@@ -1,7 +1,9 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
-"""Project and scan management commands:
-``flask list-projects``, ``flask list-scans``, ``flask delete-scan``."""
+"""Project and scan management commands.
+
+Includes scan listing and deletion commands plus global data maintenance.
+"""
 
 from ..controllers.projects import ProjectController
 from ..controllers.scans import ScanController
@@ -67,3 +69,46 @@ def list_scans_command(json_format: bool = False):
 def delete_scan_command(scan_id: uuid.UUID):
     ScanController.delete(scan_id)
     click.echo(f"Successfully deleted scan {scan_id}")
+
+
+@click.command("delete-outdated")
+@with_appcontext
+def delete_outdated_command():
+    """Permanently remove all package evidence and assessments marked outdated."""
+    from ..helpers.outdated_cleanup import delete_outdated_data
+
+    summary = delete_outdated_data()
+    click.echo(
+        "Deleted outdated data: "
+        f"{summary['assessments_deleted']} assessments, "
+        f"{summary['observations_deleted']} observations, "
+        f"{summary['sbom_packages_deleted']} SBOM package links, "
+        f"{summary['sbom_observations_deleted']} SBOM vulnerability records, "
+        f"{summary['findings_deleted']} findings, "
+        f"{summary['vulnerabilities_deleted']} vulnerabilities, "
+        f"{summary['packages_deleted']} packages"
+    )
+
+
+@click.command("delete-empty-scans")
+@with_appcontext
+def delete_empty_scans_command():
+    """Permanently remove non-initial scans with no recorded changes."""
+    from ..helpers.outdated_cleanup import delete_empty_scans
+
+    summary = delete_empty_scans()
+    click.echo(f"Deleted {summary['scans_deleted']} empty scans")
+
+
+@click.command("delete-orphaned-vulnerabilities")
+@with_appcontext
+def delete_orphaned_vulnerabilities_command():
+    """Permanently remove CVEs absent from every project and variant."""
+    from ..helpers.outdated_cleanup import delete_orphaned_vulnerabilities
+
+    summary = delete_orphaned_vulnerabilities()
+    click.echo(
+        f"Deleted {summary['vulnerabilities_deleted']} orphaned vulnerabilities, "
+        f"{summary['assessments_deleted']} assessments, "
+        f"{summary['findings_deleted']} findings"
+    )

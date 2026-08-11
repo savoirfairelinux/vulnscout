@@ -192,9 +192,9 @@ def _sbom_scans_by_variant(scans: list[Scan]) -> Dict[uuid.UUID, List[Scan]]:
         if (s.scan_type or "sbom") != "sbom":
             continue
         by_variant.setdefault(s.variant_id, []).append(s)
-    # scans are already chronological but be safe
+    # Scans are already chronological, but preserve the UUID tie-breaker.
     for v in by_variant.values():
-        v.sort(key=lambda s: s.timestamp)
+        v.sort(key=lambda s: (s.timestamp, s.id))
     return by_variant
 
 
@@ -230,7 +230,7 @@ def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> Tuple[O
         s for s in all_variant_scans
         if (s.scan_type or "sbom") == "sbom"
     ]
-    sbom_scans.sort(key=lambda s: s.timestamp)
+    sbom_scans.sort(key=lambda s: (s.timestamp, s.id))
 
     if is_tool:
         sbom_scan = _sbom_active_at(sbom_scans, scan.timestamp)
@@ -246,7 +246,7 @@ def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> Tuple[O
             continue
         src = s.scan_source or ""
         prev = latest_tool.get(src)
-        if prev is None or s.timestamp > prev.timestamp:
+        if prev is None or (s.timestamp, s.id) > (prev.timestamp, prev.id):
             latest_tool[src] = s
     # The current scan (if tool) replaces same-source
     if is_tool:

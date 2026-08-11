@@ -10,6 +10,7 @@ import typing
 import uuid
 import urllib.request
 import urllib.error
+from dataclasses import dataclass
 from typing import Optional
 
 from ..models import Vulnerability, Package, SBOMObservation
@@ -25,6 +26,18 @@ from ..extensions import db
 
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EnrichmentResult:
+    """Outcome of a best-effort vulnerability data refresh."""
+
+    successful: int = 0
+    failed: int = 0
+
+    @property
+    def completed(self) -> bool:
+        return self.failed == 0
 
 
 def _batch_commit(done: int, total: int, label: str) -> None:
@@ -332,10 +345,11 @@ class VulnerabilitiesController:
             return True
         return False
 
-    def fetch_epss_scores(self):
+    def fetch_epss_scores(self) -> EnrichmentResult:
         from ..controllers.epss_progress import EPSSProgressTracker
         start_time = time.time()
         nb_vuln = 0
+        failed = 0
 
         # Only CVE-prefixed IDs exist in the EPSS database.
         all_cve_ids = [vid for vid in self.vulnerabilities if vid.startswith("CVE-")]
@@ -380,6 +394,7 @@ class VulnerabilitiesController:
                 batch_results = self.epss_api.api_get_epss_batch(chunk)
             except Exception as e:
                 verbose(f"[fetch_epss_scores batch {chunk_idx}] {e}")
+                failed += len(chunk)
                 processed += len(chunk)
                 tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
                 continue
@@ -404,6 +419,7 @@ class VulnerabilitiesController:
                     nb_vuln += 1
                 except Exception as e:
                     verbose(f"[fetch_epss_scores {cve_id!r}] {e}")
+                    failed += 1
             processed += len(chunk)
             tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
             # Commit once every 500 CVEs processed.
@@ -416,9 +432,75 @@ class VulnerabilitiesController:
         except Exception as e:
             verbose(f"[fetch_epss_scores final commit] {e}")
             db.session.rollback()
+            failed += 1
 
         tracker.complete()
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
+        return EnrichmentResult(successful=nb_vuln, failed=failed)
+
+    def fetch_euvd_data(self) -> EnrichmentResult:
+        """Enrich the currently loaded CVEs from the cached ENISA EUVD data."""
+        from ..controllers.euvd_db import EUVD_DB
+
+        euvd = EUVD_DB()
+        full_map = euvd.get_full_mapping()
+        kev_map = euvd.get_mapping()
+        if not full_map and not kev_map:
+            verbose("[fetch_euvd_data] EUVD mappings are empty")
+            return EnrichmentResult(failed=1)
+        now = datetime.datetime.utcnow()
+        updated = 0
+        failed = 0
+
+        for vuln_id in self.vulnerabilities:
+            if not vuln_id.startswith("CVE-"):
+                continue
+            kev = kev_map.get(vuln_id)
+            euvd_id = full_map.get(vuln_id) or (kev.get("euvd_id") if kev else None)
+            try:
+                rec = self._db_record_cache.get(vuln_id) or Vulnerability.get_by_id(vuln_id)
+                if rec is not None:
+                    if euvd_id is not None:
+                        rec.update_record(
+                            euvd_id=euvd_id,
+                            euvd_known_exploited=kev is not None,
+                            euvd_kev_sources=(kev.get("sources") or []) if kev else [],
+                            euvd_date_added=kev.get("date_added") if kev else None,
+                            euvd_fetched_at=now,
+                            euvd_data_updated_at=now,
+                            commit=False,
+                        )
+                        updated += 1
+                    else:
+                        had_euvd_data = (
+                            rec.euvd_id is not None
+                            or rec.euvd_known_exploited
+                            or rec.euvd_kev_sources
+                            or rec.euvd_date_added is not None
+                        )
+                        if had_euvd_data:
+                            rec.euvd_id = None
+                            rec.euvd_known_exploited = False
+                            rec.euvd_kev_sources = []
+                            rec.euvd_date_added = None
+                            rec.update_record(
+                                euvd_fetched_at=now,
+                                euvd_data_updated_at=now,
+                                commit=False,
+                            )
+                        else:
+                            rec.update_record(euvd_fetched_at=now, commit=False)
+            except Exception as e:
+                verbose(f"[fetch_euvd_data {vuln_id!r}] {e}")
+                failed += 1
+
+        try:
+            db.session.commit()
+        except Exception as e:
+            verbose(f"[fetch_euvd_data final commit] {e}")
+            db.session.rollback()
+            failed += 1
+        return EnrichmentResult(successful=updated, failed=failed)
 
     @staticmethod
     def _fetch_ghsa_published(vuln_id: str) -> Optional[str]:
@@ -476,7 +558,7 @@ class VulnerabilitiesController:
                     except Exception:
                         pass
 
-    def fetch_nvd_data(self):
+    def fetch_nvd_data(self) -> EnrichmentResult:
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
         CVE-prefixed IDs are looked up via the NVD API. GHSA-prefixed IDs use
@@ -492,6 +574,7 @@ class VulnerabilitiesController:
 
         start_time = time.time()
         nb_vuln = 0
+        failed = 0
 
         ghsa_vulns = {}
         nvd_vulns = []
@@ -521,6 +604,7 @@ class VulnerabilitiesController:
                             rec.update_record(nvd_fetched_at=datetime.datetime.utcnow(), commit=False)
                     except Exception as e:
                         verbose(f"[fetch_nvd_data not_found sentinel {vuln.id!r}] {e}")
+                        failed += 1
                 else:
                     if cve_json.get("published"):
                         vuln.published = cve_json["published"]
@@ -561,9 +645,11 @@ class VulnerabilitiesController:
                             )
                     except Exception as e:
                         verbose(f"[fetch_nvd_data persist {vuln.id!r}] {e}")
+                        failed += 1
                     nb_vuln += 1
             except Exception as e:
                 verbose(f"[fetch_nvd_data {vuln.id!r}] {e}")
+                failed += 1
             done += 1
             tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
             if done % DB_COMMIT_EVERY == 0:
@@ -595,9 +681,11 @@ class VulnerabilitiesController:
                                     )
                             except Exception as e:
                                 verbose(f"[fetch_nvd_data persist GHSA {vid!r}] {e}")
+                                failed += 1
                             nb_vuln += 1
                     except Exception as e:
                         print(f"Error for {vid}: {e}")
+                        failed += 1
                     done += 1
                     tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vid})")
 
@@ -607,11 +695,13 @@ class VulnerabilitiesController:
         except Exception as e:
             verbose(f"[fetch_nvd_data final commit] {e}")
             db.session.rollback()
+            failed += 1
         tracker.complete()
         print(
             f"=== NVD: done — enriched {nb_vuln}/{total} vulnerabilities in {time.time() - start_time:.1f}s.",
             flush=True,
         )
+        return EnrichmentResult(successful=nb_vuln, failed=failed)
 
     def record_sbom_observation(
         self, vuln: Vulnerability, key: str, description: str, package: Package | None = None

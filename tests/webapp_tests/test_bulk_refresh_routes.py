@@ -243,7 +243,48 @@ class TestBulkEpssRefreshEndpoint:
         assert resp.status_code == 409
         assert "already in progress" in resp.get_json()["error"]
 
-    def test_409_only_after_valid_input(self, client, existing_cve_id):
+    def test_busy_request_does_not_query_vulnerabilities(self, client, existing_cve_id):
+        """A request arriving while a refresh runs returns 409 without any DB work.
+
+        The singleton is reserved before the database is touched, so a burst of
+        concurrent requests cannot each scan the vulnerabilities table.
+        """
+        with patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker, \
+             patch("src.routes.bulk_refresh.db") as MockDb, \
+             patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockTracker.start_if_idle.return_value = False
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": [existing_cve_id]},
+            )
+        assert resp.status_code == 409
+        MockDb.session.query.assert_not_called()
+        MockThread.return_value.start.assert_not_called()
+
+    def test_lookup_failure_releases_tracker(self, client, existing_cve_id):
+        """A failing DB lookup rolls back and releases the reserved tracker.
+
+        The tracker is reserved before the lookup runs, so a query failure must
+        mark it errored and roll back the session; otherwise ``in_progress``
+        would stay true and every later refresh would be rejected with 409.
+        """
+        with patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker, \
+             patch("src.routes.bulk_refresh.db") as MockDb, \
+             patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockTracker.start_if_idle.return_value = True
+            MockDb.session.query.side_effect = RuntimeError("db is down")
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": [existing_cve_id]},
+            )
+        assert resp.status_code == 500
+        MockDb.session.rollback.assert_called_once()
+        MockTracker.error.assert_called_once()
+        MockThread.return_value.start.assert_not_called()
+
+
         """Invalid input returns 400, not 409, even when tracker is running."""
         with patch(
             "src.routes.bulk_refresh.EPSSProgressTracker.start_if_idle",
@@ -282,16 +323,43 @@ class TestBulkEpssRefreshEndpoint:
         assert resp.status_code == 400
         assert "valid CVE" in resp.get_json()["error"]
 
-    def test_returns_400_when_count_exceeds_max(self, client):
-        """400 when more than _MAX_CVE_IDS valid IDs are submitted."""
+    def test_rejects_large_body_of_unknown_cve_ids(self, client):
+        """A huge body of well-formed but unknown CVE IDs is rejected (400).
+
+        The endpoint is unauthenticated, so it must not enqueue work
+        proportional to the request body. IDs that do not exist in the database
+        are dropped; when none remain the request is rejected instead of
+        starting a job.
+        """
         from src.routes.bulk_refresh import _MAX_CVE_IDS
         ids = [f"CVE-2024-{i:05d}" for i in range(_MAX_CVE_IDS + 1)]
-        resp = client.post(
-            "/api/vulnerabilities/bulk-epss-refresh",
-            json={"cve_ids": ids},
-        )
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": ids},
+            )
         assert resp.status_code == 400
-        assert "at most" in resp.get_json()["error"]
+        assert "known CVE" in resp.get_json()["error"]
+
+    def test_bounds_work_to_known_cves_and_deduplicates(self, client, existing_cve_id):
+        """Work is bounded by the database: unknown and duplicate IDs are dropped.
+
+        A body mixing many unknown IDs with the one known CVE repeated several
+        times is accepted, but the job total reflects only the single known,
+        de-duplicated CVE rather than the size of the request body.
+        """
+        unknown = [f"CVE-2024-{i:05d}" for i in range(500)]
+        ids = unknown + [existing_cve_id, existing_cve_id.lower(), existing_cve_id]
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": ids},
+            )
+        assert resp.status_code == 202
+        assert resp.get_json()["total"] == 1
+        MockThread.return_value.start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -574,9 +642,19 @@ class TestBulkEpssRefreshBackground:
 
         MockTracker.complete.assert_called()
 
-    def test_run_processes_multiple_chunks(self, client):
+    def test_run_processes_multiple_chunks(self, app, client):
         """_run() batches CVEs into chunks of _EPSS_BATCH_SIZE (100)."""
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
         cve_ids = [f"CVE-2024-{i:05d}" for i in range(150)]
+        # The route only refreshes CVEs that exist in the database, so persist
+        # the records first; this also exercises the real chunking path.
+        with app.app_context():
+            for cve in cve_ids:
+                Vulnerability.create_record(id=cve, description="test", status="low")
+            db.session.commit()
+
         target = self._capture_target(client, cve_ids)
 
         with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
@@ -829,9 +907,18 @@ class TestBulkEpssRefreshCancellation:
     def _capture_target(self, client, cve_ids):
         return _capture_refresh_target(client, "/api/vulnerabilities/bulk-epss-refresh", cve_ids)
 
-    def test_run_stops_and_commits_when_cancelled(self, client):
+    def test_run_stops_and_commits_when_cancelled(self, app, client):
         """_run() commits pending work and calls mark_cancelled when flag is set."""
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
         cve_ids = [f"CVE-2024-{i:05d}" for i in range(150)]  # 2 chunks
+        # Only CVEs stored in the database are refreshed, so persist them first.
+        with app.app_context():
+            for cve in cve_ids:
+                Vulnerability.create_record(id=cve, description="test", status="low")
+            db.session.commit()
+
         target = self._capture_target(client, cve_ids)
 
         chunk_count = {"n": 0}
@@ -1811,9 +1898,14 @@ class TestBulkEuvdRefreshBackground:
         MockTracker.error.assert_called_once()
         MockTracker.complete.assert_not_called()
 
-    def test_run_skips_unmatched_cve(self, client):
+    def test_run_stamps_fetched_at_for_unmatched_cve(self, client):
         target = self._capture_target(client, ["CVE-2099-0001"])
         mock_rec = MagicMock()
+        # This record has never had EUVD data, so nothing needs clearing.
+        mock_rec.euvd_id = None
+        mock_rec.euvd_known_exploited = False
+        mock_rec.euvd_kev_sources = []
+        mock_rec.euvd_date_added = None
 
         with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
              patch("src.routes.bulk_refresh.db") as mock_db, \
@@ -1825,7 +1917,52 @@ class TestBulkEuvdRefreshBackground:
             mock_db.session.get.return_value = mock_rec
             target()
 
-        mock_rec.update_record.assert_not_called()
+        # Unmatched CVEs are still stamped so the UI can tell "synced, not on the
+        # KEV list" apart from "never refreshed"; only the fetch timestamp is set
+        # and no data-changed timestamp is bumped since nothing changed.
+        mock_rec.update_record.assert_called_once()
+        call_kwargs = mock_rec.update_record.call_args.kwargs
+        assert call_kwargs.get("euvd_fetched_at") is not None
+        assert call_kwargs.get("commit") is False
+        assert "euvd_id" not in call_kwargs
+        assert "euvd_known_exploited" not in call_kwargs
+        assert "euvd_data_updated_at" not in call_kwargs
+        MockTracker.complete.assert_called_once()
+
+    def test_run_clears_stale_kev_when_cve_no_longer_matched(self, client):
+        # A CVE previously flagged known-exploited is now absent from both the
+        # full mapping and the KEV mapping. The refresh must clear the stale
+        # EUVD/KEV fields so the UI stops showing "Known Exploited", not just
+        # advance the fetch timestamp.
+        cve = "CVE-2021-44228"
+        target = self._capture_target(client, [cve])
+        mock_rec = MagicMock()
+        mock_rec.euvd_id = "EUVD-2021-34768"
+        mock_rec.euvd_known_exploited = True
+        mock_rec.euvd_kev_sources = ["cisa_kev"]
+        mock_rec.euvd_date_added = "2025-10-06"
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            instance = MockEuvd.return_value
+            instance.get_full_mapping.return_value = {"CVE-2099-9999": "EUVD-2099-0001"}
+            instance.get_mapping.return_value = {}
+            mock_db.session.get.return_value = mock_rec
+            target()
+
+        # Stale EUVD/KEV fields are cleared directly on the record.
+        assert mock_rec.euvd_id is None
+        assert mock_rec.euvd_known_exploited is False
+        assert mock_rec.euvd_kev_sources == []
+        assert mock_rec.euvd_date_added is None
+        # The refresh records both the sync time and a data-changed time.
+        mock_rec.update_record.assert_called_once()
+        call_kwargs = mock_rec.update_record.call_args.kwargs
+        assert call_kwargs.get("euvd_fetched_at") is not None
+        assert call_kwargs.get("euvd_data_updated_at") is not None
+        assert call_kwargs.get("commit") is False
         MockTracker.complete.assert_called_once()
 
     def test_run_stops_and_commits_when_cancelled(self, client):

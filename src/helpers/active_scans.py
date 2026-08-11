@@ -53,7 +53,7 @@ def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]:
     rows = db.session.execute(
         db.select(Scan.id, Scan.scan_type, Scan.scan_source)
         .where(Scan.variant_id == variant_uuid)
-        .order_by(Scan.timestamp.desc())
+        .order_by(Scan.timestamp.desc(), Scan.id.desc())
     ).all()
     ids: list[uuid.UUID] = []
     seen_keys: set[str] = set()  # "sbom" or "tool:<source>"
@@ -72,7 +72,7 @@ def active_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]:
         db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.scan_source, Scan.timestamp)
         .join(Variant, Scan.variant_id == Variant.id)
         .where(Variant.project_id == project_uuid)
-        .order_by(Scan.variant_id, Scan.timestamp.desc())
+        .order_by(Scan.variant_id, Scan.timestamp.desc(), Scan.id.desc())
     ).all()
     ids: list[uuid.UUID] = []
     seen: dict[uuid.UUID, set[str]] = {}  # variant_id -> set of keys already picked
@@ -101,7 +101,7 @@ def active_sbom_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]
         db.select(Scan.id)
         .where(Scan.variant_id == variant_uuid)
         .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
-        .order_by(Scan.timestamp.desc())
+        .order_by(Scan.timestamp.desc(), Scan.id.desc())
         .limit(1)
     ).all()
     return [r[0] for r in rows]
@@ -117,7 +117,7 @@ def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]
         .join(Variant, Scan.variant_id == Variant.id)
         .where(Variant.project_id == project_uuid)
         .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
-        .order_by(Scan.variant_id, Scan.timestamp.desc())
+        .order_by(Scan.variant_id, Scan.timestamp.desc(), Scan.id.desc())
     ).all()
     ids: list[uuid.UUID] = []
     seen_variants: set[uuid.UUID] = set()

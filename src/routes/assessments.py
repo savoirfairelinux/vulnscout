@@ -815,7 +815,7 @@ def init_app(app: Flask) -> None:
         Accepts either:
 
         * ``multipart/form-data`` with a ``file`` field containing a ``.json``
-          file.
+                    file and a destination ``project_id`` field.
         * ``application/json`` body with the custom-data payload directly.
 
         OpenAPI:
@@ -829,6 +829,7 @@ def init_app(app: Flask) -> None:
 
         # Parse the incoming data
         data = None
+        project_id = None
         if request.content_type and 'multipart/form-data' in request.content_type:
             uploaded = request.files.get('file')
             if not uploaded or not uploaded.filename:
@@ -837,21 +838,35 @@ def init_app(app: Flask) -> None:
                 data = _json.load(uploaded.stream)
             except Exception:
                 return {"error": "Invalid JSON file"}, 400
+            project_id = request.form.get('project_id')
         elif request.content_type and 'application/json' in request.content_type:
             data = request.get_json(silent=True)
             if data is None:
                 return {"error": "Invalid JSON body"}, 400
+            project_id = data.get('project_id')
         else:
             return {"error": "Expected multipart/form-data or application/json"}, 400
 
         if not isinstance(data, dict) or "version" not in data:
             return {"error": "Invalid custom-data format. Expected {version, assessments, ...}"}, 400
 
+        if not isinstance(project_id, str) or not project_id:
+            return {"error": "project_id is required"}, 400
+        project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+        if err:
+            return err
+        if project_uuid is None:
+            return {"error": "Internal error"}, 500
+
+        from ..models.project import Project as DBProject
+        if DBProject.get_by_id(project_uuid) is None:
+            return {"error": "Project not found"}, 404
+
         timestamp_policy = data.get('timestamp_policy', 'current')
         if timestamp_policy not in {'original', 'current'}:
             return {"error": "timestamp_policy must be 'original' or 'current'"}, 400
 
-        variant_by_name = build_variant_by_name_map()
+        variant_by_name = build_variant_by_name_map(project_uuid)
         result = import_custom_data(
             data,
             variant_by_name,
@@ -880,13 +895,29 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query format string optional Response format such as list or dict.
+        query project_id uuid optional Restrict results to one project.
         response 200 JsonObject Assessment collection for the vulnerability.
         """
+        project_uuid: UUID | None = None
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+
+        project_variant_ids: set[UUID] | None = None
+        if project_uuid is not None:
+            project_variant_ids = set(db.session.execute(
+                select(DBVariant.id).where(DBVariant.project_id == project_uuid)
+            ).scalars())
+
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         assessments = []
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
+                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                    continue
                 assessments.append(a.to_dict())
         annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":

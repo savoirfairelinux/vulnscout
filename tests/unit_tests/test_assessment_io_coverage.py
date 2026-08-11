@@ -221,7 +221,7 @@ class TestImportCustomDataAssessments:
             }]
         }
         with app.app_context():
-            result = import_custom_data(data, {})
+            result = import_custom_data(data, {var.name: var})
         assert result["assessments_imported"] == 1
         assert result["errors"] == []
 
@@ -237,7 +237,7 @@ class TestImportCustomDataAssessments:
             }]
         }
         with app.app_context():
-            result = import_custom_data(data, {})
+            result = import_custom_data(data, {var.name: var})
         assert result["assessments_imported"] == 1
         assert result["errors"] == []
 
@@ -253,8 +253,8 @@ class TestImportCustomDataAssessments:
             }]
         }
         with app.app_context():
-            import_custom_data(data, {})
-            result = import_custom_data(data, {})
+            import_custom_data(data, {var.name: var})
+            result = import_custom_data(data, {var.name: var})
         assert result["assessments_skipped"] == 1
 
     def test_variant_name_resolution_via_variant_by_name(self, app, variant_and_project):
@@ -287,9 +287,9 @@ class TestImportCustomDataAssessments:
             }]
         }
         with app.app_context():
-            result = import_custom_data(data, {})
+            result = import_custom_data(data, {var.name: var})
             imported = Assessment.get_by_origin([var.id], origin="ai")
-            duplicate_result = import_custom_data(data, {})
+            duplicate_result = import_custom_data(data, {var.name: var})
 
         assert result["ai_assessments_imported"] == 1
         assert result["assessments_imported"] == 0
@@ -353,7 +353,7 @@ class TestImportCustomDataCvss:
                     "version": "3.1",
                 }]
             }
-            result = import_custom_data(data, {})
+            result = import_custom_data(data, {var.name: var})
         assert result["cvss_imported"] == 1
 
 
@@ -415,7 +415,7 @@ class TestImportCustomDataTimeEstimates:
                     "pessimistic": "PT4H",
                 }]
             }
-            result = import_custom_data(data, {})
+            result = import_custom_data(data, {var.name: var})
         assert result["time_estimates_imported"] == 1
 
     def test_final_status_error_when_only_errors(self, app, variant_and_project):

@@ -114,6 +114,20 @@ describe('ScanStateManager.restoreFromStatus', () => {
         expect(statusFn).toHaveBeenCalledWith('v1');
         expect(manager.getSnapshot()[0].status).toBe('done');
     });
+
+    test('waits for a restored scan to complete', async () => {
+        const { manager } = makeManager({ v1: { status: 'done' } });
+        manager.restoreFromStatus([
+            { variantId: 'v1', name: 'V1', status: { status: 'running' } },
+        ]);
+        const completion = jest.fn();
+        void manager.waitForCompletion().then(completion);
+
+        await jest.advanceTimersByTimeAsync(2999);
+        expect(completion).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(1);
+        expect(completion).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe('ScanStateManager.subscribe', () => {
@@ -184,27 +198,13 @@ describe('ScanStateManager.dismiss / dismissAll', () => {
         jest.useRealTimers();
     });
 
-    test('dismiss removes a single variant and stops polling when none remain running', () => {
+    test('dismiss preserves active entries', () => {
         const clearInterval = jest.spyOn(global, 'clearInterval');
         const { manager } = makeManager({});
         manager.restoreFromStatus([
             { variantId: 'v1', name: 'V1', status: { status: 'running' } },
         ]);
         expect(manager.getSnapshot()).toHaveLength(1);
-
-        manager.dismiss('v1');
-        expect(manager.getSnapshot()).toHaveLength(0);
-        expect(clearInterval).toHaveBeenCalled();
-        clearInterval.mockRestore();
-    });
-
-    test('dismiss keeps polling while another variant is still running', () => {
-        const clearInterval = jest.spyOn(global, 'clearInterval');
-        const { manager } = makeManager({});
-        manager.restoreFromStatus([
-            { variantId: 'v1', name: 'V1', status: { status: 'running' } },
-            { variantId: 'v2', name: 'V2', status: { status: 'running' } },
-        ]);
 
         manager.dismiss('v1');
         expect(manager.getSnapshot()).toHaveLength(1);
@@ -212,7 +212,21 @@ describe('ScanStateManager.dismiss / dismissAll', () => {
         clearInterval.mockRestore();
     });
 
-    test('dismissAll clears every variant and stops polling', () => {
+    test('dismiss removes a terminal entry while another variant is running', async () => {
+        const statusFn = jest.fn(async (vid: string) => vid === 'v1' ? { status: 'done' } : { status: 'running' });
+        const manager = new ScanStateManager(jest.fn(async () => ({ ok: true })), statusFn, 'Test');
+        manager.restoreFromStatus([
+            { variantId: 'v1', name: 'V1', status: { status: 'running' } },
+            { variantId: 'v2', name: 'V2', status: { status: 'running' } },
+        ]);
+
+        await jest.advanceTimersByTimeAsync(3000);
+        manager.dismiss('v1');
+        expect(manager.getSnapshot()).toHaveLength(1);
+        expect(manager.getSnapshot()[0].variantId).toBe('v2');
+    });
+
+    test('dismissAll preserves active variants', () => {
         const { manager } = makeManager({});
         manager.restoreFromStatus([
             { variantId: 'v1', name: 'V1', status: { status: 'running' } },
@@ -220,7 +234,7 @@ describe('ScanStateManager.dismiss / dismissAll', () => {
         ]);
 
         manager.dismissAll();
-        expect(manager.getSnapshot()).toHaveLength(0);
+    expect(manager.getSnapshot()).toHaveLength(2);
     });
 });
 
@@ -283,6 +297,27 @@ describe('ScanStateManager.triggerScan (parallel)', () => {
             error: 'Failed to start Grype scan',
         });
     });
+
+    test('turns a rejected trigger into a visible error', async () => {
+        const triggerFn = jest.fn(async () => { throw new Error('network unavailable'); });
+        const manager = new ScanStateManager(triggerFn, jest.fn(), 'Grype');
+
+        await manager.triggerScan([{ id: 'v1', name: 'V1' }]);
+        expect(manager.getSnapshot()[0]).toMatchObject({
+            status: 'error',
+            error: 'network unavailable',
+        });
+        await expect(manager.waitForCompletion()).resolves.toBeUndefined();
+    });
+
+    test('does not replace an active batch with a duplicate submission', async () => {
+        const { manager, triggerFn } = makeManager({});
+        await manager.triggerScan([{ id: 'v1', name: 'V1' }]);
+        await manager.triggerScan([{ id: 'v2', name: 'V2' }]);
+
+        expect(triggerFn).toHaveBeenCalledTimes(1);
+        expect(manager.getSnapshot().map(state => state.variantId)).toEqual(['v1']);
+    });
 });
 
 describe('ScanStateManager.triggerScan (serial)', () => {
@@ -327,6 +362,21 @@ describe('ScanStateManager.triggerScan (serial)', () => {
         expect(triggerFn).toHaveBeenCalledWith('v1', {});
     });
 
+    test('shows a prepared batch as queued before it starts', async () => {
+        const { manager, triggerFn } = makeSerialManager({});
+        await manager.queueScan([
+            { id: 'v1', name: 'V1' },
+            { id: 'v2', name: 'V2' },
+        ]);
+
+        expect(manager.getSnapshot().every((state) => state.status === 'queued')).toBe(true);
+        expect(triggerFn).not.toHaveBeenCalled();
+
+        await manager.startQueuedScan();
+        expect(manager.getSnapshot().find((state) => state.variantId === 'v1')?.status).toBe('running');
+        expect(triggerFn).toHaveBeenCalledWith('v1', {});
+    });
+
     test('advances the queue as each scan finishes', async () => {
         const replies: Record<string, Status> = {
             v1: { status: 'done' },
@@ -348,6 +398,25 @@ describe('ScanStateManager.triggerScan (serial)', () => {
         // Second poll: v2 finishes
         await jest.advanceTimersByTimeAsync(3000);
         expect(manager.getSnapshot().find((s) => s.variantId === 'v2')?.status).toBe('done');
+    });
+
+    test('resolves completion only after the entire queue finishes', async () => {
+        const { manager } = makeSerialManager({
+            v1: { status: 'done' },
+            v2: { status: 'done' },
+        });
+        await manager.triggerScan([
+            { id: 'v1', name: 'V1' },
+            { id: 'v2', name: 'V2' },
+        ]);
+        const completion = jest.fn();
+        void manager.waitForCompletion().then(completion);
+
+        await jest.advanceTimersByTimeAsync(3000);
+        expect(completion).not.toHaveBeenCalled();
+
+        await jest.advanceTimersByTimeAsync(3000);
+        expect(completion).toHaveBeenCalledTimes(1);
     });
 
     test('marks the first variant as error and advances when its trigger fails', async () => {
@@ -391,6 +460,27 @@ describe('ScanStateManager.triggerScan (serial)', () => {
 
         const snap = manager.getSnapshot();
         expect(snap.find((s) => s.variantId === 'v2')).toMatchObject({ status: 'error' });
+        expect(triggerFn).toHaveBeenCalledWith('v3', {});
+    });
+
+    test('rejected queued triggers keep the queue moving', async () => {
+        const triggerFn = jest.fn(async (vid: string) => {
+            if (vid === 'v2') throw new Error('connection lost');
+            return { ok: true };
+        });
+        const { manager } = makeSerialManager({ v1: { status: 'done' } }, triggerFn);
+
+        await manager.triggerScan([
+            { id: 'v1', name: 'V1' },
+            { id: 'v2', name: 'V2' },
+            { id: 'v3', name: 'V3' },
+        ]);
+        await jest.advanceTimersByTimeAsync(3000);
+
+        expect(manager.getSnapshot().find((state) => state.variantId === 'v2')).toMatchObject({
+            status: 'error',
+            error: 'connection lost',
+        });
         expect(triggerFn).toHaveBeenCalledWith('v3', {});
     });
 });
@@ -475,5 +565,56 @@ describe('ScanStateManager polling transitions', () => {
         // Second tick succeeds
         await jest.advanceTimersByTimeAsync(3000);
         expect(manager.getSnapshot()[0].status).toBe('done');
+    });
+
+    test('updates healthy variants when another status request fails', async () => {
+        const statusFn = jest.fn(async (vid: string) => {
+            if (vid === 'v1') throw new Error('network');
+            return { status: 'done' };
+        });
+        const manager = new ScanStateManager(jest.fn(async () => ({ ok: true })), statusFn, 'Test');
+        manager.restoreFromStatus([
+            { variantId: 'v1', name: 'V1', status: { status: 'running' } },
+            { variantId: 'v2', name: 'V2', status: { status: 'running' } },
+        ]);
+
+        await jest.advanceTimersByTimeAsync(3000);
+        expect(manager.getSnapshot().find(state => state.variantId === 'v1')?.status).toBe('running');
+        expect(manager.getSnapshot().find(state => state.variantId === 'v2')?.status).toBe('done');
+    });
+
+    test('marks a scan as error after persistent status loss', async () => {
+        const statusFn = jest.fn(async () => ({ status: 'unknown' }));
+        const manager = new ScanStateManager(jest.fn(async () => ({ ok: true })), statusFn, 'Test');
+        manager.restoreFromStatus([
+            { variantId: 'v1', name: 'V1', status: { status: 'running' } },
+        ]);
+
+        await jest.advanceTimersByTimeAsync(30000);
+        expect(manager.getSnapshot()[0]).toMatchObject({
+            status: 'error',
+            error: 'Lost Test scan status',
+        });
+        await expect(manager.waitForCompletion()).resolves.toBeUndefined();
+    });
+
+    test('does not overlap slow poll ticks or repeat completion callbacks', async () => {
+        let finishStatus!: (status: Status) => void;
+        const statusFn = jest.fn(() => new Promise<Status>(resolve => { finishStatus = resolve; }));
+        const manager = new ScanStateManager(jest.fn(async () => ({ ok: true })), statusFn, 'Test');
+        const onDone = jest.fn();
+        manager.setOnDone(onDone);
+        manager.restoreFromStatus([
+            { variantId: 'v1', name: 'V1', status: { status: 'running' } },
+        ]);
+
+        await jest.advanceTimersByTimeAsync(6000);
+        expect(statusFn).toHaveBeenCalledTimes(1);
+        finishStatus({ status: 'done' });
+        await jest.advanceTimersByTimeAsync(0);
+        expect(onDone).toHaveBeenCalledTimes(1);
+
+        await jest.advanceTimersByTimeAsync(6000);
+        expect(onDone).toHaveBeenCalledTimes(1);
     });
 });

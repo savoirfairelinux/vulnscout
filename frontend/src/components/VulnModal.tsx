@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
@@ -147,6 +147,8 @@ type VariantScopedSnapshot = {
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [showCpeHint, setShowCpeHint] = useState(false);
+    const [showCpeList, setShowCpeList] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [variantsLoadedForVulnId, setVariantsLoadedForVulnId] = useState<string | null>(null);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
@@ -166,6 +168,19 @@ type VariantScopedSnapshot = {
     // the active scan context) and fall back to the full list.
     const projectPackages = (vuln.packages_current?.length > 0) ? vuln.packages_current : vuln.packages;
 
+    useEffect(() => {
+        const closeCpeHint = (event: MouseEvent) => {
+            const target = event.target;
+            if (target instanceof Element && !target.closest('[data-cpe-hint]')) {
+                setShowCpeHint(false);
+            }
+        };
+        if (showCpeHint) {
+            document.addEventListener('mousedown', closeCpeHint);
+        }
+        return () => document.removeEventListener('mousedown', closeCpeHint);
+    }, [showCpeHint]);
+
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
     useEffect(() => {
@@ -184,12 +199,13 @@ type VariantScopedSnapshot = {
         return () => controller.abort();
     }, [vuln.id, projectId]);
 
-    // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
-    // complete even when a variant filter is active in the explorer.
+    // Fetch all assessments for this vulnerability in the current project so
+    // its history remains complete when the Explorer is variant-scoped.
     useEffect(() => {
         const controller = new AbortController();
         setAllVulnAssessments([]);
-        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors', signal: controller.signal })
+        const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments${projectQuery}`, { mode: 'cors', signal: controller.signal })
             .then(r => r.json())
             .then((data: any[]) => {
                 if (Array.isArray(data)) {
@@ -203,7 +219,7 @@ type VariantScopedSnapshot = {
             })
             .catch(() => {});
         return () => controller.abort();
-    }, [vuln]);
+    }, [vuln, projectId]);
 
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
     useEffect(() => {
@@ -378,7 +394,6 @@ type VariantScopedSnapshot = {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
-    const [nvdMode, setNvdMode] = useState<"local" | "api">("local");
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -494,7 +509,7 @@ type VariantScopedSnapshot = {
                 }
             } else {
                 const [nvdResult, epssResult] = await Promise.allSettled([
-                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, nvdMode),
+                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, "api"),
                     EpssRefreshHandler.triggerSingleRefresh(vuln.id),
                 ]);
 
@@ -509,9 +524,7 @@ type VariantScopedSnapshot = {
                     } else if (nvdValue?.kind === "error" && nvdValue.code === "unauthorized") {
                         errors.push("NVD API key rejected. Check your key in Settings.");
                     } else {
-                        errors.push(nvdMode === "api"
-                            ? "NVD API unavailable. Try again or switch to Local mode."
-                            : "NVD data unavailable. Try again or run an sbom-cve-check scan.");
+                        errors.push("NVD API unavailable. Please try again later.");
                     }
                 }
                 if (epssResult.status === "rejected" || epssResult.value === null) {
@@ -554,7 +567,7 @@ type VariantScopedSnapshot = {
         } finally {
             setRefreshing(false);
         }
-    }, [vuln, patchVuln, nvdMode]);
+    }, [vuln, patchVuln]);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
@@ -911,7 +924,13 @@ type VariantScopedSnapshot = {
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     };
 
-    const groupedAssessments = groupAssessments(vuln.assessments);
+    // Prefer the project-wide response so history includes every variant. The
+    // scoped vulnerability rows remain a fallback for unavailable or empty
+    // history responses.
+    const groupedAssessments = groupAssessments(
+        (allVulnAssessments.length > 0 ? allVulnAssessments : vuln.assessments)
+            .filter(assessment => assessment.origin !== 'ai')
+    );
     const pendingAiAssessments = allVulnAssessments.filter(a =>
         a.origin === "ai" && (!variantId || a.variant_id === variantId));
     const pendingAiByVariant = new Map<string, Assessment[]>();
@@ -1422,35 +1441,6 @@ type VariantScopedSnapshot = {
 
                             {!readOnly && (
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    {!isGhsaVuln && (
-                                        <span className="flex items-center gap-1.5 text-xs text-gray-400">
-                                            NVD source:
-                                            <label className="flex items-center gap-1 cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name={`nvd-mode-${vuln.id}`}
-                                                    value="local"
-                                                    checked={nvdMode === "local"}
-                                                    onChange={() => setNvdMode("local")}
-                                                    disabled={refreshing}
-                                                    className="accent-cyan-500"
-                                                />
-                                                <span className="text-gray-300">Git repository</span>
-                                            </label>
-                                            <label className="flex items-center gap-1 cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name={`nvd-mode-${vuln.id}`}
-                                                    value="api"
-                                                    checked={nvdMode === "api"}
-                                                    onChange={() => setNvdMode("api")}
-                                                    disabled={refreshing}
-                                                    className="accent-cyan-500"
-                                                />
-                                                <span className="text-gray-300">API</span>
-                                            </label>
-                                        </span>
-                                    )}
                                     <button
                                         onClick={handleRefresh}
                                         disabled={refreshing}
@@ -1690,6 +1680,54 @@ type VariantScopedSnapshot = {
                                 ))}
                             </ul>
                         </div>
+
+                        {(vuln.cpes?.length ?? 0) > 0 && (
+                            <div className="mb-6 mt-6">
+                                <div className="relative mb-2 flex items-center gap-2">
+                                    <h3 className="font-bold">Affected CPEs ({vuln.cpes?.length})</h3>
+                                    <button
+                                        aria-label="About affected CPEs"
+                                        type="button"
+                                        data-cpe-hint
+                                        className="text-sky-300 hover:text-sky-100 transition-colors"
+                                        onClick={() => setShowCpeHint(current => !current)}
+                                    >
+                                        <FontAwesomeIcon icon={faCircleQuestion} />
+                                    </button>
+                                    <button
+                                        aria-expanded={showCpeList}
+                                        aria-label={showCpeList ? "Collapse affected CPEs" : "Expand affected CPEs"}
+                                        title={showCpeList ? "Collapse affected CPEs" : "Expand affected CPEs"}
+                                        type="button"
+                                        className="text-sky-300 hover:text-sky-100 transition-colors"
+                                        onClick={() => setShowCpeList(current => !current)}
+                                    >
+                                        <FontAwesomeIcon className={showCpeList ? "rotate-180 transition-transform" : "transition-transform"} icon={faChevronDown} />
+                                    </button>
+                                    {showCpeHint && (
+                                        <div
+                                            role="tooltip"
+                                            data-cpe-hint
+                                            className="absolute top-full mt-1 left-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
+                                        >
+                                            <h3 className="font-bold text-white mb-2">Affected CPEs</h3>
+                                            <div className="space-y-1 text-gray-100">
+                                                <p>These CPEs are provided by NVD for this vulnerability.</p>
+                                                <p>They describe all NVD-reported affected products, not only packages in the current scope.</p>
+                                                <p>They do not indicate whether the current project, variant, or scan is affected.</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                {showCpeList && (
+                                    <ul className="max-h-64 overflow-y-auto space-y-1 rounded-lg bg-gray-800 p-3 text-sm">
+                                        {vuln.cpes?.map(cpe => (
+                                            <li key={cpe}><code className="break-all">{cpe}</code></li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        )}
 
                         <div className="mb-6 mt-6" tabIndex={isEditing ? undefined : -1}>
                             <TimeEstimateEditor

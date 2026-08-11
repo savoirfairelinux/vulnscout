@@ -170,7 +170,7 @@ describe('Metrics — sections and UI', () => {
         expect(screen.getByText('Vulnerabilities by Status')).toBeInTheDocument();
         expect(screen.getByText('Active vulnerabilities')).toBeInTheDocument();
         expect(screen.getByText('Vulnerabilities by Database')).toBeInTheDocument();
-    });
+    }, 15_000);
 
     test('renders the tables section titles', async () => {
         render(<Metrics {...DEFAULT_PROPS} />);

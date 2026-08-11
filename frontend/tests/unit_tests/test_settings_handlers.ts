@@ -8,6 +8,7 @@ fetchMock.enableMocks();
 
 import Projects from '../../src/handlers/project';
 import Variants from '../../src/handlers/variant';
+import ScansHandler from '../../src/handlers/scans';
 
 
 // ---------------------------------------------------------------------------
@@ -299,7 +300,7 @@ describe('Variants.uploadSBOM', () => {
         const file1 = new File(['{"spdxVersion":"SPDX-2.3"}'], 'sbom1.spdx.json', { type: 'application/json' });
         const file2 = new File(['{"spdxVersion":"SPDX-2.3"}'], 'sbom2.spdx.json', { type: 'application/json' });
 
-        const result = await Variants.uploadSBOM('p1', 'v1', [file1, file2]);
+        const result = await Variants.uploadSBOM('p1', 'v1', [file1, file2], ['epss', 'nvd']);
 
         expect(result.upload_id).toBe('uid-1');
         expect(result.scan_id).toBe('sid-1');
@@ -312,6 +313,7 @@ describe('Variants.uploadSBOM', () => {
         const calledBody = (fetchMock.mock.calls[0] as any[])[1].body as FormData;
         expect(calledBody.get('project_id')).toBe('p1');
         expect(calledBody.get('variant_id')).toBe('v1');
+        expect(calledBody.getAll('refresh_sources')).toEqual(['epss', 'nvd']);
         const files = calledBody.getAll('files');
         expect(files).toHaveLength(2);
     });
@@ -328,8 +330,23 @@ describe('Variants.uploadSBOM', () => {
 
         expect(result.upload_id).toBe('uid-2');
         const calledBody = (fetchMock.mock.calls[0] as any[])[1].body as FormData;
+        expect(calledBody.getAll('refresh_sources')).toEqual(['epss']);
         const files = calledBody.getAll('files');
         expect(files).toHaveLength(1);
+    });
+
+    test('sends the "none" sentinel when every refresh source is unchecked', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({
+            upload_id: 'uid-3',
+            scan_id: 'sid-3',
+            message: 'accepted',
+        }));
+
+        const file = new File(['{}'], 'sbom.json', { type: 'application/json' });
+        await Variants.uploadSBOM('p1', 'v1', [file], []);
+
+        const calledBody = (fetchMock.mock.calls[0] as any[])[1].body as FormData;
+        expect(calledBody.getAll('refresh_sources')).toEqual(['none']);
     });
 
     test('throws on error response', async () => {
@@ -651,5 +668,86 @@ describe('Variants.previewCopyAssessments', () => {
             expect(result.groups![0].candidates[0].target_finding_id).toBe('tf1');
             expect(result.entries).toBeUndefined();
         }
+    });
+});
+
+
+// ---------------------------------------------------------------------------
+// Global data maintenance
+// ---------------------------------------------------------------------------
+
+describe('ScansHandler data maintenance', () => {
+    beforeEach(() => { fetchMock.resetMocks(); });
+
+    test('returns empty scan details in the preview', async () => {
+        const scans = [
+            { id: 's1', description: 'Initial import', timestamp: '2026-07-30T10:00:00Z', project: 'Project A', variant: 'Main' },
+            { id: 's2', description: '', timestamp: '2026-07-30T11:00:00Z', project: 'Project B', variant: 'Development' },
+        ];
+        fetchMock.mockResponseOnce(JSON.stringify({ scans }));
+
+        await expect(ScansHandler.getEmptyScansPreview()).resolves.toEqual({ ok: true, scans });
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/empty-scans'),
+            { mode: 'cors' }
+        );
+    });
+
+    test('deletes empty scans', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ scans_deleted: 2 }));
+
+        await expect(ScansHandler.deleteEmptyScans(['s1', 's2'])).resolves.toEqual({ ok: true, count: 2 });
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/empty-scans'),
+            {
+                method: 'DELETE',
+                mode: 'cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scan_ids: ['s1', 's2'] }),
+            }
+        );
+    });
+
+    test('returns orphaned CVEs and their assessment counts in the preview', async () => {
+        const vulnerabilities = [
+            { id: 'CVE-1', assessments: 2 },
+            { id: 'CVE-2', assessments: 1 },
+        ];
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities }));
+
+        await expect(ScansHandler.getOrphanedVulnerabilitiesPreview()).resolves.toEqual({
+            ok: true,
+            vulnerabilities,
+        });
+    });
+
+    test('deletes orphaned CVEs', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities_deleted: 2 }));
+
+        await expect(ScansHandler.deleteOrphanedVulnerabilities(['CVE-1', 'CVE-2'])).resolves.toEqual({ ok: true, count: 2 });
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/orphaned-vulnerabilities'),
+            {
+                method: 'DELETE',
+                mode: 'cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ vulnerability_ids: ['CVE-1', 'CVE-2'] }),
+            }
+        );
+    });
+
+    test('normalizes malformed error responses from cleanup endpoints', async () => {
+        fetchMock.mockImplementation(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(ScansHandler.getEmptyScansPreview()).resolves.toEqual({ ok: false, error: 'HTTP 500' });
+        await expect(ScansHandler.deleteEmptyScans([])).resolves.toEqual({ ok: false, error: 'HTTP 500' });
+        await expect(ScansHandler.getOrphanedVulnerabilitiesPreview()).resolves.toEqual({ ok: false, error: 'HTTP 500' });
+        await expect(ScansHandler.deleteOrphanedVulnerabilities([])).resolves.toEqual({ ok: false, error: 'HTTP 500' });
     });
 });

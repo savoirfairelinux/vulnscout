@@ -12,7 +12,7 @@
 #   cmd_process.py     — ``flask merge`` and ``flask process``
 #   cmd_export.py      — ``flask export`` and ``flask report``
 #   cmd_assessments.py — custom VulnScout JSON and OpenVEX import/export commands
-#   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, ``flask delete-scan``
+#   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, cleanup commands
 #   cmd_vuln_scan.py   — ``flask nvd-scan`` and ``flask osv-scan``
 
 from ..controllers import ControllersCache
@@ -39,6 +39,9 @@ from .cmd_context import (
     import_context_command,
 )
 from .cmd_scans import (
+    delete_empty_scans_command,
+    delete_orphaned_vulnerabilities_command,
+    delete_outdated_command,
     list_projects_command,
     list_scans_command,
     delete_scan_command,
@@ -61,6 +64,9 @@ def init_app(app) -> None:
     app.cli.add_command(list_projects_command)
     app.cli.add_command(list_scans_command)
     app.cli.add_command(delete_scan_command)
+    app.cli.add_command(delete_outdated_command)
+    app.cli.add_command(delete_empty_scans_command)
+    app.cli.add_command(delete_orphaned_vulnerabilities_command)
     app.cli.add_command(nvd_scan_command)
     app.cli.add_command(osv_scan_command)
     app.cli.add_command(sbom_cve_check_scan_command)

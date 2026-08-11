@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import NavigationBar from "../components/NavigationBar";
+import OperationQueueModal from "../components/OperationQueueModal";
 import MessageBanner from "../components/MessageBanner";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
@@ -14,7 +15,6 @@ import ScanHistory from "./ScanHistory";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
-import Transfer from './Transfer';
 import AIContext from './AIContext';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
@@ -22,6 +22,13 @@ import type { AppConfig } from "../handlers/config";
 import type { FrontendScope } from "../handlers/config";
 import Projects from '../handlers/project';
 import Variants from '../handlers/variant';
+import ScansHandler from '../handlers/scans';
+import type { RunningScanEntry } from '../handlers/scans';
+import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
+import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot, restoreFromStatus as nvdRestore } from "../handlers/nvdScanState";
+import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot, restoreFromStatus as osvRestore } from "../handlers/osvScanState";
+import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot, restoreFromStatus as sccRestore } from "../handlers/sccScanState";
+import { subscribeToRefreshQueue, getRefreshQueueSnapshot, restoreActiveRefreshes } from "../handlers/activeScanQueue";
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -29,7 +36,6 @@ const tabLabels: Record<string, string> = {
         vulnerabilities: 'Vulnerabilities',
         scans: 'Scans',
         review: 'Review',
-        transfer: 'Transfer',
         exports: 'Export',
         settings: 'Settings',
         ai: 'AI Context',
@@ -66,6 +72,42 @@ function Explorer() {
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
+    const [operationQueueOpen, setOperationQueueOpen] = useState(false);
+    const hadActiveScans = useRef(false);
+    const grypeScanEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
+    const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
+    const osvScanEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
+    const sccScanEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
+    const refreshQueueEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
+    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries];
+    const trackedScanCount = scanEntries.length;
+    const finishedScanCount = scanEntries
+        .filter(entry => entry.status === "done" || entry.status === "error" || entry.status === "cancelled").length;
+    const activeScanCount = scanEntries
+        .filter(entry => entry.status === "queued" || entry.status === "running").length;
+
+    useEffect(() => {
+        if (activeScanCount > 0 && !hadActiveScans.current) {
+            setOperationQueueOpen(true);
+        }
+        hadActiveScans.current = activeScanCount > 0;
+    }, [activeScanCount]);
+
+    useEffect(() => {
+        let cancelled = false;
+        void restoreActiveRefreshes();
+        Promise.all([Variants.listAll().catch(() => []), ScansHandler.getRunningScans()]).then(([variants, running]) => {
+            if (cancelled) return;
+            const nameById = new Map(variants.map(variant => [variant.id, variant.name]));
+            const toEntries = (entries: RunningScanEntry[]) => entries
+                .map(entry => ({ variantId: entry.variant_id, name: nameById.get(entry.variant_id) ?? entry.variant_id, status: entry }));
+            grypeRestore(toEntries(running.grype));
+            nvdRestore(toEntries(running.nvd));
+            osvRestore(toEntries(running.osv));
+            sccRestore(toEntries(running['sbom-cve-check']));
+        }).catch(() => undefined);
+        return () => { cancelled = true; };
+    }, []);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -125,11 +167,13 @@ function Explorer() {
         Config.get()
             .then(async config => {
                 let scope = Config.getFrontendScope();
-                let discardedScope = false;
                 // Validate the saved scope against the live project/variant
                 // lists. A transient fetch failure here must not discard the
                 // successfully-loaded config: fall back to the server default
                 // scope while keeping the config and loading default data.
+                // When the saved scope simply no longer exists (e.g. after
+                // loading a different DB), silently fall back to the default
+                // scope without surfacing an error banner.
                 try {
                     if (scope) {
                         const projects = await Projects.list();
@@ -138,13 +182,11 @@ function Explorer() {
                         if (!projectExists && canConfirmProjectAbsence) {
                             Config.clearFrontendScope();
                             scope = null;
-                            discardedScope = true;
                         } else if (projectExists) {
                             const variants = await Variants.list(scope.project_id);
                             if (!Config.isFrontendScopeAvailable(scope, projects.map(project => project.id), variants.map(variant => variant.id))) {
                                 Config.clearFrontendScope();
                                 scope = null;
-                                discardedScope = true;
                             }
                         }
                     }
@@ -156,9 +198,6 @@ function Explorer() {
                 if (cancelled) return;
                 setDefaultConfig(config);
                 setFrontendScope(scope);
-                if (discardedScope) {
-                    triggerBanner("Saved selection is no longer available; using the default scope", "error");
-                }
                 const multiActive = scope?.mode === 'select' && scope.variant_ids.length >= 2;
                 const compareActive = scope?.mode === 'compare';
                 const variantId = compareActive
@@ -192,6 +231,9 @@ function Explorer() {
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
+        setFilterLabel(undefined);
+        setFilterValue(undefined);
+        setFilterVulnerabilityIds(undefined);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
         // Track origin variant and operation separately for MultiEditBar intersection logic
@@ -318,7 +360,7 @@ function Explorer() {
         );
         return Packages.enrich_with_vulns(loaded, vulnsRef.current);
     }, [currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
-    const outdatedPackagesScopeKey = [
+    const tablePreferenceScopeKey = [
         currentProjectId ?? '',
         currentBaseVariantId ?? '',
         currentVariantId ?? '',
@@ -326,6 +368,7 @@ function Explorer() {
         currentMultiOperation,
         ...(currentVariantIds ?? []),
     ].join(':');
+    const outdatedPackagesScopeKey = tablePreferenceScopeKey;
     const hasOutdatedPackagesScope = Boolean(
         currentProjectId || currentVariantId || (currentVariantIds?.length ?? 0) > 0
     );
@@ -364,8 +407,13 @@ function Explorer() {
                     defaultVariant={defaultConfig.variant}
                     defaultScope={frontendScope}
                     onApply={handleApply}
+                    trackedScanCount={trackedScanCount}
+                    finishedScanCount={finishedScanCount}
+                    activeScanCount={activeScanCount}
+                    onOpenOperationQueue={() => setOperationQueueOpen(true)}
                 />
             </header>
+            <OperationQueueModal isOpen={operationQueueOpen} onClose={() => setOperationQueueOpen(false)} />
 
             <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">
@@ -399,18 +447,22 @@ function Explorer() {
                     projectId={currentProjectId}
                 />}
                 {tab === 'packages' && <TablePackages
+                    key={tablePreferenceScopeKey}
                     packages={pkgs}
                     vulnerabilities={vulns}
+                    preferenceScopeKey={tablePreferenceScopeKey}
                     onShowVulns={showVulnsForPackage}
                     onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
                     outdatedScopeKey={outdatedPackagesScopeKey}
                 />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
+                    key={tablePreferenceScopeKey}
                     appendAssessment={appendAssessment}
                     appendCVSS={appendCVSS}
                     patchVuln={patchVuln}
                     vulnerabilities={vulns}
+                    preferenceScopeKey={tablePreferenceScopeKey}
                     filterLabel={filterLabel}
                     filterValue={filterValue}
                     filterVulnerabilityIds={filterVulnerabilityIds}
@@ -418,6 +470,8 @@ function Explorer() {
                     projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
+                    variantIds={currentVariantIds}
+                    multiOperation={currentMultiOperation}
                     onRefreshComplete={handleRefreshComplete}
                     missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
                     onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
@@ -427,16 +481,12 @@ function Explorer() {
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
-                {tab === 'transfer' && <Transfer projectId={currentProjectId} onDataChanged={(message) => {
-                    if (message) setLoadingMessage(message);
-                    loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                }} />}
                 {tab === 'settings' && <Settings onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     Config.get().then(config => setDefaultConfig(config)).catch(() => {});
                     setSelectorKey(k => k + 1);
                     loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                }} onLoadingMessage={(msg) => {
+                }} projectId={currentProjectId} onLoadingMessage={(msg) => {
                     if (msg) {
                         setLoadingMessage(msg);
                         setIsLoadingData(true);

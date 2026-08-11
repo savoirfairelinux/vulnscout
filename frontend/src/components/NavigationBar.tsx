@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRightLeft, faRobot } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import VersionDisplay from './VersionDisplay';
@@ -16,9 +16,13 @@ type Props = {
   defaultVariant?: { id: string; name: string } | null;
   defaultScope?: FrontendScope | null;
   onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void;
+  trackedScanCount?: number;
+  finishedScanCount?: number;
+  activeScanCount?: number;
+  onOpenOperationQueue?: () => void;
 };
 
-function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, defaultScope, onApply }: Readonly<Props>) {
+function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue }: Readonly<Props>) {
   return (
   <nav aria-label="Main navigation">
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
@@ -91,18 +95,6 @@ function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, default
         </button>
       </li>
 
-      {/* === Transfer === */}
-      <li className={[bgHoverColor, tab == 'transfer' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('transfer')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'transfer' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faRightLeft} className="mr-1" />
-          Transfer
-        </button>
-      </li>
-
       <li className={[bgHoverColor, tab == 'ai' && bgActiveColor].join(' ')}>
         <button
           onClick={() => changeTab('ai')}
@@ -112,11 +104,6 @@ function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, default
           <FontAwesomeIcon icon={faRobot} className="mr-1" />
           AI
         </button>
-      </li>
-
-      {/* === Divider === */}
-      <li className="flex items-center mx-3">
-        <div className="border-l h-8 dark:border-neutral-300"></div>
       </li>
 
       {/* === Export === */}
@@ -133,6 +120,24 @@ function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, default
 
       {/* Spacer */}
       <li className="grow"></li>
+
+      {trackedScanCount > 0 && (
+        <li className="flex items-stretch">
+          <button
+            type="button"
+            onClick={onOpenOperationQueue}
+            title={activeScanCount > 0 ? `${activeScanCount} operation${activeScanCount === 1 ? '' : 's'} in progress` : 'Open operation queue'}
+            aria-label={`Open operation queue, ${finishedScanCount} of ${trackedScanCount} finished`}
+            className={`flex h-full items-center px-4 py-2 transition-colors ${bgHoverColor}`}
+          >
+            <FontAwesomeIcon icon={activeScanCount > 0 ? faArrowsRotate : faCheck} className={`mr-2 ${activeScanCount > 0 ? 'animate-spin text-cyan-200' : 'text-green-300'}`} />
+            <span className="flex flex-col items-start leading-tight">
+              <span className="text-sm font-bold">Operation queue</span>
+              <span className="text-xs font-normal tabular-nums opacity-75">{finishedScanCount} / {trackedScanCount} finished</span>
+            </span>
+          </button>
+        </li>
+      )}
 
       {/* === Project / Variant Selector === */}
       <li className="flex items-stretch">

@@ -1184,6 +1184,14 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
 // ===========================================================================
 
 describe('Review — filters, search and keyboard', () => {
+    test('does not provide a variants filter', async () => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
+        render(<Review projectId="proj1" />);
+
+        await screen.findByText('CVE-2020-1111');
+        expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
+    });
+
     test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
         const mixedOutdated = {
             ...makeAssessment('outdated', 'v1'),
@@ -1458,6 +1466,22 @@ describe('Review — deleting an assessment', () => {
 // ===========================================================================
 
 describe('Review — import and export', () => {
+    test('shows Import before Export on the Assessments and AI Assessments tabs', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        const transferActions = () => screen.getAllByRole('button')
+            .map(button => button.textContent?.trim())
+            .filter(label => label === 'Export' || label === 'Import');
+
+        await screen.findByTitle('Edit assessment');
+        expect(transferActions()).toEqual(['Import', 'Export']);
+
+        await user.click(screen.getByText('AI Assessments'));
+        expect(transferActions()).toEqual(['Import', 'Export']);
+    });
+
     test('exports selected variants as VulnScout JSON', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
@@ -1562,7 +1586,9 @@ describe('Review — import and export', () => {
 
         await screen.findByText(/Imported:/);
         const importCall = postCalls().find(call => String(call[0]).includes('/api/assessments/review/import-custom-data'));
-        expect(JSON.parse(String((importCall?.[1] as RequestInit).body)).timestamp_policy).toBe('current');
+        const importPayload = JSON.parse(String((importCall?.[1] as RequestInit).body));
+        expect(importPayload.timestamp_policy).toBe('current');
+        expect(importPayload.project_id).toBe('proj1');
     });
 
     test('imports OpenVEX into one selected variant without using the filename', async () => {

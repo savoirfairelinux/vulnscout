@@ -8,6 +8,7 @@ type Props = {
     onClose: () => void;
     testId?: string;
     contentClassName?: string;
+    dialogClassName?: string;
 };
 
 function Popup({
@@ -17,6 +18,7 @@ function Popup({
     onClose,
     testId = "popup-backdrop",
     contentClassName = "",
+    dialogClassName = "",
 }: Readonly<Props>) {
     useEffect(() => {
         if (!isOpen) return;
@@ -40,7 +42,7 @@ function Popup({
             }}
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
         >
-            <section role="dialog" aria-modal="true" className="relative mx-4 w-full max-w-md rounded-lg bg-white shadow dark:bg-gray-700">
+            <section role="dialog" aria-modal="true" className={`relative mx-4 w-full max-w-md rounded-lg bg-white shadow dark:bg-gray-700 ${dialogClassName}`.trim()}>
                 <header className="flex items-center justify-between border-b p-4 md:p-5 dark:border-gray-600">
                     <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
                     <button

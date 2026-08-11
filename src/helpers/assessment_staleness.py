@@ -154,7 +154,7 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
     scan_rows = db.session.execute(
         db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.scan_source, Scan.timestamp)
         .where(Scan.variant_id.in_(list(valid_variants.keys())))
-        .order_by(Scan.variant_id, Scan.timestamp.desc())
+        .order_by(Scan.variant_id, Scan.timestamp.desc(), Scan.id.desc())
     ).all()
 
     # variant_id -> latest SBOM scan id (packages)

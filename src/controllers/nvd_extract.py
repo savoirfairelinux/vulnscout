@@ -12,6 +12,36 @@ from __future__ import annotations
 import datetime
 
 
+def extract_affected_cpes(cve: dict) -> list[str]:
+    """Return deduplicated vulnerable CPE criteria from NVD configurations."""
+    configurations = cve.get("configurations", [])
+    if isinstance(configurations, dict):
+        configurations = [configurations]
+    if not isinstance(configurations, list):
+        return []
+
+    affected_cpes: list[str] = []
+
+    def visit_nodes(nodes: object) -> None:
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            for match in node.get("cpeMatch", []):
+                if not isinstance(match, dict) or not match.get("vulnerable"):
+                    continue
+                criteria = match.get("criteria")
+                if isinstance(criteria, str) and criteria and criteria not in affected_cpes:
+                    affected_cpes.append(criteria)
+            visit_nodes(node.get("nodes", []))
+
+    for configuration in configurations:
+        if isinstance(configuration, dict):
+            visit_nodes(configuration.get("nodes", []))
+    return affected_cpes
+
+
 def extract_cve_details(cve: dict) -> dict:
     """Extract description, severity, links, weaknesses from an NVD CVE dict.
 
@@ -108,6 +138,7 @@ def extract_cve_details(cve: dict) -> dict:
         "links": links,
         "publish_date": publish_date,
         "weaknesses": weaknesses or None,
+        "cpes": extract_affected_cpes(cve),
         "nvd_last_modified": cve.get("lastModified"),
     }
 

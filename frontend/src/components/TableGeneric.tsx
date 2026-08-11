@@ -5,6 +5,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
 import { ReactNode, useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Fuse from 'fuse.js';
+import { useLocalStorageState } from '../handlers/localStorage';
 
 declare module '@tanstack/react-table' {
     interface ColumnDefBase<TData extends RowData, TValue = unknown> {
@@ -30,6 +31,7 @@ type Props<DataType> = {
     onFilteredDataChange?: (filteredData: DataType[]) => void;
     onFocusedRowChange?: (rowIndex: number | null) => void;
     onHoverData?: (item: DataType) => Promise<DataType | null | undefined>;
+    persistenceKey?: string;
     /**
      * Values checked by the `only:<term>` search operator. When provided, a row
      * is kept only if EVERY string returned here satisfies the (optionally
@@ -63,12 +65,19 @@ function TableGeneric<DataType> ({
     onFilteredDataChange,
     onFocusedRowChange,
     onHoverData,
-    forAllValues
+    forAllValues,
+    persistenceKey
 }: Readonly<Props<DataType>>) {
-    const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 })
+    const [pagination, setPagination] = useLocalStorageState<PaginationState>(
+        persistenceKey ? `${persistenceKey}.pagination` : null,
+        { pageIndex: 0, pageSize: 50 }
+    )
     const pageIndex = pagination.pageIndex
     const itemsPerPage = pagination.pageSize
-    const [sorting, setSorting] = useState<SortingState>([])
+    const [sorting, setSorting] = useLocalStorageState<SortingState>(
+        persistenceKey ? `${persistenceKey}.sorting` : null,
+        []
+    )
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null)
     const [hintColumnId, setHintColumnId] = useState<string | null>(null)
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())

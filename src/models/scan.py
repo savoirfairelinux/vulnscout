@@ -87,7 +87,7 @@ class Scan(Base):
     def get_all() -> list["Scan"]:
         """Return all scans ordered by timestamp."""
         return list(db.session.execute(
-            db.select(Scan).order_by(Scan.timestamp)
+            db.select(Scan).order_by(Scan.timestamp, Scan.id)
         ).scalars().all())
 
     @staticmethod
@@ -97,21 +97,21 @@ class Scan(Base):
             db.select(Scan)
             .join(Variant, Scan.variant_id == Variant.id)
             .where(Variant.project_id == project_id)
-            .order_by(Scan.timestamp)
+            .order_by(Scan.timestamp, Scan.id)
         ).scalars().all())
 
     @staticmethod
     def get_by_variant_id(variant_id: uuid.UUID) -> list["Scan"]:
         """Return all scans belonging to *variant_id*, ordered by timestamp."""
         return list(db.session.execute(
-            db.select(Scan).where(Scan.variant_id == variant_id).order_by(Scan.timestamp)
+            db.select(Scan).where(Scan.variant_id == variant_id).order_by(Scan.timestamp, Scan.id)
         ).scalars().all())
 
     @staticmethod
     def get_latest() -> "Scan | None":
         """Return the most recently created scan, or ``None`` if no scans exist."""
         result = db.session.execute(
-            db.select(Scan).order_by(Scan.timestamp.desc()).limit(1)
+            db.select(Scan).order_by(Scan.timestamp.desc(), Scan.id.desc()).limit(1)
         ).scalars().first()
         return result
 

@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.20.0] - 2026-08-11
+
+### Added
+- Scans: add a guided launch wizard, allow scan selection after SBOM uploads, and show scan and vulnerability-refresh progress in the operation queue.
+- Vulnerability data: support complete and custom refresh modes, expose NVD affected CPEs, and make affected CPE lists collapsible.
+- Maintenance: clean up outdated data, empty scans, and orphaned CVEs with guarded, optimized deletion queries.
+
+### Changed
+- Tables: persist filters and sorting per variant, restore searches after scoped data loads, use a canonical vulnerability-column order, and add tooltip hints for package, SBOM, and vulnerability data.
+- Settings: streamline project and variant workflows, move assessment transfers into settings, and link MCP setup after saving AI context.
+- Scans: default NVD scans to local data, serialize queued triggers, preserve refresh scope, and refresh vulnerabilities after queued scans complete.
+- Assessments: remove variant filters and scope assessment history.
+- Vulnerability data: clarify missing, incomplete, published-date, EU KEV, and refresh-state messaging.
+
+### Fixed
+- Refresh: integrate vulnerability refreshes with the queue, improve progress handling, and bound EPSS bulk work to known CVEs without blocking large refreshes.
+- EUVD: base incomplete-data banners on fetch timestamps and clear stale KEV flags.
+- Imports: scope web custom-data imports to their project, reject foreign variant IDs, and fall back to variant names.
+- Scoping: silently fall back to the default scope after a database switch and rerun restored searches when scoped data becomes available.
+
+---
+
 ## [0.19.0] - 2026-07-29
 
 ### Added

@@ -188,6 +188,7 @@ class Variants {
         projectId: string,
         variantId: string,
         files: File[],
+        refreshSources: string[] = ["epss"],
     ): Promise<{ upload_id: string; scan_id: string; message: string }> {
         const formData = new FormData();
         for (const file of files) {
@@ -195,6 +196,14 @@ class Variants {
         }
         formData.append("project_id", projectId);
         formData.append("variant_id", variantId);
+        if (refreshSources.length === 0) {
+            // Explicit sentinel: the user unchecked every source, don't fall back to the default.
+            formData.append("refresh_sources", "none");
+        } else {
+            for (const source of refreshSources) {
+                formData.append("refresh_sources", source);
+            }
+        }
 
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/sbom/upload",

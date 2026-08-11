@@ -261,3 +261,75 @@ class TestImportTimestampOptions:
             imported = Assessment.get_by_origin([variant_id], origin="custom")
             assert len(imported) == 1
             assert ensure_utc_iso(imported[0].timestamp) == original_timestamp
+
+
+class TestImportCrossInstanceVariantId:
+    """The VulnScout JSON's ``variant_id`` is only meaningful within the
+    instance that exported it: another database mints its own variant UUIDs,
+    so re-importing the file elsewhere must not trust that UUID as-is.
+    """
+
+    def test_foreign_variant_id_falls_back_to_variant_name(self, app, tmp_path):
+        from src.models.assessment import Assessment
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("CrossInstanceProject")
+            variant = Variant.create("x86", project.id)
+            project_name = project.name
+            variant_id = variant.id
+
+        foreign_variant_id = "99999999-9999-9999-9999-999999999999"
+        import_file = tmp_path / "custom-vulnscout-foreign.json"
+        import_file.write_text(json.dumps({
+            "version": 1,
+            "assessments": [{
+                "vuln_id": "CVE-2099-20001",
+                "status": "affected",
+                "packages": ["cross-instance@1.0"],
+                "variant_id": foreign_variant_id,
+                "variant": "x86",
+            }],
+        }))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "Imported 1 assessments" in result.output
+        with app.app_context():
+            imported = Assessment.get_by_origin([variant_id], origin="custom")
+            assert len(imported) == 1
+            assert imported[0].vuln_id == "CVE-2099-20001"
+
+    def test_foreign_variant_id_without_name_is_reported_as_error(self, app, tmp_path):
+        from src.models.project import Project
+
+        with app.app_context():
+            project = Project.create("CrossInstanceProjectNoName")
+            project_name = project.name
+
+        foreign_variant_id = "99999999-9999-9999-9999-999999999999"
+        import_file = tmp_path / "custom-vulnscout-foreign-no-name.json"
+        import_file.write_text(json.dumps({
+            "version": 1,
+            "assessments": [{
+                "vuln_id": "CVE-2099-20002",
+                "status": "affected",
+                "packages": ["cross-instance-noname@1.0"],
+                "variant_id": foreign_variant_id,
+            }],
+        }))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code != 0
+        assert foreign_variant_id in result.output

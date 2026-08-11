@@ -75,6 +75,7 @@ function useRefreshProgressEffect(
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import ExplicitSearchInput from '../components/ExplicitSearchInput';
+import { useLocalStorageState } from '../handlers/localStorage';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -85,12 +86,17 @@ type Props = {
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
     filterVulnerabilityIds?: string[];
+    preferenceScopeKey?: string;
     variantId?: string;
     projectId?: string;
     /** Origin variant when compare mode is active */
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    /** Selected variants when a multi-variant (union/intersection/difference) view is active */
+    variantIds?: string[];
+    /** Multi-variant set operation ('union' | 'intersection' | 'difference') */
+    multiOperation?: string;
     /** Called when an NVD, EPSS, or GHSA bulk refresh completes, so the parent can reload data */
     onRefreshComplete?: () => void;
     missingEuvdDataBannerDismissed?: boolean;
@@ -363,7 +369,37 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
+// Canonical, fixed order for the vulnerability table columns. The rendered
+// order and the "Columns" filter list both follow this array so a column
+// always appears in the same position regardless of the order in which the
+// user toggled it on. (The 'Select' and 'Actions' columns are always pinned
+// first and last respectively and are not part of this list.)
+const VULN_COLUMN_ORDER = [
+    'ID',
+    'Severity',
+    'EU KEV',
+    'EPSS Score',
+    'Attack Vector',
+    'SBOM Affected',
+    'Variants',
+    'Status',
+    'Published Date',
+    'Estimated Effort',
+    'Last Assessed',
+    'First Scan Date',
+    'Last Fetched',
+    'Last Updated',
+    'Sources',
+] as const;
+
+// Columns shown by default (a subset of VULN_COLUMN_ORDER, kept in the same
+// canonical order).
+const DEFAULT_VISIBLE_COLUMNS = [
+    'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed',
+];
+
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
+    const preferenceKey = `vulnscout.tables.vulnerabilities.${encodeURIComponent(preferenceScopeKey)}`;
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -383,6 +419,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             ...summary,
             texts: details.texts,
             urls: details.urls,
+            cpes: details.cpes,
             severity: { ...summary.severity, cvss: details.severity.cvss },
             details_loaded: true,
         } : { ...summary, details_loaded: true };
@@ -408,6 +445,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     ...summary,
                     texts: details.texts,
                     urls: details.urls,
+                    cpes: details.cpes,
                     severity: {
                         ...summary.severity,
                         cvss: details.severity.cvss,
@@ -433,24 +471,20 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         return () => controller.abort();
     }, [modalVuln, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
-    const [search, setSearch] = useState<string>('');
-    const [draftSearch, setDraftSearch] = useState<string>('');
+    const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
+    const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
     const [descriptionMatches, setDescriptionMatches] = useState<Record<string, Set<string>>>({});
     const [descriptionSearchLoading, setDescriptionSearchLoading] = useState(false);
     const [descriptionSearchError, setDescriptionSearchError] = useState(false);
-    const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
-    const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
-    const [selectedSources, setSelectedSources] = useState<string[]>([]);
-    const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
-    // Track variants the user has explicitly unchecked. All variants (including
-    // any discovered later) are considered selected unless present here, which
-    // avoids a first-render flash where variant rows briefly disappear.
-    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
-    const [publishedDateFilterType, setPublishedDateFilterType] = useState<string>('');
-    const [publishedDateValue, setPublishedDateValue] = useState<string>('');
-    const [publishedDaysValue, setPublishedDaysValue] = useState<string>('');
-    const [publishedDateFrom, setPublishedDateFrom] = useState<string>('');
-    const [publishedDateTo, setPublishedDateTo] = useState<string>('');
+    const [selectedSeverities, setSelectedSeverities] = useLocalStorageState<string[]>(`${preferenceKey}.severities`, []);
+    const [selectedStatuses, setSelectedStatuses] = useLocalStorageState<string[]>(`${preferenceKey}.statuses`, []);
+    const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
+    const [selectedPackages, setSelectedPackages] = useLocalStorageState<string[]>(`${preferenceKey}.packages`, []);
+    const [publishedDateFilterType, setPublishedDateFilterType] = useLocalStorageState(`${preferenceKey}.publishedDate.type`, '');
+    const [publishedDateValue, setPublishedDateValue] = useLocalStorageState(`${preferenceKey}.publishedDate.value`, '');
+    const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '');
+    const [publishedDateFrom, setPublishedDateFrom] = useLocalStorageState(`${preferenceKey}.publishedDate.from`, '');
+    const [publishedDateTo, setPublishedDateTo] = useLocalStorageState(`${preferenceKey}.publishedDate.to`, '');
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
@@ -464,21 +498,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [localMissingEuvdDataBannerDismissed, setLocalMissingEuvdDataBannerDismissed] = useState(false);
     const [localMissingPublishedDateDataBannerDismissed, setLocalMissingPublishedDateDataBannerDismissed] = useState(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
-    const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
+    const [visibleColumns, setVisibleColumns] = useLocalStorageState<string[]>(`${preferenceKey}.visibleColumns`, [
+        ...DEFAULT_VISIBLE_COLUMNS
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
-    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
-    const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
-    const [showCustomEpssFilter, setShowCustomEpssFilter] = useState<boolean>(false);
-    const [epssRange, setEpssRange] = useState<{ min: number; max: number }>({ min: 0, max: 100 });
-    const [selectedAttackVectors, setSelectedAttackVectors] = useState<string[]>([]);
-    const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
+    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useLocalStorageState(`${preferenceKey}.customSeverity.enabled`, false);
+    const [severityRange, setSeverityRange] = useLocalStorageState(`${preferenceKey}.customSeverity.range`, { min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+    const [showCustomEpssFilter, setShowCustomEpssFilter] = useLocalStorageState(`${preferenceKey}.customEpss.enabled`, false);
+    const [epssRange, setEpssRange] = useLocalStorageState(`${preferenceKey}.customEpss.range`, { min: 0, max: 100 });
+    const [selectedAttackVectors, setSelectedAttackVectors] = useLocalStorageState<string[]>(`${preferenceKey}.attackVectors`, []);
+    const [selectedFirstScanDates, setSelectedFirstScanDates] = useLocalStorageState<string[]>(`${preferenceKey}.firstScanDates`, []);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
-    const [aiSuggestionFilter, setAiSuggestionFilter] = useState<'any' | 'has' | 'no'>('any');
+    const [aiSuggestionFilter, setAiSuggestionFilter] = useLocalStorageState<'any' | 'has' | 'no'>(`${preferenceKey}.aiSuggestion`, 'any');
     const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -544,14 +578,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         if (missingPublishedDateDataBannerDismissed === undefined) setLocalMissingPublishedDateDataBannerDismissed(dismissed);
     }, [missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange]);
 
-    // The EU KEV column renders a badge only when a vulnerability is flagged
-    // known_exploited; every other row shows an empty placeholder. The backend
-    // also always serialises an `euvd` object (often with just an alias id and
-    // known_exploited=false), so object presence does not indicate KEV data.
-    // Mirror the column: KEV data "exists" only when at least one vulnerability
-    // is actually known-exploited.
     const hasAnyEuvdData = useMemo(
-        () => vulnerabilities.some(v => v.euvd?.known_exploited === true),
+        () => vulnerabilities.some(v => typeof v.euvd_fetched_at === "string" && v.euvd_fetched_at !== ""),
         [vulnerabilities]
     );
     const previousHasAnyEuvdData = useRef(hasAnyEuvdData);
@@ -569,11 +597,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
     const shouldShowMissingDataBanner = shouldShowMissingEuvdDataBanner || shouldShowMissingPublishedDateDataBanner;
 
-    const missingDataBannerMessage = shouldShowMissingEuvdDataBanner && shouldShowMissingPublishedDateDataBanner
-        ? <><strong className="font-bold">EU KEV data</strong> and <strong className="font-bold">published date data</strong> need updating. Use the "Refresh vulnerability data" button to update them.</>
-        : shouldShowMissingEuvdDataBanner
-            ? <><strong className="font-bold">EU KEV data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>
-            : <><strong className="font-bold">Published date data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>;
+    const missingDataBannerMessage = <>Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.</>;
 
     const dismissMissingDataBanner = () => {
         if (shouldShowMissingEuvdDataBanner) setMissingEuvdDataBannerDismissed(true);
@@ -601,7 +625,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
-    }, [filterLabel, filterValue]);
+    }, [filterLabel, filterValue, setSelectedPackages, setSelectedSeverities, setSelectedSources, setSelectedStatuses]);
 
     // Fetch pending AI suggestions (origin == 'ai') for the current scope. These are
     // excluded from the vulnerabilities' assessments array by the backend, so they must
@@ -762,25 +786,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         [sources_list]
     );
 
-    const variants_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
-        vuln.variants.forEach(variant => {
-            if (!acc.includes(variant) && variant != '')
-                acc.push(variant)
-        });
-        return acc.sort();
-    }, []), [vulnerabilities])
-
-    // All variants are checked by default; a variant only leaves the selection
-    // once the user explicitly unchecks it. Deriving the selection during render
-    // (instead of populating it from an effect) prevents a first-render flash.
-    const selectedVariants = useMemo(
-        () => variants_list.filter(v => !deselectedVariants.includes(v)),
-        [variants_list, deselectedVariants]
-    );
-    const setSelectedVariants = useCallback((values: string[]) => {
-        setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
-    }, [variants_list]);
-
     // Distinct raw package ids across all vulnerabilities, sorted by display label.
     // Currently selected packages are always included so a stale or absent
     // preselection (e.g. from filterValue) can still be unchecked by the user.
@@ -931,6 +936,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     </div>
                 );
             },
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">EPSS Score</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Estimates the probability that this vulnerability will be exploited in the next 30 days.</p>
+                    <p>Higher percentages indicate a higher likelihood of exploitation.</p>
+                    <p>Refresh EPSS data to populate this score.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'EPSS Score helper',
             cell: info => {
                 const epss = info.getValue();
                 const fetching = epssProgress?.in_progress && (!epss.score || epss.score === 0);
@@ -957,6 +971,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('severity', {
             id: 'severity',
             header: () => <div className="flex items-center justify-center">Attack Vector</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Attack Vector</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows how an attacker needs to reach the vulnerable component.</p>
+                    <p>Values come from CVSS records, such as Network, Adjacent, Local, or Physical.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Attack Vector helper',
             cell: info => <div className="flex items-center justify-center h-full text-center">
                 {[...(new Set(info.getValue().cvss.map(cvss => cvss.attack_vector).filter(av => av != undefined)))]?.join(', ')}
             </div>,
@@ -992,6 +1014,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('effort.likely', {
             id: 'effort.likely',
             header: () => <div className="flex items-center justify-center">Estimated Effort</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Estimated Effort</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows the estimated time required to assess the vulnerability.</p>
+                    <p>The value reflects the likely effort estimate for the current vulnerability.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Estimated Effort helper',
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().formatHumanShort()}</div>,
             enableSorting: true,
             sortingFn: (rowA, rowB) => rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds,
@@ -1000,6 +1030,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('assessments', {
             id: 'assessments',
             header: () => <div className="flex items-center justify-center">Last Assessed</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Last Assessed</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows the most recent creation or update time across all assessments in the current scope.</p>
+                    <p>Vulnerabilities without an assessment display “No assessment”.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Last Assessed helper',
             cell: info => {
                 const assessments = info.getValue();
                 if (!assessments || assessments.length === 0) {
@@ -1063,6 +1101,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     <p>Select vulnerabilities and refresh their data when a date is unavailable.</p>
                 </div>
             </>,
+            HintAriaLabel: 'Published Date helper',
             cell: info => {
                 const published = info.getValue();
                 const fetching = nvdProgress?.in_progress && !published;
@@ -1070,7 +1109,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
                 }
                 if (!published) {
-                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Requires a NVD refresh</div>;
+                    // A published date is provided by the NVD refresh (CVEs) or the
+                    // GitHub Security Advisory refresh (GHSA ids). Show "-" only when
+                    // such a refresh has already run and still returned no date;
+                    // otherwise prompt the user to refresh the vulnerability data.
+                    const refreshed = Boolean(info.row.original.nvd_fetched_at || info.row.original.ghsa_fetched_at);
+                    return refreshed
+                        ? <div className="flex items-center justify-center h-full text-center text-gray-400">—</div>
+                        : <div className="flex items-center justify-center h-full text-center text-gray-400">Requires Refresh Vulnerability Data</div>;
                 }
                 const publishedDate = new Date(published);
                 const formattedDate = publishedDate.toLocaleDateString(undefined, {
@@ -1095,6 +1141,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('first_scan_date', {
             id: 'first_scan_date',
             header: () => <div className="flex items-center justify-center">First Scan Date</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">First Scan Date</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when this vulnerability was first detected in the scanned SBOM data.</p>
+                    <p>This date is recorded by VulnScout and is not the vulnerability publication date.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'First Scan Date helper',
             cell: info => {
                 const scanDate = info.getValue();
                 if (!scanDate) {
@@ -1127,6 +1181,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('data_fetched_at', {
             id: 'data_fetched_at',
             header: () => <div className="flex items-center justify-center">Last Fetched</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Last Fetched</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when vulnerability data was last retrieved from an external source.</p>
+                    <p>A value of “Never” means no external vulnerability data has been fetched yet.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Last Fetched helper',
             cell: info => {
                 const val = info.getValue();
                 if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
@@ -1153,6 +1215,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('data_updated_at', {
             id: 'data_updated_at',
             header: () => <div className="flex items-center justify-center">Last Updated</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Last Updated</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when the vulnerability record was last updated with new data.</p>
+                    <p>A value of “Never” means the record has not received an external data update.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Last Updated helper',
             cell: info => {
                 const val = info.getValue();
                 if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
@@ -1196,6 +1266,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('found_by', {
             id: 'found_by',
             header: () => <div className="flex items-center justify-center">Sources</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Sources</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Lists the vulnerability sources that reported this vulnerability.</p>
+                    <p>Use this information to trace the origin of the vulnerability data.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Vulnerability Sources helper',
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
                     {info.renderValue()
@@ -1218,16 +1296,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             </>,
             cell: info => {
                 const euvd = info.getValue();
-                if (!euvd?.known_exploited) {
-                    return <div className="flex items-center justify-center h-full text-center text-gray-500">—</div>;
+                if (euvd?.known_exploited) {
+                    return (
+                        <div className="flex items-center justify-center h-full">
+                            <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
+                                Known Exploited
+                            </span>
+                        </div>
+                    );
                 }
-                return (
-                    <div className="flex items-center justify-center h-full">
-                        <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
-                            Known Exploited
-                        </span>
-                    </div>
-                );
+                const fetching = euvdProgress?.in_progress;
+                if (fetching) {
+                    return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
+                }
+                // The EU KEV signal comes from the ENISA EUVD refresh. Show "-" only
+                // when that refresh has already run and the vulnerability was not on
+                // the KEV list; otherwise prompt the user to refresh the data.
+                const refreshed = Boolean(info.row.original.euvd_fetched_at);
+                return refreshed
+                    ? <div className="flex items-center justify-center h-full text-center text-gray-500">—</div>
+                    : <div className="flex items-center justify-center h-full text-center text-gray-400">Requires Refresh Vulnerability Data</div>;
             },
             sortingFn: (rowA, rowB) => {
                 const a = rowA.original.euvd?.known_exploited ? 1 : 0;
@@ -1259,7 +1347,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress, euvdProgress]);
 
     const columns = useMemo(() => {
         const columnByDisplayName = new Map(
@@ -1268,7 +1356,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 column,
             ])
         );
-        const selectedColumns = visibleColumns.flatMap(displayName => {
+        const selectedColumns = VULN_COLUMN_ORDER.flatMap(displayName => {
+            if (!visibleColumns.includes(displayName)) return [];
             const column = columnByDisplayName.get(displayName);
             return column ? [column] : [];
         });
@@ -1296,7 +1385,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             }
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
-            if (el.variants.length && !selectedVariants.some(variant => el.variants.includes(variant))) return false;
 
             // Published date filter
             if (publishedDateFilterType && el.published) {
@@ -1388,7 +1476,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
             return true;
         });
-    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
+    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
 
     const searchableData = useMemo(() => dataToDisplay.map(vuln => ({
         ...vuln,
@@ -1436,7 +1524,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         } finally {
             if (!controller.signal.aborted) setDescriptionSearchLoading(false);
         }
-    }, [draftSearch, vulnerabilities, variantId, projectId]);
+    }, [draftSearch, vulnerabilities, variantId, projectId, setSearch]);
+
+    const applySearchRef = useRef(applySearch);
+    applySearchRef.current = applySearch;
+
+    // Re-run the persisted/restored search whenever the scoped vulnerability
+    // data changes. Explorer loads vulnerabilities asynchronously and may
+    // initially render the previous scope's rows, so restoring only once on
+    // mount would evaluate the search against stale or empty IDs and leave an
+    // incorrectly filtered table. Re-running on data changes keeps
+    // descriptionMatches consistent with the current scope; applySearch aborts
+    // any in-flight description request before starting a new one. Depending on
+    // `vulnerabilities` (not `draftSearch`) avoids firing a description search
+    // on every keystroke.
+    useEffect(() => {
+        if (draftSearch.trim()) void applySearchRef.current();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [vulnerabilities]);
 
     useEffect(() => () => descriptionSearchController.current?.abort(), []);
 
@@ -1471,14 +1576,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedPackages([]);
-        setSelectedVariants(variants_list);
         setPublishedDateFilterType('');
         setPublishedDateValue('');
         setPublishedDaysValue('');
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
+        setVisibleColumns([...DEFAULT_VISIBLE_COLUMNS]);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
@@ -1645,23 +1749,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
             <FilterOption
                 label="Columns"
-                options={[
-                    'ID',
-                    'Severity',
-                    'EPSS Score',
-                    'SBOM Affected',
-                    'Variants',
-                    'Attack Vector',
-                    'Status',
-                    'Estimated Effort',
-                    'Last Assessed',
-                    'Published Date',
-                    'First Scan Date',
-                    'Last Fetched',
-                    'Last Updated',
-                    'Sources',
-                    'EU KEV'
-                ]}
+                options={[...VULN_COLUMN_ORDER]}
                 selected={visibleColumns}
                 setSelected={setVisibleColumns}
             />
@@ -1710,15 +1798,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 searchable
                 formatLabel={formatPkgId}
             />
-
-            {variants_list.length > 0 && (
-                <FilterOption
-                    label="Variants"
-                    options={variants_list}
-                    selected={selectedVariants}
-                    setSelected={setSelectedVariants}
-                />
-            )}
 
             {/* Published Date Filter Dropdown */}
             <PublishedDateFilter
@@ -1926,6 +2005,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 <span className="h-6 border-l border-gray-400" aria-hidden="true" />
                 <RefreshVulnerabilityData
                     vulnerabilities={vulnerabilities}
+                    getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
+                    onRefreshComplete={onRefreshComplete}
                     triggerBanner={triggerBanner}
                     hideBanner={closeBanner}
                     nvdProgress={nvdProgress}
@@ -1950,6 +2031,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         />
 
         <TableGeneric
+            persistenceKey={preferenceKey}
             fuseKeys={fuseKeys}
             forAllValues={(vuln) => (vuln.packages_current?.length ? vuln.packages_current : vuln.packages)}
             hoverField="texts"

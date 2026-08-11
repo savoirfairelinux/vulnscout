@@ -7,41 +7,26 @@ beforeEach(() => {
     mockFetch.mockReset();
 });
 
-describe("ScansHandler.triggerNvdScan — mode parameter", () => {
+describe("ScansHandler.triggerNvdScan", () => {
     const variantId = "variant-uuid-1234";
 
-    it("appends mode=local by default", async () => {
+    it("relies on the backend local data-source default", async () => {
         mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
         await ScansHandler.triggerNvdScan(variantId);
         const url: string = mockFetch.mock.calls[0][0];
-        expect(url).toContain("mode=local");
-    });
-
-    it("appends mode=local when explicitly passed", async () => {
-        mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
-        await ScansHandler.triggerNvdScan(variantId, true, "local");
-        const url: string = mockFetch.mock.calls[0][0];
-        expect(url).toContain("mode=local");
-    });
-
-    it("appends mode=api when api is passed", async () => {
-        mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
-        await ScansHandler.triggerNvdScan(variantId, true, "api");
-        const url: string = mockFetch.mock.calls[0][0];
-        expect(url).toContain("mode=api");
+        expect(url).not.toContain("mode=");
     });
 
     it("also includes exclude_kernel in the URL", async () => {
         mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
-        await ScansHandler.triggerNvdScan(variantId, false, "api");
+        await ScansHandler.triggerNvdScan(variantId, false);
         const url: string = mockFetch.mock.calls[0][0];
         expect(url).toContain("exclude_kernel=false");
-        expect(url).toContain("mode=api");
     });
 
     it("returns ok:true on 202", async () => {
         mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
-        const result = await ScansHandler.triggerNvdScan(variantId, true, "local");
+        const result = await ScansHandler.triggerNvdScan(variantId);
         expect(result.ok).toBe(true);
     });
 
@@ -51,7 +36,7 @@ describe("ScansHandler.triggerNvdScan — mode parameter", () => {
             status: 409,
             json: async () => ({ error: "already in progress" }),
         } as Response);
-        const result = await ScansHandler.triggerNvdScan(variantId, true, "api");
+        const result = await ScansHandler.triggerNvdScan(variantId);
         expect(result.ok).toBe(false);
         expect(result.error).toContain("already in progress");
     });

@@ -53,6 +53,7 @@ def apply_nvd_update(vuln_record, details: dict, now: datetime.datetime) -> bool
         ("attack_vector", "attack_vector"),
         ("links", "links"),
         ("weaknesses", "weaknesses"),
+        ("cpes", "cpes"),
         ("publish_date", "publish_date"),
         ("nvd_last_modified", "nvd_last_modified"),
     ]

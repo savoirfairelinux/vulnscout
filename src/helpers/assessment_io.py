@@ -601,6 +601,8 @@ def import_custom_data(
         ).all()
         return [variant_id for (variant_id,) in rows]
 
+    known_variant_ids = {v.id for v in variant_by_name.values()}
+
     def _resolve_variant(raw_item: dict) -> "_uuid.UUID | None":
         if variant_id is not None:
             return variant_id
@@ -613,12 +615,25 @@ def import_custom_data(
             return None
 
         try:
-            return _uuid.UUID(str(variant_token))
+            parsed = _uuid.UUID(str(variant_token))
         except (ValueError, TypeError):
-            mapped_variant = variant_by_name.get(str(variant_token))
-            if mapped_variant is None:
-                return None
-            return mapped_variant.id
+            parsed = None
+
+        # A variant_id copied from another VulnScout instance's export never
+        # matches a variant in this database (each instance generates its own
+        # UUIDs), so it must not be trusted as-is: doing so silently attaches
+        # the record to a variant_id that no local query will ever match.
+        # Fall back to the human-readable name in that case.
+        if parsed is not None and parsed in known_variant_ids:
+            return parsed
+
+        name_token = raw_item.get("variant")
+        if name_token in (None, ""):
+            name_token = variant_token
+        mapped_variant = variant_by_name.get(str(name_token))
+        if mapped_variant is None:
+            return None
+        return mapped_variant.id
 
     def _import_assessments(
         key: str,
@@ -650,6 +665,16 @@ def import_custom_data(
 
             # Determine which variant to attach to
             target_variant_id = _resolve_variant(a)
+
+            variant_token = a.get("variant_id")
+            if variant_token in (None, ""):
+                variant_token = a.get("variant")
+            if target_variant_id is None and variant_token not in (None, ""):
+                result["errors"].append({
+                    "vuln_id": vuln_name,
+                    "error": f"Variant '{variant_token}' not found",
+                })
+                continue
 
             justification = a.get("justification", "")
             impact_statement = a.get("impact_statement", "")

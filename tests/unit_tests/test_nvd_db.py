@@ -502,6 +502,39 @@ def test_extract_cve_details_non_english_description_fallback():
     assert result["description"] == "Vulnérabilité critique"
 
 
+def test_extract_cve_details_collects_vulnerable_cpes():
+    cve = {
+        "id": "CVE-2024-9998",
+        "descriptions": [],
+        "metrics": {},
+        "references": [],
+        "weaknesses": [],
+        "configurations": [{
+            "nodes": [{
+                "operator": "AND",
+                "cpeMatch": [
+                    {"vulnerable": True, "criteria": "cpe:2.3:a:example:server:1.0:*:*:*:*:*:*:*"},
+                    {"vulnerable": False, "criteria": "cpe:2.3:o:example:os:*:*:*:*:*:*:*:*"},
+                ],
+                "nodes": [{
+                    "operator": "OR",
+                    "cpeMatch": [
+                        {"vulnerable": True, "criteria": "cpe:2.3:a:example:client:2.0:*:*:*:*:*:*:*"},
+                        {"vulnerable": True, "criteria": "cpe:2.3:a:example:server:1.0:*:*:*:*:*:*:*"},
+                    ],
+                }],
+            }],
+        }],
+    }
+
+    result = NVD_DB.extract_cve_details(cve)
+
+    assert result["cpes"] == [
+        "cpe:2.3:a:example:server:1.0:*:*:*:*:*:*:*",
+        "cpe:2.3:a:example:client:2.0:*:*:*:*:*:*:*",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Lines 259-260: extract_cve_details — invalid published date
 # ---------------------------------------------------------------------------

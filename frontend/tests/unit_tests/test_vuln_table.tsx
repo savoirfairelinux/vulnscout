@@ -335,6 +335,53 @@ describe('Vulnerability Table', () => {
         expect(source_header).toBeInTheDocument();
     })
 
+    test('renders columns in a fixed canonical order regardless of saved toggle order', async () => {
+        // ARRANGE - a scrambled visibleColumns order in local storage
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.unscoped.visibleColumns',
+            JSON.stringify(['Sources', 'ID', 'Attack Vector', 'EU KEV', 'Severity', 'EPSS Score']),
+        );
+
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // ACT - collect the rendered data column headers in DOM order
+        const headers = await screen.findAllByRole('columnheader');
+        const canonical = ['ID', 'Severity', 'EU KEV', 'EPSS Score', 'Attack Vector', 'Sources'];
+        const renderedOrder = headers
+            .map(header => header.textContent?.trim() ?? '')
+            .map(text => canonical.find(name => text === name || text.startsWith(name)))
+            .filter((name): name is string => Boolean(name));
+
+        // ASSERT - rendered order follows the canonical order, not the saved order
+        expect(renderedOrder).toEqual(canonical);
+    })
+
+    test('restores visible columns from local storage', async () => {
+        window.localStorage.setItem('vulnscout.tables.vulnerabilities.unscoped.visibleColumns', JSON.stringify(['ID']));
+
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByRole('columnheader', {name: /id/i})).toBeTruthy();
+        expect(screen.queryByRole('columnheader', {name: /severity/i})).toBeNull();
+    });
+
+    test('keeps column preferences separate for each variant scope', async () => {
+        window.localStorage.setItem('vulnscout.tables.vulnerabilities.variant-a.visibleColumns', JSON.stringify(['ID']));
+
+        const variantA = render(<TableVulnerabilities key="variant-a" preferenceScopeKey="variant-a" vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(await screen.findByRole('columnheader', {name: /id/i})).toBeTruthy();
+        expect(screen.queryByRole('columnheader', {name: /severity/i})).toBeNull();
+        variantA.unmount();
+
+        const variantB = render(<TableVulnerabilities key="variant-b" preferenceScopeKey="variant-b" vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(await screen.findByRole('columnheader', {name: /severity/i})).toBeTruthy();
+        variantB.unmount();
+
+        render(<TableVulnerabilities key="variant-a" preferenceScopeKey="variant-a" vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(await screen.findByRole('columnheader', {name: /id/i})).toBeTruthy();
+        expect(screen.queryByRole('columnheader', {name: /severity/i})).toBeNull();
+    });
+
     test('render with vulnerabilities', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -639,6 +686,61 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('re-runs a restored description search when scoped vulnerabilities load', async () => {
+        // A persisted search containing a description term must be evaluated
+        // against the current scope's vulnerabilities. Explorer loads data
+        // asynchronously and can initially render the previous scope's rows, so
+        // the restored search has to re-run once the correct vulnerabilities
+        // arrive instead of staying stuck on the stale evaluation.
+        const scopeKey = 'restore-regression';
+        window.localStorage.setItem(
+            `vulnscout.tables.vulnerabilities.${scopeKey}.draftSearch`,
+            JSON.stringify('authentification'),
+        );
+        window.localStorage.setItem(
+            `vulnscout.tables.vulnerabilities.${scopeKey}.search`,
+            JSON.stringify('authentification'),
+        );
+
+        const staleVulnerabilities = [{
+            ...vulnerabilities[0],
+            id: 'CVE-1999-0001',
+            texts: [],
+            details_loaded: false,
+        }] as Vulnerability[];
+        const scopedVulnerabilities = vulnerabilities.map(vuln => ({
+            ...vuln,
+            texts: [],
+            details_loaded: false,
+        }));
+
+        // Any description search resolves to a match on CVE-2010-1234 only.
+        fetchMock.mockResponse(JSON.stringify({ matches: { authentification: ['CVE-2010-1234'] } }));
+
+        // Initial render uses the stale scope, so the first restore evaluates the
+        // search against IDs that do not belong to the current scope.
+        const view = render(<TableVulnerabilities key={scopeKey} preferenceScopeKey={scopeKey} vulnerabilities={staleVulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+        // The current scope's data arrives, replacing the stale rows in place.
+        view.rerender(<TableVulnerabilities key={scopeKey} preferenceScopeKey={scopeKey} vulnerabilities={scopedVulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // The restored search re-runs against the freshly loaded vulnerabilities.
+        await waitFor(() => {
+            const calls = fetchMock.mock.calls;
+            const lastBody = JSON.parse(calls[calls.length - 1][1]?.body as string);
+            expect(lastBody.vulnerability_ids).toContain('CVE-2010-1234');
+        });
+
+        // And the table ends up filtered to the matching vulnerability only.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+        expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+
+        window.localStorage.clear();
+    })
+
     test('filter by source', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -659,37 +761,12 @@ describe('Vulnerability Table', () => {
         expect(pkg_xyz).toBeInTheDocument();
     })
 
-    test('filter by variant', async () => {
-        // ARRANGE
+    test('does not provide a variant filter', async () => {
         const vulnerabilitiesWithVariants = vulnerabilities.map((vuln, index) => ({
             ...vuln,
             variants: index === 0 ? ['variant-a'] : index === 1 ? ['variant-b'] : ['variant-a', 'variant-b']
         }));
         render(<TableVulnerabilities vulnerabilities={vulnerabilitiesWithVariants} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-        const variantBtn = await screen.getByRole('button', { name: /^variants$/i });
-        expect(variantBtn).toBeInTheDocument();
-        await user.click(variantBtn);
-
-        // All variants are checked by default; unchecking variant-a removes rows
-        // that belong only to variant-a (the first vuln). Rows that also belong to
-        // variant-b stay visible.
-        const variantCheckbox = await screen.getByRole('checkbox', { name: 'variant-a' });
-        expect(variantCheckbox).toBeChecked();
-        await user.click(variantCheckbox);
-
-        await waitFor(() => {
-            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
-        }, { timeout: 5000 });
-
-        expect(await screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
-        expect(await screen.getByRole('cell', {name: /CVE-2024-56730/})).toBeInTheDocument();
-    })
-
-    test('variant filter is hidden when no vulnerability has variants', async () => {
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     })
@@ -1564,16 +1641,38 @@ describe('Vulnerability Table', () => {
     // Published Date Feature Tests
     // =========================================================================
 
-    test('shows an EU KEV sync information banner when EU KEV data is absent', async () => {
+    test('shows an information banner when EU KEV data is absent', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'EU KEV data needs updating. Use the "Refresh vulnerability data" button to update it.'
+            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
         );
-        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
     });
 
-    test('shows a published date sync information banner when published date data is absent', async () => {
+    test('hides the EU KEV banner after a refresh even when no vulnerability is known-exploited', async () => {
+        // A successful EUVD sync stamps euvd_fetched_at on every processed CVE
+        // even when none of them are on the KEV list. The banner must clear
+        // based on that per-row timestamp rather than a positive known_exploited
+        // match, otherwise it would stay visible forever.
+        const refreshedNoKev = vulnerabilities.map(v => ({
+            ...v,
+            euvd_fetched_at: '2026-01-01T00:00:00+00:00',
+            euvd: {
+                id: null,
+                known_exploited: false,
+                sources: [],
+                date_added: null,
+                url: null,
+            },
+        }));
+        render(<TableVulnerabilities vulnerabilities={refreshedNoKev} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // Let any async progress effects settle, then confirm no incomplete banner.
+        expect(await screen.findByText('CVE-2010-1234')).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    test('shows an information banner when published date data is absent', async () => {
         const withEuvdData = vulnerabilities.map(v => ({
             ...v,
             published: undefined,
@@ -1588,22 +1687,19 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'Published date data needs updating. Use the "Refresh vulnerability data" button to update it.'
+            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
         );
-        expect(screen.getByText('Published date data').classList.contains('font-bold')).toBe(true);
     });
 
-    test('combines missing EU KEV and published date data into one banner', async () => {
+    test('shows a single information banner when both EU KEV and published date data are missing', async () => {
         const withoutPublishedDates = vulnerabilities.map(v => ({ ...v, published: undefined }));
         render(<TableVulnerabilities vulnerabilities={withoutPublishedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const alerts = await screen.findAllByRole('alert');
         expect(alerts).toHaveLength(1);
         expect(alerts[0]).toHaveTextContent(
-            'EU KEV data and published date data need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
         );
-        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
-        expect(screen.getByText('published date data').classList.contains('font-bold')).toBe(true);
     });
 
     test('keeps a dismissed EU KEV banner hidden after the table remounts', async () => {
@@ -1626,7 +1722,7 @@ describe('Vulnerability Table', () => {
 
         render(<VulnerabilityTab />);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent('EU KEV data needs updating');
+        expect(await screen.findByRole('alert')).toHaveTextContent('Vulnerabilities are incomplete and need updating');
         fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
@@ -2165,7 +2261,7 @@ describe('Vulnerability Table', () => {
         });
     });
 
-    test('published date column shows "Requires a NVD refresh" for vulnerabilities without published date', async () => {
+    test('published date column shows "Requires Refresh Vulnerability Data" for vulnerabilities never refreshed', async () => {
         const vulnsWithMissing: Vulnerability[] = [
             ...vulnerabilities,
             {
@@ -2195,7 +2291,7 @@ describe('Vulnerability Table', () => {
                 simplified_status: 'Pending Assessment',
                 assessments: [],
                 variants: [],
-                // no 'published' field
+                // no 'published' field and never refreshed (no nvd_fetched_at)
             }
         ];
 
@@ -2209,11 +2305,136 @@ describe('Vulnerability Table', () => {
         const publishedDateCheckbox = await screen.getByRole('checkbox', { name: 'Published Date' });
         await user.click(publishedDateCheckbox);
 
-        // Now "Requires a NVD refresh" should appear for the vuln without published date
+        // "Requires Refresh Vulnerability Data" should appear for the never-refreshed vuln
         await waitFor(() => {
-            const refreshElements = screen.getAllByText('Requires a NVD refresh');
+            const refreshElements = screen.getAllByText('Requires Refresh Vulnerability Data');
             expect(refreshElements.length).toBeGreaterThan(0);
         });
+    });
+
+    test('published date column shows "-" when NVD refresh ran but found no published date', async () => {
+        const vulnsWithMissing: Vulnerability[] = [
+            {
+                id: 'CVE-NO-DATE',
+                aliases: [],
+                related_vulnerabilities: [],
+                namespace: 'nvd:cve',
+                found_by: ['hardcoded'],
+                datasource: 'test',
+                packages: ['nodatepkg@1.0.0'],
+                packages_current: [],
+                urls: [],
+                texts: [{ title: 'description', content: 'No date vuln' }],
+                severity: {
+                    severity: 'medium',
+                    min_score: 5,
+                    max_score: 5,
+                    cvss: []
+                },
+                epss: { score: undefined, percentile: undefined },
+                effort: {
+                    optimistic: new Iso8601Duration('PT1H'),
+                    likely: new Iso8601Duration('PT2H'),
+                    pessimistic: new Iso8601Duration('PT4H')
+                },
+                fix: { state: 'unknown' },
+                simplified_status: 'Pending Assessment',
+                assessments: [],
+                variants: [],
+                // refreshed against NVD and EUVD, but still no published date found
+                nvd_fetched_at: '2026-01-01T00:00:00+00:00',
+                euvd_fetched_at: '2026-01-01T00:00:00+00:00',
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Published Date column is hidden by default, so enable it first
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        await user.click(buttons[0]);
+
+        const publishedDateCheckbox = await screen.getByRole('checkbox', { name: 'Published Date' });
+        await user.click(publishedDateCheckbox);
+
+        // Both the published date and EU KEV columns render "—" for this row
+        await waitFor(() => {
+            expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+        });
+        expect(screen.queryByText('Requires Refresh Vulnerability Data')).not.toBeInTheDocument();
+    });
+
+    test('EU KEV column shows "Requires Refresh Vulnerability Data" for vulnerabilities never refreshed', async () => {
+        const vulnsWithMissing: Vulnerability[] = [
+            {
+                id: 'CVE-NO-KEV',
+                aliases: [],
+                related_vulnerabilities: [],
+                namespace: 'nvd:cve',
+                found_by: ['hardcoded'],
+                datasource: 'test',
+                packages: ['nokevpkg@1.0.0'],
+                packages_current: [],
+                urls: [],
+                texts: [{ title: 'description', content: 'No KEV vuln' }],
+                severity: { severity: 'medium', min_score: 5, max_score: 5, cvss: [] },
+                epss: { score: undefined, percentile: undefined },
+                effort: {
+                    optimistic: new Iso8601Duration('PT1H'),
+                    likely: new Iso8601Duration('PT2H'),
+                    pessimistic: new Iso8601Duration('PT4H')
+                },
+                fix: { state: 'unknown' },
+                simplified_status: 'Pending Assessment',
+                assessments: [],
+                variants: [],
+                // never refreshed against EUVD (no euvd_fetched_at)
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // EU KEV column is visible by default
+        await waitFor(() => {
+            expect(screen.getByText('Requires Refresh Vulnerability Data')).toBeInTheDocument();
+        });
+    });
+
+    test('EU KEV column shows "-" when EUVD refresh ran but vuln is not on the KEV list', async () => {
+        const vulnsWithMissing: Vulnerability[] = [
+            {
+                id: 'CVE-NO-KEV',
+                aliases: [],
+                related_vulnerabilities: [],
+                namespace: 'nvd:cve',
+                found_by: ['hardcoded'],
+                datasource: 'test',
+                packages: ['nokevpkg@1.0.0'],
+                packages_current: [],
+                urls: [],
+                texts: [{ title: 'description', content: 'No KEV vuln' }],
+                severity: { severity: 'medium', min_score: 5, max_score: 5, cvss: [] },
+                epss: { score: undefined, percentile: undefined },
+                effort: {
+                    optimistic: new Iso8601Duration('PT1H'),
+                    likely: new Iso8601Duration('PT2H'),
+                    pessimistic: new Iso8601Duration('PT4H')
+                },
+                fix: { state: 'unknown' },
+                simplified_status: 'Pending Assessment',
+                assessments: [],
+                variants: [],
+                // refreshed against EUVD, but not on the KEV list
+                euvd_fetched_at: '2026-01-01T00:00:00+00:00',
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('—')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Requires Refresh Vulnerability Data')).not.toBeInTheDocument();
     });
 
     test('published date filter type change clears previous date values', async () => {

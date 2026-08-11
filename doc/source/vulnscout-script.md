@@ -73,6 +73,36 @@ The web interface includes a **Settings** tab that provides:
 - **Import SBOM** — Upload an SBOM file directly from the browser instead of using CLI flags.
   When importing, you must select (or create) the target project and variant.
   Supported formats are auto-detected or can be specified explicitly: SPDX (2/3), CycloneDX, OpenVEX, Yocto CVE check, and Grype.
+- **Data Maintenance** — In **Scan Settings**, remove outdated data, empty scans, or CVEs no longer included in any project or variant.
+  This action is not limited to the project or variant currently selected in the web interface.
+
+### Removing Outdated Data
+
+VulnScout retains historical package evidence after an SBOM changes so it can identify
+outdated findings and assessments. After the replacement SBOM and scans have been
+reviewed, remove this obsolete data from **Settings → Scan Settings → Data Maintenance**.
+
+The confirmation dialog previews every package/variant and custom assessment selected
+for deletion. The cleanup applies to every project and variant in the database.
+
+The same global cleanup is available to automation and CI:
+
+```bash
+./vulnscout --delete-outdated
+./vulnscout --delete-empty-scans
+./vulnscout --delete-orphaned-vulnerabilities
+```
+
+The cleanup removes outdated package observations, SBOM links, and custom assessments.
+It then removes a finding, package, or vulnerability only when nothing else references it.
+When an orphaned vulnerability is removed, its exclusive metrics and refresh metadata are
+removed as well. Vulnerabilities and package records that are still referenced by current
+or other-variant data are preserved.
+
+Empty-scan cleanup preserves each variant's initial scan and removes later scans only when
+the scan-history diff contains no package, finding, CVE, or assessment changes. Orphaned-CVE
+cleanup removes vulnerabilities with no scan evidence in any variant, together with their
+findings, assessments, metrics, and refresh metadata.
 
 ---
 
@@ -401,7 +431,7 @@ Example:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VULNSCOUT_CONTAINER` | Name of the container | `vulnscout` |
-| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.19` |
+| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.20` |
 | `VULNSCOUT_BUILD_DIR` | Root build directory on the host | `./.vulnscout` |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |

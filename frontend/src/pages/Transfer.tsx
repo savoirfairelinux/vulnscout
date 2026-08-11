@@ -184,8 +184,6 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
     return (
         <div className="w-full">
             <div className="w-full space-y-6">
-                <h1 className="text-3xl font-bold text-white mb-2">Transfer</h1>
-
                 {/* ======== Copy Custom Assessments ======== */}
                 <section
                     aria-labelledby="transfer-heading-copy"

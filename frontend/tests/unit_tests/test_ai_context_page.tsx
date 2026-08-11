@@ -397,6 +397,17 @@ describe('AIContext page', () => {
             clickSpy.mockRestore();
         });
 
+        test('shows Import before Export', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+
+            const transferActions = screen.getAllByRole('button')
+                .map(button => button.getAttribute('aria-label'))
+                .filter(label => label === 'Import context' || label === 'Export context');
+            expect(transferActions).toEqual(['Import context', 'Export context']);
+        });
+
         test('export menu loads variants and downloads selected', async () => {
             fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
             render(<AIContext />);

@@ -1113,6 +1113,7 @@ def _custom_data_payload(assessments=None, cvss=None, time_estimates=None):
     return {
         "version": 1,
         "exported_at": "2025-01-01T00:00:00Z",
+        "project_id": str(PROJECT_UUID),
         "assessments": assessments or [],
         "cvss": cvss or [],
         "time_estimates": time_estimates or [],
@@ -1166,6 +1167,25 @@ def test_import_custom_data_assessments(client):
     result = json.loads(resp.data)
     assert result["status"] == "success"
     assert result["assessments_imported"] >= 1
+
+
+def test_import_custom_data_multipart_accepts_unmodified_export(client):
+    """A custom-data export can be uploaded with its destination as form data."""
+    _create_handmade_assessment(client)
+    exported = client.get("/api/assessments/review/export-custom-data")
+    assert exported.status_code == 200
+
+    response = client.post(
+        "/api/assessments/review/import-custom-data",
+        data={
+            "file": (io.BytesIO(exported.data), "custom_data.json"),
+            "project_id": str(PROJECT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.data)["status"] == "success"
 
 
 def test_import_custom_data_uses_original_timestamp(app, client):
@@ -1338,6 +1358,139 @@ def test_import_custom_data_assessments_with_variant_name(client):
     result = json.loads(resp.data)
     assert result["status"] == "success"
     assert result["assessments_imported"] >= 1
+
+
+def test_import_custom_data_foreign_variant_id_falls_back_to_name(client):
+    """A ``variant_id`` from another VulnScout instance never matches a local
+    variant (each instance mints its own UUIDs). Importing it as-is used to
+    attach the assessment to a variant_id no query would ever find, so it
+    silently disappeared from the Review page while remaining in the DB.
+    The import must fall back to the ``variant`` name field instead.
+    """
+    foreign_variant_id = str(uuid.uuid4())
+    assert foreign_variant_id != str(VARIANT_UUID)
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": foreign_variant_id,
+        "variant": "default",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] == 1
+
+    # Visible through the same variant-scoped query the Review page uses.
+    listing = client.get(f"/api/assessments/review?variant_id={VARIANT_UUID}")
+    assert listing.status_code == 200
+    vuln_ids = [a["vuln_id"] for a in json.loads(listing.data)]
+    assert "CVE-2020-35492" in vuln_ids
+
+
+def test_import_custom_data_scopes_duplicate_variant_names_to_project(app, client):
+    """A name fallback must not resolve a variant in another project."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.metrics import Metrics
+    from src.models.project import Project
+    from src.models.time_estimate import TimeEstimate
+    from src.models.variant import Variant
+
+    with app.app_context():
+        Metrics.reset_cache()
+        foreign_project = Project.create("foreign-project")
+        foreign_variant = Variant.create("default", foreign_project.id)
+        foreign_local_variant_id = foreign_variant.id
+
+    foreign_variant_id = str(uuid.uuid4())
+    payload = _custom_data_payload(
+        assessments=[{
+            "vuln_id": "CVE-2020-35492",
+            "status": "affected",
+            "packages": ["cairo@1.16.0"],
+            "variant_id": foreign_variant_id,
+            "variant": "default",
+            "origin": "custom",
+        }],
+        cvss=[{
+            "vuln_id": "CVE-2020-35492",
+            "version": "3.1",
+            "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+            "base_score": 7.5,
+            "variant_id": foreign_variant_id,
+            "variant": "default",
+        }],
+        time_estimates=[{
+            "vuln_id": "CVE-2020-35492",
+            "optimistic": "PT1H",
+            "likely": "PT2H",
+            "pessimistic": "PT3H",
+            "variant_id": foreign_variant_id,
+            "variant": "default",
+        }],
+    )
+    payload["project_id"] = str(PROJECT_UUID)
+
+    response = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    import_result = json.loads(response.data)
+    assert import_result["assessments_imported"] == 1, import_result
+    with app.app_context():
+        imported_assessments = Assessment.get_by_origin([VARIANT_UUID], origin="custom")
+        foreign_assessments = Assessment.get_by_origin([foreign_local_variant_id], origin="custom")
+        imported_metrics = db.session.execute(
+            db.select(Metrics).where(
+                Metrics.vulnerability_id == "CVE-2020-35492",
+                Metrics.vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+            )
+        ).scalars().all()
+        imported_estimates = db.session.execute(
+            db.select(TimeEstimate).where(TimeEstimate.variant_id == VARIANT_UUID)
+        ).scalars().all()
+        foreign_estimates = db.session.execute(
+            db.select(TimeEstimate).where(TimeEstimate.variant_id == foreign_local_variant_id)
+        ).scalars().all()
+
+    assert len(imported_assessments) == 1
+    assert not foreign_assessments
+    assert len(imported_metrics) == 1
+    assert imported_metrics[0].variant_id == VARIANT_UUID
+    assert imported_estimates
+    assert not foreign_estimates
+
+
+def test_import_custom_data_foreign_variant_id_without_name_is_rejected(client):
+    """A foreign variant_id with no local ``variant`` name to fall back to
+    must be reported as an error instead of silently attaching to a
+    variant_id that does not exist in this database.
+    """
+    foreign_variant_id = str(uuid.uuid4())
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": foreign_variant_id,
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+    result = json.loads(resp.data)
+    assert result["assessments_imported"] == 0
+    assert any(foreign_variant_id in e.get("error", "") for e in result["errors"])
 
 
 def test_import_custom_data_duplicate_skipped(client):
@@ -1741,7 +1894,10 @@ def test_import_custom_data_via_file_upload(client):
     data_bytes = json.dumps(payload).encode("utf-8")
     resp = client.post(
         "/api/assessments/review/import-custom-data",
-        data={"file": (io.BytesIO(data_bytes), "custom_data.json")},
+        data={
+            "file": (io.BytesIO(data_bytes), "custom_data.json"),
+            "project_id": str(PROJECT_UUID),
+        },
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -1784,6 +1940,7 @@ def test_export_import_custom_data_round_trip(client):
     exported = json.loads(export_resp.data)
     assert exported["version"] == 1
     assert len(exported["assessments"]) >= 1
+    exported["project_id"] = str(PROJECT_UUID)
 
     # Import back
     import_resp = client.post(
