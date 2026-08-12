@@ -166,6 +166,38 @@ type RunningScans = {
 
 export type { ScanStatusResponse, RunningScanEntry, RunningScans };
 
+type ScanImportEntry = {
+    scan_id: string;
+    source_scan_id: string;
+    format: 'diff' | 'full';
+    project_name: string;
+    variant_name: string;
+    package_count: number;
+    finding_count: number;
+    vulnerability_count: number;
+    assessment_count: number;
+    is_first: boolean;
+};
+
+type ScanImportResult = {
+    scan_id: string | null;
+    format: 'diff' | 'full' | null;
+    imported_count: number;
+    skipped_count: number;
+    package_count: number;
+    finding_count: number;
+    vulnerability_count: number;
+    assessment_count: number;
+    is_first: boolean;
+    scans: ScanImportEntry[];
+};
+
+type ScanImportResponse =
+    | { ok: true; result: ScanImportResult }
+    | { ok: false; error: string };
+
+export type { ScanImportEntry, ScanImportResult, ScanImportResponse };
+
 type OutdatedDataPreview = {
     candidate_ids: {
         observations: string[];
@@ -198,6 +230,35 @@ type OrphanedVulnerabilityPreview = {
 export type { OutdatedDataPreview, EmptyScanPreview, OrphanedVulnerabilityPreview };
 
 class ScansHandler {
+    /**
+     * Send one or more exported scans to the import endpoint.
+     *
+     * The whole payload is imported atomically by the server, so a rejected
+     * request leaves nothing behind. Network failures are reported through the
+     * same result shape as API errors rather than thrown, so callers do not
+     * have to distinguish "could not reach the server" from "could not read
+     * the file".
+     */
+    static async importExport(payload: unknown): Promise<ScanImportResponse> {
+        let response: Response;
+        try {
+            response = await fetch(import.meta.env.VITE_API_URL + '/api/scans/import', {
+                method: 'POST',
+                mode: 'cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            return { ok: false, error: `Import failed: could not reach the server (${detail}).` };
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            return { ok: false, error: data?.error ?? `Import failed (${response.status})` };
+        }
+        return { ok: true, result: data as ScanImportResult };
+    }
+
     static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
         let url: string;
         if (variantId) {

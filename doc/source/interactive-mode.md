@@ -233,6 +233,22 @@ Every scan and vulnerability-data refresh is also tracked in the **Operation que
 
 Three coloured toggle buttons in the toolbar (Grype, NVD, OSV) let you show or hide scan entries by source. This is useful when you only want to see SBOM imports or a specific scanner's results without the others cluttering the timeline.
 
+### Importing and Exporting Scan Data
+
+The **Export** menu downloads scan history as VulnScout JSON. A single timeline entry can be exported either as its diff or as its full scan result. The toolbar export applies the same formats to every scan visible in the current project or variant scope.
+
+Use **Import** to restore exported scan data. You can select one or more files, and each file may hold a single export or the array produced by the toolbar's Export All — every scan in the selection is imported together.
+
+VulnScout matches the `project_name` and `variant_name` recorded in each export to an existing project and variant, then persists its packages, findings and assessments as a new scan entry. The destination project and variant must already exist; nothing is created implicitly.
+
+A few properties are worth knowing:
+
+- **Both export formats import.** A scan diff carries the scan's complete package and finding state at the top level, so a diff taken from any point in the timeline can be imported, not just the first one. The `diff` section itself describes the *source* instance's history and is ignored — the destination recomputes badges against its own timeline.
+- **Imports are idempotent.** A scan is recognised by its variant, its kind (SBOM, or a tool plus that tool's name) and its timestamp, so importing the same scan into a variant that already has it is rejected as a duplicate instead of creating a second copy. This also catches an export whose scan the destination already holds natively — re-importing a file into the instance it came from changes nothing. Assessments that already exist on the destination are likewise left alone rather than duplicated.
+- **Imports are all-or-nothing.** The entire selection is validated before anything is written and applied in one transaction. If any export is malformed, references a missing project or variant, or has already been imported, the request is rejected and the database is left untouched — the error names the offending entry so you can drop it and retry.
+- **Existing data is reused.** Packages, vulnerabilities and findings already present in the destination are linked to rather than duplicated, so importing overlapping scans does not inflate the database. A supplier recorded in SPDX form is matched against the plain name the export carries, so no second copy of the package appears.
+- **Assessments keep their finding.** An assessment applies to one package/vulnerability pair, and exports record that pair, so an imported assessment attaches to the same finding it had on the source rather than to every package sharing the vulnerability.
+
 ### Timeline Layout
 
 Scans are displayed in a vertical timeline, most recent first. Each entry shows the timestamp of the import, the project and variant it belongs to, and a set of colour-coded badges summarising the delta:
