@@ -371,6 +371,46 @@ describe('Explorer saved-scope validation', () => {
         expect(screen.getByRole('button', { name: 'filter vulnerabilities' })).toBeInTheDocument();
     });
 
+    test('shows a retryable setup error when projects cannot be loaded', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList
+            .mockRejectedValueOnce(new Error('Temporary network failure'))
+            .mockResolvedValue([{ id: 'project-1', name: 'Project 1' }]);
+        mockVariantsListAll.mockResolvedValue([
+            { id: 'variant-1', name: 'Variant 1', project_id: 'project-1' },
+        ]);
+
+        render(<Explorer />);
+
+        expect(await screen.findByText('Unable to check setup')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        await waitFor(() => expect(screen.queryByTestId('setup-required-popup')).not.toBeInTheDocument());
+    });
+
+    test('ignores an older setup response that resolves after a newer check', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        let resolveOlder: (projects: Array<{ id: string; name: string }>) => void = () => undefined;
+        const older = new Promise<Array<{ id: string; name: string }>>(resolve => { resolveOlder = resolve; });
+        mockProjectsList
+            .mockResolvedValueOnce([{ id: 'project-1', name: 'Project 1' }])
+            .mockReturnValueOnce(older)
+            .mockResolvedValueOnce([{ id: 'project-1', name: 'Project 1' }]);
+        mockVariantsListAll
+            .mockResolvedValueOnce([{ id: 'variant-1', name: 'Variant 1', project_id: 'project-1' }])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ id: 'variant-1', name: 'Variant 1', project_id: 'project-1' }]);
+
+        render(<Explorer />);
+        await waitFor(() => expect(mockProjectsList).toHaveBeenCalled());
+        fireEvent.click(screen.getByRole('button', { name: 'settings' }));
+        fireEvent.click(screen.getByRole('button', { name: 'settings changed' }));
+        fireEvent.click(screen.getByRole('button', { name: 'settings changed' }));
+        await waitFor(() => expect(mockProjectsList).toHaveBeenCalledTimes(3));
+        resolveOlder([{ id: 'project-1', name: 'Project 1' }]);
+
+        await waitFor(() => expect(screen.queryByTestId('setup-required-popup')).not.toBeInTheDocument());
+    });
+
     test('wires navigation and data update callbacks', async () => {
         mockGetFrontendScope.mockReturnValue(null);
         mockProjectsList.mockResolvedValue([]);
