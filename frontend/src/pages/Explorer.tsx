@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "
 import NavigationBar from "../components/NavigationBar";
 import OperationQueueModal from "../components/OperationQueueModal";
 import MessageBanner from "../components/MessageBanner";
+import Popup from "../components/Popup";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
@@ -73,6 +74,12 @@ function Explorer() {
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
+    const [setupRequirement, setSetupRequirement] = useState<
+        { kind: 'project' } | { kind: 'variant'; projectId: string } | null
+    >(null);
+    const [settingsDestination, setSettingsDestination] = useState<
+        { tab: 'projects'; projectId?: string } | null
+    >(null);
     const hadActiveScans = useRef(false);
     const grypeScanEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
     const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
@@ -108,6 +115,24 @@ function Explorer() {
         }).catch(() => undefined);
         return () => { cancelled = true; };
     }, []);
+
+    const loadSetupRequirement = useCallback(() => {
+        return Promise.all([Projects.list(), Variants.listAll()])
+            .then(([projects, variants]) => {
+                if (projects.length === 0) {
+                    setSetupRequirement({ kind: 'project' });
+                } else if (variants.length === 0) {
+                    setSetupRequirement({ kind: 'variant', projectId: projects[0].id });
+                } else {
+                    setSetupRequirement(null);
+                }
+            })
+            .catch(() => undefined);
+    }, []);
+
+    useEffect(() => {
+        void loadSetupRequirement();
+    }, [loadSetupRequirement]);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -387,6 +412,7 @@ function Explorer() {
             setFilterValue(undefined);
             setFilterVulnerabilityIds(undefined);
         }
+        if (newTab === 'settings') setSettingsDestination(null);
         setTab(newTab);
     }
 
@@ -414,6 +440,35 @@ function Explorer() {
                 />
             </header>
             <OperationQueueModal isOpen={operationQueueOpen} onClose={() => setOperationQueueOpen(false)} />
+            <Popup
+                isOpen={tab === 'metrics' && setupRequirement !== null}
+                title={setupRequirement?.kind === 'project' ? 'Add your first project' : 'Add a project variant'}
+                onClose={() => setSetupRequirement(null)}
+                testId="setup-required-popup"
+            >
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                    {setupRequirement?.kind === 'project'
+                        ? 'Projects organize your software variants, vulnerability data, scans, and assessments. Create one to get started.'
+                        : 'VulnScout needs a variant before it can display metrics for your project.'}
+                </p>
+                <div className="mt-5 flex justify-end">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setSettingsDestination({
+                                tab: 'projects',
+                                projectId: setupRequirement?.kind === 'variant'
+                                    ? setupRequirement.projectId
+                                    : undefined,
+                            });
+                            setTab('settings');
+                        }}
+                        className="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    >
+                        Go to settings
+                    </button>
+                </div>
+            </Popup>
 
             <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">
@@ -481,12 +536,13 @@ function Explorer() {
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
-                {tab === 'settings' && <Settings onDataChanged={(message) => {
+                {tab === 'settings' && <Settings initialTab={settingsDestination?.tab} onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     Config.get().then(config => setDefaultConfig(config)).catch(() => {});
+                    loadSetupRequirement();
                     setSelectorKey(k => k + 1);
                     loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                }} projectId={currentProjectId} onLoadingMessage={(msg) => {
+                }} projectId={settingsDestination ? settingsDestination.projectId : currentProjectId} onLoadingMessage={(msg) => {
                     if (msg) {
                         setLoadingMessage(msg);
                         setIsLoadingData(true);

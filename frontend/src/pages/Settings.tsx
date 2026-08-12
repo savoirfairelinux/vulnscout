@@ -43,6 +43,7 @@ type Props = {
   onDataChanged?: (message?: string) => void;
   onLoadingMessage?: (message: string | null) => void;
   projectId?: string;
+  initialTab?: SettingsTab;
 };
 
 type SettingsTab = "general" | "transfer" | "projects" | "variants";
@@ -51,9 +52,9 @@ type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
   | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
 
-function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props>) {
+function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Readonly<Props>) {
   // ---- Active category tab ----
-  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
 
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
@@ -453,6 +454,16 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
   const [deleteProjectMsg, setDeleteProjectMsg] = useState<FeedbackMsg>(null);
+  const initialProjectAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (initialProjectAppliedRef.current || initialTab !== "projects" || !projectId) return;
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) return;
+    setRenameProjectId(project.id);
+    setRenameProjectName(project.name);
+    initialProjectAppliedRef.current = true;
+  }, [initialTab, projectId, projects]);
 
   const handleRenameProject = async () => {
     if (!renameProjectId || !renameProjectName.trim()) return;

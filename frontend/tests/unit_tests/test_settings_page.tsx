@@ -115,6 +115,14 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.queryByRole("heading", { name: "Add Project" })).not.toBeInTheDocument();
   });
 
+  test("opens an initial project from the project list", async () => {
+    render(<Settings initialTab="projects" projectId={project.id} />);
+
+    expect(await screen.findByDisplayValue("Apollo")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Add Project" })).not.toBeInTheDocument();
+  });
+
   test("the project add-variant action opens an add form scoped to that project", async () => {
     render(<Settings />);
 
