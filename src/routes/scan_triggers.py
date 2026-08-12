@@ -465,8 +465,13 @@ def init_app(app: Flask) -> None:
             _nvd_scans_in_progress[vid_str]["logs"].append(
                 "Loading local NVD advisory database…"
             )
+
+            def report_database_progress(message: str) -> None:
+                _nvd_scans_in_progress[vid_str]["progress"] = message
+                _nvd_scans_in_progress[vid_str]["logs"].append(message)
+
             try:
-                engine = get_engine()
+                engine = get_engine(progress=report_database_progress)
             except Exception as exc:
                 set_error(_nvd_scans_in_progress, vid_str,
                           f"Failed to load local NVD database: {exc}")
@@ -951,8 +956,14 @@ def init_app(app: Flask) -> None:
                 _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
                     "Loading CVE databases — this might take several minutes on first run…"
                 )
+
+                def report_database_progress(message: str) -> None:
+                    progress = _sbom_cve_check_scans_in_progress[vid_str]
+                    progress["progress"] = message
+                    progress["logs"].append(message)
+
                 try:
-                    engine = get_engine()
+                    engine = get_engine(progress=report_database_progress)
                 except Exception as e:
                     set_error(_sbom_cve_check_scans_in_progress, vid_str,
                               f"Failed to load CVE databases: {str(e)[:300]}")

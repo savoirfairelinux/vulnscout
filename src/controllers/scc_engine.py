@@ -29,11 +29,13 @@ import fcntl
 import logging
 import os
 import pathlib
+import re
+import subprocess
 import tempfile
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import cast
+from typing import Any, cast
 
 from sbom_cve_check.database.db_git import GitDatabase
 from sbom_cve_check.database.locking import init_global_databases_lock
@@ -57,6 +59,132 @@ _PURE_CACHES_INSTALLED = False
 # Sentinel distinguishing "attribute genuinely absent" (upstream rename) from a
 # legitimate ``None`` value when reaching into sbom-cve-check internals.
 _MISSING = object()
+
+ProgressCallback = Callable[[str], None]
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_GIT_PERCENT_RE = re.compile(r"^(?P<stage>[^:]+):\s+(?P<percent>\d{1,3})%")
+
+
+class _GitProgressReporter:
+    """Normalize and rate-limit progress emitted by a Git subprocess."""
+
+    def __init__(self, database: str, callback: ProgressCallback) -> None:
+        self._database = database
+        self._callback: ProgressCallback | None = callback
+        self._last_message = ""
+        self._last_percent: dict[str, int] = {}
+
+    def emit(self, raw_message: str) -> None:
+        message = _ANSI_ESCAPE_RE.sub("", raw_message).strip()
+        if message.startswith("remote: "):
+            message = message.removeprefix("remote: ").strip()
+        if not message or message == self._last_message:
+            return
+
+        match = _GIT_PERCENT_RE.match(message)
+        if match:
+            stage = match.group("stage")
+            percent = int(match.group("percent"))
+            previous = self._last_percent.get(stage, -5)
+            if percent != 100 and percent < previous + 5:
+                return
+            self._last_percent[stage] = percent
+
+        self._last_message = message
+        callback = self._callback
+        if callback is None:
+            return
+        try:
+            callback(f"Synchronizing {self._database}: {message}")
+        except Exception:  # noqa: BLE001 - progress must never break synchronization
+            self._callback = None
+            _logger.warning(
+                "SCC Git progress callback failed; synchronization will continue",
+                exc_info=True,
+            )
+
+
+def _stream_git_command(
+    git_repo: Any, args: list[str], callback: ProgressCallback
+) -> subprocess.CompletedProcess[str]:
+    """Run an SCC Git transfer while streaming its normally-hidden progress."""
+    progress_args = list(args)
+    if progress_args[0] in {"clone", "fetch"} and "--progress" not in progress_args:
+        progress_args.insert(1, "--progress")
+
+    command = [git_repo._git_exe, *progress_args]
+    reporter = _GitProgressReporter(git_repo.path.name, callback)
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=git_repo.path,
+        encoding="utf-8",
+        errors="replace",
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+
+    output: list[str] = []
+    progress_line: list[str] = []
+    while chunk := process.stdout.read(1):
+        output.append(chunk)
+        if chunk in {"\r", "\n"}:
+            reporter.emit("".join(progress_line))
+            progress_line.clear()
+        else:
+            progress_line.append(chunk)
+    if progress_line:
+        reporter.emit("".join(progress_line))
+
+    return_code = process.wait()
+    stdout = "".join(output)
+    result = subprocess.CompletedProcess(command, return_code, stdout=stdout, stderr="")
+    if return_code:
+        raise subprocess.CalledProcessError(
+            return_code, command, output=stdout, stderr=""
+        )
+    return result
+
+
+@contextmanager
+def _git_progress(
+    git_databases: list[Any], callback: ProgressCallback | None
+) -> Generator[None, None, None]:
+    """Temporarily stream transfer progress from SCC's GitRepo instances."""
+    if callback is None:
+        yield
+        return
+
+    Executor = Callable[[list[str]], subprocess.CompletedProcess[str]]
+    originals: list[tuple[Any, Executor]] = []
+    for git_database in git_databases:
+        git_repo = getattr(git_database, "_git_repo", None)
+        original = getattr(git_repo, "_exec_git_cmd", None)
+        if git_repo is None or not callable(original):
+            continue
+        typed_original = cast(Executor, original)
+
+        def exec_with_progress(
+            args: list[str],
+            *,
+            _repo: Any = git_repo,
+            _original: Executor = typed_original,
+        ) -> subprocess.CompletedProcess[str]:
+            if args and args[0] in {"clone", "fetch"}:
+                return _stream_git_command(_repo, args, callback)
+            return _original(args)
+
+        originals.append((git_repo, typed_original))
+        git_repo._exec_git_cmd = exec_with_progress
+
+    try:
+        yield
+    finally:
+        for git_repo, original in originals:
+            git_repo._exec_git_cmd = original
 
 
 def _install_cpe_parse_caches() -> None:
@@ -186,7 +314,8 @@ class SccEngine:
     """Indexed sbom-cve-check engine ready to match VulnScout packages."""
 
     def __init__(self, databases_dir: pathlib.Path, fetch_depth: int,
-                 auto_update: bool) -> None:
+                 auto_update: bool,
+                 progress: ProgressCallback | None = None) -> None:
         self._databases_dir = databases_dir
         self._fetch_depth = fetch_depth
         self._auto_update = auto_update
@@ -254,7 +383,10 @@ class SccEngine:
         _install_cpe_parse_caches()
 
         # Build the in-memory index (parallel across databases).  Expensive.
-        self._manager.create_index()
+        # SCC captures Git stderr, so temporarily stream clone/fetch output to
+        # the caller while retaining SCC's locking and update decisions.
+        with _git_progress(self._git_databases(), progress):
+            self._manager.create_index()
 
         # Memoize per-CVE record reads so each advisory JSON file is opened and
         # parsed at most once per engine lifetime instead of once per
@@ -346,7 +478,7 @@ class SccEngine:
                     if callable(clear):
                         clear()
 
-    def refresh_databases(self) -> bool:
+    def refresh_databases(self, progress: ProgressCallback | None = None) -> bool:
         """Fetch fresh advisories for each git database before a scan.
 
         Called once per scan (see :func:`get_engine`).  The process-wide engine is
@@ -367,19 +499,21 @@ class SccEngine:
             return False
         with self._refresh_lock:
             changed = False
-            for git_db in self._git_databases():
-                before = git_db.get_date_last_commit()
-                try:
-                    git_db.update(force_update=True)
-                except Exception as exc:  # noqa: BLE001 - never abort a scan on fetch error
-                    _logger.warning(
-                        "sbom-cve-check database refresh failed (using existing clone): %s",
-                        exc,
-                    )
-                    continue
-                after = git_db.get_date_last_commit()
-                if before != after:
-                    changed = True
+            git_databases = self._git_databases()
+            with _git_progress(git_databases, progress):
+                for git_db in git_databases:
+                    before = git_db.get_date_last_commit()
+                    try:
+                        git_db.update(force_update=True)
+                    except Exception as exc:  # noqa: BLE001 - never abort a scan on fetch error
+                        _logger.warning(
+                            "sbom-cve-check database refresh failed (using existing clone): %s",
+                            exc,
+                        )
+                        continue
+                    after = git_db.get_date_last_commit()
+                    if before != after:
+                        changed = True
             if changed:
                 self._manager.create_index()
                 self._clear_caches()
@@ -508,7 +642,7 @@ class SccEngine:
         return None
 
 
-def _get_engine() -> SccEngine:
+def _get_engine(progress: ProgressCallback | None = None) -> SccEngine:
     """Build or reuse the process-wide engine and refresh its databases."""
     global _ENGINE
     with _ENGINE_LOCK:
@@ -522,12 +656,13 @@ def _get_engine() -> SccEngine:
                 databases_dir=_databases_dir(),
                 fetch_depth=fetch_depth,
                 auto_update=_truthy(os.getenv("SBOM_CVE_CHECK_AUTO_UPDATE")),
+                progress=progress,
             )
-    _ENGINE.refresh_databases()
+    _ENGINE.refresh_databases(progress=progress)
     return _ENGINE
 
 
-def get_engine() -> SccEngine:
+def get_engine(progress: ProgressCallback | None = None) -> SccEngine:
     """Return the process-wide indexed engine, building it on first use.
 
     The engine is expensive to build and is cached for the lifetime of the
@@ -538,7 +673,7 @@ def get_engine() -> SccEngine:
     triggering a refresh).
     """
     with _serialized_engine_operation():
-        return _get_engine()
+        return _get_engine(progress=progress)
 
 
 def serialized_engine_operation(func):

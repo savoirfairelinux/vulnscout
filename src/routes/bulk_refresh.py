@@ -139,7 +139,11 @@ def init_app(app: Flask) -> None:
                         # auto-update is on) so individual CVE lookups in the loop
                         # below reuse the cached engine without re-fetching.
                         try:
-                            _get_scc_engine()
+                            _get_scc_engine(
+                                progress=lambda message: NVDProgressTracker.update(
+                                    "database_sync", 0, total, message
+                                )
+                            )
                         except Exception as exc:
                             NVDProgressTracker.error(
                                 f"Failed to load local NVD database: {exc}"
