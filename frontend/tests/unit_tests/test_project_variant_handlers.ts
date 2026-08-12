@@ -113,6 +113,12 @@ describe('Projects', () => {
         expect(projects).toEqual([]);
     });
 
+    test('rejects when the project list request fails', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'unavailable' }), { status: 503 });
+
+        await expect(Projects.list()).rejects.toThrow('Failed to list projects (503)');
+    });
+
     test('filters out items missing id or name', async () => {
         const mockData = [
             { id: 'p1', name: 'Valid' },

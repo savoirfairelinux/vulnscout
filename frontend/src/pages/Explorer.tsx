@@ -75,12 +75,13 @@ function Explorer() {
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const [setupRequirement, setSetupRequirement] = useState<
-        { kind: 'project' } | { kind: 'variant'; projectId: string } | null
+        { kind: 'project' } | { kind: 'variant'; projectId: string } | { kind: 'error' } | null
     >(null);
     const [settingsDestination, setSettingsDestination] = useState<
         { tab: 'projects'; projectId?: string } | null
     >(null);
     const hadActiveScans = useRef(false);
+    const setupCheckGeneration = useRef(0);
     const grypeScanEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
     const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
     const osvScanEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
@@ -117,8 +118,10 @@ function Explorer() {
     }, []);
 
     const loadSetupRequirement = useCallback(() => {
+        const generation = ++setupCheckGeneration.current;
         return Promise.all([Projects.list(), Variants.listAll()])
             .then(([projects, variants]) => {
+                if (generation !== setupCheckGeneration.current) return;
                 if (projects.length === 0) {
                     setSetupRequirement({ kind: 'project' });
                 } else if (variants.length === 0) {
@@ -127,7 +130,11 @@ function Explorer() {
                     setSetupRequirement(null);
                 }
             })
-            .catch(() => undefined);
+            .catch(() => {
+                if (generation === setupCheckGeneration.current) {
+                    setSetupRequirement({ kind: 'error' });
+                }
+            });
     }, []);
 
     useEffect(() => {
@@ -442,19 +449,29 @@ function Explorer() {
             <OperationQueueModal isOpen={operationQueueOpen} onClose={() => setOperationQueueOpen(false)} />
             <Popup
                 isOpen={tab === 'metrics' && setupRequirement !== null}
-                title={setupRequirement?.kind === 'project' ? 'Add your first project' : 'Add a project variant'}
+                title={setupRequirement?.kind === 'project'
+                    ? 'Add your first project'
+                    : setupRequirement?.kind === 'variant'
+                        ? 'Add a project variant'
+                        : 'Unable to check setup'}
                 onClose={() => setSetupRequirement(null)}
                 testId="setup-required-popup"
             >
                 <p className="text-sm text-gray-600 dark:text-gray-300">
                     {setupRequirement?.kind === 'project'
                         ? 'Projects organize your software variants, vulnerability data, scans, and assessments. Create one to get started.'
-                        : 'VulnScout needs a variant before it can display metrics for your project.'}
+                        : setupRequirement?.kind === 'variant'
+                            ? 'VulnScout needs a variant before it can display metrics for your project.'
+                            : 'VulnScout could not load the project list. Check the connection and try again.'}
                 </p>
                 <div className="mt-5 flex justify-end">
                     <button
                         type="button"
                         onClick={() => {
+                            if (setupRequirement?.kind === 'error') {
+                                void loadSetupRequirement();
+                                return;
+                            }
                             setSettingsDestination({
                                 tab: 'projects',
                                 projectId: setupRequirement?.kind === 'variant'
@@ -465,7 +482,7 @@ function Explorer() {
                         }}
                         className="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-400"
                     >
-                        Go to settings
+                        {setupRequirement?.kind === 'error' ? 'Retry' : 'Go to settings'}
                     </button>
                 </div>
             </Popup>
