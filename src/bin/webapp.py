@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
-from ..helpers.env_vars import get_bool_env
+from ..helpers.env_vars import get_bool_env, get_int_env
 from ..extensions import db, migrate, setup_write_serialization
 from ..routes import init_app
 from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
@@ -22,7 +22,7 @@ from flask import request
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
-MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
+DEFAULT_MAX_UPLOAD_MB = 500  # overridable via VULNSCOUT_MAX_UPLOAD_MB
 DEFAULT_BACKGROUND_TASK_DELAY = 120.0
 
 
@@ -116,8 +116,10 @@ def create_app():
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
     # Allow multipart headers while ensuring Werkzeug rejects oversized bodies
-    # before parsing and spooling uploaded files.
-    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_BYTES
+    # before parsing and spooling uploaded files.  The cap is expressed in MB
+    # via VULNSCOUT_MAX_UPLOAD_MB and defaults to DEFAULT_MAX_UPLOAD_MB.
+    max_upload_mb = get_int_env("VULNSCOUT_MAX_UPLOAD_MB", DEFAULT_MAX_UPLOAD_MB)
+    app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * 1024 * 1024
     app._INT_SCAN_FINISHED = False
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE

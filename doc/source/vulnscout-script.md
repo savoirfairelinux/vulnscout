@@ -440,6 +440,7 @@ Example:
 | `VITE_API_URL` | Backend API URL used by the dev frontend | `http://localhost:7275` |
 | `USER_UID` | UID used to write output files | current user |
 | `USER_GID` | GID used to write output files | current group |
+| `VULNSCOUT_MAX_UPLOAD_MB` | Maximum upload/request body size accepted by the web API, in MB | `500` |
 | `REFRESH_REMOTE_DELAY` | How often EPSS/NVD data is re-fetched (`never`, `always`, `48h`, `7d`, etc.) | `48h` |
 
 #### Scan & Enrichment
