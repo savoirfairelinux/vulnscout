@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import pathlib
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -36,6 +37,64 @@ class TestTruthy:
         from src.controllers.scc_engine import _truthy
         for val in ("0", "false", "no", "off", "", None, "anything-else"):
             assert _truthy(val) is False, f"Expected False for {val!r}"
+
+
+class TestGitProgress:
+
+    def test_reporter_normalizes_and_throttles_percent_updates(self):
+        from src.controllers.scc_engine import _GitProgressReporter
+
+        messages = []
+        reporter = _GitProgressReporter("nvd-fkie", messages.append)
+        reporter.emit("remote: Counting objects: 1% (1/100)\x1b[K")
+        reporter.emit("remote: Counting objects: 3% (3/100)")
+        reporter.emit("remote: Counting objects: 6% (6/100)")
+        reporter.emit("remote: Counting objects: 100% (100/100)")
+
+        assert messages == [
+            "Synchronizing nvd-fkie: Counting objects: 1% (1/100)",
+            "Synchronizing nvd-fkie: Counting objects: 6% (6/100)",
+            "Synchronizing nvd-fkie: Counting objects: 100% (100/100)",
+        ]
+
+    def test_git_progress_intercepts_transfers_and_restores_executor(self, tmp_path):
+        from sbom_cve_check.utils.git import GitRepo
+        from src.controllers.scc_engine import _git_progress
+
+        source = self._create_git_repository(tmp_path / "source")
+        destination = tmp_path / "nvd-fkie"
+        destination.mkdir()
+        git_repo = GitRepo(destination)
+        original = git_repo._exec_git_cmd
+        messages = []
+        git_database = SimpleNamespace(_git_repo=git_repo)
+
+        with _git_progress([git_database], messages.append):
+            result = git_repo._exec_git_cmd(["clone", str(source), "."])
+            assert result.returncode == 0
+            assert git_repo._exec_git_cmd(["rev-parse", "HEAD"]).stdout.strip()
+
+        assert any(message.startswith("Synchronizing nvd-fkie:") for message in messages)
+        assert git_repo._exec_git_cmd == original
+
+    @staticmethod
+    def _create_git_repository(path):
+        import subprocess
+
+        path.mkdir()
+        subprocess.run(["git", "init", "-q", str(path)], check=True)
+        subprocess.run(
+            ["git", "-C", str(path), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(path), "config", "user.name", "Test User"],
+            check=True,
+        )
+        path.joinpath("advisory.json").write_text("{}", encoding="utf-8")
+        subprocess.run(["git", "-C", str(path), "add", "advisory.json"], check=True)
+        subprocess.run(["git", "-C", str(path), "commit", "-qm", "Initial"], check=True)
+        return path
 
 
 class TestDatabasesDir:
@@ -593,7 +652,7 @@ class TestGetAndResetEngine:
 
         original_init = None
 
-        def fake_init(self, databases_dir, fetch_depth, auto_update):
+        def fake_init(self, databases_dir, fetch_depth, auto_update, progress=None):
             captured["fetch_depth"] = fetch_depth
             self._databases_dir = databases_dir
             self._manager = mock_mgr
@@ -627,7 +686,7 @@ class TestGetAndResetEngine:
         mock_mgr = MagicMock()
         mock_mgr._databases = {}
 
-        def fake_init(self, databases_dir, fetch_depth, auto_update):
+        def fake_init(self, databases_dir, fetch_depth, auto_update, progress=None):
             captured["fetch_depth"] = fetch_depth
             self._databases_dir = databases_dir
             self._manager = mock_mgr
