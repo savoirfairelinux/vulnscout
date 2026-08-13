@@ -396,6 +396,7 @@ describe('Explorer saved-scope validation', () => {
             .mockReturnValueOnce(older)
             .mockResolvedValueOnce([{ id: 'project-1', name: 'Project 1' }]);
         mockVariantsListAll
+            .mockResolvedValueOnce([])
             .mockResolvedValueOnce([{ id: 'variant-1', name: 'Variant 1', project_id: 'project-1' }])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([{ id: 'variant-1', name: 'Variant 1', project_id: 'project-1' }]);
