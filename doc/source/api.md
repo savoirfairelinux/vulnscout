@@ -495,9 +495,9 @@ POST /api/assessments/group-reconcile
 Apply one edit to an entire assessment group in a single transaction. The
 clients previously issued one `PUT`, `DELETE` or `POST` per
 `(package, variant)` combo; this endpoint takes the group's current member ids
-and the desired end state, and reconciles them atomically. Every target combo
-is validated before any write, so one invalid package or variant cancels the
-whole action.
+and the desired end state, and reconciles them atomically. Every target is
+resolved before any write, and a failure part-way through rolls the whole
+transaction back.
 
 Request body:
 
@@ -517,11 +517,23 @@ Request body:
 ```
 
 `variant_ids` must be non-empty, matching `POST /api/assessments/batch`. Every
-id in `existing_ids` must belong to `vuln_id` or the request is rejected.
+id in `existing_ids` must belong to `vuln_id` and to the same project as the
+selected variants, or the request is rejected.
 Rows whose combo is still selected are updated in place, rows whose combo was
 deselected are deleted, and missing combos are created. All rows written by one
 call share a single timestamp. A pending AI row keeps `origin: "ai"` so that
 editing it does not silently approve it.
+
+`packages` × `variant_ids` is a selection, not an assertion: a package that was
+never scanned in one of the selected variants simply produces no row there. The
+request is refused when a package is unknown, when a package is observed for
+this vulnerability in none of the selected variants, when a listed row is not
+bound to a variant and package, or when deleting a row would remove a pending
+AI assessment.
+
+`justification` is cleared when sent as `""`, except for `not_affected`, which
+requires one. Omitting `responses` leaves the stored VEX responses untouched;
+sending the key replaces them.
 
 Response:
 
