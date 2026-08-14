@@ -11,7 +11,7 @@ import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
-import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
+import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -199,6 +199,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [transferVariantIds, setTransferVariantIds] = useState<string[]>([]);
     const [transferFormat, setTransferFormat] = useState<'custom' | 'openvex'>('custom');
     const [importTimestampPolicy, setImportTimestampPolicy] = useState<'original' | 'current'>('original');
+    const [exportMode, setExportMode] = useState<'normal' | 'update'>('normal');
+    const [existingExportFile, setExistingExportFile] = useState<File | undefined>();
+    const [existingExportError, setExistingExportError] = useState<string | undefined>();
 
     const showMessage = useCallback((message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -464,6 +467,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const openTransfer = useCallback((mode: 'import' | 'export') => {
         setTransferFormat('custom');
         setImportTimestampPolicy('original');
+        setExportMode('normal');
+        setExistingExportFile(undefined);
+        setExistingExportError(undefined);
         setTransferVariantIds(mode === 'export'
             ? variantId ? [variantId] : transferVariants.map(variant => variant.id)
             : []);
@@ -484,8 +490,43 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setTransferVariantIds(defaultVariantId ? [defaultVariantId] : []);
     }, [transferMode, transferVariants, variantId]);
 
+    const changeExportMode = useCallback((mode: 'normal' | 'update') => {
+        setExportMode(mode);
+        setExistingExportFile(undefined);
+        setExistingExportError(undefined);
+        if (mode === 'normal') changeTransferFormat('custom');
+    }, [changeTransferFormat]);
+
+    const existingExportSelection = useRef(0);
+    const handleExistingExportFile = useCallback(async (file?: File) => {
+        const selection = ++existingExportSelection.current;
+        setExistingExportFile(undefined);
+        setExistingExportError(undefined);
+        if (!file) return;
+        try {
+            const text = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result ?? ''));
+                reader.onerror = () => reject(new Error('Unable to read export file.'));
+                reader.readAsText(file);
+            });
+            if (selection !== existingExportSelection.current) return;
+            const parsed = JSON.parse(text);
+            const detectedFormat = detectReviewExportFormat(parsed);
+            changeTransferFormat(detectedFormat);
+            setExistingExportFile(file);
+        } catch (error) {
+            if (selection !== existingExportSelection.current) return;
+            setExistingExportError(error instanceof Error ? error.message : 'Unable to read export file.');
+        }
+    }, [changeTransferFormat]);
+
     const handleExportReview = useCallback(async () => {
         try {
+            if (exportMode === 'update' && !existingExportFile) {
+                showMessage('Choose a supported existing export file.', 'error');
+                return;
+            }
             const params = new URLSearchParams();
             transferVariantIds.forEach(variantId => params.append('variant_id', variantId));
             const endpoint = transferFormat === 'openvex' ? 'export' : 'export-custom-data';
@@ -494,26 +535,38 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 (params.toString() ? `?${params.toString()}` : ''),
                 window.location.href,
             );
-            const res = await fetch(url.toString(), { mode: 'cors' });
+            let res: Response;
+            if (exportMode === 'update' && existingExportFile) {
+                const formData = new FormData();
+                formData.append('file', existingExportFile);
+                transferVariantIds.forEach(variantId => formData.append('variant_id', variantId));
+                res = await fetch(new URL(
+                    import.meta.env.VITE_API_URL + '/api/assessments/review/export-update',
+                    window.location.href,
+                ).toString(), { method: 'POST', mode: 'cors', body: formData });
+            } else {
+                res = await fetch(url.toString(), { mode: 'cors' });
+            }
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 showMessage(err.error || 'Failed to export review data.', 'error');
                 return;
             }
+            const exported = await res.json();
             const ts = formatTimestampForFilename();
             if (transferFormat === 'openvex') {
                 const label = variantNames[transferVariantIds[0]] ?? 'variant';
-                downloadJson(await res.json(), `review_openvex_${sanitizeFilename(label)}_${ts}.json`);
+                downloadJson(exported, `review_openvex_${sanitizeFilename(label)}_${ts}.json`);
             } else {
                 const label = transferVariantIds.length === 1 ? variantNames[transferVariantIds[0]] ?? 'variant' : 'all';
-                downloadJson(await res.json(), `custom_data_${sanitizeFilename(label)}_${ts}.json`);
+                downloadJson(exported, `custom_data_${sanitizeFilename(label)}_${ts}.json`);
             }
             setTransferMode(null);
         } catch (err) {
             console.error('Export error:', err);
             showMessage('Failed to export review data.', 'error');
         }
-    }, [showMessage, variantNames, transferVariantIds, transferFormat]);
+    }, [existingExportFile, exportMode, showMessage, variantNames, transferVariantIds, transferFormat]);
 
     const handleImportReview = useCallback(() => {
         setTransferMode(null);
@@ -1553,9 +1606,14 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     selectedVariantIds={transferVariantIds}
                     transferFormat={transferFormat}
                     timestampPolicy={importTimestampPolicy}
+                    exportMode={exportMode}
+                    existingFileName={existingExportFile?.name}
+                    existingFileError={existingExportError}
                     onSelectedVariantIdsChange={setTransferVariantIds}
                     onTransferFormatChange={changeTransferFormat}
                     onTimestampPolicyChange={setImportTimestampPolicy}
+                    onExportModeChange={changeExportMode}
+                    onExistingFileChange={handleExistingExportFile}
                     onConfirm={transferMode === 'export' ? handleExportReview : handleImportReview}
                     onCancel={() => setTransferMode(null)}
                 />

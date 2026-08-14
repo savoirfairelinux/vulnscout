@@ -1,6 +1,7 @@
 import {
     downloadBlob,
     downloadJson,
+    detectReviewExportFormat,
     formatTimestampForFilename,
     sanitizeFilename,
 } from '../../src/helpers/exportJson';
@@ -63,5 +64,12 @@ describe('exportJson helpers', () => {
 
         document.removeEventListener('click', captureDownload);
         expect(download).toBe('vulnerabilities.json');
+    });
+
+    test('detects supported review export formats and rejects unsupported JSON', () => {
+        expect(detectReviewExportFormat({ version: 1, assessments: [] })).toBe('custom');
+        expect(detectReviewExportFormat({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })).toBe('openvex');
+        expect(() => detectReviewExportFormat({ version: 1, assessments: [], cvss: {} })).toThrow(/cvss.*array/);
+        expect(() => detectReviewExportFormat({ foo: 'bar' })).toThrow(/Unsupported export format/);
     });
 });

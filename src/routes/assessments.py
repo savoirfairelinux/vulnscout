@@ -22,7 +22,9 @@ from ..helpers.assessment_io import (
     import_statements as _import_openvex_statements,
     build_variant_by_name_map,
     build_custom_data_export,
+    detect_review_export_format,
     import_custom_data,
+    reconcile_review_export,
 )
 from ..helpers.assessment_staleness import annotate_assessments_outdated
 
@@ -803,6 +805,75 @@ def init_app(app: Flask) -> None:
         safe_name = re.sub(r'[^\w\-.]', '_', project_name) if project_name else None
         filename = f"custom_data_{safe_name}.json" if safe_name else "custom_data.json"
         return json_bytes, 200, {
+            "Content-Type": "application/json",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        }
+
+    @app.route('/api/assessments/review/export-update', methods=['POST'])
+    def update_review_export() -> ResponseReturnValue:
+        """Update an uploaded Review export using the currently selected variants.
+
+        The uploaded document determines whether VulnScout JSON or OpenVEX is
+        generated. Matching records retain their existing order, records for
+        variants outside the current selection are removed, and new records
+        are appended.
+
+        OpenAPI:
+        body multipart required Existing JSON export and repeated variant_id fields.
+        response 200 binary Updated JSON download.
+        response 400 Error Unsupported input or invalid variant selection.
+        response 404 Error No review data available.
+        """
+        if not (request.content_type and 'multipart/form-data' in request.content_type):
+            return {"error": "Expected multipart/form-data with a file upload"}, 400
+        uploaded = request.files.get('file')
+        if not uploaded or not uploaded.filename:
+            return {"error": "No file uploaded"}, 400
+        if not uploaded.filename.lower().endswith('.json'):
+            return {"error": "Unsupported file type. Please upload a .json file."}, 400
+
+        try:
+            existing = json.load(uploaded.stream)
+        except (TypeError, ValueError):
+            return {"error": "Invalid JSON file"}, 400
+        try:
+            export_format = detect_review_export_format(existing)
+        except ValueError as error:
+            return {"error": str(error)}, 400
+
+        raw_variant_ids = request.form.getlist('variant_id')
+        if not raw_variant_ids:
+            return {"error": "At least one variant_id is required"}, 400
+        variant_ids: list[UUID] = []
+        for raw_variant_id in raw_variant_ids:
+            variant_id, err = parse_uuid_or_400(raw_variant_id, "variant_id")
+            if err:
+                return err
+            if variant_id is None:
+                return {"error": "Internal error"}, 500
+            variant = DBVariant.get_by_id(variant_id)
+            if variant is None:
+                return {"error": f"Variant not found: {raw_variant_id}"}, 404
+            variant_ids.append(variant_id)
+
+        if export_format == 'openvex':
+            if len(variant_ids) != 1:
+                return {"error": "Exactly one variant_id is required for OpenVEX export"}, 400
+            handmade = DBAssessment.get_by_origin(variant_ids, origin="custom")
+            current = build_openvex_doc(
+                handmade,
+                request.form.get('author', existing.get('author', 'Savoir-faire Linux')),
+            )
+        else:
+            current = build_custom_data_export(variant_ids)
+
+        try:
+            updated = reconcile_review_export(existing, current)
+        except ValueError as error:
+            return {"error": str(error)}, 400
+
+        filename = re.sub(r'[^\w\-.]', '_', uploaded.filename) or 'review_export.json'
+        return json.dumps(updated, indent=2), 200, {
             "Content-Type": "application/json",
             "Content-Disposition": f'attachment; filename="{filename}"',
         }

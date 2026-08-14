@@ -19,6 +19,28 @@ export function formatTimestampForFilename(date?: Date | string): string {
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+export type ReviewExportFormat = 'custom' | 'openvex';
+
+/** Detect a supported Review export format from parsed JSON. */
+export function detectReviewExportFormat(data: unknown): ReviewExportFormat {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new Error('Export file must contain a JSON object.');
+    }
+    const document = data as Record<string, unknown>;
+    if (String(document['@context'] ?? '').includes('openvex') && Array.isArray(document.statements)) {
+        return 'openvex';
+    }
+    if (document.version === 1 && Array.isArray(document.assessments)) {
+        for (const section of ['ai_assessments', 'cvss', 'time_estimates']) {
+            if (document[section] !== undefined && !Array.isArray(document[section])) {
+                throw new Error(`Invalid VulnScout JSON: '${section}' must be an array.`);
+            }
+        }
+        return 'custom';
+    }
+    throw new Error('Unsupported export format. Expected VulnScout JSON or OpenVEX.');
+}
+
 /**
  * Trigger a JSON file download in the browser.
  */
