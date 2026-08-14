@@ -380,3 +380,33 @@ def test_deleting_custom_row_does_not_invalidate_scan_cache(app, client, monkeyp
     )
     assert resp.status_code == 200, resp.get_json()
     assert calls == []
+
+
+def test_failure_during_the_write_rolls_everything_back(app, client, monkeypatch):
+    """A crash part-way through the writes must leave the group untouched.
+
+    Pre-validation covers bad input, but the atomicity claim rests on the
+    surrounding transaction. The group is ordered so that the update lands
+    before the failing delete, which is the case the per-row loop could not
+    undo.
+    """
+    kept = _create(client, variant_id=VARIANT_1)
+    dropped = _create(client, variant_id=VARIANT_2)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("write failed half-way")
+
+    monkeypatch.setattr("src.models.assessment.Assessment.delete", boom)
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[kept, dropped], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 500
+
+    # The update that had already been applied is rolled back, and the row the
+    # delete was working on is still there.
+    assert _read_row(app, kept, "status") == "affected"
+    assert client.get(f"/api/assessments/{dropped}").status_code == 200
+    assert _read_row(app, dropped, "status") == "affected"
