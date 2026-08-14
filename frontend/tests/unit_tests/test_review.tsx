@@ -301,8 +301,11 @@ beforeEach(() => {
     mockedDownloadJson.mockClear();
 });
 
+const reconcileCalls = () =>
+    fetchMock.mock.calls.filter(c => String(c[0]).includes('/api/assessments/group-reconcile'));
+
 describe('Review — editing "Apply to variants"', () => {
-    test('checking a new variant creates an assessment for it (POST) and keeps the existing one (PUT)', async () => {
+    test('checking a new variant sends a single group-reconcile request with both variants', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -317,27 +320,26 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(postCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls().length).toBe(1);
         });
 
-        // Existing v1 assessment is updated in place.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
-
-        // A new assessment is created for the newly-selected variant v2.
-        const post = postCalls().find(c => String(c[0]).includes('/api/vulnerabilities/CVE-2020-1111/assessments'));
-        expect(post).toBeDefined();
-        const body = JSON.parse((post![1] as any).body);
-        expect(body.variant_id).toBe('v2');
+        // A single POST reconciles the whole group atomically: the existing
+        // assessment id is carried forward and both variants are requested.
+        const [url, init] = reconcileCalls()[0];
+        expect(String(url)).toContain('/api/assessments/group-reconcile');
+        expect((init as any).method).toBe('POST');
+        const body = JSON.parse((init as any).body);
+        expect(body.vuln_id).toBe('CVE-2020-1111');
+        expect(body.existing_ids).toEqual(['a1']);
         expect(body.packages).toEqual(['pkgA@1.0.0']);
+        expect(body.variant_ids.sort()).toEqual(['v1', 'v2']);
 
-        // No assessments were removed.
+        // No other per-row mutation requests are made.
+        expect(putCalls().length).toBe(0);
         expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('unchecking a variant deletes its assessment (DELETE) and keeps the other (PUT)', async () => {
+    test('unchecking a variant sends a single group-reconcile request with the remaining variant', async () => {
         // Two assessments with identical content are merged into one row.
         mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
         render(<Review projectId="proj1" />);
@@ -353,24 +355,22 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(deleteCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls().length).toBe(1);
         });
 
-        // v2 assessment is deleted, v1 assessment is updated.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a2'),
-            expect.objectContaining({ method: 'DELETE' })
-        );
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
+        const [, init] = reconcileCalls()[0];
+        const body = JSON.parse((init as any).body);
+        expect(body.existing_ids.sort()).toEqual(['a1', 'a2']);
+        expect(body.variant_ids).toEqual(['v1']);
 
-        // Nothing new was created.
-        expect(postCalls()).toHaveLength(0);
+        // No other per-row mutation requests are made; the backend handles
+        // the delete of the deselected variant's assessment atomically.
+        expect(putCalls().length).toBe(0);
+        expect(deleteCalls()).toHaveLength(0);
+        expect(postCalls()).toHaveLength(1);
     });
 
-    test('editing without changing the variant selection neither creates nor deletes assessments', async () => {
+    test('editing without changing the variant selection still sends a single group-reconcile request', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -379,15 +379,16 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(putCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls().length).toBe(1);
         });
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
+        const [, init] = reconcileCalls()[0];
+        const body = JSON.parse((init as any).body);
+        expect(body.existing_ids).toEqual(['a1']);
+        expect(body.variant_ids).toEqual(['v1']);
+
         expect(deleteCalls()).toHaveLength(0);
-        expect(postCalls()).toHaveLength(0);
+        expect(postCalls()).toHaveLength(1);
     });
 
     test('a successful edit reports success and notifies the parent', async () => {
@@ -401,6 +402,7 @@ describe('Review — editing "Apply to variants"', () => {
 
         await screen.findByText('Assessment updated successfully!');
         expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ type: 'update', vulnId: 'CVE-2020-1111' }));
+        expect(reconcileCalls()).toHaveLength(1);
     });
 
     test('a failed edit reports an error', async () => {
@@ -411,7 +413,7 @@ describe('Review — editing "Apply to variants"', () => {
         await openEditor(user);
         await user.click(screen.getByText('Save Changes'));
 
-        await screen.findByText('Failed to update assessment.');
+        await screen.findByText(/Failed to update assessment/);
     });
 
     test('pressing Escape closes the editor without saving', async () => {
