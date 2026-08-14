@@ -110,7 +110,13 @@ def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], i
         assessment.set_status_notes(data["status_notes"], False)
 
     if "justification" in data and isinstance(data["justification"], str):
-        if not assessment.set_justification(data["justification"]):
+        # An empty justification means "clear it", the way the per-row PUT this
+        # replaced always read it. Only a status that needs one still refuses.
+        if data["justification"] == "":
+            if assessment.is_justification_required():
+                return {"error": "Justification required"}, 400
+            assessment.justification = None
+        elif not assessment.set_justification(data["justification"]):
             return {"error": "Invalid justification"}, 400
     elif assessment.is_justification_required():
         return {"error": "Justification required"}, 400

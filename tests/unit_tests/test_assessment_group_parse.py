@@ -104,3 +104,23 @@ def test_explicit_responses_is_flagged_present():
     assert req is not None
     assert req.has_responses is True
     assert list(req.dto.responses) == ["rollback"]
+
+
+def test_empty_justification_clears_it():
+    """An empty justification means "clear", as the per-row PUT always read it."""
+    req, err = parse_reconcile_payload(_payload(status="fixed", justification=""))
+    assert err is None
+    assert req is not None
+    assert not req.dto.justification
+
+
+def test_empty_justification_still_refused_when_required():
+    req, err = parse_reconcile_payload(_payload(status="not_affected", justification=""))
+    assert req is None
+    assert err == {"error": "Justification required"}
+
+
+def test_unknown_justification_is_still_rejected():
+    req, err = parse_reconcile_payload(_payload(status="fixed", justification="made_up"))
+    assert req is None
+    assert err == {"error": "Invalid justification"}
