@@ -251,20 +251,28 @@ def validate_deletions(
     Mirrors ``delete_assessment``: AI rows are approved or rejected through
     their own endpoints, never removed as a side effect of a group edit.
     """
-    for key, row in index_group_rows(rows).items():
-        if key not in targets and row.origin == "ai":
+    for key, group_rows in index_group_rows(rows).items():
+        if key in targets:
+            continue
+        if any(row.origin == "ai" for row in group_rows):
             return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}
     return None
 
 
-def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], DBAssessment]":
-    """Index the group's rows by their (package, variant) key."""
-    indexed: dict[tuple[str, UUID], DBAssessment] = {}
+def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], list[DBAssessment]]":
+    """Index the group's rows by their (package, variant) key.
+
+    A key can carry more than one row — the same combo may have been assessed
+    several times — so every row is kept. Indexing to a single row would let a
+    shadowed duplicate escape both the update and the delete pass and stay in
+    the group with stale content.
+    """
+    indexed: dict[tuple[str, UUID], list[DBAssessment]] = {}
     for row in rows:
         finding = row.finding
         if finding is None or finding.package is None or row.variant_id is None:
             continue
-        indexed[(finding.package.string_id, row.variant_id)] = row
+        indexed.setdefault((finding.package.string_id, row.variant_id), []).append(row)
     return indexed
 
 
@@ -328,34 +336,35 @@ def apply_reconcile(
     deleted_non_custom = False
 
     with batch_session():
-        for key, row in existing_by_key.items():
-            if key in targets:
-                # Editing a pending AI row must not silently approve it.
-                new_origin = "ai" if row.origin == "ai" else "custom"
-                if (row.origin or "") != "custom" and new_origin == "custom":
-                    became_custom = True
-                row.update(
-                    status=req.dto.status,
-                    origin=new_origin,
-                    simplified_status=STATUS_TO_SIMPLIFIED.get(
-                        req.dto.status or "", "Pending Assessment"
-                    ),
-                    status_notes=req.dto.status_notes or "",
-                    justification=req.dto.justification or "",
-                    impact_statement=req.dto.impact_statement or "",
-                    workaround=getattr(req.dto, "workaround", None) or "",
-                    # ``None`` means "leave as is": an edit that did not send
-                    # responses must not wipe imported VEX response data.
-                    responses=list(req.dto.responses or []) if req.has_responses else None,
-                    timestamp=shared_ts if req.update_timestamp else None,
-                    update_timestamp=req.update_timestamp,
-                )
-                updated.append(row.to_dict())
-            else:
-                if (row.origin or "") != "custom":
-                    deleted_non_custom = True
-                deleted.append(str(row.id))
-                row.delete()
+        for key, group_rows in existing_by_key.items():
+            for row in group_rows:
+                if key in targets:
+                    # Editing a pending AI row must not silently approve it.
+                    new_origin = "ai" if row.origin == "ai" else "custom"
+                    if (row.origin or "") != "custom" and new_origin == "custom":
+                        became_custom = True
+                    row.update(
+                        status=req.dto.status,
+                        origin=new_origin,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(
+                            req.dto.status or "", "Pending Assessment"
+                        ),
+                        status_notes=req.dto.status_notes or "",
+                        justification=req.dto.justification or "",
+                        impact_statement=req.dto.impact_statement or "",
+                        workaround=getattr(req.dto, "workaround", None) or "",
+                        # ``None`` means "leave as is": an edit that did not send
+                        # responses must not wipe imported VEX response data.
+                        responses=list(req.dto.responses or []) if req.has_responses else None,
+                        timestamp=shared_ts if req.update_timestamp else None,
+                        update_timestamp=req.update_timestamp,
+                    )
+                    updated.append(row.to_dict())
+                else:
+                    if (row.origin or "") != "custom":
+                        deleted_non_custom = True
+                    deleted.append(str(row.id))
+                    row.delete()
 
         for key, finding in targets.items():
             if key in existing_by_key:

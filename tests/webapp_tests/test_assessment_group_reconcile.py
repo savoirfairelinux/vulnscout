@@ -410,3 +410,41 @@ def test_failure_during_the_write_rolls_everything_back(app, client, monkeypatch
     assert _read_row(app, kept, "status") == "affected"
     assert client.get(f"/api/assessments/{dropped}").status_code == 200
     assert _read_row(app, dropped, "status") == "affected"
+
+
+def test_duplicate_rows_for_one_combo_are_all_updated(app, client):
+    """Two rows sharing a (package, variant) key must both be written.
+
+    Indexing the group to a single row per key let the shadowed duplicate
+    escape both passes and stay behind with stale content.
+    """
+    first = _create(client, variant_id=VARIANT_1)
+    second = _create(client, variant_id=VARIANT_1)
+    assert first != second
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[first, second], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assert {row["id"] for row in resp.get_json()["updated"]} == {first, second}
+    assert _read_row(app, first, "status") == "fixed"
+    assert _read_row(app, second, "status") == "fixed"
+
+
+def test_duplicate_rows_for_a_deselected_combo_are_all_deleted(app, client):
+    """The same applies to the delete pass: no duplicate may survive it."""
+    kept = _create(client, variant_id=VARIANT_1)
+    first = _create(client, variant_id=VARIANT_2)
+    second = _create(client, variant_id=VARIANT_2)
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[kept, first, second], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assert set(resp.get_json()["deleted"]) == {first, second}
+    assert client.get(f"/api/assessments/{first}").status_code == 404
+    assert client.get(f"/api/assessments/{second}").status_code == 404
