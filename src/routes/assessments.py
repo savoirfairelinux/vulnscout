@@ -20,6 +20,10 @@ from ._assessment_group import (
     validate_assessment_findings as _validate_assessment_findings,
     create_assessment_record as _create_assessment_record,
     payload_to_assessment,
+    parse_reconcile_payload,
+    load_group_rows,
+    resolve_targets,
+    apply_reconcile,
 )
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.assessment_io import (
@@ -1190,6 +1194,46 @@ def init_app(app: Flask) -> None:
             "vuln_count": distinct_vulns
         }
         return response, 200 if results else 400
+
+    @app.route("/api/assessments/group-reconcile", methods=["POST"])
+    def reconcile_assessment_group() -> ResponseReturnValue:
+        """Apply one edit to a whole assessment group in a single transaction.
+
+        Replaces the per-row PUT/DELETE/POST loop the clients used to run: the
+        group's current rows are brought to the requested set of
+        (package, variant) combos atomically.
+
+        OpenAPI:
+        body JsonObject optional Group reconcile payload.
+        response 200 JsonObject Reconciliation result.
+        response 400 Error Invalid reconcile payload.
+        response 500 Error Reconciliation failed.
+        """
+        payload_data = request.get_json(silent=True)
+        if not isinstance(payload_data, dict):
+            return {"error": "Invalid request data"}, 400
+
+        req, error = parse_reconcile_payload(payload_data)
+        if error is not None or req is None:
+            return error or {"error": "Invalid request data"}, 400
+
+        rows, error = load_group_rows(req.existing_ids, req.vuln_id)
+        if error is not None:
+            return error, 400
+
+        targets, error = resolve_targets(req)
+        if error is not None:
+            return error, 400
+
+        try:
+            result = apply_reconcile(req, rows, targets)
+        except Exception as e:
+            return {"error": f"DB error: {e}"}, 500
+
+        if result.pop("became_custom", False):
+            invalidate_scan_list_cache()
+        result["status"] = "success"
+        return result, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
     def update_assessment(assessment_id: str) -> ResponseReturnValue:

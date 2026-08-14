@@ -6,11 +6,11 @@
 """Shared helpers for assessment write endpoints."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from ..extensions import db
+from ..extensions import db, batch_session
 from ..models import Assessment as DBAssessment, Finding, Package
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 
@@ -228,3 +228,111 @@ def load_group_rows(
             return [], {"error": f"Assessment {assessment_id} does not belong to {vuln_id}"}
         rows.append(row)
     return rows, None
+
+
+def resolve_targets(
+    req: ReconcileRequest,
+) -> "tuple[dict[tuple[str, UUID], Finding], dict[str, str] | None]":
+    """Resolve every (package, variant) combo to a Finding.
+
+    Every combo is checked before any write happens, so one bad combo cancels
+    the whole action — the same rule ``add_assessments_batch`` applies.
+    """
+    packages: list[Package] = []
+    missing: list[str] = []
+    for pkg_string_id in req.packages:
+        package = resolve_package(pkg_string_id)
+        if package is None:
+            missing.append(pkg_string_id)
+        else:
+            packages.append(package)
+    if missing:
+        return {}, {
+            "error": "Package not found: " + ", ".join(missing)
+            + ". Assessments can only be written for existing packages."
+        }
+
+    resolved: dict[tuple[str, UUID], Finding] = {}
+    invalid: list[str] = []
+    for variant_id in req.variant_ids:
+        findings, bad = validate_assessment_findings(packages, req.vuln_id, variant_id)
+        invalid.extend(f"{sid} (variant {variant_id})" for sid in bad)
+        for package in packages:
+            finding = findings.get(package.id)
+            if finding is not None:
+                resolved[(package.string_id, variant_id)] = finding
+    if invalid:
+        return {}, {
+            "error": "Invalid package version for vulnerability and variant: " + ", ".join(invalid)
+        }
+    return resolved, None
+
+
+def apply_reconcile(
+    req: ReconcileRequest,
+    rows: "list[DBAssessment]",
+    targets: "dict[tuple[str, UUID], Finding]",
+) -> "dict[str, Any]":
+    """Bring the group to the desired state inside a single transaction.
+
+    ``batch_session`` defers every per-row commit to one commit at the end and
+    rolls back on any exception, so a failure part-way leaves the group
+    untouched.
+    """
+    shared_ts = req.timestamp or datetime.now(timezone.utc)
+
+    existing_by_key: dict[tuple[str, UUID], DBAssessment] = {}
+    for row in rows:
+        finding = row.finding
+        if finding is None or finding.package is None or row.variant_id is None:
+            continue
+        existing_by_key[(finding.package.string_id, row.variant_id)] = row
+
+    updated: list[dict[str, Any]] = []
+    created: list[dict[str, Any]] = []
+    deleted: list[str] = []
+    became_custom = False
+
+    with batch_session():
+        for key, row in existing_by_key.items():
+            if key in targets:
+                # Editing a pending AI row must not silently approve it.
+                new_origin = "ai" if row.origin == "ai" else "custom"
+                if (row.origin or "") != "custom" and new_origin == "custom":
+                    became_custom = True
+                row.update(
+                    status=req.dto.status,
+                    origin=new_origin,
+                    simplified_status=STATUS_TO_SIMPLIFIED.get(
+                        req.dto.status or "", "Pending Assessment"
+                    ),
+                    status_notes=req.dto.status_notes or "",
+                    justification=req.dto.justification or "",
+                    impact_statement=req.dto.impact_statement or "",
+                    workaround=getattr(req.dto, "workaround", None) or "",
+                    responses=list(req.dto.responses or []),
+                    timestamp=shared_ts if req.update_timestamp else None,
+                    update_timestamp=req.update_timestamp,
+                )
+                updated.append(row.to_dict())
+            else:
+                deleted.append(str(row.id))
+                row.delete()
+
+        for key, finding in targets.items():
+            if key in existing_by_key:
+                continue
+            new_row = create_assessment_record(
+                req.dto,
+                finding.id,
+                key[1],
+                timestamp=shared_ts if req.update_timestamp else None,
+            )
+            created.append(new_row.to_dict())
+
+    return {
+        "updated": updated,
+        "created": created,
+        "deleted": deleted,
+        "became_custom": became_custom,
+    }
