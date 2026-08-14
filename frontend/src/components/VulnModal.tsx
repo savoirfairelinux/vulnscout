@@ -685,172 +685,45 @@ type VariantScopedSnapshot = {
         if (!editingGroup) return;
         setSubmittingMessage('Editing assessment...');
 
-        // Keep every row affected by this edit in one history group. Depending
-        // on the user's choice, reuse the group's timestamp or move the whole
-        // group to the top with one shared current timestamp.
-        const editSharedTimestamp = data.update_timestamp === false
-            ? editingGroup.timestamp
-            : new Date().toISOString();
-
-        // Build target (package × variantId) combos from form selection
-        const targetVariantIds: Array<string | undefined> =
+        const targetVariantIds: string[] =
             data.variant_ids && data.variant_ids.length > 0
                 ? data.variant_ids
-                : [undefined];
+                : editingGroup.assessments
+                    .map(a => a.variant_id)
+                    .filter((v): v is string => Boolean(v));
         const targetPackages: string[] =
-            data.packages && data.packages.length > 0
-                ? data.packages
-                : editingGroup.packages;
+            data.packages && data.packages.length > 0 ? data.packages : editingGroup.packages;
 
-        // Index existing group assessments by (pkg, vid) key
-        const existingByKey = new Map<string, Assessment>();
-        for (const a of editingGroup.assessments) {
-            const pkg = a.packages[0] ?? '';
-            const vid = a.variant_id ?? '';
-            existingByKey.set(`${pkg}::${vid}`, a);
-        }
+        try {
+            const result = await Assessments.reconcileGroup({
+                vuln_id: vuln.id,
+                existing_ids: editingGroup.assessments.map(a => a.id),
+                packages: targetPackages,
+                variant_ids: targetVariantIds,
+                status: data.status,
+                justification: data.justification,
+                impact_statement: data.impact_statement,
+                status_notes: data.status_notes,
+                workaround: data.workaround,
+                update_timestamp: data.update_timestamp !== false,
+            });
 
-        // Build the desired target key set
-        const targetKeys = new Set<string>();
-        for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
-                targetKeys.add(`${pkg}::${vid ?? ''}`);
-            }
-        }
+            const removed = new Set(result.deleted);
+            const replaced = new Map(result.updated.map(a => [a.id, a]));
+            const applyLocal = (list: Assessment[]): Assessment[] => [
+                ...list
+                    .filter(a => !removed.has(a.id))
+                    .map(a => replaced.get(a.id) ?? a),
+                ...result.created,
+            ];
+            vuln.assessments = applyLocal(vuln.assessments);
+            setAllVulnAssessments(prev => applyLocal(prev));
 
-        let anyError = false;
-
-        // Helper — normalise an Assessment from the API response
-        const normalise = (raw: unknown): Assessment | null => {
-            const a = asAssessment(raw);
-            if (Array.isArray(a) || typeof a !== 'object') return null;
-            const isRelevant = a.status === 'not_affected' || a.status === 'false_positive';
-            if (!isRelevant) {
-                a.justification = undefined;
-                a.impact_statement = undefined;
-            }
-            return a;
-        };
-
-        // 1. PUT-update persisting combos / DELETE removed combos
-        for (const [key, existing] of existingByKey) {
-            if (targetKeys.has(key)) {
-                try {
-                    const res = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`, {
-                        method: 'PUT', mode: 'cors',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            status: data.status,
-                            justification: data.justification,
-                            impact_statement: data.impact_statement,
-                            status_notes: data.status_notes,
-                            workaround: data.workaround,
-                            update_timestamp: data.update_timestamp !== false,
-                            timestamp: editSharedTimestamp,
-                        })
-                    });
-                    if (res.ok) {
-                        const rd = await res.json();
-                        if (rd?.status !== 'success') {
-                            anyError = true;
-                            showMessage('Error: invalid response from server', 'error');
-                        } else {
-                            const updated = normalise(rd.assessment);
-                            if (updated) {
-                                const idx = vuln.assessments.findIndex(a => a.id === existing.id);
-                                if (idx !== -1) vuln.assessments[idx] = updated;
-                                setAllVulnAssessments(prev => prev.map(a => a.id === updated.id ? updated : a));
-                            } else {
-                                anyError = true;
-                                showMessage('Error: invalid assessment data received', 'error');
-                            }
-                        }
-                    } else {
-                        anyError = true;
-                        showMessage(`Failed to update assessment: HTTP ${res.status}`, 'error');
-                    }
-                } catch (e) {
-                    anyError = true;
-                    showMessage(`Failed to update assessment: ${escape(String(e))}`, 'error');
-                }
-            } else {
-                // Deselected — delete this record
-                try {
-                    const res = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`, {
-                        method: 'DELETE', mode: 'cors'
-                    });
-                    if (res.ok) {
-                        vuln.assessments = vuln.assessments.filter(a => a.id !== existing.id);
-                        setAllVulnAssessments(prev => prev.filter(a => a.id !== existing.id));
-                    } else {
-                        anyError = true;
-                        showMessage(`Failed to delete assessment: HTTP ${res.status}`, 'error');
-                    }
-                } catch (e) {
-                    anyError = true;
-                    showMessage(`Failed to delete assessment: ${escape(String(e))}`, 'error');
-                }
-            }
-        }
-
-        // 2. POST-create newly-added combos — batch packages per variant so
-        //    all Assessment rows share the exact same timestamp.
-        const newPkgsByVariant = new Map<string | undefined, string[]>();
-        for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
-                const key = `${pkg}::${vid ?? ''}`;
-                if (!existingByKey.has(key)) {
-                    const arr = newPkgsByVariant.get(vid) ?? [];
-                    arr.push(pkg);
-                    newPkgsByVariant.set(vid, arr);
-                }
-            }
-        }
-
-        for (const [vid, pkgs] of newPkgsByVariant) {
-            if (pkgs.length === 0) continue;
-            try {
-                const body: Record<string, unknown> = {
-                    vuln_id: vuln.id,
-                    packages: pkgs,
-                    status: data.status,
-                    justification: data.justification,
-                    impact_statement: data.impact_statement,
-                    status_notes: data.status_notes,
-                    workaround: data.workaround,
-                    timestamp: editSharedTimestamp,
-                };
-                if (vid) body.variant_id = vid;
-                const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-                    method: 'POST', mode: 'cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const rd = await res.json();
-                if (rd?.status === 'success') {
-                    const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
-                    for (const raw of rawList) {
-                        const casted = normalise(raw);
-                        if (casted) {
-                            vuln.assessments.push(casted);
-                            setAllVulnAssessments(prev => [...prev, casted]);
-                        }
-                    }
-                } else {
-                    anyError = true;
-                    showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
-                }
-            } catch (e) {
-                anyError = true;
-                showMessage(`Failed to create assessment: ${escape(String(e))}`, 'error');
-            }
-        }
-
-        if (!anyError) {
             const updatedAssessments = [...vuln.assessments];
             const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
             vuln.simplified_status = statusSummary.dominant_status;
             vuln.status_summary = statusSummary;
+
             patchVuln(vuln.id, {
                 ...vuln,
                 assessments: updatedAssessments,
@@ -858,6 +731,8 @@ type VariantScopedSnapshot = {
                 status_summary: statusSummary,
             });
             showMessage('Assessment updated successfully!', 'success');
+        } catch (e) {
+            showMessage(`Failed to update assessment: ${String(e instanceof Error ? e.message : e)}`, 'error');
         }
 
         setSubmittingMessage(null);

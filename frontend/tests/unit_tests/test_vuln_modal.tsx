@@ -1550,7 +1550,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
-            assessment: {
+            updated: [{
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
@@ -1564,7 +1564,9 @@ describe('Vulnerability Modal', () => {
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
                 responses: []
-            }
+            }],
+            created: [],
+            deleted: []
         }), { status: 200 });
 
         const patchVuln = jest.fn();
@@ -1583,6 +1585,7 @@ describe('Vulnerability Modal', () => {
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
+                variant_id: 'variant-1',
                 responses: []
             }]
         };
@@ -1599,21 +1602,27 @@ describe('Vulnerability Modal', () => {
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
+        // A single POST reconciles the whole group atomically.
         expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/assessment-1'),
-            expect.objectContaining({ method: 'PUT' })
+            expect.stringContaining('/api/assessments/group-reconcile'),
+            expect.objectContaining({ method: 'POST' })
         );
-        const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
-        const putBody = JSON.parse(String(putCall?.[1]?.body));
-        expect(putBody).toEqual(expect.objectContaining({
+        const reconcileCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/api/assessments/group-reconcile'));
+        const body = JSON.parse(String(reconcileCall?.[1]?.body));
+        expect(body).toEqual(expect.objectContaining({
+            vuln_id: 'CVE-2010-1234',
+            existing_ids: ['assessment-1'],
+            packages: ['aaabbbccc@1.0.0'],
+            variant_ids: ['variant-1'],
             update_timestamp: false,
-            timestamp: '2021-01-01T00:00:00Z',
         }));
-        expect(patchVuln).toHaveBeenCalled();
 
         // Check for success banner
         const successBanner = await screen.findByText(/assessment updated successfully/i);
         expect(successBanner).toBeInTheDocument();
+
+        // The group listing reflects the reconciled data returned by the server.
+        expect(await screen.findByText(/updated justification/i)).toBeInTheDocument();
     });
 
     test('edit assessment API error', async () => {
@@ -1637,6 +1646,7 @@ describe('Vulnerability Modal', () => {
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
+                variant_id: 'variant-1',
                 responses: []
             }]
         };
@@ -1651,21 +1661,23 @@ describe('Vulnerability Modal', () => {
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/group-reconcile'),
+            expect.objectContaining({ method: 'POST' })
+        );
 
         // Check for error banner
         const errorBanner = await screen.findByText(/failed to update assessment/i);
         expect(errorBanner).toBeInTheDocument();
     });
 
-    test('edit assessment invalid response', async () => {
+    test('edit assessment rejects an unknown package with the server error message', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
-            status: 'error',
-            message: 'Invalid data'
-        }), { status: 200 });
+            error: 'Package not found: ghost@9.9.9'
+        }), { status: 400 });
 
         const vulnWithAssessment = {
             ...vulnerability,
@@ -1682,6 +1694,7 @@ describe('Vulnerability Modal', () => {
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
+                variant_id: 'variant-1',
                 responses: []
             }]
         };
@@ -1696,11 +1709,16 @@ describe('Vulnerability Modal', () => {
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/group-reconcile'),
+            expect.objectContaining({ method: 'POST' })
+        );
 
-        // Check for error banner
-        const errorBanner = await screen.findByText(/error.*invalid response from server/i);
+        // The group-reconcile endpoint rejects the whole request, so the
+        // existing row is left untouched and the server's message is surfaced.
+        const errorBanner = await screen.findByText(/failed to update assessment.*package not found: ghost@9\.9\.9/i);
         expect(errorBanner).toBeInTheDocument();
+        expect(screen.getByText(/because 42/i)).toBeInTheDocument();
     });
 
     test('edit assessment network error', async () => {
@@ -1724,6 +1742,7 @@ describe('Vulnerability Modal', () => {
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
+                variant_id: 'variant-1',
                 responses: []
             }]
         };
@@ -1738,7 +1757,10 @@ describe('Vulnerability Modal', () => {
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/group-reconcile'),
+            expect.objectContaining({ method: 'POST' })
+        );
 
         // Check for error banner
         const errorBanner = await screen.findByText(/failed to update assessment.*network failure/i);
@@ -1967,13 +1989,17 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
     });
 
-    test('edit assessment invalid assessment data', async () => {
+    test('edit assessment ignores malformed entries in the reconcile response', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        // The 'updated' entry is missing required fields (no status/timestamp),
+        // so Assessments.reconcileGroup silently drops it via asAssessment.
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
-            assessment: ['invalid', 'array', 'instead', 'of', 'object']
+            updated: [{ id: 'assessment-1', vuln_id: 'CVE-2010-1234' }],
+            created: [],
+            deleted: []
         }), { status: 200 });
 
         const vulnWithAssessment = {
@@ -1991,6 +2017,7 @@ describe('Vulnerability Modal', () => {
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
+                variant_id: 'variant-1',
                 responses: []
             }]
         };
@@ -2005,20 +2032,26 @@ describe('Vulnerability Modal', () => {
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/group-reconcile'),
+            expect.objectContaining({ method: 'POST' })
+        );
 
-        // Check for error banner about invalid assessment data
-        const errorBanner = await screen.findByText(/error.*invalid assessment data received/i);
-        expect(errorBanner).toBeInTheDocument();
+        // The malformed entry is dropped, not applied, but the request still
+        // succeeds and the original row is left in place.
+        await screen.findByText('Assessment updated successfully!');
+        expect(screen.getByText(/because 42/i)).toBeInTheDocument();
     });
 
-    test('edit assessment data mismatch', async () => {
+    test('edit assessment leaves unrelated rows untouched when the response references an unknown id', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        // 'updated' references an id that isn't part of this group; applyLocal
+        // only replaces rows already present locally, so it's a no-op here.
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
-            assessment: {
+            updated: [{
                 id: 'different-assessment-id',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
@@ -2032,7 +2065,9 @@ describe('Vulnerability Modal', () => {
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
                 responses: []
-            }
+            }],
+            created: [],
+            deleted: []
         }), { status: 200 });
 
         const vulnWithAssessment = {
@@ -2050,6 +2085,7 @@ describe('Vulnerability Modal', () => {
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
+                variant_id: 'variant-1',
                 responses: []
             }]
         };
@@ -2064,10 +2100,15 @@ describe('Vulnerability Modal', () => {
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/group-reconcile'),
+            expect.objectContaining({ method: 'POST' })
+        );
 
-        // Since the returned assessment ID doesn't match, it should show success anyway
+        // The request still reports success, and the existing row (whose id
+        // doesn't match the response) keeps its original content.
         await screen.findByText('Assessment updated successfully!');
+        expect(screen.getByText(/because 42/i)).toBeInTheDocument();
     });
 
     test('renders modal with view mode by default', () => {
