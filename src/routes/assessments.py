@@ -22,6 +22,7 @@ from ._assessment_group import (
     payload_to_assessment,
     parse_reconcile_payload,
     load_group_rows,
+    index_group_rows,
     resolve_targets,
     validate_deletions,
     apply_reconcile,
@@ -1222,7 +1223,9 @@ def init_app(app: Flask) -> None:
         if error is not None:
             return error, 400
 
-        targets, error = resolve_targets(req)
+        existing_by_key = index_group_rows(rows)
+
+        targets, error = resolve_targets(req, existing_by_key)
         if error is not None:
             return error, 400
 

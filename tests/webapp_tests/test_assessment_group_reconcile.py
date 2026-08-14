@@ -448,3 +448,68 @@ def test_duplicate_rows_for_a_deselected_combo_are_all_deleted(app, client):
     assert set(resp.get_json()["deleted"]) == {first, second}
     assert client.get(f"/api/assessments/{first}").status_code == 404
     assert client.get(f"/api/assessments/{second}").status_code == 404
+
+
+VARIANT_3 = "77777777-7777-7777-7777-777777777777"
+
+
+def _add_variant_without_the_finding(application):
+    """Add a scanned variant where this vulnerability was never observed.
+
+    The package/variant selection is a cross-product but the scan data is
+    sparse, so such an empty cell has to be reachable in the tests.
+    """
+    from src.extensions import db
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+
+    with application.app_context():
+        variant = Variant(
+            id=uuid.UUID(VARIANT_3),
+            name="third",
+            project_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        )
+        db.session.add(variant)
+        db.session.add(Scan(
+            id=uuid.UUID("88888888-8888-8888-8888-888888888888"),
+            variant_id=variant.id,
+        ))
+        db.session.commit()
+
+
+def test_variant_without_the_package_does_not_cancel_the_edit(app, client):
+    """A combo with no finding is an empty cell, not an invalid request.
+
+    Rejecting it would make the group uneditable, which the per-row loop this
+    endpoint replaced never did.
+    """
+    _add_variant_without_the_finding(app)
+    assessment_id = _create(client, variant_id=VARIANT_1)
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_1, VARIANT_3], status="fixed",
+    )
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    assert len(body["updated"]) == 1
+    assert body["updated"][0]["id"] == assessment_id
+    assert body["created"] == [], "no row can be created where nothing was scanned"
+    assert body["deleted"] == [], "the still-selected row must not be deleted"
+    assert _read_row(app, assessment_id, "status") == "fixed"
+
+
+def test_package_observed_in_no_selected_variant_is_refused(app, client):
+    """A selection that resolves to nothing anywhere is still a bad request."""
+    _add_variant_without_the_finding(app)
+    assessment_id = _create(client, variant_id=VARIANT_1)
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_3], status="fixed",
+    )
+    assert resp.status_code == 400
+    assert PKG in resp.get_json()["error"]
+    assert _read_row(app, assessment_id, "status") == "affected"

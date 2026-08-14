@@ -278,11 +278,19 @@ def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], list
 
 def resolve_targets(
     req: ReconcileRequest,
+    existing_by_key: "dict[tuple[str, UUID], list[DBAssessment]] | None" = None,
 ) -> "tuple[dict[tuple[str, UUID], Finding], dict[str, str] | None]":
-    """Resolve every (package, variant) combo to a Finding.
+    """Resolve the (package, variant) combos this edit should end up covering.
 
-    Every combo is checked before any write happens, so one bad combo cancels
-    the whole action — the same rule ``add_assessments_batch`` applies.
+    A selected package is not necessarily observed in every selected variant:
+    the selection is a cross-product, but the scan data is sparse. Such an empty
+    cell is not an error, it simply produces no row — rejecting the whole
+    request for it would make an otherwise valid group uneditable, which is what
+    the per-row loop this endpoint replaced never did.
+
+    What is still refused before any write happens: an unknown package, and a
+    package that is observed for this vulnerability in *none* of the selected
+    variants, which means the selection itself is wrong.
     """
     packages: list[Package] = []
     missing: list[str] = []
@@ -299,17 +307,32 @@ def resolve_targets(
         }
 
     resolved: dict[tuple[str, UUID], Finding] = {}
-    invalid: list[str] = []
+    covered: set[str] = set()
     for variant_id in req.variant_ids:
-        findings, bad = validate_assessment_findings(packages, req.vuln_id, variant_id)
-        invalid.extend(f"{sid} (variant {variant_id})" for sid in bad)
+        findings, _absent = validate_assessment_findings(packages, req.vuln_id, variant_id)
         for package in packages:
             finding = findings.get(package.id)
             if finding is not None:
                 resolved[(package.string_id, variant_id)] = finding
-    if invalid:
+                covered.add(package.string_id)
+
+    # A row that already exists for a still-selected combo stays a target even
+    # if the finding lookup above missed it, otherwise the reconcile would read
+    # it as deselected and delete a row the user only meant to edit.
+    selected_packages = {package.string_id for package in packages}
+    selected_variants = set(req.variant_ids)
+    for key, group_rows in (existing_by_key or {}).items():
+        if key in resolved or key[0] not in selected_packages or key[1] not in selected_variants:
+            continue
+        finding = next((row.finding for row in group_rows if row.finding is not None), None)
+        if finding is not None:
+            resolved[key] = finding
+            covered.add(key[0])
+
+    unobserved = sorted(selected_packages - covered)
+    if unobserved:
         return {}, {
-            "error": "Invalid package version for vulnerability and variant: " + ", ".join(invalid)
+            "error": "Invalid package version for vulnerability and variant: " + ", ".join(unobserved)
         }
     return resolved, None
 
