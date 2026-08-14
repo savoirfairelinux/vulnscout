@@ -477,3 +477,49 @@ describe('asAssessment outdated flag', () => {
     expect(result.superseded_map).toEqual({ 'firefox@1.0': ['firefox@2.0'] });
   });
 });
+
+describe('Assessments.reconcileGroup', () => {
+  beforeEach(() => { fetchMock.resetMocks(); });
+
+  const input = {
+    vuln_id: 'CVE-2020-35492',
+    existing_ids: ['id-1'],
+    packages: ['cairo@1.16.0'],
+    variant_ids: ['v-1', 'v-2'],
+    status: 'fixed',
+  };
+
+  test('posts the payload and returns the reconciliation result', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({
+      status: 'success',
+      updated: [{ id: 'id-1', vuln_id: 'CVE-2020-35492', status: 'fixed', timestamp: '2026-01-01T00:00:00' }],
+      created: [],
+      deleted: ['id-9'],
+    }));
+
+    const result = await Assessments.reconcileGroup(input as any);
+
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/api/assessments/group-reconcile');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      vuln_id: 'CVE-2020-35492',
+      variant_ids: ['v-1', 'v-2'],
+    });
+    expect(result.updated).toHaveLength(1);
+    expect(result.deleted).toEqual(['id-9']);
+  });
+
+  test('throws the server error message on failure', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ error: 'Package not found: ghost@9.9.9' }), { status: 400 });
+    await expect(Assessments.reconcileGroup(input as any)).rejects.toThrow('Package not found: ghost@9.9.9');
+  });
+
+  test('rejects an empty variant list without calling the API', async () => {
+    await expect(
+      Assessments.reconcileGroup({ ...input, variant_ids: [] } as any)
+    ).rejects.toThrow('At least one variant must be selected');
+    expect(fetchMock.mock.calls).toHaveLength(0);
+  });
+});

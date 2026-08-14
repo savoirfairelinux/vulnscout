@@ -161,6 +161,26 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
     return uniqueAssessments;
 }
 
+export interface ReconcileGroupInput {
+    vuln_id: string;
+    existing_ids: string[];
+    packages: string[];
+    variant_ids: string[];
+    status: string;
+    justification?: string;
+    impact_statement?: string;
+    status_notes?: string;
+    workaround?: string;
+    update_timestamp?: boolean;
+    timestamp?: string;
+}
+
+export interface ReconcileGroupResult {
+    updated: Assessment[];
+    created: Assessment[];
+    deleted: string[];
+}
+
 class Assessments {
     /**
      * Fetch server API to list all packages
@@ -255,6 +275,37 @@ class Assessments {
         const data = await response.json();
         if (!Array.isArray(data?.assessments)) return [];
         return data.assessments.flatMap(asAssessment);
+    }
+
+    /** Apply one edit to a whole assessment group in a single transaction.
+     *
+     * Replaces the per-(package, variant) PUT/DELETE/POST loop the pages used
+     * to run: the backend reconciles every member row atomically, so a partial
+     * failure can no longer leave a group half-updated. */
+    static async reconcileGroup(input: ReconcileGroupInput): Promise<ReconcileGroupResult> {
+        if (!input.variant_ids || input.variant_ids.length === 0) {
+            throw new Error('At least one variant must be selected');
+        }
+        const url = new URL(
+            import.meta.env.VITE_API_URL + '/api/assessments/group-reconcile',
+            window.location.href
+        );
+        const response = await fetch(url.toString(), {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(input),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        return {
+            updated: Array.isArray(data?.updated) ? data.updated.flatMap(asAssessment) : [],
+            created: Array.isArray(data?.created) ? data.created.flatMap(asAssessment) : [],
+            deleted: asStringArray(data?.deleted),
+        };
     }
 
     /** Reject a pending AI assessment group and return the deleted assessment ids.
