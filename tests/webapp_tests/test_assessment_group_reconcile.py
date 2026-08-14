@@ -513,3 +513,55 @@ def test_package_observed_in_no_selected_variant_is_refused(app, client):
     assert resp.status_code == 400
     assert PKG in resp.get_json()["error"]
     assert _read_row(app, assessment_id, "status") == "affected"
+
+
+OTHER_VARIANT = "99999999-9999-9999-9999-999999999999"
+
+
+def _add_variant_in_another_project(application):
+    """Observe the same CVE under a variant of a different project."""
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.project import Project
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+
+    with application.app_context():
+        project = Project(
+            id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+            name="other-project",
+        )
+        db.session.add(project)
+        variant = Variant(id=uuid.UUID(OTHER_VARIANT), name="other", project_id=project.id)
+        db.session.add(variant)
+        scan = Scan(
+            id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+            variant_id=variant.id,
+        )
+        db.session.add(scan)
+        db.session.commit()
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == VULN)
+        ).scalars().first()
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+
+
+def test_rejects_id_from_another_project(app, client):
+    """Sharing a CVE is not enough: another project's row is not in this group."""
+    _add_variant_in_another_project(app)
+    mine = _create(client, variant_id=VARIANT_1)
+    theirs = _create(client, variant_id=OTHER_VARIANT)
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[mine, theirs], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 400
+    assert "another project" in resp.get_json()["error"]
+    # The foreign row was neither deleted nor touched.
+    assert client.get(f"/api/assessments/{theirs}").status_code == 200
+    assert _read_row(app, theirs, "status") == "affected"
+    assert _read_row(app, mine, "status") == "affected"

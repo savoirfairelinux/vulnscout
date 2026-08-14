@@ -1219,7 +1219,7 @@ def init_app(app: Flask) -> None:
         if error is not None or req is None:
             return error or {"error": "Invalid request data"}, 400
 
-        rows, error = load_group_rows(req.existing_ids, req.vuln_id)
+        rows, error = load_group_rows(req.existing_ids, req.vuln_id, req.variant_ids)
         if error is not None:
             return error, 400
 

@@ -216,13 +216,27 @@ def parse_reconcile_payload(
 
 
 def load_group_rows(
-    existing_ids: list[UUID], vuln_id: str
+    existing_ids: list[UUID], vuln_id: str, variant_ids: "list[UUID] | None" = None
 ) -> "tuple[list[DBAssessment], dict[str, str] | None]":
-    """Load the group's current rows, rejecting ids that belong to another CVE.
+    """Load the group's current rows, rejecting ids outside the edited group.
 
     Without this guard a client could pass arbitrary assessment ids and have
-    them deleted by the reconcile below.
+    them deleted by the reconcile below. Two things bound the group: the
+    vulnerability, and the project the edited variants belong to. Scoping to the
+    selected variants themselves would be wrong — a deselected variant's row has
+    to stay loadable, that is how it gets deleted — but a row belonging to
+    another project is never part of this group.
     """
+    allowed_projects: "set[UUID] | None" = None
+    if variant_ids:
+        from ..models.variant import Variant
+
+        allowed_projects = {
+            variant.project_id
+            for variant in (Variant.get_by_id(variant_id) for variant_id in variant_ids)
+            if variant is not None
+        }
+
     rows: list[DBAssessment] = []
     for assessment_id in existing_ids:
         row = DBAssessment.get_by_id(assessment_id)
@@ -238,6 +252,13 @@ def load_group_rows(
             return [], {
                 "error": f"Assessment {assessment_id} is not bound to a variant and package"
                          " and cannot be reconciled"
+            }
+        if allowed_projects is not None and (
+            row.variant is None or row.variant.project_id not in allowed_projects
+        ):
+            return [], {
+                "error": f"Assessment {assessment_id} belongs to another project"
+                         " and cannot be reconciled here"
             }
         rows.append(row)
     return rows, None
