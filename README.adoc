@@ -195,6 +195,26 @@ You can combine inputs with a match condition in a single invocation:
   --match-condition "((cvss >= 9.0) and (pending or affected)) "
 ----
 
+===  Refreshing Vulnerability Data
+
+Use `--refresh-vulnerability-data` with an input command to enrich vulnerabilities imported by that run with current EPSS, NVD, ENISA EUVD, and GitHub Advisory data:
+
+[source,shell]
+----
+./vulnscout --add-spdx /path/to/sbom.spdx.json --refresh-vulnerability-data
+----
+
+The option can also refresh vulnerabilities already in the database. Without a project it refreshes all vulnerabilities; project and variant options restrict the scope:
+
+[source,shell]
+----
+./vulnscout --refresh-vulnerability-data
+./vulnscout --project demo --refresh-vulnerability-data
+./vulnscout --project demo --variant x86 --refresh-vulnerability-data
+----
+
+The refresh enriches existing CVE and GHSA records; it does not discover new findings. A variant requires its project because variant names are project-local.
+
 ===  Performing a Grype Scan
 
 VulnScout can run Grype on the current database contents. This exports the current state as a CycloneDX SBOM, runs Grype against it, and merges the results back:
