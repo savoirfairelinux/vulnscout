@@ -89,3 +89,18 @@ def test_invalid_timestamp_is_rejected():
     req, err = parse_reconcile_payload(_payload(timestamp="not-a-date"))
     assert req is None
     assert err == {"error": "Invalid timestamp"}
+
+
+def test_omitted_responses_is_flagged_absent():
+    req, err = parse_reconcile_payload(_payload())
+    assert err is None
+    assert req is not None
+    assert req.has_responses is False
+
+
+def test_explicit_responses_is_flagged_present():
+    req, err = parse_reconcile_payload(_payload(responses=["rollback"]))
+    assert err is None
+    assert req is not None
+    assert req.has_responses is True
+    assert list(req.dto.responses) == ["rollback"]

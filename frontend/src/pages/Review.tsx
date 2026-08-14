@@ -796,6 +796,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 impact_statement: data.impact_statement,
                 status_notes: data.status_notes,
                 workaround: data.workaround,
+                update_timestamp: data.update_timestamp !== false,
+                // Keeping the current timestamp must also apply to rows created
+                // by this edit, so new siblings join the existing group instead
+                // of getting a fresh `now()`.
+                ...(data.update_timestamp === false && editingRow.timestamp
+                    ? { timestamp: editingRow.timestamp }
+                    : {}),
             });
             const updated = await Assessments.listReview(variantId, projectId);
             setAssessments(groupAssessments(updated));

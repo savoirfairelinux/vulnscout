@@ -23,6 +23,7 @@ from ._assessment_group import (
     parse_reconcile_payload,
     load_group_rows,
     resolve_targets,
+    validate_deletions,
     apply_reconcile,
 )
 from ..helpers.datetime_utils import ensure_utc_iso
@@ -1225,12 +1226,20 @@ def init_app(app: Flask) -> None:
         if error is not None:
             return error, 400
 
+        error = validate_deletions(rows, targets)
+        if error is not None:
+            return error, 400
+
         try:
             result = apply_reconcile(req, rows, targets)
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
 
-        if result.pop("became_custom", False):
+        became_custom = result.pop("became_custom", False)
+        deleted_non_custom = result.pop("deleted_non_custom", False)
+        # Both an automated row becoming custom and the removal of a
+        # non-custom row change the scan-history counts.
+        if became_custom or deleted_non_custom:
             invalidate_scan_list_cache()
         result["status"] = "success"
         return result, 200

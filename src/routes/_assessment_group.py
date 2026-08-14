@@ -143,6 +143,10 @@ class ReconcileRequest:
     dto: "DBAssessment"
     update_timestamp: bool
     timestamp: "datetime | None"
+    # Whether the payload carried a ``responses`` key. Without this flag an
+    # edit that simply omits ``responses`` would wipe the VEX responses stored
+    # on the existing rows.
+    has_responses: bool = False
 
 
 def parse_reconcile_payload(
@@ -207,6 +211,7 @@ def parse_reconcile_payload(
         dto=dto,
         update_timestamp=update_timestamp,
         timestamp=timestamp,
+        has_responses=isinstance(data.get("responses"), list),
     ), None
 
 
@@ -226,8 +231,41 @@ def load_group_rows(
         finding = row.finding
         if finding is None or (finding.vulnerability_id or "").upper() != vuln_id.upper():
             return [], {"error": f"Assessment {assessment_id} does not belong to {vuln_id}"}
+        if row.variant_id is None or finding.package is None:
+            # Such a legacy row cannot be keyed by (package, variant), so it
+            # could neither be updated nor deleted: refuse rather than leaving
+            # it silently desynced from the rest of the group.
+            return [], {
+                "error": f"Assessment {assessment_id} is not bound to a variant and package"
+                         " and cannot be reconciled"
+            }
         rows.append(row)
     return rows, None
+
+
+def validate_deletions(
+    rows: "list[DBAssessment]", targets: "dict[tuple[str, UUID], Finding]"
+) -> "dict[str, str] | None":
+    """Refuse the whole request when it would delete a pending AI row.
+
+    Mirrors ``delete_assessment``: AI rows are approved or rejected through
+    their own endpoints, never removed as a side effect of a group edit.
+    """
+    for key, row in index_group_rows(rows).items():
+        if key not in targets and row.origin == "ai":
+            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}
+    return None
+
+
+def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], DBAssessment]":
+    """Index the group's rows by their (package, variant) key."""
+    indexed: dict[tuple[str, UUID], DBAssessment] = {}
+    for row in rows:
+        finding = row.finding
+        if finding is None or finding.package is None or row.variant_id is None:
+            continue
+        indexed[(finding.package.string_id, row.variant_id)] = row
+    return indexed
 
 
 def resolve_targets(
@@ -281,17 +319,13 @@ def apply_reconcile(
     """
     shared_ts = req.timestamp or datetime.now(timezone.utc)
 
-    existing_by_key: dict[tuple[str, UUID], DBAssessment] = {}
-    for row in rows:
-        finding = row.finding
-        if finding is None or finding.package is None or row.variant_id is None:
-            continue
-        existing_by_key[(finding.package.string_id, row.variant_id)] = row
+    existing_by_key = index_group_rows(rows)
 
     updated: list[dict[str, Any]] = []
     created: list[dict[str, Any]] = []
     deleted: list[str] = []
     became_custom = False
+    deleted_non_custom = False
 
     with batch_session():
         for key, row in existing_by_key.items():
@@ -310,12 +344,16 @@ def apply_reconcile(
                     justification=req.dto.justification or "",
                     impact_statement=req.dto.impact_statement or "",
                     workaround=getattr(req.dto, "workaround", None) or "",
-                    responses=list(req.dto.responses or []),
+                    # ``None`` means "leave as is": an edit that did not send
+                    # responses must not wipe imported VEX response data.
+                    responses=list(req.dto.responses or []) if req.has_responses else None,
                     timestamp=shared_ts if req.update_timestamp else None,
                     update_timestamp=req.update_timestamp,
                 )
                 updated.append(row.to_dict())
             else:
+                if (row.origin or "") != "custom":
+                    deleted_non_custom = True
                 deleted.append(str(row.id))
                 row.delete()
 
@@ -326,7 +364,10 @@ def apply_reconcile(
                 req.dto,
                 finding.id,
                 key[1],
-                timestamp=shared_ts if req.update_timestamp else None,
+                # A new row always needs a first-observation timestamp; callers
+                # keeping the group's timestamp pass it as ``req.timestamp`` so
+                # the new sibling joins the same group instead of splitting it.
+                timestamp=shared_ts,
             )
             created.append(new_row.to_dict())
 
@@ -335,4 +376,5 @@ def apply_reconcile(
         "created": created,
         "deleted": deleted,
         "became_custom": became_custom,
+        "deleted_non_custom": deleted_non_custom,
     }

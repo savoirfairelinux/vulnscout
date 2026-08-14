@@ -237,3 +237,146 @@ def test_update_timestamp_false_preserves_timestamps(client):
     persisted = client.get(f"/api/assessments/{assessment_id}")
     assert persisted.status_code == 200
     assert persisted.get_json()["timestamp"] == before
+
+
+def _mutate_row(application, assessment_id, **fields):
+    """Set fields directly on a stored row (to build states the API forbids)."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+
+    with application.app_context():
+        row = db.session.get(Assessment, uuid.UUID(assessment_id))
+        for name, value in fields.items():
+            setattr(row, name, value)
+        db.session.commit()
+
+
+def _read_row(application, assessment_id, field):
+    from src.extensions import db
+    from src.models.assessment import Assessment
+
+    with application.app_context():
+        row = db.session.get(Assessment, uuid.UUID(assessment_id))
+        return getattr(row, field)
+
+
+def test_edit_without_responses_keeps_stored_responses(app, client):
+    """An edit that omits ``responses`` must not wipe imported VEX responses."""
+    assessment_id = _create(client)
+    _mutate_row(app, assessment_id, responses=["will_not_fix", "workaround_available"])
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["updated"][0]["responses"] == ["will_not_fix", "workaround_available"]
+    assert _read_row(app, assessment_id, "responses") == ["will_not_fix", "workaround_available"]
+
+
+def test_explicit_responses_replace_stored_responses(app, client):
+    assessment_id = _create(client)
+    _mutate_row(app, assessment_id, responses=["will_not_fix"])
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed", responses=["rollback"],
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["updated"][0]["responses"] == ["rollback"]
+    assert _read_row(app, assessment_id, "responses") == ["rollback"]
+
+
+def test_rejects_row_without_variant(app, client):
+    """A legacy row with no variant cannot be keyed, so the request is refused."""
+    assessment_id = _create(client)
+    _mutate_row(app, assessment_id, variant_id=None)
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 400
+    assert "cannot be reconciled" in resp.get_json()["error"]
+    # Nothing was written: the row kept its original status.
+    assert _read_row(app, assessment_id, "status") == "affected"
+
+
+def test_new_sibling_shares_group_timestamp_when_not_updating(app, client):
+    """With update_timestamp false the created row uses the group timestamp."""
+    assessment_id = _create(client)
+    before = client.get(f"/api/assessments/{assessment_id}").get_json()["timestamp"]
+
+    body = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_1, VARIANT_2], status="fixed",
+        update_timestamp=False, timestamp=before,
+    ).get_json()
+    assert len(body["created"]) == 1
+    assert body["updated"][0]["timestamp"] == before
+    assert body["created"][0]["timestamp"] == before
+
+
+def test_refuses_to_delete_pending_ai_row(app, client):
+    """AI rows are approved/rejected through their own endpoints, never here."""
+    kept = _create(client, variant_id=VARIANT_1)
+    resp = client.post(
+        f"/api/vulnerabilities/{VULN}/assessments",
+        json={"packages": [PKG], "status": "affected",
+              "variant_id": VARIANT_2, "ai_generated": True},
+    )
+    assert resp.status_code == 200, resp.get_json()
+    ai_id = resp.get_json()["assessment"]["id"]
+
+    result = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[kept, ai_id], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert result.status_code == 400
+    assert "AI approve/reject" in result.get_json()["error"]
+    # Neither the deletion nor the update to the kept row happened.
+    assert client.get(f"/api/assessments/{ai_id}").status_code == 200
+    assert _read_row(app, kept, "status") == "affected"
+
+
+def test_deleting_non_custom_row_invalidates_scan_cache(app, client, monkeypatch):
+    kept = _create(client, variant_id=VARIANT_1)
+    dropped = _create(client, variant_id=VARIANT_2)
+    _mutate_row(app, dropped, origin="sbom")
+
+    calls = []
+    monkeypatch.setattr(
+        "src.routes.assessments.invalidate_scan_list_cache",
+        lambda *a, **kw: calls.append(True),
+    )
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[kept, dropped], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["deleted"] == [dropped]
+    assert calls, "deleting a non-custom row must invalidate the scan list cache"
+
+
+def test_deleting_custom_row_does_not_invalidate_scan_cache(app, client, monkeypatch):
+    kept = _create(client, variant_id=VARIANT_1)
+    dropped = _create(client, variant_id=VARIANT_2)
+
+    calls = []
+    monkeypatch.setattr(
+        "src.routes.assessments.invalidate_scan_list_cache",
+        lambda *a, **kw: calls.append(True),
+    )
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[kept, dropped], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assert calls == []

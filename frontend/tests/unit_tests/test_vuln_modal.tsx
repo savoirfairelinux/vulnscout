@@ -1615,6 +1615,9 @@ describe('Vulnerability Modal', () => {
             packages: ['aaabbbccc@1.0.0'],
             variant_ids: ['variant-1'],
             update_timestamp: false,
+            // Keeping the timestamp must also apply to rows created by the edit,
+            // so the group's shared timestamp is sent along.
+            timestamp: '2021-01-01T00:00:00Z',
         }));
 
         // Check for success banner
@@ -1623,6 +1626,16 @@ describe('Vulnerability Modal', () => {
 
         // The group listing reflects the reconciled data returned by the server.
         expect(await screen.findByText(/updated justification/i)).toBeInTheDocument();
+
+        // The status summary is recomputed from the reconciled group and pushed
+        // back to the parent list.
+        expect(patchVuln).toHaveBeenCalledWith('CVE-2010-1234', expect.objectContaining({
+            simplified_status: 'Fixed',
+            status_summary: expect.objectContaining({
+                dominant_status: 'Fixed',
+                total_assessments: 1,
+            }),
+        }));
     });
 
     test('edit assessment API error', async () => {

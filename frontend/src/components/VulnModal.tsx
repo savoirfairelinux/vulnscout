@@ -706,6 +706,12 @@ type VariantScopedSnapshot = {
                 status_notes: data.status_notes,
                 workaround: data.workaround,
                 update_timestamp: data.update_timestamp !== false,
+                // Keeping the current timestamp must also apply to rows created
+                // by this edit, otherwise a new sibling gets `now()` and splits
+                // the group in the timestamp-keyed client-side grouping.
+                ...(data.update_timestamp === false
+                    ? { timestamp: editingGroup.assessments[0]?.timestamp ?? editingGroup.timestamp }
+                    : {}),
             });
 
             const removed = new Set(result.deleted);
