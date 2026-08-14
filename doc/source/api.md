@@ -486,6 +486,54 @@ POST /api/assessments/batch
 }
 ```
 
+### Group Reconcile Assessments
+
+```
+POST /api/assessments/group-reconcile
+```
+
+Apply one edit to an entire assessment group in a single transaction. The
+clients previously issued one `PUT`, `DELETE` or `POST` per
+`(package, variant)` combo; this endpoint takes the group's current member ids
+and the desired end state, and reconciles them atomically. Every target combo
+is validated before any write, so one invalid package or variant cancels the
+whole action.
+
+Request body:
+
+```json
+{
+  "vuln_id": "CVE-2020-35492",
+  "existing_ids": ["7e1b...", "9c02..."],
+  "packages": ["cairo@1.16.0"],
+  "variant_ids": ["2222...", "5555..."],
+  "status": "not_affected",
+  "justification": "code_not_reachable",
+  "impact_statement": "",
+  "status_notes": "",
+  "workaround": "",
+  "update_timestamp": true
+}
+```
+
+`variant_ids` must be non-empty, matching `POST /api/assessments/batch`. Every
+id in `existing_ids` must belong to `vuln_id` or the request is rejected.
+Rows whose combo is still selected are updated in place, rows whose combo was
+deselected are deleted, and missing combos are created. All rows written by one
+call share a single timestamp. A pending AI row keeps `origin: "ai"` so that
+editing it does not silently approve it.
+
+Response:
+
+```json
+{
+  "status": "success",
+  "updated": [...],
+  "created": [...],
+  "deleted": ["9c02..."]
+}
+```
+
 ### Update Assessment
 
 ```

@@ -181,3 +181,59 @@ def test_rejects_empty_variant_ids(client):
     )
     assert resp.status_code == 400
     assert "variant_ids" in resp.get_json()["error"]
+
+
+def test_invalid_combo_writes_nothing(client):
+    """One bad package must cancel the whole action, including the good rows."""
+    first = _create(client, variant_id=VARIANT_1, status="affected")
+    second = _create(client, variant_id=VARIANT_2, status="affected")
+
+    resp = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[first, second],
+        packages=[PKG, "ghost@9.9.9"],
+        variant_ids=[VARIANT_1], status="fixed",
+    )
+    assert resp.status_code == 400
+
+    # Neither the update to `first` nor the deletion of `second` happened.
+    for assessment_id in (first, second):
+        row = client.get(f"/api/assessments/{assessment_id}")
+        assert row.status_code == 200
+        assert row.get_json()["status"] == "affected"
+
+
+def test_editing_pending_ai_row_keeps_it_pending(client):
+    resp = client.post(
+        f"/api/vulnerabilities/{VULN}/assessments",
+        json={"packages": [PKG], "status": "affected",
+              "variant_id": VARIANT_1, "ai_generated": True},
+    )
+    assert resp.status_code == 200, resp.get_json()
+    assessment_id = resp.get_json()["assessment"]["id"]
+
+    body = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed",
+    ).get_json()
+    assert body["updated"][0]["origin"] == "ai"
+
+    persisted = client.get(f"/api/assessments/{assessment_id}")
+    assert persisted.status_code == 200
+    assert persisted.get_json()["origin"] == "ai"
+
+
+def test_update_timestamp_false_preserves_timestamps(client):
+    assessment_id = _create(client)
+    before = client.get(f"/api/assessments/{assessment_id}").get_json()["timestamp"]
+    body = _reconcile(
+        client,
+        vuln_id=VULN, existing_ids=[assessment_id], packages=[PKG],
+        variant_ids=[VARIANT_1], status="fixed", update_timestamp=False,
+    ).get_json()
+    assert body["updated"][0]["timestamp"] == before
+
+    persisted = client.get(f"/api/assessments/{assessment_id}")
+    assert persisted.status_code == 200
+    assert persisted.get_json()["timestamp"] == before
