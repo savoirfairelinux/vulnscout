@@ -27,6 +27,7 @@ def upgrade():
         sa.Column('workaround', sa.Text(), nullable=True),
         sa.Column('responses', sa.JSON(), nullable=True),
         sa.Column('rationale', sa.Text(), nullable=False),
+        sa.Column('reviewed_fingerprint', sa.Text(), nullable=True),
         sa.Column('timestamp', sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(['assessment_id'], ['assessments.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
