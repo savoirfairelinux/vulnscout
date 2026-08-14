@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -14,6 +16,37 @@ from .assessment import Assessment
 
 # Fields compared to decide whether a review agrees with its assessment.
 VERDICT_FIELDS = ("status", "justification", "impact_statement", "workaround")
+
+# Fields whose content the reviewer actually read. Any change to one of these
+# invalidates the review, so they are hashed into the review's fingerprint.
+# Wider than VERDICT_FIELDS: rewording status_notes is not a disagreement, but
+# it does mean the review was written against text that no longer exists.
+REVIEWED_FIELDS = (
+    "status",
+    "status_notes",
+    "justification",
+    "impact_statement",
+    "workaround",
+)
+
+
+def fingerprint_assessment(assessment: "Assessment | None") -> str | None:
+    """Hash the assessment content a review is written against.
+
+    Staleness cannot be derived from ``assessment.timestamp``: that column is
+    the VEX *statement date*, which the edit form deliberately preserves when
+    the analyst leaves "keep current timestamp" enabled (the default). An edit
+    made that way changes the text without moving the timestamp, so a
+    timestamp comparison would report a stale review as fresh. Hashing the
+    content instead makes staleness independent of how the timestamp is
+    managed.
+    """
+    if assessment is None:
+        return None
+    payload = [(field, getattr(assessment, field) or "") for field in REVIEWED_FIELDS]
+    payload.append(("responses", sorted(assessment.responses or [])))
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 class AssessmentReview(Base):
@@ -39,6 +72,7 @@ class AssessmentReview(Base):
     workaround: Mapped[str | None] = mapped_column(Text)
     responses: Mapped[list[str] | None] = mapped_column(JSON)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_fingerprint: Mapped[str | None] = mapped_column(Text)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -68,9 +102,20 @@ class AssessmentReview(Base):
         return "agrees"
 
     def is_stale(self) -> bool:
-        """True when the assessment was edited after this review was written."""
+        """True when the assessment changed after this review was written.
+
+        Compares a fingerprint of the reviewed content rather than timestamps,
+        because an edit that keeps the current timestamp (the edit form's
+        default) leaves ``assessment.timestamp`` untouched. Reviews stored
+        before fingerprints existed carry no fingerprint and fall back to the
+        original timestamp comparison.
+        """
         parent = self.assessment
-        if parent is None or parent.timestamp is None or self.timestamp is None:
+        if parent is None:
+            return False
+        if self.reviewed_fingerprint:
+            return fingerprint_assessment(parent) != self.reviewed_fingerprint
+        if parent.timestamp is None or self.timestamp is None:
             return False
         return parent.timestamp > self.timestamp
 
@@ -136,6 +181,9 @@ class AssessmentReview(Base):
         review.impact_statement = impact_statement
         review.workaround = workaround
         review.responses = list(responses or [])
+        review.reviewed_fingerprint = fingerprint_assessment(
+            db.session.get(Assessment, assessment_id)
+        )
         review.timestamp = datetime.now(timezone.utc)
         db.session.commit()
         return review

@@ -76,7 +76,9 @@ By default, **skip assessments that already carry a review**, by passing
 Two exceptions:
 - The caller explicitly asks to re-review everything → omit `has_review`.
 - An assessment's existing review is stale (`is_stale=true`, meaning the
-  assessment was edited after the review was written) → review it again. Stale
+  assessment's reviewed content changed after the review was written — note
+  this is content-based, so it fires even when the analyst kept the original
+  assessment timestamp) → review it again. Stale
   reviews surface via `get_custom_assessment`; when listing with
   `has_review=false` they are excluded, so fetch them explicitly if the caller
   asks about stale reviews.

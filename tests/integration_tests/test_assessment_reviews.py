@@ -115,11 +115,89 @@ def test_is_stale_when_assessment_edited_after_review(finding, variant):
     assert review.to_dict()["is_stale"] is False
 
     # Act
+    assessment.update(
+        status_notes="reassessed: openssl is linked in",
+        timestamp=review.timestamp + timedelta(minutes=1),
+    )
+    db.session.commit()
+
+    # Assert
+    assert assessment.timestamp > review.timestamp
+    assert review.to_dict()["is_stale"] is True
+
+
+def test_is_stale_when_assessment_edited_keeping_its_timestamp(finding, variant):
+    """The edit form's "keep current timestamp" toggle must not hide staleness.
+
+    Editing an assessment with ``update_timestamp=False`` preserves the VEX
+    statement date, so a timestamp comparison alone reports the review as
+    fresh even though the analyst rewrote the assessment underneath it.
+    """
+    # Arrange
+    assessment = make_assessment(finding, variant, workaround="upgrade to 3.0.9")
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id, status="affected", rationale="r"
+    )
+    assert review.to_dict()["is_stale"] is False
+    original_timestamp = assessment.timestamp
+
+    # Act — edit the content while explicitly keeping the old timestamp.
+    assessment.update(workaround="Intentionally make the review stale", update_timestamp=False)
+
+    # Assert
+    assert assessment.timestamp == original_timestamp
+    assert review.to_dict()["is_stale"] is True
+
+
+def test_is_not_stale_when_assessment_saved_without_content_change(finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id, status="affected", rationale="r"
+    )
+
+    # Act — a re-save that bumps the timestamp but changes no reviewed field.
+    assessment.update(status=assessment.status)
+
+    # Assert
+    assert assessment.timestamp > review.timestamp
+    assert review.to_dict()["is_stale"] is False
+
+
+def test_legacy_review_without_fingerprint_falls_back_to_timestamp(finding, variant):
+    # Arrange — simulate a review written before fingerprints existed.
+    assessment = make_assessment(finding, variant)
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id, status="affected", rationale="r"
+    )
+    review.reviewed_fingerprint = None
+    db.session.commit()
+    assert review.to_dict()["is_stale"] is False
+
+    # Act
     assessment.timestamp = review.timestamp + timedelta(minutes=1)
     db.session.commit()
 
     # Assert
     assert review.to_dict()["is_stale"] is True
+
+
+def test_re_reviewing_a_stale_review_clears_staleness(finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id, status="affected", rationale="r"
+    )
+    assessment.update(status_notes="rewritten", update_timestamp=False)
+    assert review.to_dict()["is_stale"] is True
+
+    # Act
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id, status="affected", rationale="re-derived"
+    )
+
+    # Assert
+    assert review.to_dict()["is_stale"] is False
 
 
 def test_deleting_assessment_cascades_to_review(finding, variant):
@@ -232,6 +310,38 @@ def test_put_review_overwrites_existing(client, finding, variant):
     assert resp.status_code == 200
     assert resp.get_json()["review"]["rationale"] == "second"
     assert len(AssessmentReview.get_for_variants([variant.id])) == 1
+
+
+def test_editing_assessment_marks_review_stale_over_http(client, finding, variant):
+    """The UI flow: review an assessment, then edit it keeping its timestamp.
+
+    ``PUT /api/assessments/<id>`` sends ``update_timestamp: false`` whenever
+    the edit form's "keep current timestamp" toggle is left on (its default),
+    so the review must go stale on content alone. The update is applied
+    through the same model call the route makes; this test covers the review
+    endpoints reporting it.
+    """
+    # Arrange
+    assessment = make_assessment(finding, variant, status="affected", justification="")
+    client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "openssl is linked in"},
+    )
+    fresh = client.get(f"/api/assessments/{assessment.id}/review").get_json()["review"]
+    assert fresh["is_stale"] is False
+
+    # Act — exactly what update_assessment() does for a keep-timestamp edit.
+    assessment.update(
+        status="affected",
+        status_notes="Intentionally make the review stale",
+        update_timestamp=False,
+    )
+
+    # Assert
+    review = client.get(f"/api/assessments/{assessment.id}/review").get_json()["review"]
+    assert review["is_stale"] is True
+    listed = client.get(f"/api/assessment-reviews?variant_id={variant.id}").get_json()
+    assert listed[str(assessment.id)]["is_stale"] is True
 
 
 def test_get_review_404_when_absent(client, finding, variant):
