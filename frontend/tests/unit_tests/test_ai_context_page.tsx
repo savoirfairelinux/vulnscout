@@ -259,6 +259,50 @@ describe('AIContext page', () => {
         });
     });
 
+    test('keeps unsaved project description when variant changes', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v1', name: 'Variant 1', project_id: 'p1' },
+            { id: 'v2', name: 'Variant 2', project_id: 'p1' },
+        ]));
+        // getProject: nothing stored yet for the project description
+        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: null }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            project_id: 'p1', description: null, variant_id: 'v1',
+            variant_description: null, environment: null, threat_model: 'TM1',
+            risks: null, other_info: null, files: [],
+        }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            project_id: 'p1', description: null, variant_id: 'v2',
+            variant_description: null, environment: null, threat_model: 'TM2',
+            risks: null, other_info: null, files: [],
+        }));
+
+        render(<AIContext />);
+        await screen.findByRole('option', { name: 'Project A' });
+        fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+        await screen.findByRole('option', { name: 'Variant 1' });
+        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+        await waitFor(() => {
+            const tm = screen.getByLabelText(/threat model/i) as HTMLTextAreaElement;
+            expect(tm.value).toBe('TM1');
+        });
+
+        // Type a project description without saving, then switch variant
+        fireEvent.change(screen.getByLabelText("Project Description"), {
+            target: { value: 'Unsaved description' },
+        });
+        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v2' } });
+
+        await waitFor(() => {
+            const tm = screen.getByLabelText(/threat model/i) as HTMLTextAreaElement;
+            expect(tm.value).toBe('TM2');
+        });
+        expect(
+            (screen.getByLabelText("Project Description") as HTMLTextAreaElement).value
+        ).toBe('Unsaved description');
+    });
+
     function setupWithVariant() {
         fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
         fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
