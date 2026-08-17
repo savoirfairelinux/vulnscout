@@ -1939,21 +1939,13 @@ describe('Review — import and export', () => {
 });
 
 describe('Review page AI review column', () => {
-    // asAssessment() (frontend/src/handlers/assessments.ts) drops any raw
-    // object missing a string `timestamp`, so — unlike the brief's bare
-    // fixture — these need the same required fields as `makeAssessment`
-    // above (packages/timestamp/responses) or they're silently filtered out
-    // before grouping ever runs.
-    const groupedAssessments = [
-        {
-            id: 'assess-1', vuln_id: 'CVE-2024-0001', status: 'not_affected', group_id: 'group-1',
-            origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
-        },
-        {
-            id: 'assess-2', vuln_id: 'CVE-2024-0001', status: 'not_affected', group_id: 'group-1',
-            origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
-        },
-    ];
+    // A "group" is now just a single assessment with more than one target,
+    // so what used to be two same-content assessment records sharing a
+    // group_id is one assessment spanning two (variant, package) targets.
+    const groupedAssessment = makeMultiTargetAssessment('assess-1', 'CVE-2024-0001', [
+        { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+        { variantId: 'v2', pkg: 'pkgA@1.0.0' },
+    ], { status: 'not_affected' });
 
     const differsReview = {
         id: 'r1',
@@ -1972,7 +1964,7 @@ describe('Review page AI review column', () => {
 
     test('renders one row per server-side group', async () => {
         // Arrange
-        mockNetwork(groupedAssessments);
+        mockNetwork([groupedAssessment]);
 
         // Act
         render(<Review projectId="proj1" />);
@@ -1983,7 +1975,7 @@ describe('Review page AI review column', () => {
 
     test('flags a group whose assessment carries a review', async () => {
         // Arrange
-        mockNetwork(groupedAssessments, { reviews: { 'assess-1': differsReview } });
+        mockNetwork([groupedAssessment], { reviews: { 'assess-1': differsReview } });
 
         // Act
         render(<Review projectId="proj1" />);
@@ -1993,18 +1985,10 @@ describe('Review page AI review column', () => {
     });
 
     test('renders a dash for assessments with no review', async () => {
-        mockNetwork([groupedAssessments[0]]);
+        mockNetwork([groupedAssessment]);
 
         render(<Review projectId="proj1" />);
 
         expect(await screen.findByTitle(/not reviewed/i)).toBeInTheDocument();
-    });
-
-    test('shows a count instead of an id on a grouped row', async () => {
-        mockNetwork(groupedAssessments);
-
-        render(<Review projectId="proj1" />);
-
-        expect(await screen.findByText(/2 assessments/i)).toBeInTheDocument();
     });
 });

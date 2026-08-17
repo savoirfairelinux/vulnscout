@@ -16,6 +16,7 @@ import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
+import AssessmentIdTag from "./AssessmentIdTag";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from "./EditAssessment";
@@ -309,6 +310,11 @@ type VariantScopedSnapshot = {
         [availableVariants]
     );
 
+    const variantNameById = useMemo(
+        () => new Map(availableVariants.map(v => [v.id, v.name])),
+        [availableVariants]
+    );
+
     // Build per-variant snapshots so the modal can show where custom CVSS and
     // effort differ across variants directly in all-variants mode.
     useEffect(() => {
@@ -321,8 +327,6 @@ type VariantScopedSnapshot = {
         if (variantsLoadedForVulnId !== vuln.id) {
             return;
         }
-
-        const variantNameById = new Map(availableVariants.map(v => [v.id, v.name]));
 
         (async () => {
             try {
@@ -2106,20 +2110,22 @@ type VariantScopedSnapshot = {
                                             </div>
                                             {group.origin === "custom" && (() => {
                                                 const assessmentId = group.id;
+                                                const assessmentTag = {
+                                                    id: assessmentId,
+                                                    variant_id: targets.find(t => t.variant_id !== null)?.variant_id ?? undefined,
+                                                    packages: [...new Set(targets.map(t => t.package))],
+                                                };
                                                 const review = reviews[assessmentId];
                                                 const verdict = verdictOf(review);
                                                 return (
                                                     <div key={`review-${assessmentId}`} className="mt-3">
                                                         <div className="flex items-center gap-2 text-xs text-gray-400">
-                                                            <span className="font-mono">id {assessmentId.slice(0, 8)}</span>
-                                                            <button
-                                                                type="button"
-                                                                title="Copy assessment id"
-                                                                onClick={() => navigator.clipboard.writeText(assessmentId)}
-                                                                className="hover:text-gray-200 transition-colors"
-                                                            >
-                                                                <FontAwesomeIcon icon={faCopy} className="w-3 h-3" />
-                                                            </button>
+                                                            <span>id</span>
+                                                            <AssessmentIdTag
+                                                                assessment={assessmentTag}
+                                                                variantName={assessmentTag.variant_id ? variantNameById.get(assessmentTag.variant_id) : undefined}
+                                                                showPackages
+                                                            />
                                                         </div>
                                                         {review && (
                                                             <div className="mt-2 ml-4 p-3 rounded-lg border border-sky-700 bg-sky-950/30">
