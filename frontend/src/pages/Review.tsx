@@ -9,6 +9,7 @@ import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
+import AssessmentIdTag from "../components/AssessmentIdTag";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
@@ -119,10 +120,24 @@ const COPIED_FEEDBACK_MS = 2000;
 const rowCopyKey = (row: ReviewRow) =>
     `${isMultiTarget(row.targets) ? 'group' : 'assessment'}:${row.id}`;
 
-/** The reviews attached to a row's assessments. A group's members share the
- *  same assessment text, so any member's review speaks for the whole row. */
-const rowReviews = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
-    row.assessment_ids.map(id => reviews[id]).filter((r): r is AssessmentReview => Boolean(r));
+/** The per-variant tag data for a row. A single assessment can target several
+ *  variants, so each tag's packages are recovered from the row's targets. */
+const rowAssessmentTags = (row: ReviewRow) => {
+    const variantIds = [...new Set(row.targets.map(t => t.variant_id))];
+    return variantIds.map(variantId => ({
+        id: row.id,
+        variant_id: variantId ?? undefined,
+        packages: [...new Set(
+            row.targets.filter(t => t.variant_id === variantId).map(t => t.package)
+        )],
+    }));
+};
+
+/** The review attached to a row's assessment, if any. */
+const rowReviews = (row: ReviewRow, reviews: Record<string, AssessmentReview>) => {
+    const review = reviews[row.id];
+    return review ? [review] : [];
+};
 
 /** Copies a row's group/assessment id, confirming inline like VulnModal does.
  *  Same styles and confirmation as the copy button in the assessment history,
@@ -1145,12 +1160,22 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.display({
             id: "assessment_id",
             header: "ID",
+            size: 200,
+            // An assessment can span several variants, so list the id once per
+            // variant it belongs to rather than collapsing to a bare count.
+            // Packages stay in the tag's tooltip to keep the column narrow.
             cell: ({ row }) => {
-                const ids = row.original.assessment_ids;
-                if (ids.length !== 1) {
-                    return <span className="text-gray-400 text-xs">{ids.length} assessments</span>;
-                }
-                return <span className="font-mono text-xs">{ids[0].slice(0, 8)}</span>;
+                return (
+                    <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto py-1">
+                        {rowAssessmentTags(row.original).map(a => (
+                            <AssessmentIdTag
+                                key={`${a.id}-${a.variant_id ?? 'none'}`}
+                                assessment={a}
+                                variantName={a.variant_id ? variantNames[a.variant_id] : undefined}
+                            />
+                        ))}
+                    </div>
+                );
             },
         }),
         columnHelper.display({
