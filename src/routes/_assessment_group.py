@@ -90,10 +90,19 @@ def create_assessment_record(
     )
 
 
-def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":
+def payload_to_assessment(
+    data: dict, *, allow_clearing_justification: bool = False
+) -> "tuple[DBAssessment | dict[str, str], int]":
     """
     Take an object in input and try to convert it to an Assessment DTO.
     Return either (Assessment, 200) or (error_dict, http_code).
+
+    ``allow_clearing_justification`` reads an empty justification as "clear it"
+    instead of rejecting it, matching the inline handling in ``update_assessment``
+    that the group reconcile replaced. Only the reconcile passes it: that
+    endpoint sends every content field on every save, so an empty string is how
+    the user removes a justification. Assessment creation and the batch endpoint
+    keep refusing it, which is what they have always done.
     """
     if "packages" not in data or not isinstance(data["packages"], list) or len(data["packages"]) < 1:
         return {"error": "Invalid request data"}, 400
@@ -110,9 +119,7 @@ def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], i
         assessment.set_status_notes(data["status_notes"], False)
 
     if "justification" in data and isinstance(data["justification"], str):
-        # An empty justification means "clear it", the way the per-row PUT this
-        # replaced always read it. Only a status that needs one still refuses.
-        if data["justification"] == "":
+        if allow_clearing_justification and data["justification"] == "":
             if assessment.is_justification_required():
                 return {"error": "Justification required"}, 400
             assessment.justification = None
@@ -192,7 +199,10 @@ def parse_reconcile_payload(
         except (ValueError, AttributeError, TypeError):
             return None, {"error": f"Invalid assessment id: {raw}"}
 
-    dto, code = payload_to_assessment({**data, "vuln_id": vuln_id, "packages": packages})
+    dto, code = payload_to_assessment(
+        {**data, "vuln_id": vuln_id, "packages": packages},
+        allow_clearing_justification=True,
+    )
     if code != 200 or not isinstance(dto, DBAssessment):
         message = dto.get("error", "Invalid assessment content") if isinstance(dto, dict) else "Invalid content"
         return None, {"error": message}

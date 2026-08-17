@@ -107,7 +107,11 @@ def test_explicit_responses_is_flagged_present():
 
 
 def test_empty_justification_clears_it():
-    """An empty justification means "clear", as the per-row PUT always read it."""
+    """An empty justification means "clear" on this endpoint only.
+
+    The reconcile sends every content field on every save, so "" is how a user
+    removes a justification. ``PUT /api/assessments/<id>`` keeps rejecting it.
+    """
     req, err = parse_reconcile_payload(_payload(status="fixed", justification=""))
     assert err is None
     assert req is not None

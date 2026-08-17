@@ -404,6 +404,9 @@ def test_failure_during_the_write_rolls_everything_back(app, client, monkeypatch
         variant_ids=[VARIANT_1], status="fixed",
     )
     assert resp.status_code == 500
+    # The failure is reported without echoing the exception: its text can carry
+    # SQL and row content.
+    assert "write failed half-way" not in resp.get_data(as_text=True)
 
     # The update that had already been applied is rolled back, and the row the
     # delete was working on is still there.

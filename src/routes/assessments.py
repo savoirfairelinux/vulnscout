@@ -1235,8 +1235,11 @@ def init_app(app: Flask) -> None:
 
         try:
             result = apply_reconcile(req, rows, targets)
-        except Exception as e:
-            return {"error": f"DB error: {e}"}, 500
+        except Exception:
+            # The exception text can carry SQL and row content: log it server
+            # side, hand the client a message that says nothing about internals.
+            app.logger.exception("Failed to reconcile assessment group %s", req.vuln_id)
+            return {"error": "Failed to save the assessment group"}, 500
 
         became_custom = result.pop("became_custom", False)
         deleted_non_custom = result.pop("deleted_non_custom", False)

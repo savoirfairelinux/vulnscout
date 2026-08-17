@@ -581,6 +581,29 @@ def test_update_assessment_invalid_justification(client):
     assert "Invalid justification" in data["error"]
 
 
+# Test POST assessment - an empty justification is still a rejection here
+def test_create_assessment_empty_justification_rejected(client):
+    """Only the group reconcile reads "" as "clear"; creation keeps refusing it.
+
+    ``payload_to_assessment`` is shared with the reconcile endpoint, which
+    needed an empty justification to mean "clear it". That reading stays behind
+    ``allow_clearing_justification`` so creation and the batch endpoint do not
+    silently change meaning. (``PUT`` has its own inline handling and is not
+    affected either way.)
+    """
+    # Arrange / Act
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        'packages': ['test@1.0.0'],
+        'status': 'affected',
+        'justification': '',
+        'variant_id': DEMO_VARIANT_ID,
+    })
+
+    # Assert
+    assert response.status_code == 400
+    assert "Invalid justification" in json.loads(response.data)["error"]
+
+
 # Test PUT assessment - require justification when status is not_affected
 def test_update_assessment_require_justification(client):
     """Test that justification is required when updating status to not_affected"""
