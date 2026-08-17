@@ -9,6 +9,7 @@ import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
+import AssessmentIdTag from "../components/AssessmentIdTag";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
@@ -117,6 +118,17 @@ const COPIED_FEEDBACK_MS = 2000;
  *  id of its single assessment. Mirrors VulnModal's copy buttons. */
 const rowCopyKey = (row: ReviewRow) =>
     row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
+
+/** The per-assessment tag data for a row. An assessment is written per variant,
+ *  so each member's variant and packages are recovered from the row's targets. */
+const rowAssessmentTags = (row: ReviewRow) => row.assessment_ids.map(id => {
+    const targets = row.targets.filter(t => t.assessment_id === id);
+    return {
+        id,
+        variant_id: targets.find(t => t.variant_id !== null)?.variant_id ?? undefined,
+        packages: [...new Set(targets.map(t => t.package))],
+    };
+});
 
 /** The reviews attached to a row's assessments. A group's members share the
  *  same assessment text, so any member's review speaks for the whole row. */
@@ -1256,12 +1268,22 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.display({
             id: "assessment_id",
             header: "ID",
+            size: 200,
+            // A grouped row spans several variants, so list every id with the
+            // variant it belongs to rather than collapsing to a bare count.
+            // Packages stay in the tag's tooltip to keep the column narrow.
             cell: ({ row }) => {
-                const ids = row.original.assessment_ids;
-                if (ids.length !== 1) {
-                    return <span className="text-gray-400 text-xs">{ids.length} assessments</span>;
-                }
-                return <span className="font-mono text-xs">{ids[0].slice(0, 8)}</span>;
+                return (
+                    <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto py-1">
+                        {rowAssessmentTags(row.original).map(a => (
+                            <AssessmentIdTag
+                                key={a.id}
+                                assessment={a}
+                                variantName={a.variant_id ? variantNames[a.variant_id] : undefined}
+                            />
+                        ))}
+                    </div>
+                );
             },
         }),
         columnHelper.display({

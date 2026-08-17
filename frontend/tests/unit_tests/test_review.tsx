@@ -1995,11 +1995,39 @@ describe('Review page AI review column', () => {
         expect(await screen.findByTitle(/not reviewed/i)).toBeInTheDocument();
     });
 
-    test('shows a count instead of an id on a grouped row', async () => {
+    test('lists every id on a grouped row instead of a bare count', async () => {
+        // Arrange
         mockNetwork(groupedAssessments);
 
+        // Act
         render(<Review projectId="proj1" />);
 
-        expect(await screen.findByText(/2 assessments/i)).toBeInTheDocument();
+        // Assert
+        expect(await screen.findByText('assess-1')).toBeInTheDocument();
+        expect(screen.getByText('assess-2')).toBeInTheDocument();
+        expect(screen.queryByText(/2 assessments/i)).not.toBeInTheDocument();
+    });
+
+    test('labels each grouped id with the variant it belongs to', async () => {
+        // Arrange — same content, different variants, so grouping merges them
+        mockNetwork([
+            { ...groupedAssessments[0], variant_id: 'v1', packages: [RICH_PKG] },
+            { ...groupedAssessments[1], variant_id: 'v2', packages: [RICH_PKG] },
+        ]);
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert — the id tag carries the variant name, and the packages stay in
+        // the tooltip so the narrow column keeps the full mapping.
+        const firstTag = (await screen.findByText('assess-1')).parentElement as HTMLElement;
+        expect(firstTag).toHaveTextContent('Variant Alpha');
+        expect(firstTag).toHaveAttribute(
+            'title',
+            'Assessment assess-1\nVariant: Variant Alpha\nPackages: pkgA@1.0.0 (ACME Corp)',
+        );
+
+        const secondTag = screen.getByText('assess-2').parentElement as HTMLElement;
+        expect(secondTag).toHaveTextContent('Variant Beta');
     });
 });
