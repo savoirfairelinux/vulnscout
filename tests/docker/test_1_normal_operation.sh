@@ -128,7 +128,9 @@ function wait_scan_finished() {
 
     if [[ $elapsed_time -ge $timeout_seconds ]]; then
         echo "Timeout reached"
+        return
     fi
+
     echo "OK"
 }
 

@@ -44,7 +44,7 @@ function main() {
         --serve &
 
     chmod +x ./test_1_normal_operation.sh
-    ./test_1_normal_operation.sh "localhost:$flask_port"
+    ./test_1_normal_operation.sh "127.0.0.1:$flask_port"
 
     echo "[OK, FINAL] All tests passed"
 }
