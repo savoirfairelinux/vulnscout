@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBug, faShieldHalved, faLeaf, faCrosshairs, faXmark, faArrowsRotate } from "@fortawesome/free-solid-svg-icons";
+import { faBug, faShieldHalved, faLeaf, faCrosshairs, faXmark, faArrowsRotate, faFileExport } from "@fortawesome/free-solid-svg-icons";
 import OperationQueuePanel from "./OperationQueuePanel";
 import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot, dismiss as grypeDismiss } from "../handlers/grypeScanState";
 import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot, dismiss as nvdDismiss } from "../handlers/nvdScanState";
@@ -8,6 +8,7 @@ import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot, dismiss as os
 import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot, dismiss as sccDismiss } from "../handlers/sccScanState";
 import { subscribeToRefreshQueue, getRefreshQueueSnapshot, dismissRefreshQueueEntry } from "../handlers/activeScanQueue";
 import type { RefreshType } from "../handlers/activeScanQueue";
+import { subscribe as exportSubscribe, getSnapshot as exportGetSnapshot, dismiss as exportDismiss } from "../handlers/exportQueue";
 
 type Props = {
     isOpen: boolean;
@@ -19,6 +20,7 @@ const nvdColors = { border: "border-orange-700/60", headerBg: "bg-orange-900/40"
 const osvColors = { border: "border-green-700/60", headerBg: "bg-green-900/40", iconText: "text-green-400", titleText: "text-green-200", subtitleText: "text-green-300/80", bar: "bg-green-500" };
 const sccColors = { border: "border-sky-700/60", headerBg: "bg-sky-900/40", iconText: "text-sky-400", titleText: "text-sky-200", subtitleText: "text-sky-300/80", bar: "bg-sky-500" };
 const refreshColors = { border: "border-cyan-700/60", headerBg: "bg-cyan-900/40", iconText: "text-cyan-400", titleText: "text-cyan-200", subtitleText: "text-cyan-300/80", bar: "bg-cyan-500" };
+const exportColors = { border: "border-teal-700/60", headerBg: "bg-teal-900/40", iconText: "text-teal-400", titleText: "text-teal-200", subtitleText: "text-teal-300/80", bar: "bg-teal-500" };
 
 function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
     const overlayRef = useRef<HTMLDivElement>(null);
@@ -27,6 +29,7 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
     const osvEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
     const sccEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
     const refreshEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
+    const exportEntries = useSyncExternalStore(exportSubscribe, exportGetSnapshot);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -40,7 +43,7 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
 
     if (!isOpen) return null;
 
-    const hasEntries = grypeEntries.length + nvdEntries.length + osvEntries.length + sccEntries.length + refreshEntries.length > 0;
+    const hasEntries = grypeEntries.length + nvdEntries.length + osvEntries.length + sccEntries.length + refreshEntries.length + exportEntries.length > 0;
 
     return (
         <div
@@ -85,6 +88,9 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
                             ))}
                             {refreshEntries.map(entry => (
                                 <OperationQueuePanel key={entry.variantId} entry={entry} label="Vulnerability Data Refresh" icon={faArrowsRotate} colors={refreshColors} onDismiss={() => dismissRefreshQueueEntry(entry.variantId as RefreshType)} />
+                            ))}
+                            {exportEntries.map(entry => (
+                                <OperationQueuePanel key={entry.variantId} entry={entry} label="Export" icon={faFileExport} colors={exportColors} onDismiss={() => exportDismiss(entry.variantId)} />
                             ))}
                         </div>
                     ) : (

@@ -6,12 +6,57 @@ jest.mock('../../src/handlers/activeScanQueue', () => ({
     getRefreshQueueSnapshot: jest.fn(),
     dismissRefreshQueueEntry: jest.fn(),
 }));
+jest.mock('../../src/handlers/grypeScanState', () => ({
+    subscribe: () => () => undefined,
+    getSnapshot: jest.fn(),
+    dismiss: jest.fn(),
+}));
+jest.mock('../../src/handlers/nvdScanState', () => ({
+    subscribe: () => () => undefined,
+    getSnapshot: jest.fn(),
+    dismiss: jest.fn(),
+}));
+jest.mock('../../src/handlers/osvScanState', () => ({
+    subscribe: () => () => undefined,
+    getSnapshot: jest.fn(),
+    dismiss: jest.fn(),
+}));
+jest.mock('../../src/handlers/sccScanState', () => ({
+    subscribe: () => () => undefined,
+    getSnapshot: jest.fn(),
+    dismiss: jest.fn(),
+}));
+jest.mock('../../src/handlers/exportQueue', () => ({
+    subscribe: () => () => undefined,
+    getSnapshot: jest.fn(),
+    dismiss: jest.fn(),
+}));
 
 import OperationQueueModal from '../../src/components/OperationQueueModal';
-import { getRefreshQueueSnapshot } from '../../src/handlers/activeScanQueue';
+import { dismissRefreshQueueEntry, getRefreshQueueSnapshot } from '../../src/handlers/activeScanQueue';
+import { dismiss as grypeDismiss, getSnapshot as grypeGetSnapshot } from '../../src/handlers/grypeScanState';
+import { dismiss as nvdDismiss, getSnapshot as nvdGetSnapshot } from '../../src/handlers/nvdScanState';
+import { dismiss as osvDismiss, getSnapshot as osvGetSnapshot } from '../../src/handlers/osvScanState';
+import { dismiss as sccDismiss, getSnapshot as sccGetSnapshot } from '../../src/handlers/sccScanState';
+import { dismiss as exportDismiss, getSnapshot as exportGetSnapshot } from '../../src/handlers/exportQueue';
+
+const completedEntry = (variantId: string, variantName: string) => ({
+    variantId,
+    variantName,
+    status: 'done',
+    error: null,
+    progress: 'Complete',
+    logs: [],
+    total: 1,
+    doneCount: 1,
+});
 
 describe('OperationQueueModal', () => {
-    beforeEach(() => (getRefreshQueueSnapshot as jest.Mock).mockReturnValue([]));
+    beforeEach(() => {
+        jest.clearAllMocks();
+        [getRefreshQueueSnapshot, grypeGetSnapshot, nvdGetSnapshot, osvGetSnapshot, sccGetSnapshot, exportGetSnapshot]
+            .forEach(snapshot => (snapshot as jest.Mock).mockReturnValue([]));
+    });
 
     it('closes from its close button, backdrop, and Escape key', () => {
         const onClose = jest.fn();
@@ -45,5 +90,24 @@ describe('OperationQueueModal', () => {
         fireEvent.click(nvdCollapse);
         expect(nvdCollapse).toHaveAttribute('aria-expanded', 'true');
         expect(epssCollapse).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('dismisses completed operations through their owning queues', () => {
+        (grypeGetSnapshot as jest.Mock).mockReturnValue([completedEntry('grype-id', 'Grype')]);
+        (nvdGetSnapshot as jest.Mock).mockReturnValue([completedEntry('nvd-id', 'NVD')]);
+        (osvGetSnapshot as jest.Mock).mockReturnValue([completedEntry('osv-id', 'OSV')]);
+        (sccGetSnapshot as jest.Mock).mockReturnValue([completedEntry('scc-id', 'SCC')]);
+        (getRefreshQueueSnapshot as jest.Mock).mockReturnValue([completedEntry('epss', 'EPSS')]);
+        (exportGetSnapshot as jest.Mock).mockReturnValue([completedEntry('export-id', 'Project export')]);
+
+        render(<OperationQueueModal isOpen={true} onClose={jest.fn()} />);
+        screen.getAllByTitle('Close').forEach(button => fireEvent.click(button));
+
+        expect(grypeDismiss).toHaveBeenCalledWith('grype-id');
+        expect(nvdDismiss).toHaveBeenCalledWith('nvd-id');
+        expect(osvDismiss).toHaveBeenCalledWith('osv-id');
+        expect(sccDismiss).toHaveBeenCalledWith('scc-id');
+        expect(dismissRefreshQueueEntry).toHaveBeenCalledWith('epss');
+        expect(exportDismiss).toHaveBeenCalledWith('export-id');
     });
 });
