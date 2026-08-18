@@ -18,6 +18,7 @@ import {
   faGear,
   faRightLeft,
   faCircleQuestion,
+  faFileExport,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
@@ -38,6 +39,7 @@ import {
   vulnerabilityRefreshSources,
 } from "../helpers/refreshSources";
 import type { RefreshMode } from "../helpers/refreshSources";
+import CustomExportContentManager from "../components/CustomExportContentManager";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
@@ -46,7 +48,7 @@ type Props = {
   initialTab?: SettingsTab;
 };
 
-type SettingsTab = "general" | "transfer" | "projects" | "variants";
+type SettingsTab = "general" | "transfer" | "custom-export" | "projects" | "variants";
 type FeedbackMsg = { text: string; type: "success" | "error" } | null;
 type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
@@ -754,6 +756,9 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
   } else if (activeTab === "transfer") {
     crumbs.push("Transfer");
     pageTitle = "Transfer Assessments";
+  } else if (activeTab === "custom-export") {
+    crumbs.push("Custom reports & assets");
+    pageTitle = "Custom reports & assets";
   } else {
     crumbs.push("General Settings");
   }
@@ -787,6 +792,17 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
             >
               <FontAwesomeIcon icon={faRightLeft} className="w-4 text-sky-400" aria-hidden="true" />
               Transfer Assessments
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("custom-export")}
+              aria-current={activeTab === "custom-export" ? "page" : undefined}
+              className={`mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                activeTab === "custom-export" ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
+              }`}
+            >
+              <FontAwesomeIcon icon={faFileExport} className="w-4 text-sky-400" aria-hidden="true" />
+              Custom reports &amp; assets
             </button>
 
             <div className="my-3 border-t border-slate-700" />
@@ -1399,6 +1415,10 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
 
         {activeTab === "transfer" && (
           <Transfer projectId={projectId} onDataChanged={onDataChanged} />
+        )}
+
+        {activeTab === "custom-export" && (
+          <CustomExportContentManager />
         )}
 
         {/* ======== Variants Settings tab ======== */}

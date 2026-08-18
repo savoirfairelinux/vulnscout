@@ -176,10 +176,8 @@ class SPDX:
                     data_license="CC0-1.0",
                     spdx_id="SPDXRef-DOCUMENT",
                     name=f"{getenv('PRODUCT_NAME', 'PRODUCT_NAME')}-{getenv('PRODUCT_VERSION', '1.0.0')}",
-                    document_namespace=getenv(
-                        'DOCUMENT_URL',
-                        f"https://spdx.org/spdxdocs/{uuid7(as_type='str')}.spdx.json"
-                    ),
+                    document_namespace=getenv('DOCUMENT_URL')
+                    or f"https://spdx.org/spdxdocs/{uuid7(as_type='str')}.spdx.json",
                     creators=[
                         Actor(
                             actor_type=ActorType.ORGANIZATION,

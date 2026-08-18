@@ -353,6 +353,37 @@ describe("Settings scoped project and variant views", () => {
     expect(await screen.findByRole("heading", { name: "Report Metadata" })).toBeInTheDocument();
   });
 
+  test("manages custom reports and assets from its Settings tab", async () => {
+    const fetchFunction = global.fetch as jest.Mock;
+    fetchFunction.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve([
+        { id: "custom.adoc", category: ["custom"], extension: "adoc" },
+        { id: "logo.png", category: ["assets"], extension: "png" },
+      ]),
+    } as Response);
+    const { container } = render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Custom reports & assets" }));
+
+    expect(await screen.findByRole("heading", { name: "Custom reports (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Custom assets (1)" })).toBeInTheDocument();
+    expect(screen.getByText("custom.adoc")).toBeInTheDocument();
+    expect(screen.getByText("logo.png")).toBeInTheDocument();
+
+    fetchFunction
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "new.adoc" }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response);
+    fireEvent.change(container.querySelector('input[type="file"][accept*=".adoc"]')!, {
+      target: { files: [new File(["report"], "new.adoc", { type: "text/asciidoc" })] },
+    });
+
+    expect(await screen.findByText(/Imported "new\.adoc"/)).toBeInTheDocument();
+    expect(fetchFunction.mock.calls.some(([url, options]) =>
+      String(url).includes("/api/documents/templates") && options?.method === "POST"
+    )).toBe(true);
+  });
+
   test("opens and cancels editing an existing NVD API key", async () => {
     nvdApiKeyGet.mockResolvedValueOnce({ has_key: true, masked_key: "abcd...wxyz" });
     render(<Settings />);

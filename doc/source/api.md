@@ -690,6 +690,34 @@ Generate a report from a template or export an SBOM in the requested format.
 
 **Response:** File download with appropriate `Content-Type` and `Content-Disposition` headers. Supports JSON, XML, PDF, and HTML outputs depending on the template.
 
+### Export Multiple Documents
+
+```
+POST /api/documents/export
+```
+
+Renders selected document formats for every variant in one project. `consolidated` creates one project-wide file per selection; `per_variant` creates one file per selection and variant. Both modes return a ZIP archive.
+
+**Request body:**
+
+```json
+{
+  "project_id": "11111111-1111-1111-1111-111111111111",
+  "variant_ids": [
+    "22222222-2222-2222-2222-222222222222"
+  ],
+  "mode": "per_variant",
+  "documents": [
+    { "name": "summary.adoc", "extension": "pdf" },
+    { "name": "CycloneDX 1.6", "extension": "json" }
+  ]
+}
+```
+
+`variant_ids` selects one or more variants belonging to the project. When omitted, all project variants are exported. Reports support either output mode. SBOM selections require `per_variant` mode and cannot be mixed with reports in the same request. Document and extension pairs must match non-asset entries returned by `GET /api/documents`. Custom assets are resources used by report templates and cannot be exported directly.
+
+**Response:** ZIP file download (`Content-Type: application/zip`).
+
 ---
 
 ## Scans

@@ -207,12 +207,13 @@ class TestListDocumentsError:
     def test_list_documents_success(self, templates_instance):
         """Test successful list_documents"""
         # Mock the loaders to return template lists
-        with patch.object(templates_instance.internal_loader, 'list_templates', return_value=["template1.jinja2"]):
-            with patch.object(templates_instance.external_loader, 'list_templates', return_value=["custom.jinja2"]):
+        with patch.object(templates_instance.internal_loader, 'list_templates', return_value=["template1.jinja2", "assets/logo.png"]):
+            with patch.object(templates_instance.external_loader, 'list_templates', return_value=["custom.jinja2", "assets/lolcat.jpg"]):
                 result = templates_instance.list_documents()
                 assert len(result) == 2
                 assert {"id": "template1.jinja2", "is_template": True, "category": ["built-in"]} in result
                 assert {"id": "custom.jinja2", "is_template": True, "category": ["custom"]} in result
+                assert all(not document["id"].startswith("assets/") for document in result)
 
 
 class TestFilterEpssScoreException:

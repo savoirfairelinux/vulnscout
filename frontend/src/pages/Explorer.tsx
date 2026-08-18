@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import NavigationBar from "../components/NavigationBar";
 import OperationQueueModal from "../components/OperationQueueModal";
+import { subscribe as exportSubscribe, getSnapshot as exportGetSnapshot } from "../handlers/exportQueue";
 import MessageBanner from "../components/MessageBanner";
 import Popup from "../components/Popup";
 import type { Package } from "../handlers/packages";
@@ -87,7 +88,8 @@ function Explorer() {
     const osvScanEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
     const sccScanEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
     const refreshQueueEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
-    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries];
+    const exportEntries = useSyncExternalStore(exportSubscribe, exportGetSnapshot);
+    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries, ...exportEntries];
     const trackedScanCount = scanEntries.length;
     const finishedScanCount = scanEntries
         .filter(entry => entry.status === "done" || entry.status === "error" || entry.status === "cancelled").length;
