@@ -690,3 +690,57 @@ def test_batch_session_exception_propagates(app):
     with pytest.raises(ValueError, match="test error"):
         with batch_session():
             raise ValueError("test error")
+
+
+# ===========================================================================
+# AssessmentGroupMember model
+# ===========================================================================
+
+def _make_two_grouped_assessments():
+    """Two persisted assessments on one finding, for group lifecycle tests."""
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+
+    Vulnerability.create_record(id="CVE-2026-0002")
+    pkg = Package.create(name="cascade-pkg", version="2.0.0")
+    finding = Finding.create(package_id=pkg.id, vulnerability_id="CVE-2026-0002")
+    return (
+        Assessment.create(status="fixed", finding_id=finding.id),
+        Assessment.create(status="fixed", finding_id=finding.id),
+    )
+
+
+def test_group_members_table_exists_after_migration(app):
+    """The migration must create the table with its index."""
+    with app.app_context():
+        from sqlalchemy import inspect
+        from src.extensions import db
+
+        inspector = inspect(db.engine)
+        assert "assessment_group_members" in inspector.get_table_names()
+
+        columns = {c["name"] for c in inspector.get_columns("assessment_group_members")}
+        assert columns == {"assessment_id", "group_id"}
+
+        indexes = {i["name"] for i in inspector.get_indexes("assessment_group_members")}
+        assert "ix_assessment_group_members_group_id" in indexes
+
+
+def test_deleting_an_assessment_removes_its_membership(app):
+    """ON DELETE CASCADE means orphan member rows cannot exist."""
+    with app.app_context():
+        from sqlalchemy import text
+        from src.extensions import db
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        first, second = _make_two_grouped_assessments()
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+
+        db.session.execute(text("PRAGMA foreign_keys=ON"))
+        db.session.delete(db.session.get(Assessment, first.id))
+        db.session.commit()
+
+        assert AssessmentGroupMember.get_assessment_ids(group_id) == [second.id]
