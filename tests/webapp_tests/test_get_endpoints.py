@@ -73,6 +73,56 @@ def runner(app):
     return app.test_cli_runner()
 
 
+@pytest.fixture()
+def demo_ids(app):
+    from src.extensions import db
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+    import uuid as uuid_module
+
+    with app.app_context():
+        vuln_id = "CVE-1999-12345"
+        other_vuln_id = "CVE-1999-99999"
+        for vid in (vuln_id, other_vuln_id):
+            if Vulnerability.get_by_id(vid) is None:
+                Vulnerability.create_record(id=vid)
+
+        pkg_a = Package.find_or_create("cairo", "1.16.0")
+        pkg_b = Package.find_or_create("libpng", "1.6.37")
+        db.session.commit()
+
+        variant_id = uuid_module.UUID("22222222-2222-2222-2222-222222222222")
+        other_variant = Variant(
+            id=uuid_module.uuid4(), name="other",
+            project_id=uuid_module.UUID("11111111-1111-1111-1111-111111111111"))
+        db.session.add(other_variant)
+        db.session.commit()
+
+        existing_scan_id = uuid_module.UUID("33333333-3333-3333-3333-333333333333")
+        other_scan = Scan(id=uuid_module.uuid4(), variant_id=other_variant.id)
+        db.session.add(other_scan)
+        db.session.commit()
+
+        for vid in (vuln_id, other_vuln_id):
+            for pkg in (pkg_a, pkg_b):
+                finding = Finding.get_or_create(pkg.id, vid)
+                db.session.add(Observation(finding_id=finding.id, scan_id=existing_scan_id))
+                db.session.add(Observation(finding_id=finding.id, scan_id=other_scan.id))
+        db.session.commit()
+
+        return {
+            "vuln_id": vuln_id,
+            "other_vuln_id": other_vuln_id,
+            "variant_id": str(variant_id),
+            "other_variant_id": str(other_variant.id),
+            "two_packages": [pkg_a.string_id, pkg_b.string_id],
+        }
+
+
 def test_get_status(client):
     response = client.get("/api/scan/status")
     assert response.status_code == 200
@@ -974,3 +1024,96 @@ def test_upload_asset_no_multipart(client):
         content_type="application/octet-stream",
     )
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GET assessment-groups endpoints
+# ---------------------------------------------------------------------------
+
+def test_assessment_groups_by_vuln_returns_one_entry_per_group(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    response = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups")
+
+    assert response.status_code == 200
+    match = [g for g in response.get_json() if g["group_id"] == group_id]
+    assert len(match) == 1
+    assert len(match[0]["targets"]) == 2
+    assert match[0]["status"] == "not_affected"
+
+
+def test_assessment_group_by_id_returns_the_group(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    response = client.get(f"/api/assessment-groups/{group_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["group_id"] == group_id
+
+
+def test_unknown_assessment_group_is_404(client):
+    import uuid
+
+    assert client.get(f"/api/assessment-groups/{uuid.uuid4()}").status_code == 404
+
+
+def test_ungrouped_assessment_appears_with_null_group_id(client, demo_ids):
+    client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    )
+
+    groups = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups").get_json()
+
+    ungrouped = [g for g in groups if g["group_id"] is None]
+    assert ungrouped, "an ungrouped assessment must still be listed"
+    assert all(len(g["targets"]) == 1 for g in ungrouped)
+
+
+def test_review_assessment_groups_filters(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    response = client.get(
+        f"/api/reviews/assessment-groups?variant_id={demo_ids['variant_id']}&origin=custom")
+    assert response.status_code == 200
+    match = [g for g in response.get_json() if g["group_id"] == group_id]
+    assert len(match) == 1
+
+    other_variant_response = client.get(
+        f"/api/reviews/assessment-groups?variant_id={demo_ids['other_variant_id']}")
+    assert other_variant_response.status_code == 200
+    assert all(
+        g["group_id"] != group_id for g in other_variant_response.get_json())

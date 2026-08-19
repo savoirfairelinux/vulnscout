@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import select
 
 from ..extensions import db
+from ..helpers.assessment_staleness import annotate_assessments_outdated
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..models.assessment import Assessment
 from ..models.assessment_group_member import AssessmentGroupMember
@@ -47,6 +48,13 @@ def build_groups(assessments: list[Assessment]) -> list[dict]:
         .where(AssessmentGroupMember.assessment_id.in_([a.id for a in assessments]))
     ).all())
 
+    # One call for the whole page: three queries total, not three per group.
+    member_dicts = [a.to_dict() for a in assessments]
+    annotate_assessments_outdated(member_dicts)
+    stale_by_assessment = {
+        d["id"]: set(d.get("stale_packages") or []) for d in member_dicts
+    }
+
     buckets: dict[str, list[Assessment]] = {}
     for assessment in assessments:
         group_id = memberships.get(assessment.id)
@@ -60,7 +68,7 @@ def build_groups(assessments: list[Assessment]) -> list[dict]:
             {
                 "variant_id": str(m.variant_id) if m.variant_id else None,
                 "package": pkg,
-                "outdated": False,
+                "outdated": pkg in stale_by_assessment.get(str(m.id), set()),
             }
             for m in members for pkg in m.packages
         ]
