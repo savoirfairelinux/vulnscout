@@ -243,3 +243,19 @@ def test_get_group_id_is_none_for_ungrouped_assessment(app):
         first, _ = _make_two_assessments()
 
         assert AssessmentGroupMember.get_group_id(first.id) is None
+
+
+def test_to_dict_exposes_group_id_when_grouped(app):
+    with app.app_context():
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+
+        assert first.to_dict()["group_id"] == str(group_id)
+
+
+def test_to_dict_group_id_is_none_when_ungrouped(app):
+    with app.app_context():
+        first, _ = _make_two_assessments()
+
+        assert first.to_dict()["group_id"] is None
