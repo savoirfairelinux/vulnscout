@@ -29,6 +29,17 @@ from ..helpers.assessment_io import (
 )
 from ..helpers.assessment_staleness import annotate_assessments_outdated
 from ..controllers.assessment_groups import build_groups, load_group
+from ._assessment_group import (
+    apply_reconcile,
+    create_assessment_record,
+    find_valid_finding,
+    index_group_rows,
+    parse_reconcile_payload,
+    resolve_package,
+    resolve_targets,
+    validate_assessment_findings,
+    validate_deletions,
+)
 
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
@@ -58,81 +69,6 @@ def _is_scanner_author(author: str | None) -> bool:
     if _UUID_RE.match(a):
         return True
     return False
-
-
-def _resolve_package(pkg_string_id: str) -> "Package | None":
-    """Look up an existing Package for 'name@version::supplier'.
-
-    Returns ``None`` when no matching package exists. Writing an assessment must
-    never create a package, so callers block the write when this returns
-    ``None``. Matching is on name + version + supplier (with the same supplier
-    normalization used by :meth:`Package.find_or_create`).
-    """
-    return Package.get_by_string_id(pkg_string_id)
-
-
-def _find_valid_finding(package_id: UUID, vuln_id: str, variant_id: UUID) -> "Finding | None":
-    """Return the finding when it was actually observed for the variant.
-
-    Assessment writes may target active or historical package versions, but
-    they must never invent a package/vulnerability/variant relationship that
-    was not produced by a scan.
-    """
-    from ..models.observation import Observation
-    from ..models.scan import Scan
-
-    return db.session.execute(
-        db.select(Finding)
-        .join(Observation, Observation.finding_id == Finding.id)
-        .join(Scan, Scan.id == Observation.scan_id)
-        .where(
-            Finding.package_id == package_id,
-            Finding.vulnerability_id == vuln_id.upper(),
-            Scan.variant_id == variant_id,
-        )
-        .distinct()
-    ).scalar_one_or_none()
-
-
-def _validate_assessment_findings(
-    packages: list[Package], vuln_id: str, variant_id: UUID
-) -> "tuple[dict[UUID, Finding], list[str]]":
-    findings: dict[UUID, Finding] = {}
-    invalid: list[str] = []
-    for package in packages:
-        finding = _find_valid_finding(package.id, vuln_id, variant_id)
-        if finding is None:
-            invalid.append(package.string_id)
-        else:
-            findings[package.id] = finding
-    return findings, invalid
-
-
-def _create_assessment_record(
-    assessment: "DBAssessment",
-    finding_id: UUID,
-    variant_id: UUID | None,
-    timestamp: datetime | None = None,
-    origin: str = "custom",
-) -> "DBAssessment":
-    """Create a single DBAssessment row from a validated DTO.
-
-    Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
-    """
-    return DBAssessment.create(
-        status=assessment.status or "",
-        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status or "", "Pending Assessment"),
-        finding_id=finding_id,
-        variant_id=variant_id,
-        origin=origin,
-        status_notes=assessment.status_notes,
-        justification=assessment.justification,
-        impact_statement=assessment.impact_statement,
-        workaround=getattr(assessment, "workaround", None),
-        responses=list(assessment.responses) if assessment.responses else [],
-        commit=True,
-        timestamp=timestamp,
-    )
 
 
 def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
@@ -1054,6 +990,62 @@ def init_app(app: Flask) -> None:
             return {"error": "Group not found"}, 404
         return build_groups(rows)[0], 200
 
+    @app.route('/api/assessment-groups/<group_id>/reconcile', methods=['POST'])
+    def reconcile_assessment_group(group_id: str) -> ResponseReturnValue:
+        """Bring an assessment group to the requested state in one transaction.
+
+        OpenAPI:
+        body JsonObject optional Desired group content and targets.
+        response 200 JsonObject The reconciled group.
+        response 400 Error Invalid reconcile payload.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
+
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+
+        req, parse_err = parse_reconcile_payload(request.get_json() or {})
+        if parse_err:
+            return parse_err, 400
+        if req is None:
+            return {"error": "Internal error"}, 500
+
+        existing_by_key = index_group_rows(rows)
+        targets, target_err = resolve_targets(req, existing_by_key)
+        if target_err:
+            return target_err, 400
+
+        deletion_err = validate_deletions(rows, targets)
+        if deletion_err:
+            return deletion_err, 400
+
+        try:
+            with batch_session():
+                result = apply_reconcile(req, rows, targets)
+                created_ids = [UUID(a["id"]) for a in result["created"]]
+                if created_ids:
+                    # Every new row joins the group being edited; the group
+                    # id never changes and is never dissolved, even if the
+                    # edit leaves only one member.
+                    AssessmentGroupMember.create_group(
+                        created_ids, group_id=group_uuid, commit=False)
+        except Exception as e:
+            return {"error": f"DB error: {e}"}, 500
+
+        return {
+            "status": "success",
+            "group_id": str(group_uuid),
+            "updated": result["updated"],
+            "created": result["created"],
+            "deleted": result["deleted"],
+        }, 200
+
     @app.route('/api/reviews/assessment-groups', methods=['GET'])
     def list_review_assessment_groups() -> ResponseReturnValue:
         """List assessment groups for the review table.
@@ -1256,7 +1248,7 @@ def init_app(app: Flask) -> None:
         resolved_packages: list[Package] = []
         missing_packages: list[str] = []
         for pkg_string_id in (assessment.packages or []):
-            db_pkg = _resolve_package(pkg_string_id)
+            db_pkg = resolve_package(pkg_string_id)
             if db_pkg is None:
                 missing_packages.append(pkg_string_id)
             else:
@@ -1267,7 +1259,7 @@ def init_app(app: Flask) -> None:
                 + ". Assessments can only be written for existing packages."
             }, 400
 
-        valid_findings, invalid_findings = _validate_assessment_findings(
+        valid_findings, invalid_findings = validate_assessment_findings(
             resolved_packages, vuln_id, variant_id
         )
         if invalid_findings:
@@ -1291,7 +1283,7 @@ def init_app(app: Flask) -> None:
                     # Always create a new record — never merge with an existing one.
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
-                    db_a = _create_assessment_record(
+                    db_a = create_assessment_record(
                         assessment, finding.id, variant_id, timestamp=shared_timestamp,
                         origin=target_origin)
                     created_rows.append(db_a)
@@ -1374,7 +1366,7 @@ def init_app(app: Flask) -> None:
             for pkg_string_id in pkg_list:
                 db_pkg = pkg_cache.get(pkg_string_id)
                 if db_pkg is None:
-                    db_pkg = _resolve_package(pkg_string_id)
+                    db_pkg = resolve_package(pkg_string_id)
                     if db_pkg is not None:
                         pkg_cache[pkg_string_id] = db_pkg
                 if db_pkg is None:
@@ -1390,7 +1382,7 @@ def init_app(app: Flask) -> None:
                 })
                 continue
 
-            valid_findings, invalid_findings = _validate_assessment_findings(
+            valid_findings, invalid_findings = validate_assessment_findings(
                 item_packages, vuln_id, variant_id
             )
             if invalid_findings:
@@ -1422,7 +1414,7 @@ def init_app(app: Flask) -> None:
                 rows_by_vuln: dict[str, list[DBAssessment]] = {}
                 for assessment, variant_id, item_packages, valid_findings in prepared:
                     for db_pkg in item_packages:
-                        db_a = _create_assessment_record(
+                        db_a = create_assessment_record(
                             assessment, valid_findings[db_pkg.id].id, variant_id,
                             timestamp=getattr(assessment, "timestamp", None),
                         )
@@ -1474,7 +1466,7 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
-        if existing.finding is None or existing.variant_id is None or _find_valid_finding(
+        if existing.finding is None or existing.variant_id is None or find_valid_finding(
             existing.finding.package_id,
             existing.finding.vulnerability_id,
             existing.variant_id,
