@@ -370,8 +370,12 @@ def reconcile_review_export(existing: object, current: dict[str, Any]) -> dict[s
     result = dict(existing)
     if export_format == "openvex":
         for key, value in current.items():
-            if key != "@id":
+            if key not in {"@id", "version"}:
                 result[key] = value
+            if type(existing["version"]) is int:
+                result["version"] = existing["version"] + 1
+            else:
+                raise ValueError("Version must be an integer")
         result["statements"] = _reconcile_records(
             existing["statements"],
             current["statements"],

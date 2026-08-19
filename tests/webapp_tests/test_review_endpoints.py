@@ -1126,6 +1126,7 @@ def test_update_custom_export_preserves_matching_content_and_removes_unselected(
         "/api/assessments/review/export-update",
         data={
             "file": (io.BytesIO(json.dumps(existing).encode()), "custom_data.json"),
+            "project_id": str(PROJECT_UUID),
             "variant_id": str(VARIANT_UUID),
         },
         content_type="multipart/form-data",
@@ -1145,11 +1146,13 @@ def test_update_openvex_auto_detects_format_and_preserves_document_id(client):
     existing = json.loads(exported.data)
     existing["@id"] = "https://example.com/stable-review-id"
     existing["author"] = "Existing review author"
+    existing["version"] = 3
 
     response = client.post(
         "/api/assessments/review/export-update",
         data={
             "file": (io.BytesIO(json.dumps(existing).encode()), "review.json"),
+            "project_id": str(PROJECT_UUID),
             "variant_id": str(VARIANT_UUID),
         },
         content_type="multipart/form-data",
@@ -1159,6 +1162,7 @@ def test_update_openvex_auto_detects_format_and_preserves_document_id(client):
     updated = json.loads(response.data)
     assert updated["@id"] == "https://example.com/stable-review-id"
     assert updated["author"] == "Existing review author"
+    assert updated["version"] == 4
     assert "openvex" in updated["@context"]
 
 
@@ -1178,6 +1182,7 @@ def test_update_export_can_remove_all_selected_data(client):
         "/api/assessments/review/export-update",
         data={
             "file": (io.BytesIO(json.dumps(existing).encode()), "custom_data.json"),
+            "project_id": str(PROJECT_UUID),
             "variant_id": str(VARIANT_UUID),
         },
         content_type="multipart/form-data",
@@ -1197,6 +1202,7 @@ def test_update_export_rejects_malformed_or_unsupported_input(client, body, expe
         "/api/assessments/review/export-update",
         data={
             "file": (io.BytesIO(body), "review.json"),
+            "project_id": str(PROJECT_UUID),
             "variant_id": str(VARIANT_UUID),
         },
         content_type="multipart/form-data",
@@ -1204,6 +1210,36 @@ def test_update_export_rejects_malformed_or_unsupported_input(client, body, expe
 
     assert response.status_code == 400
     assert expected_error in json.loads(response.data)["error"]
+
+
+def test_update_export_rejects_variant_from_another_project(client, app):
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    with app.app_context():
+        foreign_project = Project.create("foreign-review-project")
+        foreign_variant = Variant.create("foreign-review-variant", foreign_project.id)
+        foreign_variant_id = str(foreign_variant.id)
+
+    existing = {
+        "version": 1,
+        "assessments": [],
+        "ai_assessments": [],
+        "cvss": [],
+        "time_estimates": [],
+    }
+    response = client.post(
+        "/api/assessments/review/export-update",
+        data={
+            "file": (io.BytesIO(json.dumps(existing).encode()), "custom_data.json"),
+            "project_id": str(PROJECT_UUID),
+            "variant_id": [str(VARIANT_UUID), foreign_variant_id],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert "does not belong to project" in json.loads(response.data)["error"]
 
 
 # ── POST /api/assessments/review/import-custom-data ──────────────────────

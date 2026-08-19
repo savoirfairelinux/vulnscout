@@ -819,7 +819,7 @@ def init_app(app: Flask) -> None:
         are appended.
 
         OpenAPI:
-        body multipart required Existing JSON export and repeated variant_id fields.
+        body multipart required Existing JSON export, project_id and repeated variant_id fields.
         response 200 binary Updated JSON download.
         response 400 Error Unsupported input or invalid variant selection.
         response 404 Error No review data available.
@@ -844,6 +844,14 @@ def init_app(app: Flask) -> None:
         raw_variant_ids = request.form.getlist('variant_id')
         if not raw_variant_ids:
             return {"error": "At least one variant_id is required"}, 400
+        raw_project_id = request.form.get('project_id')
+        if not raw_project_id:
+            return {"error": "project_id is required"}, 400
+        project_id, err = parse_uuid_or_400(raw_project_id, "project_id")
+        if err:
+            return err
+        if project_id is None:
+            return {"error": "Internal error"}, 500
         variant_ids: list[UUID] = []
         for raw_variant_id in raw_variant_ids:
             variant_id, err = parse_uuid_or_400(raw_variant_id, "variant_id")
@@ -854,6 +862,8 @@ def init_app(app: Flask) -> None:
             variant = DBVariant.get_by_id(variant_id)
             if variant is None:
                 return {"error": f"Variant not found: {raw_variant_id}"}, 404
+            if variant.project_id != project_id:
+                return {"error": f"Variant does not belong to project: {raw_variant_id}"}, 400
             variant_ids.append(variant_id)
 
         if export_format == 'openvex':

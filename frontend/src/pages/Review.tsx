@@ -459,10 +459,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setShowOnlyOutdated(false);
     };
 
-    const transferVariants = useMemo(() => {
-        const scopedProjectId = projectId ?? allVariants.find(v => v.id === variantId)?.project_id;
-        return scopedProjectId ? allVariants.filter(v => v.project_id === scopedProjectId) : allVariants;
-    }, [allVariants, projectId, variantId]);
+    const transferProjectId = projectId ?? allVariants.find(v => v.id === variantId)?.project_id;
+    const transferVariants = useMemo(() => (
+        transferProjectId ? allVariants.filter(v => v.project_id === transferProjectId) : allVariants
+    ), [allVariants, transferProjectId]);
 
     const openTransfer = useCallback((mode: 'import' | 'export') => {
         setTransferFormat('custom');
@@ -539,6 +539,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (exportMode === 'update' && existingExportFile) {
                 const formData = new FormData();
                 formData.append('file', existingExportFile);
+                if (transferProjectId) formData.append('project_id', transferProjectId);
                 transferVariantIds.forEach(variantId => formData.append('variant_id', variantId));
                 res = await fetch(new URL(
                     import.meta.env.VITE_API_URL + '/api/assessments/review/export-update',
@@ -566,7 +567,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             console.error('Export error:', err);
             showMessage('Failed to export review data.', 'error');
         }
-    }, [existingExportFile, exportMode, showMessage, variantNames, transferVariantIds, transferFormat]);
+    }, [existingExportFile, exportMode, showMessage, transferProjectId, variantNames, transferVariantIds, transferFormat]);
 
     const handleImportReview = useCallback(() => {
         setTransferMode(null);

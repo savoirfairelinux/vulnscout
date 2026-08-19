@@ -178,6 +178,10 @@ Timestamp options for custom data imports:
         --use-current-timestamps        Set imported assessment timestamps to the current time
         Default: current time for VulnScout JSON; original timestamps for OpenVEX.
 
+Custom review export options:
+        Applies to --export-custom-vulnscout-data and --export-custom-openvex-assessments.
+        --amend                         Update the existing output file while preserving stable review ordering
+
 Examples:
   /scan/src/entrypoint.sh --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
   /scan/src/entrypoint.sh --project test --match-condition "cvss >= 9.0"
@@ -582,6 +586,7 @@ cmd_export_custom_vulnscout_data() {
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
     export_args+=(--output-dir "$output_dir")
+    [[ "${AMEND_REVIEW_EXPORT:-false}" == "true" ]] && export_args+=(--amend)
 
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp export-custom-vulnscout-data "${export_args[@]}"
@@ -618,9 +623,12 @@ cmd_export_custom_openvex_assessments() {
 
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    local -a amend_args=()
+    [[ "${AMEND_REVIEW_EXPORT:-false}" == "true" ]] && amend_args+=(--amend)
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp export-custom-openvex-assessments \
-        --project "$PROJECT_NAME" --variant "$variant_name" --output-dir "$output_dir"
+        --project "$PROJECT_NAME" --variant "$variant_name" --output-dir "$output_dir" \
+        "${amend_args[@]}"
     setup_user
 }
 
@@ -892,6 +900,8 @@ while [[ $# -gt 0 ]]; do
             IMPORT_CUSTOM_VULNSCOUT_DATA_FILE="$2"; shift 2 ;;
         --export-custom-openvex-assessments)
             EXPORT_CUSTOM_OPENVEX_ASSESSMENTS=true; shift ;;
+        --amend)
+            AMEND_REVIEW_EXPORT=true; shift ;;
         --import-custom-openvex-assessments)
             IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE="$2"; shift 2 ;;
         --export-context)

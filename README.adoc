@@ -324,7 +324,12 @@ The `--export-custom-vulnscout-data` flag exports custom assessments, CVSS score
 
 # Export one variant
 ./vulnscout --project demo --variant x86 --export-custom-vulnscout-data
+
+# Update the existing export with current review data
+./vulnscout --project demo --export-custom-vulnscout-data --amend
 ----
+
+Add `--amend` to reconcile current review data with the existing file in the output directory. The file must already exist at the path produced by the same export scope. Existing records retain stable ordering and extension fields while updated and new records are incorporated.
 
 The `--import-custom-vulnscout-data` command restores entries according to the variant metadata in the file. Imported assessments use the current system time by default. Add `--use-original-timestamps` to preserve assessment timestamps from the file.
 `--use-current-timestamps` is also accepted to select the default explicitly.
@@ -345,12 +350,17 @@ The OpenVEX custom-assessment commands operate on one JSON document and require 
 # Export a variant
 ./vulnscout --project demo --variant x86 --export-custom-openvex-assessments
 
+# Update the existing OpenVEX export
+./vulnscout --project demo --variant x86 --export-custom-openvex-assessments --amend
+
 # Import into a variant
 ./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json
 
 # Ignore OpenVEX statement timestamps and use the current system time
 ./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json --use-current-timestamps
 ----
+
+For OpenVEX exports, `--amend` preserves the document ID and statement ordering from the existing output file and increments its version.
 
 OpenVEX imports preserve statement timestamps by default. Add `--use-current-timestamps` to use the current system time, or use `--use-original-timestamps` to select the default explicitly.
 

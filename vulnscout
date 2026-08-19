@@ -127,6 +127,10 @@ Timestamp options for custom data imports:
     --use-current-timestamps        Set imported assessment timestamps to the current time
     Default: current time for VulnScout JSON; original timestamps for OpenVEX.
 
+Custom review export options:
+    Applies to --export-custom-vulnscout-data and --export-custom-openvex-assessments.
+    --amend                         Update the existing output file while preserving stable review ordering
+
 Environment variables:
     VULNSCOUT_CONTAINER     Container name (default: vulnscout)
     VULNSCOUT_IMAGE         Docker image (default: docker.io/sflinux/vulnscout:v0.20)
@@ -386,6 +390,8 @@ parse_and_run() {
                 ensure_running; EXPORT_ARGS+=(--export-custom-vulnscout-data); shift ;;
             export-custom-openvex-assessments|--export-custom-openvex-assessments)
                 ensure_running; EXPORT_ARGS+=(--export-custom-openvex-assessments); shift ;;
+            amend|--amend)
+                EXPORT_ARGS+=(--amend); shift ;;
             import-custom-vulnscout-data|--import-custom-vulnscout-data)
                 ensure_running
                 local import_file
