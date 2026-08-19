@@ -4,6 +4,7 @@ Revision ID: x0a1b2c3d4e5
 Revises: w9f0a1b2c3d4
 Create Date: 2026-08-19 00:00:00.000000
 """
+import uuid
 from alembic import op
 import sqlalchemy as sa
 
@@ -28,6 +29,54 @@ def upgrade():
         'assessment_group_members',
         ['group_id'],
     )
+    backfill_groups(op.get_bind())
+
+
+def backfill_groups(connection):
+    """Recreate today's frontend grouping as stored membership rows.
+
+    Assessments are grouped by the same key the frontend uses to render one
+    history entry, scoped to the vulnerability so that bulk imports sharing a
+    timestamp and content across different CVEs are not fused.  Only tuples
+    with more than one row become a group; single-row tuples are skipped, which
+    is what keeps the table sparse.
+    """
+    rows = connection.execute(sa.text("""
+        SELECT a.id AS assessment_id,
+               f.vulnerability_id AS vuln_id,
+               a.timestamp, a.status, a.simplified_status, a.status_notes,
+               a.justification, a.impact_statement, a.workaround, a.origin
+        FROM assessments a
+        JOIN findings f ON f.id = a.finding_id
+    """)).mappings().all()
+
+    buckets = {}
+    for row in rows:
+        key = (
+            row["vuln_id"], row["timestamp"], row["status"],
+            row["simplified_status"], row["status_notes"], row["justification"],
+            row["impact_statement"], row["workaround"], row["origin"],
+        )
+        buckets.setdefault(key, []).append(row["assessment_id"])
+
+    payload = []
+    for assessment_ids in buckets.values():
+        if len(assessment_ids) < 2:
+            continue
+        group_id = uuid.uuid4()
+        payload.extend(
+            {"assessment_id": assessment_id, "group_id": group_id.hex}
+            for assessment_id in assessment_ids
+        )
+
+    for start in range(0, len(payload), 500):
+        connection.execute(
+            sa.text(
+                "INSERT INTO assessment_group_members (assessment_id, group_id) "
+                "VALUES (:assessment_id, :group_id)"
+            ),
+            payload[start:start + 500],
+        )
 
 
 def downgrade():
