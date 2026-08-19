@@ -1106,6 +1106,106 @@ def test_export_custom_data_filename_by_project(client):
     assert disposition.endswith('.json"')
 
 
+# ── POST /api/assessments/review/export-update ───────────────────────────
+
+def test_update_custom_export_preserves_matching_content_and_removes_unselected(client):
+    _create_handmade_assessment(client)
+    exported = client.get(f"/api/assessments/review/export-custom-data?variant_id={VARIANT_UUID}")
+    existing = json.loads(exported.data)
+    existing["custom_header"] = "preserved"
+    existing["assessments"][0]["x-local-note"] = "preserved"
+    existing["assessments"].insert(0, {
+        "vuln_id": "CVE-2099-REMOVED",
+        "variant_id": "33333333-3333-3333-3333-333333333333",
+        "variant": "not-selected",
+        "packages": [],
+        "status": "affected",
+    })
+
+    response = client.post(
+        "/api/assessments/review/export-update",
+        data={
+            "file": (io.BytesIO(json.dumps(existing).encode()), "custom_data.json"),
+            "variant_id": str(VARIANT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    updated = json.loads(response.data)
+    assert updated["custom_header"] == "preserved"
+    assert updated["assessments"][0]["x-local-note"] == "preserved"
+    assert {item["variant_id"] for item in updated["assessments"]} == {str(VARIANT_UUID)}
+    assert 'filename="custom_data.json"' in response.headers["Content-Disposition"]
+
+
+def test_update_openvex_auto_detects_format_and_preserves_document_id(client):
+    _create_handmade_assessment(client)
+    exported = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
+    existing = json.loads(exported.data)
+    existing["@id"] = "https://example.com/stable-review-id"
+    existing["author"] = "Existing review author"
+
+    response = client.post(
+        "/api/assessments/review/export-update",
+        data={
+            "file": (io.BytesIO(json.dumps(existing).encode()), "review.json"),
+            "variant_id": str(VARIANT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    updated = json.loads(response.data)
+    assert updated["@id"] == "https://example.com/stable-review-id"
+    assert updated["author"] == "Existing review author"
+    assert "openvex" in updated["@context"]
+
+
+def test_update_export_can_remove_all_selected_data(client):
+    existing = {
+        "version": 1,
+        "assessments": [{
+            "vuln_id": "CVE-2099-REMOVED",
+            "variant_id": str(VARIANT_UUID),
+            "packages": [],
+            "status": "affected",
+        }],
+        "ai_assessments": [], "cvss": [], "time_estimates": [],
+    }
+
+    response = client.post(
+        "/api/assessments/review/export-update",
+        data={
+            "file": (io.BytesIO(json.dumps(existing).encode()), "custom_data.json"),
+            "variant_id": str(VARIANT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.data)["assessments"] == []
+
+
+@pytest.mark.parametrize("body, expected_error", [
+    (b"not-json", "Invalid JSON file"),
+    (json.dumps({"foo": "bar"}).encode(), "Unsupported export format"),
+    (json.dumps({"@context": "openvex", "statements": []}).encode(), "Unsupported export format"),
+])
+def test_update_export_rejects_malformed_or_unsupported_input(client, body, expected_error):
+    response = client.post(
+        "/api/assessments/review/export-update",
+        data={
+            "file": (io.BytesIO(body), "review.json"),
+            "variant_id": str(VARIANT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert expected_error in json.loads(response.data)["error"]
+
+
 # ── POST /api/assessments/review/import-custom-data ──────────────────────
 
 def _custom_data_payload(assessments=None, cvss=None, time_estimates=None):
