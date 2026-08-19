@@ -242,8 +242,22 @@ class TestReconcileReviewExport:
 
         assert result["@id"] == "stable-id"
         assert result["author"] == "new"
+        assert result["version"] == 2
         assert [item["vulnerability"]["name"] for item in result["statements"]] == ["CVE-2", "CVE-1"]
         assert result["statements"][1]["status"] == "fixed"
+
+    def test_openvex_requires_an_integer_version(self):
+        document = {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "@id": "stable-id",
+            "author": "author",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "version": True,
+            "statements": [],
+        }
+
+        with pytest.raises(ValueError):
+            reconcile_review_export(document, {**document, "version": 1})
 
     def test_duplicate_records_match_exact_values_before_timestamp_updates(self):
         first = {

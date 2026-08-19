@@ -1560,6 +1560,7 @@ describe('Review — import and export', () => {
         const updateCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/assessments/review/export-update'));
         const body = (updateCall?.[1] as RequestInit).body as FormData;
         expect(updateCall?.[1]).toMatchObject({ method: 'POST' });
+        expect(body.get('project_id')).toBe('proj1');
         expect(body.getAll('variant_id')).toEqual(['v1']);
         expect((body.get('file') as File).name).toBe('tracked-review.json');
     });
