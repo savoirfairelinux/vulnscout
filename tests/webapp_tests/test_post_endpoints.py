@@ -541,3 +541,68 @@ def test_payload_group_id_joins_the_existing_group(client, demo_ids):
 
     assert second.status_code == 200
     assert second.get_json()["assessments"][0]["group_id"] == group_id
+
+
+def test_batch_groups_per_vulnerability_not_per_request(client, demo_ids):
+    response = client.post("/api/assessments/batch", json={"assessments": [
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+        {
+            "vuln_id": demo_ids["other_vuln_id"],
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ]})
+
+    assert response.status_code == 200
+    by_vuln = {}
+    for row in response.get_json()["assessments"]:
+        by_vuln.setdefault(row["vuln_id"], set()).add(row["group_id"])
+
+    assert len(by_vuln) == 2
+    for vuln_id, group_ids in by_vuln.items():
+        assert len(group_ids) == 1, f"{vuln_id} must have exactly one group"
+        assert group_ids != {None}
+    assert len({next(iter(g)) for g in by_vuln.values()}) == 2, \
+        "different vulnerabilities must not share a group"
+
+
+def test_batch_multi_variant_single_vuln_yields_one_group(client, demo_ids):
+    response = client.post("/api/assessments/batch", json={"assessments": [
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "fixed",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "fixed",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["other_variant_id"],
+        },
+    ]})
+
+    assert response.status_code == 200
+    group_ids = {row["group_id"] for row in response.get_json()["assessments"]}
+    assert len(group_ids) == 1
+    assert group_ids != {None}
+
+
+def test_batch_single_row_vulnerability_gets_no_group(client, demo_ids):
+    response = client.post("/api/assessments/batch", json={"assessments": [{
+        "vuln_id": demo_ids["vuln_id"],
+        "status": "fixed",
+        "packages": [demo_ids["two_packages"][0]],
+        "variant_id": demo_ids["variant_id"],
+    }]})
+
+    assert response.status_code == 200
+    assert response.get_json()["assessments"][0]["group_id"] is None

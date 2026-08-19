@@ -1336,13 +1336,28 @@ def init_app(app: Flask) -> None:
         results: list[AssessmentDict] = []
         try:
             with batch_session():
+                # A batch is one user action but may span several CVEs.  Group
+                # per vulnerability, never per request: fusing CVEs into one
+                # group would let approving one approve them all.
+                rows_by_vuln: dict[str, list[DBAssessment]] = {}
                 for assessment, variant_id, item_packages, valid_findings in prepared:
                     for db_pkg in item_packages:
                         db_a = _create_assessment_record(
                             assessment, valid_findings[db_pkg.id].id, variant_id,
                             timestamp=getattr(assessment, "timestamp", None),
                         )
-                        results.append(db_a.to_dict())
+                        rows_by_vuln.setdefault(assessment.vuln_id, []).append(db_a)
+
+                for vuln_rows in rows_by_vuln.values():
+                    if len(vuln_rows) > 1:
+                        AssessmentGroupMember.create_group(
+                            [row.id for row in vuln_rows], commit=False)
+
+                # Serialize after the membership rows are flushed so group_id is set.
+                results = [
+                    row.to_dict()
+                    for vuln_rows in rows_by_vuln.values() for row in vuln_rows
+                ]
         except Exception as e:
             return {
                 "status": "error",
