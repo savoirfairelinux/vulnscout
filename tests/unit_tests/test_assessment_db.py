@@ -259,3 +259,48 @@ def test_to_dict_group_id_is_none_when_ungrouped(app):
         first, _ = _make_two_assessments()
 
         assert first.to_dict()["group_id"] is None
+
+
+def test_build_groups_collapses_members_into_one_entry(app):
+    with app.app_context():
+        from src.controllers.assessment_groups import build_groups
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+
+        groups = build_groups([first, second])
+
+        assert len(groups) == 1
+        assert groups[0]["group_id"] == str(group_id)
+        assert set(groups[0]["assessment_ids"]) == {str(first.id), str(second.id)}
+        assert len(groups[0]["targets"]) == 2
+
+
+def test_build_groups_keeps_ungrouped_assessments_as_single_entries(app):
+    with app.app_context():
+        from src.controllers.assessment_groups import build_groups
+        first, second = _make_two_assessments()
+
+        groups = build_groups([first, second])
+
+        assert len(groups) == 2
+        assert all(g["group_id"] is None for g in groups)
+        assert all(len(g["targets"]) == 1 for g in groups)
+
+
+def test_load_group_returns_every_member(app):
+    with app.app_context():
+        from src.controllers.assessment_groups import load_group
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+
+        assert {a.id for a in load_group(group_id)} == {first.id, second.id}
+
+
+def test_load_group_is_empty_for_unknown_id(app):
+    with app.app_context():
+        import uuid
+        from src.controllers.assessment_groups import load_group
+
+        assert load_group(uuid.uuid4()) == []
