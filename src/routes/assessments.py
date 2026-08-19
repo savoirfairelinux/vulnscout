@@ -10,6 +10,7 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment import STATUS_TO_SIMPLIFIED
+from ..models.assessment_group_member import AssessmentGroupMember
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -1195,7 +1196,14 @@ def init_app(app: Flask) -> None:
                 + ", ".join(invalid_findings)
             }, 400
 
-        created = []
+        requested_group_id: UUID | None = None
+        if payload_data.get("group_id"):
+            requested_group_id, err = parse_uuid_or_400(
+                payload_data["group_id"], "group_id")
+            if err:
+                return err
+
+        created_rows = []
         try:
             with batch_session():
                 for db_pkg in resolved_packages:
@@ -1206,9 +1214,22 @@ def init_app(app: Flask) -> None:
                     db_a = _create_assessment_record(
                         assessment, finding.id, variant_id, timestamp=shared_timestamp,
                         origin=target_origin)
-                    created.append(db_a.to_dict())
+                    created_rows.append(db_a)
+
+                # Membership is sparse: recorded only when this action produced
+                # several rows, or when it joins a group an earlier request in
+                # the same user action already created.
+                if len(created_rows) > 1 or requested_group_id is not None:
+                    AssessmentGroupMember.create_group(
+                        [row.id for row in created_rows],
+                        group_id=requested_group_id,
+                        commit=False,
+                    )
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
+
+        # Serialize after the membership rows are flushed so group_id is set.
+        created = [row.to_dict() for row in created_rows]
 
         if not created:
             return {"error": "No valid package found"}, 400
