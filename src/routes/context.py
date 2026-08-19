@@ -271,7 +271,11 @@ def init_app(app):
             return jsonify({"error": "Variant not found"}), 404
 
         file = request.files.get('file')
-        if file is None or file.filename == '':
+        if file is None:
+            return jsonify({"error": "No file provided"}), 400
+
+        filename = file.filename
+        if not filename:
             return jsonify({"error": "No file provided"}), 400
 
         file.seek(0, 2)
@@ -290,7 +294,7 @@ def init_app(app):
             description = description.strip() or None
 
         file_id = uuid.uuid4()
-        original_name = os.path.basename(file.filename.replace('\\', '/'))
+        original_name = os.path.basename(filename.replace('\\', '/'))
 
         dest_dir = os.path.join(_get_cache_dir(), "context-files", str(vc.id))
         try:
