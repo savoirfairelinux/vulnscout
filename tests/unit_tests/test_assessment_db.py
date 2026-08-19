@@ -10,6 +10,21 @@ add_package edge cases that require a real ORM session (lines 163-165,
 import pytest
 
 
+def _make_two_assessments():
+    """Create two persisted assessments on one finding, for grouping tests."""
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+
+    Vulnerability.create_record(id="CVE-2026-0001")
+    pkg = Package.create(name="grouped-pkg", version="1.0.0")
+    finding = Finding.create(package_id=pkg.id, vulnerability_id="CVE-2026-0001")
+    first = Assessment.create(status="not_affected", finding_id=finding.id)
+    second = Assessment.create(status="not_affected", finding_id=finding.id)
+    return first, second
+
+
 # ---------------------------------------------------------------------------
 # DB app fixture
 # ---------------------------------------------------------------------------
@@ -196,3 +211,35 @@ class TestAssessmentPropertyExceptions:
         broken = object.__new__(_BrokenPkg)
         result = assess.add_package(broken)
         assert result is False
+
+
+def test_create_group_links_every_assessment(app):
+    with app.app_context():
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+
+        assert set(AssessmentGroupMember.get_assessment_ids(group_id)) == {first.id, second.id}
+        assert AssessmentGroupMember.get_group_id(first.id) == group_id
+
+
+def test_assessment_belongs_to_at_most_one_group(app):
+    with app.app_context():
+        from sqlalchemy.exc import IntegrityError
+        from src.extensions import db
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+        AssessmentGroupMember.create_group([first.id, second.id])
+
+        with pytest.raises(IntegrityError):
+            AssessmentGroupMember.create_group([first.id])
+        db.session.rollback()
+
+
+def test_get_group_id_is_none_for_ungrouped_assessment(app):
+    with app.app_context():
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, _ = _make_two_assessments()
+
+        assert AssessmentGroupMember.get_group_id(first.id) is None
