@@ -3,7 +3,7 @@
 
 from typing import Any, Callable, TypeVar, cast
 
-from flask import Flask
+from flask import Flask, Request, current_app
 from flask.typing import ResponseReturnValue
 from functools import wraps
 
@@ -15,7 +15,21 @@ MiddlewareCallable = Callable[..., ResponseReturnValue | None]
 RouteFunc = TypeVar("RouteFunc", bound=Callable[..., Any])
 
 
+class VulnScoutRequest(Request):
+    @property
+    def max_content_length(self) -> int | None:
+        if self.path == "/api/scans/import":
+            return current_app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"]
+        return super().max_content_length
+
+    @max_content_length.setter
+    def max_content_length(self, value: int | None) -> None:
+        self._max_content_length = value
+
+
 class FlaskWithMiddleware(Flask):
+    request_class = VulnScoutRequest
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
 
         self.middlewares: list[tuple[str, MiddlewareCallable]] = []

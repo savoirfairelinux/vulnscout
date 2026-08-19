@@ -687,6 +687,10 @@ def _global_result_full(
         if aid in seen_assess:
             continue
         seen_assess.add(aid)
+        # Carry the finding's package: an assessment applies to one
+        # (package, vulnerability) pair, and consumers that serialise the
+        # result need it to attach the assessment back to the right finding.
+        package = pkg_map.get(pkg_id, {})
         assessments.append({
             "vulnerability_id": vid,
             "status": status or "under_investigation",
@@ -694,6 +698,9 @@ def _global_result_full(
             "justification": justification or "",
             "impact_statement": impact or "",
             "status_notes": notes or "",
+            "package_name": package.get("package_name", ""),
+            "package_version": package.get("package_version", ""),
+            "package_supplier": package.get("package_supplier", ""),
         })
     assessments.sort(key=lambda a: a["vulnerability_id"])
 
