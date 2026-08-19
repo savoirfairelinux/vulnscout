@@ -128,6 +128,42 @@ Example:
 
 VulnScout accepts multiple input file types. Commands can be chained and will automatically trigger a scan.
 
+### Refresh Vulnerability Data
+
+Use `--refresh-vulnerability-data` with an input command to enrich the vulnerabilities
+imported by that run with current EPSS, NVD, ENISA EUVD, and GitHub Advisory data:
+
+```bash
+./vulnscout \
+  --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --refresh-vulnerability-data
+```
+
+Inside the container, the equivalent Flask command is:
+
+```bash
+flask --app src.bin.webapp process --refresh-vulnerability-data
+```
+
+The option can also refresh vulnerability data already in the database. Omit
+`--project` to refresh every vulnerability, or supply it to restrict the refresh to
+that project's active vulnerabilities:
+
+```bash
+./vulnscout --refresh-vulnerability-data
+./vulnscout --project demo --refresh-vulnerability-data
+./vulnscout --project demo --variant x86 --refresh-vulnerability-data
+```
+
+Inside the container, use `flask --app src.bin.webapp refresh-vulnerability-data`
+with optional `--project` and `--variant` arguments. A variant requires its project
+because variant names are project-local.
+
+The refresh enriches existing imported CVE and GHSA records; it does not discover new
+findings. Providers with no applicable vulnerability identifiers are skipped. If any
+applicable provider fails, processing continues through the remaining providers and the
+command exits with an error listing the failed sources.
+
 ### SPDX SBOM
 
 ```

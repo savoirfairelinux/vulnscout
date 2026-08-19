@@ -32,7 +32,9 @@ call_container_engine() {
 }
 
 PROJECT="default"
+PROJECT_SPECIFIED=false
 VARIANT=""
+VARIANT_SPECIFIED=false
 MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false
@@ -54,8 +56,8 @@ Note: The container runs as a daemon. All commands auto-start it if needed and
 leave it running afterward (including --serve). Use 'stop' or '--stop' to remove it.
 
 Global flags:
-  --project <name>                Set project name (default: 'default')
-  --variant <name>                Set variant name (default: 'default')
+  --project <name>                Set project name (scopes standalone refresh)
+  --variant <name>                Set variant name (scopes standalone refresh; requires --project)
 
 Input commands (can be chained, triggers scan automatically):
   --add-spdx <path>               Add an SPDX 2/3 SBOM file or archive
@@ -64,6 +66,7 @@ Input commands (can be chained, triggers scan automatically):
   --add-openvex <path>            Add an OpenVEX JSON file
   --add-cdx <path>                Add a CycloneDX file
   --add-grype <path>              Add a Grype results file
+  --refresh-vulnerability-data    Refresh EPSS, NVD, EUVD, and GHSA data; without inputs refreshes all vulnerabilities
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
   --perform-nvd-scan              Run an NVD CPE-based vulnerability scan
   --perform-osv-scan              Run an OSV PURL-based vulnerability scan
@@ -126,9 +129,19 @@ exec_container() {
     call_container_engine exec "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
 }
 
+container_has_dev_mount() {
+    call_container_engine inspect "$CONTAINER_NAME" \
+        --format '{{range .Mounts}}{{.Destination}}{{println}}{{end}}' 2>/dev/null \
+        | grep -qx '/scan/src'
+}
+
 ensure_running() {
     if ! call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo "Container not running, starting..."
+        do_start
+    elif [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ] && ! container_has_dev_mount; then
+        # Otherwise the container keeps serving the image's src/, ignoring local changes
+        echo "Container running without dev mode, restarting..."
         do_start
     fi
 }
@@ -321,13 +334,15 @@ parse_and_run() {
             --dev)
                 DEV_MODE=true; shift ;;
             --project)
-                PROJECT="$2"; shift 2 ;;
+                PROJECT="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
             --variant)
-                VARIANT="$2"; shift 2 ;;
+                VARIANT="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
             --match-condition)
                 MATCH_CONDITION="$2"; shift 2 ;;
             add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-yocto-vex|--add-yocto-vex|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
                 ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
+            --refresh-vulnerability-data)
+                ensure_running; REFRESH_VULNERABILITY_DATA=true; shift ;;
             add-asset|--add-asset)
                 ensure_running; add_input add-asset "$2"; shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
@@ -502,7 +517,13 @@ parse_and_run() {
     elif [ ${#PENDING_ARGS[@]} -gt 0 ]; then
         local -a scan_args=()
         [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
+        [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ] && scan_args+=(--refresh-vulnerability-data)
         exec_container --project "$PROJECT" --variant "$VARIANT" "${PENDING_ARGS[@]}" "${scan_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
+    elif [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ]; then
+        local -a refresh_args=(--refresh-vulnerability-data)
+        [ "$PROJECT_SPECIFIED" = true ] && refresh_args=(--project "$PROJECT" "${refresh_args[@]}")
+        [ "$VARIANT_SPECIFIED" = true ] && refresh_args=(--variant "$VARIANT" "${refresh_args[@]}")
+        exec_container "${refresh_args[@]}" || _exit=$?
     elif [[ "$DATA_REQUESTED" != "" ]]; then
         exec_container "--$DATA_REQUESTED" "${DATA_ARGS[@]}"
     elif [ -n "$MATCH_CONDITION" ] || [ ${#REPORT_ARGS[@]} -gt 0 ] || [ ${#EXPORT_ARGS[@]} -gt 0 ]; then

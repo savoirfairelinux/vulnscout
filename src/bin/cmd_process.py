@@ -25,10 +25,12 @@ from ..extensions import batch_session, db as _db
 import click
 import json
 import os
-from typing import TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
+from ..controllers.projects import ProjectController
+from ..helpers.export_scope import compute_export_scope
 
 if TYPE_CHECKING:
     from ..controllers.packages import PackagesController
@@ -68,6 +70,63 @@ def _ts_key(ts) -> str:
 def post_treatment(controllers: ControllersCache, documents=None):
     """Enrich vulnerabilities with EPSS scores."""
     return controllers.vulnerabilities.fetch_epss_scores()
+
+
+REFRESH_SOURCES = ("epss", "nvd", "euvd", "ghsa")
+
+
+def _refresh_source(controllers: ControllersCache, source: str) -> bool:
+    if source == "epss":
+        result = post_treatment(controllers)
+    elif source in {"nvd", "ghsa"}:
+        result = controllers.vulnerabilities.fetch_nvd_data()
+    else:
+        result = controllers.vulnerabilities.fetch_euvd_data()
+    return result is None or result.completed
+
+
+def refresh_vulnerability_sources(
+    controllers: ControllersCache,
+    vulnerability_ids: Iterable[str],
+    refresh_sources: Iterable[str] = REFRESH_SOURCES,
+    on_source_start: Callable[[str, int, int], None] | None = None,
+) -> list[str]:
+    """Refresh selected providers for the supplied vulnerabilities."""
+    vuln_ctrl = controllers.vulnerabilities
+    all_vulnerabilities = vuln_ctrl.vulnerabilities
+    selected_vulnerability_ids = tuple(vulnerability_ids)
+    selected_sources = set(refresh_sources)
+    applicable_sources = [
+        source
+        for source in REFRESH_SOURCES
+        if source in selected_sources
+        and any(
+            vuln_id.startswith("GHSA-" if source == "ghsa" else "CVE-")
+            and vuln_id in all_vulnerabilities
+            for vuln_id in selected_vulnerability_ids
+        )
+    ]
+    failed_sources: list[str] = []
+    try:
+        for step, source in enumerate(applicable_sources, start=1):
+            prefix = "GHSA-" if source == "ghsa" else "CVE-"
+            vuln_ctrl.vulnerabilities = {
+                vuln_id: all_vulnerabilities[vuln_id]
+                for vuln_id in selected_vulnerability_ids
+                if vuln_id.startswith(prefix) and vuln_id in all_vulnerabilities
+            }
+            label = source.upper()
+            if on_source_start is not None:
+                on_source_start(label, step, len(applicable_sources))
+            try:
+                if not _refresh_source(controllers, source):
+                    failed_sources.append(label)
+            except Exception as exc:
+                failed_sources.append(label)
+                verbose(f"{label} enrichment failed: {exc}")
+    finally:
+        vuln_ctrl.vulnerabilities = all_vulnerabilities
+    return failed_sources
 
 
 def evaluate_condition(
@@ -264,10 +323,50 @@ def create_project_context(
 
 
 @click.command("process")
+@click.option(
+    "--refresh-vulnerability-data",
+    is_flag=True,
+    help="Refresh EPSS, NVD, EUVD, and GHSA data for imported vulnerabilities.",
+)
 @with_appcontext
-def process_command() -> None:
+def process_command(refresh_vulnerability_data: bool) -> None:
     """Parse all SBOM inputs, persist results to the DB and generate output files."""
-    _run_main()
+    _run_main(refresh_vulnerability_data=refresh_vulnerability_data)
+
+
+@click.command("refresh-vulnerability-data")
+@click.option("--project", "project_name", default=None, help="Refresh vulnerabilities in this project only.")
+@click.option("--variant", "variant_name", default=None, help="Refresh vulnerabilities in this project variant only.")
+@with_appcontext
+def refresh_vulnerability_data_command(project_name: str | None, variant_name: str | None) -> None:
+    """Refresh vulnerability data already stored in the database."""
+    scope = None
+    if variant_name and not project_name:
+        raise click.UsageError("--variant requires --project.")
+    if project_name:
+        project = ProjectController.get_by_name(project_name)
+        if project is None:
+            raise click.ClickException(f"project not found: {project_name}")
+        if variant_name:
+            _, variant = resolve_project_variant(project_name, variant_name)
+            scope = compute_export_scope(variant_id=variant.id)
+        else:
+            scope = compute_export_scope(project_id=project.id)
+
+    controllers = ControllersCache(scope=scope)
+    failed_sources = refresh_vulnerability_sources(
+        controllers,
+        controllers.vulnerabilities.vulnerabilities,
+        on_source_start=lambda label, step, total: click.echo(
+            f"Refreshing {label} data (step {step} of {total})..."
+        ),
+    )
+    if failed_sources:
+        unique_failed = list(dict.fromkeys(failed_sources))
+        raise click.ClickException(
+            f"{', '.join(unique_failed)} vulnerability-data refresh failed."
+        )
+    click.echo("Vulnerability data refresh complete.")
 
 
 def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None:
@@ -334,7 +433,7 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
         print(f"Warning: could not populate observations table: {e}")
 
 
-def _run_main() -> ControllersCache:
+def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
     """Core processing logic (usable both from the CLI command and directly)."""
     controllers = ControllersCache()
     vulnCtrl: VulnerabilitiesController = controllers.vulnerabilities
@@ -366,7 +465,24 @@ def _run_main() -> ControllersCache:
     # In batch / CI mode (INTERACTIVE_MODE != "true") we run it here so that
     # EPSS scores are available for --match-condition evaluation.
     interactive_mode = get_bool_env("INTERACTIVE_MODE", False)
-    if not interactive_mode:
+    observations_populated = False
+    if refresh_vulnerability_data:
+        populate_observations(latest_scan, vulnCtrl)
+        observations_populated = True
+        failed_sources = refresh_vulnerability_sources(
+            controllers,
+            vulnCtrl._encountered_this_run,
+            on_source_start=lambda label, step, total: click.echo(
+                f"Refreshing {label} data (step {step} of {total})..."
+            ),
+        )
+        if failed_sources:
+            unique_failed = list(dict.fromkeys(failed_sources))
+            raise click.ClickException(
+                f"{', '.join(unique_failed)} vulnerability-data refresh failed."
+            )
+        click.echo("Vulnerability data refresh complete.")
+    elif not interactive_mode:
         verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
         post_treatment(controllers)
         verbose("merger_ci: Post-treatment done")
@@ -389,8 +505,9 @@ def _run_main() -> ControllersCache:
     verbose("merger_ci: Start exporting results")
     verbose("merger_ci: Finished exporting results")
 
-    latest_scan = ScanModel.get_latest()
-    populate_observations(latest_scan, vulnCtrl)
+    if not observations_populated:
+        latest_scan = ScanModel.get_latest()
+        populate_observations(latest_scan, vulnCtrl)
 
     verbose("merger_ci: Processing complete")
 

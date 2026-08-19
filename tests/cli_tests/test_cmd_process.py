@@ -8,6 +8,7 @@ Targets uncovered branches reported by the CI coverage run:
 
 import json
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from src.bin.webapp import create_app
@@ -58,7 +59,207 @@ class TestCmdProcessCoverage:
             mock_main.return_value = {}
             runner = app.test_cli_runner()
             result = runner.invoke(args=["process"])
-        mock_main.assert_called_once()
+        assert result.exit_code == 0
+        mock_main.assert_called_once_with(refresh_vulnerability_data=False)
+
+    def test_process_command_propagates_refresh_flag(self, app):
+        with patch("src.bin.cmd_process._run_main") as run_main:
+            runner = app.test_cli_runner()
+            result = runner.invoke(args=["process", "--refresh-vulnerability-data"])
+
+        assert result.exit_code == 0
+        run_main.assert_called_once_with(refresh_vulnerability_data=True)
+
+    def test_standalone_refresh_uses_all_vulnerabilities(self, app):
+        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh:
+            result = app.test_cli_runner().invoke(args=["refresh-vulnerability-data"])
+
+        assert result.exit_code == 0
+        assert set(refresh.call_args.args[1]) == set(refresh.call_args.args[0].vulnerabilities.vulnerabilities)
+        assert "Vulnerability data refresh complete." in result.output
+
+    def test_standalone_refresh_scopes_to_project(self, app):
+        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh:
+            result = app.test_cli_runner().invoke(
+                args=["refresh-vulnerability-data", "--project", "ProcessProject"]
+            )
+
+        assert result.exit_code == 0
+        assert refresh.call_args.args[0]._scope is not None
+
+    def test_standalone_refresh_scopes_to_variant(self, app):
+        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh:
+            result = app.test_cli_runner().invoke(
+                args=[
+                    "refresh-vulnerability-data", "--project", "ProcessProject",
+                    "--variant", "ProcessVariant",
+                ]
+            )
+
+        assert result.exit_code == 0
+        assert len(refresh.call_args.args[0]._scope.variant_ids) == 1
+
+    def test_standalone_refresh_rejects_variant_without_project(self, app):
+        result = app.test_cli_runner().invoke(
+            args=["refresh-vulnerability-data", "--variant", "ProcessVariant"]
+        )
+
+        assert result.exit_code == 2
+        assert "--variant requires --project" in result.output
+
+    def test_process_refresh_failure_exits_one(self, app):
+        with patch("src.bin.cmd_process.read_inputs"), \
+                patch("src.bin.cmd_process.populate_observations"):
+            with patch(
+                    "src.bin.cmd_process.refresh_vulnerability_sources",
+                    return_value=["NVD", "GHSA"],
+            ):
+                runner = app.test_cli_runner()
+                result = runner.invoke(args=["process", "--refresh-vulnerability-data"])
+
+        assert result.exit_code == 1
+        assert "NVD, GHSA vulnerability-data refresh failed" in result.output
+
+    def test_process_refresh_reports_source_steps(self, app):
+        def report_all_sources(*args, on_source_start, **kwargs):
+            labels = ("EPSS", "NVD", "EUVD", "GHSA")
+            for step, label in enumerate(labels, start=1):
+                on_source_start(label, step, len(labels))
+            return []
+
+        with patch("src.bin.cmd_process.read_inputs"), \
+                patch("src.bin.cmd_process.populate_observations"), \
+                patch(
+                    "src.bin.cmd_process.refresh_vulnerability_sources",
+                    side_effect=report_all_sources,
+                ):
+            runner = app.test_cli_runner()
+            result = runner.invoke(args=["process", "--refresh-vulnerability-data"])
+
+        assert result.exit_code == 0
+        assert "Refreshing EPSS data (step 1 of 4)..." in result.output
+        assert "Refreshing NVD data (step 2 of 4)..." in result.output
+        assert "Refreshing EUVD data (step 3 of 4)..." in result.output
+        assert "Refreshing GHSA data (step 4 of 4)..." in result.output
+        assert "Vulnerability data refresh complete." in result.output
+
+    def test_refresh_vulnerability_sources_uses_settings_order_and_scope(self):
+        from src.bin.cmd_process import refresh_vulnerability_sources
+        from src.controllers.vulnerabilities import EnrichmentResult
+
+        events = []
+
+        class Vulnerabilities:
+            def __init__(self):
+                self.vulnerabilities = {
+                    "CVE-2026-0001": object(),
+                    "CVE-OLD-0001": object(),
+                    "GHSA-aaaa-bbbb-cccc": object(),
+                }
+
+            def fetch_nvd_data(self):
+                events.append(("fetch-nvd", tuple(self.vulnerabilities)))
+                return EnrichmentResult(successful=1)
+
+            def fetch_euvd_data(self):
+                events.append(("fetch-euvd", tuple(self.vulnerabilities)))
+                return EnrichmentResult(successful=1)
+
+        vulnerabilities = Vulnerabilities()
+        original_vulnerabilities = vulnerabilities.vulnerabilities
+        controllers = SimpleNamespace(vulnerabilities=vulnerabilities)
+
+        with patch(
+            "src.bin.cmd_process.post_treatment",
+            side_effect=lambda _: events.append(
+                ("fetch-epss", tuple(vulnerabilities.vulnerabilities))
+            ) or EnrichmentResult(successful=1),
+        ):
+            failed = refresh_vulnerability_sources(
+                controllers,
+                {"CVE-2026-0001", "GHSA-aaaa-bbbb-cccc"},
+                on_source_start=lambda label, step, total: events.append(
+                    ("start", label, step, total)
+                ),
+            )
+
+        assert failed == []
+        assert events == [
+            ("start", "EPSS", 1, 4),
+            ("fetch-epss", ("CVE-2026-0001",)),
+            ("start", "NVD", 2, 4),
+            ("fetch-nvd", ("CVE-2026-0001",)),
+            ("start", "EUVD", 3, 4),
+            ("fetch-euvd", ("CVE-2026-0001",)),
+            ("start", "GHSA", 4, 4),
+            ("fetch-nvd", ("GHSA-aaaa-bbbb-cccc",)),
+        ]
+        assert vulnerabilities.vulnerabilities is original_vulnerabilities
+
+    def test_refresh_progress_excludes_inapplicable_ghsa_source(self):
+        from src.bin.cmd_process import refresh_vulnerability_sources
+        from src.controllers.vulnerabilities import EnrichmentResult
+
+        class Vulnerabilities:
+            vulnerabilities = {"CVE-2026-0001": object()}
+
+            def fetch_nvd_data(self):
+                return EnrichmentResult(successful=1)
+
+            def fetch_euvd_data(self):
+                return EnrichmentResult(successful=1)
+
+        events = []
+        controllers = SimpleNamespace(vulnerabilities=Vulnerabilities())
+        with patch(
+            "src.bin.cmd_process.post_treatment",
+            return_value=EnrichmentResult(successful=1),
+        ):
+            failed = refresh_vulnerability_sources(
+                controllers,
+                ["CVE-2026-0001"],
+                on_source_start=lambda label, step, total: events.append(
+                    (label, step, total)
+                ),
+            )
+
+        assert failed == []
+        assert events == [
+            ("EPSS", 1, 3),
+            ("NVD", 2, 3),
+            ("EUVD", 3, 3),
+        ]
+
+    def test_refresh_vulnerability_sources_continues_after_failure(self):
+        from src.bin.cmd_process import refresh_vulnerability_sources
+        from src.controllers.vulnerabilities import EnrichmentResult
+
+        calls = []
+
+        class Vulnerabilities:
+            vulnerabilities = {"CVE-2026-0001": object()}
+
+            def fetch_nvd_data(self):
+                calls.append("nvd")
+                return EnrichmentResult(successful=1)
+
+            def fetch_euvd_data(self):
+                calls.append("euvd")
+                return EnrichmentResult(successful=1)
+
+        controllers = SimpleNamespace(vulnerabilities=Vulnerabilities())
+        with patch(
+            "src.bin.cmd_process.post_treatment",
+            side_effect=RuntimeError("EPSS unavailable"),
+        ):
+            failed = refresh_vulnerability_sources(
+                controllers,
+                ["CVE-2026-0001"],
+                {"epss", "nvd", "euvd"},
+            )
+
+        assert failed == ["EPSS"]
+        assert calls == ["nvd", "euvd"]
 
     def test_populate_observations_no_scan_prints_warning(self, app, capsys):
         """populate_observations(None, …) prints warning and returns early (lines 255-256)."""

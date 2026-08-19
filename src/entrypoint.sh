@@ -8,7 +8,9 @@ set -m # enable job control to allow `fg` command
 CONFIG_FILE="${VULNSCOUT_CONFIG:-/etc/vulnscout/config.env}"
 INPUTS_DIR="/scan/inputs"
 PROJECT_NAME="default"
+PROJECT_SPECIFIED=false
 VARIANT_NAME=""
+VARIANT_SPECIFIED=false
 
 readonly BASE_DIR="/scan"
 INTERACTIVE_MODE="${INTERACTIVE_MODE:-false}"
@@ -98,7 +100,7 @@ Usage: docker exec <container> /scan/src/entrypoint.sh [COMMAND] [OPTIONS]
 
 Setting:
   --project <name>          Project name for the next input command (default: 'default')
-  --variant <name>          Variant name for the next input command (default: 'default')
+    --variant <name>          Variant name for the next input command or standalone refresh (requires --project)
 
 Input commands:
   --add-spdx <path>         Add an SPDX 2/3 SBOM file or archive
@@ -111,6 +113,7 @@ Input commands:
   --perform-nvd-scan        Run an NVD CPE-based vulnerability scan
   --perform-osv-scan        Run an OSV PURL-based vulnerability scan
   --perform-sbom-cve-check-scan  Run a sbom-cve-check vulnerability scan
+    --refresh-vulnerability-data  Refresh EPSS, NVD, EUVD, and GHSA data; with no inputs, refreshes all vulnerabilities
   --add-asset <path>        Stage an image asset for use in report templates
 
 Scan & output commands:
@@ -472,7 +475,9 @@ cmd_scan() {
         # passed through to stdout unchanged.
         # With set -o pipefail the non-zero exit code from flask (e.g. 2 for a
         # triggered fail condition) is still propagated through the pipeline.
-        (cd "$BASE_DIR" && flask --app src.bin.webapp process) | \
+        local -a process_args=()
+        [[ "${REFRESH_VULNERABILITY_DATA:-false}" == "true" ]] && process_args+=(--refresh-vulnerability-data)
+        (cd "$BASE_DIR" && flask --app src.bin.webapp process "${process_args[@]}") | \
             while IFS= read -r _line; do
                 if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then
                     set_status "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
@@ -488,6 +493,11 @@ cmd_scan() {
             # Also clean up any staged temp files
             rm -f /tmp/vulnscout_stage_*
         fi
+    elif [[ "${REFRESH_VULNERABILITY_DATA:-false}" == "true" ]]; then
+        local -a refresh_args=()
+        [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_args+=(--project "$PROJECT_NAME")
+        [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_args+=(--variant "$VARIANT_NAME")
+        (cd "$BASE_DIR" && flask --app src.bin.webapp refresh-vulnerability-data "${refresh_args[@]}") || _cmd_scan_exit=$?
     elif [[ "${INTERACTIVE_MODE}" == "true" ]] && [[ "$has_inputs" == "false" ]]; then
         set_status "1" "No new input files to merge, skipping"
     fi
@@ -775,6 +785,7 @@ GRYPE_SCAN_REQUESTED=false
 NVD_SCAN_REQUESTED=false
 OSV_SCAN_REQUESTED=false
 SBOM_CVE_CHECK_SCAN_REQUESTED=false
+REFRESH_VULNERABILITY_DATA=false
 REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
@@ -794,9 +805,9 @@ while [[ $# -gt 0 ]]; do
         --version)
             echo "${VULNSCOUT_VERSION:-unknown}"; exit 0 ;;
         --project)
-            PROJECT_NAME="$2"; shift 2 ;;
+            PROJECT_NAME="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
         --variant)
-            VARIANT_NAME="$2"; shift 2 ;;
+            VARIANT_NAME="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
         --json)
             JSON_OUTPUT=true; shift ;;
         --match-condition)
@@ -826,6 +837,8 @@ while [[ $# -gt 0 ]]; do
             OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-sbom-cve-check-scan)
             SBOM_CVE_CHECK_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+        --refresh-vulnerability-data)
+            REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
         --delete-scan)
             cmd_delete_scan "$2"; shift 2 ;;
         --delete-outdated)

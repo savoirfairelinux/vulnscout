@@ -29,6 +29,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.project import Project
 from ..models.variant import Variant
 from ..helpers.verbose import verbose
+from ..bin.cmd_process import REFRESH_SOURCES, refresh_vulnerability_sources
 from ._scan_helpers import parse_uuid_or_400, ErrorResponse
 
 if TYPE_CHECKING:
@@ -51,7 +52,7 @@ class _CrudController(Protocol[_C]):
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
 _UPLOAD_STATUS_TTL = 3600  # seconds – entries older than this are pruned
-_REFRESH_SOURCES = {"epss", "nvd", "euvd", "ghsa"}
+_REFRESH_SOURCES = set(REFRESH_SOURCES)
 
 
 def _prune_upload_status() -> None:
@@ -177,7 +178,7 @@ def _process_sbom_background(
         try:
             _upload_status[upload_id] = {"status": "processing", "message": "Parsing SBOM file(s)..."}
 
-            from ..bin.cmd_process import read_inputs, post_treatment, populate_observations
+            from ..bin.cmd_process import read_inputs, populate_observations
 
             controllers = ControllersCache()
             vulnCtrl = controllers.vulnerabilities
@@ -197,41 +198,18 @@ def _process_sbom_background(
                 else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
             populate_observations(scan, vulnCtrl, log_prefix="settings/upload")
 
-            encountered = vulnCtrl._encountered_this_run
-            all_vulnerabilities = vulnCtrl.vulnerabilities
-            failed_sources: list[str] = []
-            try:
-                for source in ("epss", "nvd", "euvd", "ghsa"):
-                    if source not in refresh_sources:
-                        continue
-                    prefix = "GHSA-" if source == "ghsa" else "CVE-"
-                    vulnCtrl.vulnerabilities = {
-                        vuln_id: all_vulnerabilities[vuln_id]
-                        for vuln_id in encountered
-                        if vuln_id.startswith(prefix) and vuln_id in all_vulnerabilities
-                    }
-                    if not vulnCtrl.vulnerabilities:
-                        continue
-                    label = source.upper()
-                    _upload_status[upload_id] = {
-                        "status": "processing",
-                        "message": f"Refreshing {label} data...",
-                    }
-                    # Each source is isolated so one failure doesn't skip the rest.
-                    try:
-                        if source == "epss":
-                            result = post_treatment(controllers)
-                        elif source in {"nvd", "ghsa"}:
-                            result = vulnCtrl.fetch_nvd_data()
-                        else:
-                            result = vulnCtrl.fetch_euvd_data()
-                        if result is not None and not result.completed:
-                            failed_sources.append(label)
-                    except Exception as e:
-                        failed_sources.append(label)
-                        verbose(f"settings/upload: {label} enrichment failed: {e}")
-            finally:
-                vulnCtrl.vulnerabilities = all_vulnerabilities
+            def update_refresh_status(label: str, _step: int, _total: int) -> None:
+                _upload_status[upload_id] = {
+                    "status": "processing",
+                    "message": f"Refreshing {label} data...",
+                }
+
+            failed_sources = refresh_vulnerability_sources(
+                controllers,
+                vulnCtrl._encountered_this_run,
+                refresh_sources,
+                update_refresh_status,
+            )
 
             done_message = "SBOM imported successfully."
             if failed_sources:
