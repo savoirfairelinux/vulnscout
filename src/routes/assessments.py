@@ -28,6 +28,7 @@ from ..helpers.assessment_io import (
     reconcile_review_export,
 )
 from ..helpers.assessment_staleness import annotate_assessments_outdated
+from ..controllers.assessment_groups import build_groups, load_group
 
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
@@ -1005,6 +1006,85 @@ def init_app(app: Flask) -> None:
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments, 200
+
+    @app.route('/api/vulnerabilities/<vuln_id>/assessment-groups', methods=['GET'])
+    def list_assessment_groups(vuln_id: str) -> ResponseReturnValue:
+        """List assessment groups for a vulnerability.
+
+        OpenAPI:
+        query project_id uuid optional Restrict results to one project.
+        response 200 JsonArray Assessment groups for the vulnerability.
+        """
+        project_uuid: UUID | None = None
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+
+        project_variant_ids: set[UUID] | None = None
+        if project_uuid is not None:
+            project_variant_ids = set(db.session.execute(
+                select(DBVariant.id).where(DBVariant.project_id == project_uuid)
+            ).scalars())
+
+        rows = []
+        for finding in Finding.get_by_vulnerability(vuln_id):
+            for a in DBAssessment.get_by_finding(finding.id):
+                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                    continue
+                rows.append(a)
+        return build_groups(rows), 200
+
+    @app.route('/api/assessment-groups/<group_id>', methods=['GET'])
+    def get_assessment_group(group_id: str) -> ResponseReturnValue:
+        """Return one assessment group by its id.
+
+        OpenAPI:
+        response 200 JsonObject The assessment group.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        return build_groups(rows)[0], 200
+
+    @app.route('/api/reviews/assessment-groups', methods=['GET'])
+    def list_review_assessment_groups() -> ResponseReturnValue:
+        """List assessment groups for the review table.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict results to one variant.
+        query project_id uuid optional Restrict results to one project.
+        query origin string optional Restrict results to one origin.
+        response 200 JsonArray Assessment groups for review.
+        """
+        query = select(DBAssessment)
+        variant_id = request.args.get('variant_id')
+        if variant_id:
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            query = query.where(DBAssessment.variant_id == variant_uuid)
+
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            query = query.where(DBAssessment.variant_id.in_(
+                select(DBVariant.id).where(DBVariant.project_id == project_uuid)))
+
+        origin = request.args.get('origin')
+        if origin:
+            query = query.where(DBAssessment.origin == origin)
+
+        return build_groups(list(db.session.execute(query).scalars())), 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
     def list_variants_by_vuln(vuln_id: str) -> ResponseReturnValue:
