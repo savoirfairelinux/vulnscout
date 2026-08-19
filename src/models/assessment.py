@@ -345,6 +345,13 @@ class Assessment(Base):
 
     def to_dict(self) -> dict:
         ts = ensure_utc_iso(self.timestamp)
+        # Function-local import: the two model modules would otherwise import
+        # each other at module load time.
+        from .assessment_group_member import AssessmentGroupMember
+        group_id = (
+            AssessmentGroupMember.get_group_id(self.id)
+            if getattr(self, "id", None) is not None else None
+        )
         return {
             "id": str(self.id),
             "source": self.source or "",
@@ -352,6 +359,7 @@ class Assessment(Base):
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
             "variant_id": str(self.variant_id) if self.variant_id else None,
+            "group_id": str(group_id) if group_id else None,
             "timestamp": ts,
             "last_update": ts or "",
             "status": self.status or "",
