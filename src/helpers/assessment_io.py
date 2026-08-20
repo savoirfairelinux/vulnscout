@@ -471,6 +471,7 @@ def import_statements(
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
+    from ..models.assessment_group_member import AssessmentGroupMember
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
     from ..models.finding import Finding
@@ -525,6 +526,8 @@ def import_statements(
             stmt.get("timestamp"), use_original_timestamps
         )
 
+        statement_created_ids: list[_uuid.UUID] = []
+
         for pkg_string_id in pkg_ids:
             try:
                 if "@" in pkg_string_id:
@@ -565,12 +568,16 @@ def import_statements(
                     commit=True,
                 )
                 created.append(db_a.to_dict())
+                statement_created_ids.append(db_a.id)
             except Exception as e:
                 errors.append({
                     "vuln_id": vuln_name,
                     "package": pkg_string_id,
                     "error": str(e),
                 })
+
+        if len(statement_created_ids) > 1:
+            AssessmentGroupMember.create_group(statement_created_ids, commit=True)
 
     return created, errors, skipped
 
@@ -800,6 +807,7 @@ def import_custom_data(
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
+    from ..models.assessment_group_member import AssessmentGroupMember
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
     from ..models.finding import Finding
@@ -915,6 +923,8 @@ def import_custom_data(
                 a.get("timestamp"), use_original_timestamps
             )
 
+            entry_created_ids: list[_uuid.UUID] = []
+
             for pkg_string_id in pkg_ids:
                 try:
                     if "::" in pkg_string_id:
@@ -942,7 +952,7 @@ def import_custom_data(
                         result[skipped_key] += 1
                         continue
 
-                    DBAssessment.create(
+                    db_a = DBAssessment.create(
                         status=status,
                         simplified_status=STATUS_TO_SIMPLIFIED.get(
                             status, "Pending Assessment"
@@ -959,12 +969,16 @@ def import_custom_data(
                         commit=True,
                     )
                     result[imported_key] += 1
+                    entry_created_ids.append(db_a.id)
                 except Exception as e:
                     result["errors"].append({
                         "vuln_id": vuln_name,
                         "package": pkg_string_id,
                         "error": str(e),
                     })
+
+            if len(entry_created_ids) > 1:
+                AssessmentGroupMember.create_group(entry_created_ids, commit=True)
 
     # Import pending AI assessments separately so the Review page continues to
     # surface them in its AI Assessments tab for approval or rejection.
