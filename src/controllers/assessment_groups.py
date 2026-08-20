@@ -69,11 +69,13 @@ def build_groups(assessments: list[Assessment]) -> list[dict]:
                 "variant_id": str(m.variant_id) if m.variant_id else None,
                 "package": pkg,
                 "outdated": pkg in stale_by_assessment.get(str(m.id), set()),
+                "assessment_id": str(m.id),
             }
             for m in members for pkg in m.packages
         ]
         groups.append({
             "group_id": None if key.startswith("ungrouped::") else key,
+            "vuln_id": head.vuln_id,
             **{field: getattr(head, field) or "" for field in CONTENT_FIELDS},
             "responses": list(head.responses or []),
             "timestamp": ensure_utc_iso(head.timestamp),

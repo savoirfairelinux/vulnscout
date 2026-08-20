@@ -1020,26 +1020,40 @@ def init_app(app: Flask) -> None:
         response 200 JsonArray Assessment groups for review.
         """
         query = select(DBAssessment)
+        variant_ids: list[UUID] | None = None
         variant_id = request.args.get('variant_id')
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
             query = query.where(DBAssessment.variant_id == variant_uuid)
+            variant_ids = [variant_uuid] if variant_uuid else None
 
         project_id = request.args.get('project_id')
         if project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
-            query = query.where(DBAssessment.variant_id.in_(
-                select(DBVariant.id).where(DBVariant.project_id == project_uuid)))
+            project_variant_ids = [v.id for v in DBVariant.get_by_project(project_uuid)] if project_uuid else []
+            query = query.where(DBAssessment.variant_id.in_(project_variant_ids))
+            variant_ids = project_variant_ids
 
         origin = request.args.get('origin')
         if origin:
             query = query.where(DBAssessment.origin == origin)
 
-        return build_groups(list(db.session.execute(query).scalars())), 200
+        assessments = list(db.session.execute(query).scalars())
+        groups = build_groups(assessments)
+
+        # Enrich with vulnerability texts for front-end tooltips (single DB
+        # pass) — the review table spans several CVEs, unlike the vuln-scoped
+        # /assessment-groups routes where the caller already knows the texts.
+        vuln_ids = {g["vuln_id"] for g in groups if g.get("vuln_id")}
+        vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
+        for g in groups:
+            g["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts.get(g["vuln_id"], [])))
+
+        return groups, 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
     def list_variants_by_vuln(vuln_id: str) -> ResponseReturnValue:
