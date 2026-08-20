@@ -2518,9 +2518,10 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
 
-    test('approving a pending AI review calls approveAi and removes the panel', async () => {
+    test('approving an ungrouped pending AI review promotes it to a group, then calls approveAiGroup', async () => {
         const patchVuln = jest.fn();
-        const approveSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
+        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup').mockResolvedValue('group-promoted-1');
+        const approveGroupSpy = jest.spyOn(Assessments, 'approveAiGroup').mockResolvedValue([
             { ...pendingAiAssessment, origin: 'custom' }
         ]);
 
@@ -2530,19 +2531,31 @@ describe('Vulnerability Modal', () => {
         await screen.findByText(/AI-generated/i);
         await user.click(screen.getByRole('button', { name: /Approve/i }));
 
+        // The real fix under test: an ungrouped AI assessment has no
+        // per-row approve route anymore, so the frontend must mint a real
+        // group id first (promoteToGroup) and only then call the
+        // group-scoped approve endpoint (approveAiGroup) — never the
+        // deleted per-assessment approve route.
         await waitFor(() => {
-            expect(approveSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
+            expect(promoteSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
+        await waitFor(() => {
+            expect(approveGroupSpy).toHaveBeenCalledWith('group-promoted-1');
+        });
+        expect(promoteSpy.mock.invocationCallOrder[0])
+            .toBeLessThan(approveGroupSpy.mock.invocationCallOrder[0]);
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         });
         expect(patchVuln).toHaveBeenCalled();
 
-        approveSpy.mockRestore();
+        promoteSpy.mockRestore();
+        approveGroupSpy.mockRestore();
     });
 
-    test('rejecting a pending AI review calls rejectAi and removes the panel', async () => {
-        const rejectSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
+    test('rejecting an ungrouped pending AI review promotes it to a group, then calls rejectAiGroup', async () => {
+        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup').mockResolvedValue('group-promoted-2');
+        const rejectGroupSpy = jest.spyOn(Assessments, 'rejectAiGroup').mockResolvedValue(['assessment-ai-1']);
 
         renderWithPendingAiAssessment({ isEditing: true });
         const user = userEvent.setup();
@@ -2551,13 +2564,19 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Reject/i }));
 
         await waitFor(() => {
-            expect(rejectSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
+            expect(promoteSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
+        await waitFor(() => {
+            expect(rejectGroupSpy).toHaveBeenCalledWith('group-promoted-2');
+        });
+        expect(promoteSpy.mock.invocationCallOrder[0])
+            .toBeLessThan(rejectGroupSpy.mock.invocationCallOrder[0]);
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         });
 
-        rejectSpy.mockRestore();
+        promoteSpy.mockRestore();
+        rejectGroupSpy.mockRestore();
     });
 
     test('readOnly mode still shows the pending AI review panel but without approve/reject actions', async () => {
@@ -2601,7 +2620,7 @@ describe('Vulnerability Modal', () => {
         const approveGroupSpy = jest.spyOn(Assessments, 'approveAiGroup').mockResolvedValue([
             { ...pendingAiAssessment, origin: 'custom' }
         ]);
-        const approveSpy = jest.spyOn(Assessments, 'approveAi');
+        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup');
 
         render(
             <VulnModal
@@ -2621,10 +2640,10 @@ describe('Vulnerability Modal', () => {
         await waitFor(() => {
             expect(approveGroupSpy).toHaveBeenCalledWith('group-ai-1');
         });
-        expect(approveSpy).not.toHaveBeenCalled();
+        expect(promoteSpy).not.toHaveBeenCalled();
 
         approveGroupSpy.mockRestore();
-        approveSpy.mockRestore();
+        promoteSpy.mockRestore();
     });
 
     test('rejecting a grouped pending AI review calls rejectAiGroup with the group id', async () => {
@@ -2658,7 +2677,7 @@ describe('Vulnerability Modal', () => {
         });
 
         const rejectGroupSpy = jest.spyOn(Assessments, 'rejectAiGroup').mockResolvedValue(['assessment-ai-1']);
-        const rejectSpy = jest.spyOn(Assessments, 'rejectAi');
+        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup');
 
         render(
             <VulnModal
@@ -2678,10 +2697,10 @@ describe('Vulnerability Modal', () => {
         await waitFor(() => {
             expect(rejectGroupSpy).toHaveBeenCalledWith('group-ai-2');
         });
-        expect(rejectSpy).not.toHaveBeenCalled();
+        expect(promoteSpy).not.toHaveBeenCalled();
 
         rejectGroupSpy.mockRestore();
-        rejectSpy.mockRestore();
+        promoteSpy.mockRestore();
     });
 
     test('copy assessment id button copies "assessment:<id>" for an ungrouped history entry', async () => {

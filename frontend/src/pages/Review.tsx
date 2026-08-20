@@ -732,11 +732,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            if (row.group_id) {
-                await Assessments.approveAiGroup(row.group_id);
-            } else {
-                await Assessments.approveAi(row.assessment_ids[0], row.assessment_ids);
-            }
+            const groupId = row.group_id ?? await Assessments.promoteToGroup(row.assessment_ids[0]);
+            await Assessments.approveAiGroup(groupId);
             await refreshAssessmentLists();
             showMessage('AI assessment approved!', 'success');
         } catch (e) {
@@ -746,11 +743,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            if (row.group_id) {
-                await Assessments.rejectAiGroup(row.group_id);
-            } else {
-                await Assessments.rejectAi(row.assessment_ids[0], row.assessment_ids);
-            }
+            const groupId = row.group_id ?? await Assessments.promoteToGroup(row.assessment_ids[0]);
+            await Assessments.rejectAiGroup(groupId);
             await refreshAssessmentLists();
             showMessage('AI assessment rejected.', 'success');
         } catch (e) {
@@ -801,10 +795,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 }
             } else if (bulkDeleteTab === 'ai-assessments') {
                 const rows = aiAssessments.filter(row => selectedAiAssessments[row.id]);
-                await Promise.all(rows.map(row => row.group_id
-                    ? Assessments.rejectAiGroup(row.group_id)
-                    : Assessments.rejectAi(row.assessment_ids[0], row.assessment_ids)
-                ));
+                await Promise.all(rows.map(async row => {
+                    const groupId = row.group_id ?? await Assessments.promoteToGroup(row.assessment_ids[0]);
+                    await Assessments.rejectAiGroup(groupId);
+                }));
                 await refreshAssessmentLists();
             } else if (bulkDeleteTab === 'time-estimates') {
                 const ids = Object.keys(selectedTimeEstimates);
@@ -944,6 +938,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     timestamp: editSharedTimestamp,
                 };
                 if (vid) body.variant_id = vid;
+                if (editingRow.group_id) body.group_id = editingRow.group_id;
                 const res = await fetch(
                     import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(editingRow.vuln_id)}/assessments`,
                     {

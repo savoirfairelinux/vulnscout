@@ -1251,6 +1251,12 @@ def init_app(app: Flask) -> None:
                 payload_data["group_id"], "group_id")
             if err:
                 return err
+            if requested_group_id is not None:
+                existing_group_rows = load_group(requested_group_id)
+                if not existing_group_rows:
+                    return {"error": "Group not found"}, 404
+                if (existing_group_rows[0].vuln_id or "").upper() != vuln_id.upper():
+                    return {"error": "vuln_id does not match this group's vulnerability"}, 400
 
         created_rows = []
         try:
@@ -1599,6 +1605,8 @@ def init_app(app: Flask) -> None:
         rows = load_group(group_uuid)
         if not rows:
             return {"error": "Group not found"}, 404
+        if any(row.origin == "ai" for row in rows):
+            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}, 400
         deleted_ids = [str(row.id) for row in rows]
         was_non_custom = any((row.origin or "") != "custom" for row in rows)
         with batch_session():
