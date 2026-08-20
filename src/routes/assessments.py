@@ -1016,6 +1016,10 @@ def init_app(app: Flask) -> None:
         if req is None:
             return {"error": "Internal error"}, 500
 
+        group_vuln_id = (rows[0].vuln_id or "").upper()
+        if req.vuln_id.upper() != group_vuln_id:
+            return {"error": "vuln_id does not match this group's vulnerability"}, 400
+
         existing_by_key = index_group_rows(rows)
         targets, target_err = resolve_targets(req, existing_by_key)
         if target_err:
@@ -1037,6 +1041,9 @@ def init_app(app: Flask) -> None:
                         created_ids, group_id=group_uuid, commit=False)
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
+
+        if result["became_custom"] or result["deleted_non_custom"]:
+            invalidate_scan_list_cache()
 
         return {
             "status": "success",
