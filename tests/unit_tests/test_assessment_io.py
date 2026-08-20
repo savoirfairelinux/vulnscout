@@ -6,6 +6,7 @@
 """Unit tests for assessment_io.py helper functions."""
 
 import json
+import os
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +19,7 @@ from src.helpers.assessment_io import (
     build_variant_by_name_map,
     build_openvex_doc,
     import_statements,
+    import_custom_data,
 )
 
 
@@ -572,3 +574,181 @@ class TestImportStatementsUnit:
         created, errors, skipped = import_statements(statements, variant_id)
         assert created == []
         assert len(errors) == 2  # vuln name missing + status missing
+
+
+# ---------------------------------------------------------------------------
+# Re-import grouping — imported rows from one action share a group
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def app():
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        from src.bin.webapp import create_app
+        from src.extensions import db as _db
+        application = create_app()
+        application.config.update({"TESTING": True, "SCAN_FILE": "/dev/null"})
+        with application.app_context():
+            _db.create_all()
+            yield application
+            _db.drop_all()
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
+
+
+@pytest.fixture()
+def variant_and_project(app):
+    from src.models.project import Project
+    from src.models.variant import Variant
+    proj = Project.create("io-group-proj")
+    var = Variant.create("io-group-var", proj.id)
+    return proj, var
+
+
+class TestImportStatementsGrouping:
+    """Rows created by one OpenVEX statement (one vuln_id, multiple packages)
+    must share a group_id; a statement with a single package must not."""
+
+    def test_multi_package_statement_shares_group(self, app, variant_and_project):
+        """GIVEN one statement covering 2 packages WHEN imported THEN both rows
+        share a non-None group_id."""
+        import uuid as _uuid
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        _, var = variant_and_project
+        stmt = {
+            "vulnerability": {"name": "CVE-2099-GRP01"},
+            "status": "affected",
+            "products": [{"@id": "pkg-a@1.0"}, {"@id": "pkg-b@1.0"}],
+        }
+        with app.app_context():
+            created, errors, skipped = import_statements([stmt], var.id)
+            assert errors == []
+            assert len(created) == 2
+            group_ids = {
+                AssessmentGroupMember.get_group_id(_uuid.UUID(row["id"]))
+                for row in created
+            }
+        assert len(group_ids) == 1
+        assert None not in group_ids
+
+    def test_single_package_statement_has_no_group(self, app, variant_and_project):
+        """GIVEN one statement covering only 1 package WHEN imported THEN the
+        created row has no group_id."""
+        import uuid as _uuid
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        _, var = variant_and_project
+        stmt = {
+            "vulnerability": {"name": "CVE-2099-GRP02"},
+            "status": "affected",
+            "products": [{"@id": "pkg-solo@1.0"}],
+        }
+        with app.app_context():
+            created, errors, skipped = import_statements([stmt], var.id)
+            assert errors == []
+            assert len(created) == 1
+            group_id = AssessmentGroupMember.get_group_id(_uuid.UUID(created[0]["id"]))
+        assert group_id is None
+
+
+class TestImportCustomDataGrouping:
+    """Rows created by one custom-JSON entry (one vuln_id, multiple packages)
+    must share a group_id; an entry with a single package must not."""
+
+    def test_multi_package_entry_shares_group(self, app, variant_and_project):
+        """GIVEN one 'assessments' entry covering 2 packages WHEN imported
+        THEN both created rows share a non-None group_id."""
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        _, var = variant_and_project
+        data = {
+            "assessments": [{
+                "vuln_id": "CVE-2099-GRP03",
+                "status": "not_affected",
+                "packages": ["grp-pkg-a@1.0", "grp-pkg-b@1.0"],
+                "variant_id": str(var.id),
+            }]
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+            assert result["assessments_imported"] == 2
+            rows = Assessment.get_by_origin([var.id], origin="custom")
+            assert len(rows) == 2
+            group_ids = {
+                AssessmentGroupMember.get_group_id(row.id) for row in rows
+            }
+        assert len(group_ids) == 1
+        assert None not in group_ids
+
+    def test_single_package_entry_has_no_group(self, app, variant_and_project):
+        """GIVEN one 'assessments' entry covering only 1 package WHEN imported
+        THEN the created row has no group_id."""
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        _, var = variant_and_project
+        data = {
+            "assessments": [{
+                "vuln_id": "CVE-2099-GRP04",
+                "status": "not_affected",
+                "packages": ["grp-pkg-solo@1.0"],
+                "variant_id": str(var.id),
+            }]
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+            assert result["assessments_imported"] == 1
+            rows = Assessment.get_by_origin([var.id], origin="custom")
+            assert len(rows) == 1
+            group_id = AssessmentGroupMember.get_group_id(rows[0].id)
+        assert group_id is None
+
+    def test_custom_and_ai_entries_never_share_a_group(self, app, variant_and_project):
+        """GIVEN the same vuln_id/packages appear in both 'assessments' and
+        'ai_assessments' WHEN imported THEN no group links a custom-origin row
+        to an ai-origin row (each _import_assessments call groups only within
+        its own call)."""
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        _, var = variant_and_project
+        packages = ["dual-pkg-a@1.0", "dual-pkg-b@1.0"]
+        data = {
+            "assessments": [{
+                "vuln_id": "CVE-2099-GRP05",
+                "status": "not_affected",
+                "packages": packages,
+                "variant_id": str(var.id),
+            }],
+            "ai_assessments": [{
+                "vuln_id": "CVE-2099-GRP05",
+                "status": "affected",
+                "packages": packages,
+                "variant_id": str(var.id),
+            }],
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+            assert result["assessments_imported"] == 2
+            assert result["ai_assessments_imported"] == 2
+
+            custom_rows = Assessment.get_by_origin([var.id], origin="custom")
+            ai_rows = Assessment.get_by_origin([var.id], origin="ai")
+            assert len(custom_rows) == 2
+            assert len(ai_rows) == 2
+
+            custom_group_ids = {
+                AssessmentGroupMember.get_group_id(row.id) for row in custom_rows
+            }
+            ai_group_ids = {
+                AssessmentGroupMember.get_group_id(row.id) for row in ai_rows
+            }
+
+        assert len(custom_group_ids) == 1
+        assert len(ai_group_ids) == 1
+        assert None not in custom_group_ids
+        assert None not in ai_group_ids
+        # The two origins must never be fused into the same group.
+        assert custom_group_ids.isdisjoint(ai_group_ids)
