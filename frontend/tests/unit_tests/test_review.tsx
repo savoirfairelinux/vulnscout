@@ -344,6 +344,12 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         if (url.includes('/api/assessments/review/import')) return JSON.stringify({ status: 'success' });
         if (url.includes('/api/assessments/review/export-update')) return JSON.stringify({ version: 1, assessments: [] });
         if (!mutationOk) return { status: 500, body: JSON.stringify({ status: 'error' }) };
+        // Lazy promotion: mint a group id for an ungrouped assessment id so
+        // callers that then hit the group-scoped approve/reject endpoints
+        // have a real group id to target.
+        if (/\/api\/assessments\/[^/]+\/group$/.test(url)) {
+            return JSON.stringify({ status: 'success', group_id: 'promoted-group-id' });
+        }
         return JSON.stringify({ status: 'success' });
     });
 }
@@ -667,7 +673,7 @@ describe('Review — AI Assessments tab', () => {
         await screen.findByText('No AI-generated assessments found');
     });
 
-    test('approving a pending AI row calls approveAi with all grouped ids and refreshes the lists', async () => {
+    test('approving an ungrouped pending AI row promotes it to a group, then approves that group', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -677,10 +683,15 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Approve AI suggestion'));
 
         await screen.findByText('AI assessment approved!');
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
+        // The deleted per-assessment approve route no longer exists; the
+        // frontend must mint a real group id first (lazy promotion) and
+        // then call the group-scoped approve endpoint with it.
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/approve'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(false);
     });
 
-    test('rejecting a pending AI row calls rejectAi with all grouped ids and refreshes the lists', async () => {
+    test('rejecting an ungrouped pending AI row promotes it to a group, then rejects that group', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -690,7 +701,9 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Reject AI suggestion'));
 
         await screen.findByText('AI assessment rejected.');
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/reject'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(false);
     });
 
     test('reports an error when approving a pending AI row fails', async () => {
@@ -1464,7 +1477,13 @@ describe('Review — deleting an assessment', () => {
 
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessments/ai-1/reject'),
+                expect.stringContaining('/api/assessments/ai-1/group'),
+                expect.objectContaining({ method: 'POST' }),
+            );
+        });
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/assessment-groups/promoted-group-id/reject'),
                 expect.objectContaining({ method: 'POST' }),
             );
         });
