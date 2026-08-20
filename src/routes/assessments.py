@@ -79,50 +79,6 @@ def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
     return False
 
 
-def _pending_ai_group(assessment: "DBAssessment") -> list["DBAssessment"]:
-    """All pending AI rows sharing the addressed row's (vuln_id, variant_id)."""
-    vuln_id = assessment.vuln_id
-    return [
-        a for a in DBAssessment.get_by_vulnerability(vuln_id)
-        if a.origin == "ai" and a.variant_id == assessment.variant_id
-    ]
-
-
-def _resolve_ai_group(
-    assessment: "DBAssessment",
-) -> "tuple[list[DBAssessment], ResponseReturnValue | None]":
-    """Resolve the set of pending AI assessments an approve/reject applies to.
-
-    A grouped review row can span several variants (the front-end groups by
-    ``vuln_id`` + status/justification, deliberately ignoring ``variant_id``),
-    so the client may send an explicit ``ids`` list naming every assessment in
-    the row.  Only pending AI rows are eligible; any id that is missing or not a
-    pending AI assessment is rejected so a single request cannot silently
-    approve unrelated rows.  When no ``ids`` are provided we fall back to the
-    legacy (vuln_id, variant_id) grouping for the addressed row alone.
-    """
-    payload = request.get_json(silent=True) or {}
-    raw_ids = payload.get("ids")
-    if not raw_ids:
-        return _pending_ai_group(assessment), None
-    if not isinstance(raw_ids, list) or not all(isinstance(i, str) for i in raw_ids):
-        return [], ({"error": "'ids' must be a list of assessment id strings"}, 400)
-
-    group: list["DBAssessment"] = []
-    seen: set[str] = set()
-    for aid in raw_ids:
-        if aid in seen:
-            continue
-        seen.add(aid)
-        row = DBAssessment.get_by_id(aid)
-        if row is None:
-            return [], ({"error": f"Assessment not found: {aid}"}, 404)
-        if row.origin != "ai":
-            return [], ({"error": f"Not a pending AI assessment: {aid}"}, 400)
-        group.append(row)
-    return group, None
-
-
 def _parse_batch_record_ids() -> tuple[list[UUID] | None, str | None]:
     """Return unique UUIDs from a batch-delete request, or an error message."""
     payload = request.get_json(silent=True) or {}
@@ -1568,38 +1524,98 @@ def init_app(app: Flask) -> None:
             invalidate_scan_list_cache()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
-    @app.route("/api/assessments/<assessment_id>/approve", methods=["POST"])
-    def approve_ai_assessment(assessment_id: str) -> ResponseReturnValue:
-        existing = DBAssessment.get_by_id(assessment_id)
-        if existing is None:
-            return {"error": "Assessment not found"}, 404
-        if existing.origin != "ai":
-            return {"error": "Not a pending AI assessment"}, 400
-        group, err = _resolve_ai_group(existing)
-        if err is not None:
+    @app.route("/api/assessment-groups/<group_id>/approve", methods=["POST"])
+    def approve_ai_group(group_id: str) -> ResponseReturnValue:
+        """Approve every AI-origin assessment in a group, converting it to custom.
+
+        OpenAPI:
+        response 200 JsonObject Approved assessments.
+        response 400 Error Group is not a pending AI group.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
             return err
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        if any(row.origin != "ai" for row in rows):
+            return {"error": "Not a pending AI group"}, 400
         approved = []
         with batch_session():
-            for row in group:
+            for row in rows:
                 row.update(origin="custom")
                 approved.append(row.to_dict())
         return {"status": "success", "assessments": approved}, 200
 
-    @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
-    def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:
-        existing = DBAssessment.get_by_id(assessment_id)
-        if existing is None:
-            return {"error": "Assessment not found"}, 404
-        if existing.origin != "ai":
-            return {"error": "Not a pending AI assessment"}, 400
-        group, err = _resolve_ai_group(existing)
-        if err is not None:
+    @app.route("/api/assessment-groups/<group_id>/reject", methods=["POST"])
+    def reject_ai_group(group_id: str) -> ResponseReturnValue:
+        """Reject every AI-origin assessment in a group, deleting the whole group.
+
+        OpenAPI:
+        response 200 JsonObject Deleted assessment ids.
+        response 400 Error Group is not a pending AI group.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
             return err
-        deleted_ids = [str(row.id) for row in group]
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        if any(row.origin != "ai" for row in rows):
+            return {"error": "Not a pending AI group"}, 400
+        deleted_ids = [str(row.id) for row in rows]
         with batch_session():
-            for row in group:
+            for row in rows:
                 row.delete()
         return {"status": "success", "deleted": deleted_ids}, 200
+
+    @app.route('/api/assessment-groups/<group_id>', methods=['DELETE'])
+    def delete_assessment_group(group_id: str) -> ResponseReturnValue:
+        """Delete every assessment in a group.
+
+        OpenAPI:
+        response 200 JsonObject Ids of the deleted assessments.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        deleted_ids = [str(row.id) for row in rows]
+        was_non_custom = any((row.origin or "") != "custom" for row in rows)
+        with batch_session():
+            for row in rows:
+                row.delete()
+        if was_non_custom:
+            invalidate_scan_list_cache()
+        return {"status": "success", "deleted_ids": deleted_ids}, 200
+
+    @app.route('/api/assessments/<assessment_id>/group', methods=['POST'])
+    def promote_assessment_to_group(assessment_id: str) -> ResponseReturnValue:
+        """Put a single assessment into a group, creating one if needed.
+
+        Lazy creation: an assessment written on its own has no group until an
+        edit gives it a second target.
+
+        OpenAPI:
+        response 200 JsonObject The group id the assessment now belongs to.
+        response 404 Error No such assessment.
+        """
+        assessment_uuid, err = parse_uuid_or_400(assessment_id, "assessment_id")
+        if err:
+            return err
+        row = DBAssessment.get_by_id(assessment_uuid)
+        if row is None:
+            return {"error": "Assessment not found"}, 404
+        existing = AssessmentGroupMember.get_group_id(assessment_uuid)
+        if existing is not None:
+            return {"group_id": str(existing)}, 200
+        return {"group_id": str(
+            AssessmentGroupMember.create_group([assessment_uuid]))}, 200
 
 
 def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":

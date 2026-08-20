@@ -2828,3 +2828,82 @@ def test_reconcile_rejects_mismatched_vuln_id(client, demo_ids):
     assert len(group["targets"]) == 2
     for assessment_id in ids:
         assert _read_row(client.application, assessment_id, "status") == "affected"
+
+
+# ── DELETE /api/assessment-groups/<group_id> and lazy promotion ────────────
+
+
+def test_delete_group_removes_every_member(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    response = client.delete(f"/api/assessment-groups/{group_id}")
+
+    assert response.status_code == 200
+    assert len(response.get_json()["deleted_ids"]) == 2
+    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 404
+
+
+def test_deleting_one_member_leaves_the_rest_of_the_group(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    client.delete(f"/api/assessments/{created['assessments'][0]['id']}")
+
+    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    assert len(group["assessment_ids"]) == 1
+
+
+def test_promote_ungrouped_assessment_creates_a_group(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    assessment_id = created["assessments"][0]["id"]
+    assert created["assessments"][0]["group_id"] is None
+
+    response = client.post(f"/api/assessments/{assessment_id}/group")
+
+    assert response.status_code == 200
+    group_id = response.get_json()["group_id"]
+    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    assert group["assessment_ids"] == [assessment_id]
+
+
+def test_promoting_an_already_grouped_assessment_returns_its_group(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    existing_group = created["assessments"][0]["group_id"]
+
+    response = client.post(
+        f"/api/assessments/{created['assessments'][0]['id']}/group")
+
+    assert response.status_code == 200
+    assert response.get_json()["group_id"] == existing_group
