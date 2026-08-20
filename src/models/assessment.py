@@ -347,11 +347,11 @@ class Assessment(Base):
         ts = ensure_utc_iso(self.timestamp)
         # Function-local import: the two model modules would otherwise import
         # each other at module load time.
+        from flask import has_app_context
         from .assessment_group_member import AssessmentGroupMember
-        group_id = (
-            AssessmentGroupMember.get_group_id(self.id)
-            if getattr(self, "id", None) is not None else None
-        )
+        group_id = None
+        if getattr(self, "id", None) is not None and has_app_context():
+            group_id = AssessmentGroupMember.get_group_id(self.id)
         return {
             "id": str(self.id),
             "source": self.source or "",
