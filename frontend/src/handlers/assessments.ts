@@ -45,10 +45,14 @@ type AssessmentTarget = {
     variant_id: string | null;
     package: string;
     outdated: boolean;
+    /** Which underlying assessment record owns this (package, variant) pair —
+     *  needed to PUT/DELETE it directly when a legacy per-row edit applies. */
+    assessment_id: string;
 };
 
 type AssessmentGroup = {
     group_id: string | null;
+    vuln_id: string;
     status: string;
     simplified_status: string;
     justification: string;
@@ -60,6 +64,9 @@ type AssessmentGroup = {
     timestamp: string;
     targets: AssessmentTarget[];
     assessment_ids: string[];
+    /** Only populated by the cross-vuln review endpoint; vuln-scoped group
+     *  endpoints omit it since the caller already knows the vulnerability. */
+    vuln_texts?: VulnText[];
 };
 
 type BatchAssessmentItem = {
@@ -71,6 +78,8 @@ type BatchAssessmentItem = {
     status_notes?: string;
     workaround?: string;
     variant_id?: string;
+    /** Shared timestamp so all rows created by one batch action line up. */
+    timestamp?: string;
 };
 
 type BatchResult = {

@@ -1571,7 +1571,7 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
             assessment_ids: ['assessment-1'],
         }])); // assessment groups mount fetch
 
@@ -1613,12 +1613,13 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
             assessment_ids: ['assessment-1'],
         }])); // assessment groups mount fetch
 
         const reconcileSpy = jest.spyOn(Assessments, 'reconcileGroup').mockResolvedValue({
             group_id: 'group-77',
+            vuln_id: 'CVE-2010-1234',
             status: 'affected',
             simplified_status: 'Exploitable',
             justification: 'because 42',
@@ -1628,7 +1629,7 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
             assessment_ids: ['assessment-1'],
         });
         const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup');
@@ -2587,7 +2588,7 @@ describe('Vulnerability Modal', () => {
                     responses: [],
                     origin: 'ai',
                     timestamp: pendingAiAssessment.timestamp,
-                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-ai-1' }],
                     assessment_ids: ['assessment-ai-1'],
                 }]));
             }
@@ -2646,7 +2647,7 @@ describe('Vulnerability Modal', () => {
                     responses: [],
                     origin: 'ai',
                     timestamp: pendingAiAssessment.timestamp,
-                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-ai-1' }],
                     assessment_ids: ['assessment-ai-1'],
                 }]));
             }
@@ -2737,7 +2738,7 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
             assessment_ids: ['assessment-1'],
         }])); // assessment groups mount fetch
 

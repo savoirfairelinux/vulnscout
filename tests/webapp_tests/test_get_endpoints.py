@@ -1117,3 +1117,63 @@ def test_review_assessment_groups_filters(client, demo_ids):
     assert other_variant_response.status_code == 200
     assert all(
         g["group_id"] != group_id for g in other_variant_response.get_json())
+
+
+def test_assessment_groups_targets_carry_their_owning_assessment_id(client, demo_ids):
+    """Each target dict must carry the id of the assessment record it came
+    from, so the frontend can PUT/DELETE that exact row for legacy per-row
+    edits (Task 13)."""
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    created_ids = {a["id"] for a in created["assessments"]}
+    group_id = created["assessments"][0]["group_id"]
+
+    response = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups")
+    assert response.status_code == 200
+    match = [g for g in response.get_json() if g["group_id"] == group_id][0]
+    assert len(match["targets"]) == 2
+    assert all(t["assessment_id"] in created_ids for t in match["targets"])
+    # Every created assessment record owns exactly one target.
+    assert {t["assessment_id"] for t in match["targets"]} == created_ids
+
+
+def test_review_assessment_groups_include_vuln_id_and_texts(client, demo_ids, app):
+    """The cross-vuln review endpoint must tag each group with its
+    vulnerability id and enrich it with that vulnerability's texts, since the
+    review table spans several CVEs and the frontend needs both for its
+    columns and hover tooltips (Task 13)."""
+    from src.extensions import db
+    from src.models.vulnerability import Vulnerability
+
+    with app.app_context():
+        vuln = Vulnerability.get_by_id(demo_ids["vuln_id"])
+        vuln.description = "a description used for the review tooltip"
+        db.session.commit()
+
+    client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    )
+
+    response = client.get(
+        f"/api/reviews/assessment-groups?variant_id={demo_ids['variant_id']}&origin=custom")
+    assert response.status_code == 200
+    groups = [g for g in response.get_json() if g["vuln_id"] == demo_ids["vuln_id"]]
+    assert len(groups) == 1
+    assert groups[0]["vuln_texts"]
+    assert any(
+        t["content"] == "a description used for the review tooltip"
+        for t in groups[0]["vuln_texts"]
+    )

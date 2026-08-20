@@ -928,29 +928,27 @@ type VariantScopedSnapshot = {
             }
         }
 
-        for (const [vid, pkgs] of newPkgsByVariant) {
-            if (pkgs.length === 0) continue;
+        // One submit is one request: the backend then assigns one group per
+        // vulnerability. Posting per variant would create one group per variant.
+        const batchItems = [...newPkgsByVariant.entries()]
+            .filter(([, pkgs]) => pkgs.length > 0)
+            .map(([vid, pkgs]) => ({
+                vuln_id: vuln.id,
+                packages: pkgs,
+                status: data.status,
+                justification: data.justification,
+                impact_statement: data.impact_statement,
+                status_notes: data.status_notes,
+                workaround: data.workaround,
+                timestamp: editSharedTimestamp,
+                ...(vid ? { variant_id: vid } : {}),
+            }));
+
+        if (batchItems.length > 0) {
             try {
-                const body: Record<string, unknown> = {
-                    vuln_id: vuln.id,
-                    packages: pkgs,
-                    status: data.status,
-                    justification: data.justification,
-                    impact_statement: data.impact_statement,
-                    status_notes: data.status_notes,
-                    workaround: data.workaround,
-                    timestamp: editSharedTimestamp,
-                };
-                if (vid) body.variant_id = vid;
-                const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-                    method: 'POST', mode: 'cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const rd = await res.json();
-                if (rd?.status === 'success') {
-                    const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
-                    for (const raw of rawList) {
+                const result = await Assessments.createBatch(batchItems);
+                if (result.status === 'success') {
+                    for (const raw of result.assessments) {
                         const casted = normalise(raw);
                         if (casted) {
                             vuln.assessments.push(casted);
@@ -959,7 +957,7 @@ type VariantScopedSnapshot = {
                     }
                 } else {
                     anyError = true;
-                    showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
+                    showMessage('Failed to create assessment', 'error');
                 }
             } catch (e) {
                 anyError = true;
@@ -1070,11 +1068,12 @@ type VariantScopedSnapshot = {
                             && variantPackageMap[member.variant_id] !== undefined
                             && !variantPackageMap[member.variant_id].includes(pkg)
                         );
-                        return { variant_id: member.variant_id ?? null, package: pkg, outdated };
+                        return { variant_id: member.variant_id ?? null, package: pkg, outdated, assessment_id: member.id };
                     })
                 );
                 return {
                     group_id: null,
+                    vuln_id: head.vuln_id,
                     status: head.status,
                     simplified_status: head.simplified_status,
                     justification: head.justification ?? '',
