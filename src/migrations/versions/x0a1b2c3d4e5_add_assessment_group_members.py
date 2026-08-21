@@ -50,7 +50,7 @@ def backfill_groups(connection):
         JOIN findings f ON f.id = a.finding_id
     """)).mappings().all()
 
-    buckets = {}
+    buckets: dict[tuple, list] = {}
     for row in rows:
         key = (
             row["vuln_id"], row["timestamp"], row["status"],
@@ -59,7 +59,7 @@ def backfill_groups(connection):
         )
         buckets.setdefault(key, []).append(row["assessment_id"])
 
-    payload = []
+    payload: list[dict] = []
     for assessment_ids in buckets.values():
         if len(assessment_ids) < 2:
             continue

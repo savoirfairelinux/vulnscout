@@ -746,6 +746,21 @@ def test_deleting_an_assessment_removes_its_membership(app):
         assert AssessmentGroupMember.get_assessment_ids(group_id) == [second.id]
 
 
+def test_group_member_repr_names_both_ids(app):
+    """``__repr__`` is used in debug output, so it must show the link."""
+    with app.app_context():
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        first, second = _make_two_grouped_assessments()
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+
+        text_form = repr(AssessmentGroupMember(
+            assessment_id=first.id, group_id=group_id))
+
+        assert str(first.id) in text_form
+        assert str(group_id) in text_form
+
+
 def test_backfill_groups_only_multi_row_tuples(app):
     """Rows the frontend renders as one entry become one group; singles get none."""
     with app.app_context():

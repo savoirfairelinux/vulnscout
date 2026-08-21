@@ -2907,3 +2907,71 @@ def test_promoting_an_already_grouped_assessment_returns_its_group(client, demo_
 
     assert response.status_code == 200
     assert response.get_json()["group_id"] == existing_group
+
+
+def test_group_endpoints_reject_a_malformed_group_id(client):
+    assert client.post("/api/assessment-groups/not-a-uuid/approve").status_code == 400
+    assert client.post("/api/assessment-groups/not-a-uuid/reject").status_code == 400
+    assert client.delete("/api/assessment-groups/not-a-uuid").status_code == 400
+
+
+def test_promote_rejects_a_malformed_assessment_id(client):
+    response = client.post("/api/assessments/not-a-uuid/group")
+
+    assert response.status_code == 400
+
+
+def test_delete_unknown_group_returns_404(client):
+    response = client.delete(f"/api/assessment-groups/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+
+
+def test_promote_unknown_assessment_returns_404(client):
+    response = client.post(f"/api/assessments/{uuid.uuid4()}/group")
+
+    assert response.status_code == 404
+
+
+def test_delete_group_of_pending_ai_assessments_is_rejected(client, app, demo_ids):
+    group_id, assessment_ids = _create_group(client, demo_ids)
+    for assessment_id in assessment_ids:
+        _mutate_row(app, assessment_id, origin="ai")
+
+    response = client.delete(f"/api/assessment-groups/{group_id}")
+
+    assert response.status_code == 400
+    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 200
+
+
+def test_delete_group_of_non_custom_assessments_succeeds(client, app, demo_ids):
+    group_id, assessment_ids = _create_group(client, demo_ids)
+    for assessment_id in assessment_ids:
+        _mutate_row(app, assessment_id, origin="sbom")
+
+    response = client.delete(f"/api/assessment-groups/{group_id}")
+
+    assert response.status_code == 200
+    assert sorted(response.get_json()["deleted_ids"]) == sorted(assessment_ids)
+    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 404
+
+
+def test_reconcile_rejects_existing_ids_that_is_not_a_list(client, demo_ids):
+    group_id, _ = _create_group(client, demo_ids)
+
+    response = _reconcile(client, group_id, demo_ids, existing_ids="nope")
+
+    assert response.status_code == 400
+    assert "existing_ids" in response.get_json()["error"]
+
+
+def test_reconcile_converts_non_custom_rows_to_custom(client, app, demo_ids):
+    group_id, assessment_ids = _create_group(client, demo_ids)
+    for assessment_id in assessment_ids:
+        _mutate_row(app, assessment_id, origin="sbom")
+
+    response = _reconcile(client, group_id, demo_ids, status="fixed")
+
+    assert response.status_code == 200
+    for assessment_id in assessment_ids:
+        assert _read_row(app, assessment_id, "origin") == "custom"

@@ -43,10 +43,13 @@ def build_groups(assessments: list[Assessment]) -> list[dict]:
     if not assessments:
         return []
 
-    memberships = dict(db.session.execute(
-        select(AssessmentGroupMember.assessment_id, AssessmentGroupMember.group_id)
-        .where(AssessmentGroupMember.assessment_id.in_([a.id for a in assessments]))
-    ).all())
+    memberships: dict[uuid.UUID, uuid.UUID] = {
+        row.assessment_id: row.group_id
+        for row in db.session.execute(
+            select(AssessmentGroupMember.assessment_id, AssessmentGroupMember.group_id)
+            .where(AssessmentGroupMember.assessment_id.in_([a.id for a in assessments]))
+        ).all()
+    }
 
     # One call for the whole page: three queries total, not three per group.
     member_dicts = [a.to_dict() for a in assessments]
