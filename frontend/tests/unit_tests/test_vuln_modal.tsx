@@ -2813,6 +2813,8 @@ describe('Vulnerability Modal', () => {
         await user.click(copyBtn);
 
         expect(writeText).toHaveBeenCalledWith('assessment:assessment-1');
+        // The clipboard itself gives no visible feedback, so the button must.
+        expect(await screen.findByText('Copied')).toBeInTheDocument();
         writeText.mockRestore();
     });
 

@@ -45,6 +45,9 @@ type Props = {
     projectId?: string;
 };
 
+// How long the inline "Copied" confirmation stays next to a copy button.
+const COPIED_FEEDBACK_MS = 2000;
+
 const dt_options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
     month: 'long',
@@ -434,7 +437,10 @@ type VariantScopedSnapshot = {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
+    // Identifies which copy button was last used, so only that one confirms.
+    const [copiedGroupKey, setCopiedGroupKey] = useState<string | null>(null);
 
+    const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -609,14 +615,27 @@ type VariantScopedSnapshot = {
         }
     }, [vuln, patchVuln]);
 
+    const groupCopyKey = (group: AssessmentGroup) =>
+        group.group_id ? `group:${group.group_id}` : `assessment:${group.assessment_ids[0]}`;
+
     const copyGroupId = async (group: AssessmentGroup) => {
-        const text = group.group_id ? `group:${group.group_id}` : `assessment:${group.assessment_ids[0]}`;
+        const text = groupCopyKey(group);
         try {
             await navigator.clipboard.writeText(text);
+            // Confirm the copy inline: the clipboard gives no visible feedback of
+            // its own, so without this the button looks inert.
+            setCopiedGroupKey(text);
+            if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+            copiedResetTimer.current = setTimeout(() => setCopiedGroupKey(null), COPIED_FEEDBACK_MS);
         } catch {
             // Clipboard access can be denied by the browser; nothing more to do.
         }
     };
+
+    // Drop the pending reset if the modal closes while the confirmation shows.
+    useEffect(() => () => {
+        if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+    }, []);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
@@ -2006,6 +2025,12 @@ type VariantScopedSnapshot = {
                                                     >
                                                         <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
                                                     </button>
+                                                    {copiedGroupKey === groupCopyKey(group) && (
+                                                        <span role="status" className="inline-flex items-center gap-1 text-xs text-amber-300">
+                                                            <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                                                            Copied
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
@@ -2129,6 +2154,12 @@ type VariantScopedSnapshot = {
                                                             >
                                                                 <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
                                                             </button>
+                                                            {copiedGroupKey === groupCopyKey(group) && (
+                                                                <span role="status" className="inline-flex items-center gap-1 text-xs text-green-400">
+                                                                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                                                                    Copied
+                                                                </span>
+                                                            )}
                                                         </div>
                                                     </h3>
                                                     {!isBeingEdited && (
