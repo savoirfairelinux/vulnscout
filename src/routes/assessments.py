@@ -9,7 +9,6 @@ from typing import Any, Literal, overload
 from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
-from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..models.assessment_group_member import AssessmentGroupMember
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
@@ -1556,6 +1555,8 @@ def init_app(app: Flask) -> None:
         group_uuid, err = parse_uuid_or_400(group_id, "group_id")
         if err:
             return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
         rows = load_group(group_uuid)
         if not rows:
             return {"error": "Group not found"}, 404
@@ -1580,6 +1581,8 @@ def init_app(app: Flask) -> None:
         group_uuid, err = parse_uuid_or_400(group_id, "group_id")
         if err:
             return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
         rows = load_group(group_uuid)
         if not rows:
             return {"error": "Group not found"}, 404
@@ -1602,6 +1605,8 @@ def init_app(app: Flask) -> None:
         group_uuid, err = parse_uuid_or_400(group_id, "group_id")
         if err:
             return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
         rows = load_group(group_uuid)
         if not rows:
             return {"error": "Group not found"}, 404
@@ -1630,6 +1635,8 @@ def init_app(app: Flask) -> None:
         assessment_uuid, err = parse_uuid_or_400(assessment_id, "assessment_id")
         if err:
             return err
+        if assessment_uuid is None:
+            return {"error": "Internal error"}, 500
         row = DBAssessment.get_by_id(assessment_uuid)
         if row is None:
             return {"error": "Assessment not found"}, 404
