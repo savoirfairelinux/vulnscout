@@ -90,7 +90,7 @@ The same global cleanup is available to automation and CI:
 ```bash
 ./vulnscout --delete-outdated
 ./vulnscout --delete-empty-scans
-./vulnscout --delete-orphaned-vulnerabilities
+./vulnscout --delete-orphaned-vulns
 ```
 
 The cleanup removes outdated package observations, SBOM links, and custom assessments.

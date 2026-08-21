@@ -119,8 +119,8 @@ def import_custom_vulnscout_data_command(
 @click.command("export-custom-openvex-assessments")
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
-@click.option("--project", "-p", required=True, help="Project name.")
-@click.option("--variant", "-v", required=True, help="Variant name to export.")
+@click.option("--project", "-p", default="default", show_default=True, help="Project name.")
+@click.option("--variant", "-v", default="default", show_default=True, help="Variant name to export.")
 @with_appcontext
 def export_custom_openvex_assessments_command(output_dir: str, project: str, variant: str) -> None:
     """Export custom assessments for one variant as an OpenVEX JSON file."""
@@ -143,8 +143,8 @@ def export_custom_openvex_assessments_command(output_dir: str, project: str, var
 
 @click.command("import-custom-openvex-assessments")
 @click.argument("file_path")
-@click.option("--project", "-p", required=True, help="Project name.")
-@click.option("--variant", "-v", required=True, help="Variant name to import into.")
+@click.option("--project", "-p", default="default", show_default=True, help="Project name.")
+@click.option("--variant", "-v", default="default", show_default=True, help="Variant name to import into.")
 @click.option(
     "--use-original-timestamps/--use-current-timestamps",
     default=True,

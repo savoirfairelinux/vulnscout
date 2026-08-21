@@ -100,7 +100,7 @@ def delete_empty_scans_command():
     click.echo(f"Deleted {summary['scans_deleted']} empty scans")
 
 
-@click.command("delete-orphaned-vulnerabilities")
+@click.command("delete-orphaned-vulns")
 @with_appcontext
 def delete_orphaned_vulnerabilities_command():
     """Permanently remove CVEs absent from every project and variant."""

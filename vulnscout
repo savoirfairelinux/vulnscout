@@ -44,72 +44,95 @@ show_help() {
 VulnScout - Vulnerability Scanner
 Usage: vulnscout [--project <name>] [--variant <name>] <command> [options]
 
-Container lifecycle:
-  start|--start                   Start VulnScout container (auto-started by other commands)
-  stop|--stop                     Stop and remove VulnScout container
-  restart|--restart               Restart VulnScout container
-  --update                        Pull latest image and restart if a new version is available
-  --version                       Show current version
-  --dev                           Dev mode: mount local src/ into container and start frontend npm dev server
+Project and variant options:
+    --project <name>                Select a project
+    --variant <name>                Select a variant within --project
 
-Note: The container runs as a daemon. All commands auto-start it if needed and
-leave it running afterward (including --serve). Use 'stop' or '--stop' to remove it.
+Commands without --project or --variant:
 
-Global flags:
-  --project <name>                Set project name (scopes standalone refresh)
-  --variant <name>                Set variant name (scopes standalone refresh; requires --project)
+    Container lifecycle:
+    start|--start                   Start VulnScout container (auto-started by other commands)
+    stop|--stop                     Stop and remove VulnScout container
+    restart|--restart               Restart VulnScout container
+    --update                        Pull latest image and restart if a new version is available
+    --version                       Show current version
 
-Input commands (can be chained, triggers scan automatically):
-  --add-spdx <path>               Add an SPDX 2/3 SBOM file or archive
-  --add-cve-check <path>          Add a Yocto CVE check JSON file
-  --add-yocto-vex <path>          Add a Yocto VEX JSON file
-  --add-openvex <path>            Add an OpenVEX JSON file
-  --add-cdx <path>                Add a CycloneDX file
-  --add-grype <path>              Add a Grype results file
-  --refresh-vulnerability-data    Refresh EPSS, NVD, EUVD, and GHSA data; without inputs refreshes all vulnerabilities
-  --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
-  --perform-nvd-scan              Run an NVD CPE-based vulnerability scan
-  --perform-osv-scan              Run an OSV PURL-based vulnerability scan
-  --perform-sbom-cve-check-scan          Run a sbom-cve-check vulnerability scan
+    Development and web interface:
+    --dev                           Mount local src/ and start the frontend dev server
+    --serve                         Run scan then start web UI (port 7275)
 
-Scan & output commands:
-  --match-condition <expr>        Run vulnerability scan
-  --serve                         Run scan then start web UI (port 7275)
-  --report <template>             Generate a report from a template
-  --report <path>                 Stage a local report template file and generate a report from it
-  --add-asset <path>              Stage a local image asset for use in report templates
-  --export-spdx                   Export project as SPDX 3.0 SBOM
-  --export-cdx                    Export project as CycloneDX 1.6 SBOM
-  --export-openvex                Export project as OpenVEX document
+    Reports and assets:
+    --report <template|path>        Generate a report from a template
+    --add-asset <path>              Stage an image asset for report templates
+
+    Data maintenance:
+    --delete-scan <id>              Delete a past scan by ID
+    --delete-outdated               Delete outdated packages and assessments
+    --delete-empty-scans            Delete scans with no recorded changes
+    --delete-orphaned-vulns         Delete CVEs absent from every project and variant
+
+    Refresh vulnerability data:
+    --refresh-vulnerability-data    Refresh all projects (optionally limited by --project and --variant)
+
+    Data listing:
+    --list-projects                 List all projects and their variants (optionally in JSON format with --json)
+    --list-scans                    List all past scans (optionally in JSON format with --json)
+
+    Import or export AI assessment context for a project:
+    --export-context                Export AI assessment context
+    --import-context <path>         Import AI assessment context
+    
+    Configuration:
+    --config <key> <value>          Set a config value
+    --config-list                   Show current configuration
+    --config-clear <key>            Remove a config key
+
+Commands with optional --project and --variant (uses "default" project and variant if not specified):
+
+    Import a SBOM or vulnerability data file into the selected project/variant:
+    --add-spdx <path>               Add an SPDX 2/3 SBOM file or archive
+    --add-cve-check <path>          Add a Yocto CVE check JSON file
+    --add-yocto-vex <path>          Add a Yocto VEX JSON file
+    --add-openvex <path>            Add an OpenVEX JSON file
+    --add-cdx <path>                Add a CycloneDX file
+    --add-grype <path>              Add a Grype results file
+
+    Trigger scanning to detect new vulnerabilities in the selected project/variant:
+    --perform-grype-scan            Run Grype after merging any inputs
+    --perform-nvd-scan              Run an NVD CPE-based scan
+    --perform-osv-scan              Run an OSV PURL-based scan
+    --perform-sbom-cve-check-scan   Run an sbom-cve-check scan
+
+    Export the selected project/variant's vulnerability data to a SBOM file:
+    --export-spdx                   Export as SPDX 3.0 SBOM
+    --export-cdx                    Export as CycloneDX 1.6 SBOM
+    --export-openvex                Export as OpenVEX
+
+    Import or export custom OpenVEX custom assessments for a project/variant:
+    --export-custom-openvex-assessments Export custom OpenVEX assessments
+    --import-custom-openvex-assessments <path> Import custom OpenVEX assessments
+
+    Test for vulnerabilities matching a condition in the selected project/variant:
+    --match-condition <expr>        Test for vulnerabilities matching a condition
+
+Commands only requiring --project (uses default project if not specified):
+
+    Import or export custom VulnScout data for a project:
     --export-custom-vulnscout-data  Export custom VulnScout JSON data
-        --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
-            --use-original-timestamps    Preserve file timestamps instead of using system time
-            --use-current-timestamps     Use current system time instead of file timestamps
-    --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
-    --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
-    --export-context                 Export AI assessment context to /scan/outputs/context-export.json
-    --import-context <path>          Import AI assessment context from a JSON file (overwrites matching project/variant)
-  --delete-scan <id>                Delete a past scan by its ID
-    --delete-outdated                 Permanently delete outdated packages and assessments
-    --delete-empty-scans              Permanently delete scans with no recorded changes
-    --delete-orphaned-vulnerabilities Delete CVEs absent from every project and variant
+    --import-custom-vulnscout-data <path> Import custom VulnScout JSON data
 
-Data retrieval commands:
-  --list-projects                 List all projects and their variants
-  --list-scans                    List all past scans
-  --json                          Output objects in JSON format
-
-Configuration:
-  --config <key> <value>          Set a config value
-  --config-list                   Show current configuration
-  --config-clear <key>            Remove a config key
+Timestamp options for custom data imports:
+    Applies to --import-custom-vulnscout-data and --import-custom-openvex-assessments.
+    --use-original-timestamps       Preserve assessment timestamps from the imported file
+    --use-current-timestamps        Set imported assessment timestamps to the current time
+    Default: current time for VulnScout JSON; original timestamps for OpenVEX.
 
 Environment variables:
-  VULNSCOUT_CONTAINER   Container name (default: vulnscout)
-    VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:v0.20)
-  VULNSCOUT_BUILD_DIR   Build base dir (default: ./.vulnscout)
-  VULNSCOUT_CACHE_DIR   Cache dir (default: VULNSCOUT_BUILD_DIR/cache)
-  VULNSCOUT_OUTPUTS_DIR Output directory (default: VULNSCOUT_BUILD_DIR/outputs)
+    VULNSCOUT_CONTAINER     Container name (default: vulnscout)
+    VULNSCOUT_IMAGE         Docker image (default: docker.io/sflinux/vulnscout:v0.20)
+    VULNSCOUT_BUILD_DIR     Build base dir (default: ./.vulnscout)
+    VULNSCOUT_CACHE_DIR     Cache dir (default: VULNSCOUT_BUILD_DIR/cache)
+    VULNSCOUT_OUTPUTS_DIR   Output directory (default: VULNSCOUT_BUILD_DIR/outputs)
 
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
@@ -408,9 +431,9 @@ parse_and_run() {
                 ensure_running
                 exec_container --delete-empty-scans
                 shift ;;
-            delete-orphaned-vulnerabilities|--delete-orphaned-vulnerabilities)
+            delete-orphaned-vulns|--delete-orphaned-vulns|delete-orphaned-vulnerabilities|--delete-orphaned-vulnerabilities)
                 ensure_running
-                exec_container --delete-orphaned-vulnerabilities
+                exec_container --delete-orphaned-vulns
                 shift ;;
             serve|--serve)
                 SERVE_REQUESTED=true; shift ;;
@@ -529,7 +552,8 @@ parse_and_run() {
     elif [ -n "$MATCH_CONDITION" ] || [ ${#REPORT_ARGS[@]} -gt 0 ] || [ ${#EXPORT_ARGS[@]} -gt 0 ]; then
         # No new inputs but a match-condition, report, or export was given: run against existing DB data
         ensure_running
-        local -a mc_args=(--project "$PROJECT" --variant "$VARIANT")
+        local -a mc_args=(--project "$PROJECT")
+        [ "$VARIANT_SPECIFIED" = true ] && mc_args+=(--variant "$VARIANT")
         [ -n "$MATCH_CONDITION" ] && mc_args+=(--match-condition "$MATCH_CONDITION")
         exec_container "${mc_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
     fi
