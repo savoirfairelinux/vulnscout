@@ -302,8 +302,9 @@ describe('Vulnerability Modal', () => {
         await user.type(inputWorkaround, 'upgrade layer version');
         await user.click(btn);
 
-        // ASSERT
-        expect(thisFetch).toHaveBeenCalledTimes(4);
+        // ASSERT: 3 mount fetches + the batch POST + the groups refresh that
+        // makes the new assessment appear in history immediately.
+        expect(thisFetch).toHaveBeenCalledTimes(5);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
@@ -814,6 +815,79 @@ describe('Vulnerability Modal', () => {
 
         const errorBanner = await screen.findByText(/assessment not added/i);
         expect(errorBanner).toBeInTheDocument();
+    });
+
+    test('a newly added assessment shows in history right away when server groups already exist', async () => {
+        fetchMock.resetMocks();
+        const existingGroup = {
+            group_id: 'group-1',
+            vuln_id: 'CVE-2010-1234',
+            status: 'affected',
+            simplified_status: 'active',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            responses: [],
+            origin: 'custom',
+            timestamp: '2021-01-01T00:00:00Z',
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
+            assessment_ids: ['assessment-1'],
+        };
+        const newGroup = {
+            ...existingGroup,
+            group_id: 'group-2',
+            status: 'fixed',
+            simplified_status: 'fixed',
+            justification: '',
+            impact_statement: '',
+            status_notes: 'freshly written note',
+            workaround: '',
+            timestamp: '2026-01-01T00:00:00Z',
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-2' }],
+            assessment_ids: ['assessment-2'],
+        };
+        let posted = false;
+        fetchMock.mockResponse(async req => {
+            if (req.url.includes('/assessment-groups')) {
+                return JSON.stringify(posted ? [newGroup, existingGroup] : [existingGroup]);
+            }
+            if (req.method === 'POST' && req.url.includes('/api/assessments/batch')) {
+                posted = true;
+                return JSON.stringify({
+                    status: 'success',
+                    assessments: [{
+                        id: 'assessment-2',
+                        vuln_id: 'CVE-2010-1234',
+                        packages: ['aaabbbccc@1.0.0'],
+                        status: 'fixed',
+                        simplified_status: 'fixed',
+                        justification: '',
+                        impact_statement: '',
+                        status_notes: 'freshly written note',
+                        workaround: '',
+                        timestamp: '2026-01-01T00:00:00Z',
+                        origin: 'custom',
+                        responses: []
+                    }]
+                });
+            }
+            return JSON.stringify([]);
+        });
+
+        render(<VulnModal vuln={{...vulnerability, assessments: [...vulnerability.assessments]}} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        // Wait for the server-built groups to land before submitting.
+        expect(await screen.findByText(/this is a fictive status note/i)).toBeInTheDocument();
+
+        const selects = screen.getAllByRole('combobox');
+        const selectSource = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectSource, 'fixed');
+        await user.type(screen.getByPlaceholderText(/notes/i), 'freshly written note');
+        await user.click(screen.getByText(/add assessment/i));
+
+        expect(await screen.findByText(/freshly written note/i)).toBeInTheDocument();
     });
 
     test('edit button toggle functionality', async () => {
