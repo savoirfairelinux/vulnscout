@@ -1319,6 +1319,10 @@ type VariantScopedSnapshot = {
                     vuln.simplified_status = casted.simplified_status;
                 }
             }
+            // History renders from the server-built groups, so refresh them or
+            // the assessment just created stays invisible until the modal is
+            // reopened.
+            if (successCount > 0) await refreshAssessmentGroups();
         } else {
             const errors = Array.isArray(data?.errors)
                 ? data.errors.map((entry: {error?: unknown}) => String(entry?.error ?? '')).filter(Boolean).join('; ')
