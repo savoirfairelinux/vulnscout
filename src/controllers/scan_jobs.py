@@ -270,7 +270,7 @@ def _run_cancellable(
     )
     ctx.set_cancel_hook(process.terminate)
     try:
-        process.communicate(timeout=timeout)
+        _, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.kill()
         process.communicate()
@@ -279,6 +279,10 @@ def _run_cancellable(
         ctx.set_cancel_hook(None)
     ctx.check_cancelled()
     if process.returncode != 0:
+        logging.getLogger(__name__).warning(
+            "Scanner command failed: %s",
+            (stderr or "").strip()[:500] or f"exit code {process.returncode}",
+        )
         raise OperationError("Scanner command failed")
 
 
@@ -515,7 +519,6 @@ def _run_nvd_scan_api(ctx: JobContext, packages: List[Package]) -> None:
         ctx.log(
             f"✓ Scan complete — found {len(cves_found)} unique CVEs across {total} CPEs"
         )
-
 
 def run_nvd_scan(ctx: JobContext) -> None:
     """Match package CPEs against NVD, locally or through the REST API."""
