@@ -3,7 +3,7 @@ import NavigationBar from "../components/NavigationBar";
 import OperationQueueModal from "../components/OperationQueueModal";
 import { subscribe as exportSubscribe, getSnapshot as exportGetSnapshot } from "../handlers/exportQueue";
 import MessageBanner from "../components/MessageBanner";
-import Popup from "../components/Popup";
+import ModalShell from "../components/ModalShell";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
@@ -449,7 +449,7 @@ function Explorer() {
                 />
             </header>
             <OperationQueueModal isOpen={operationQueueOpen} onClose={() => setOperationQueueOpen(false)} />
-            <Popup
+            <ModalShell
                 isOpen={tab === 'metrics' && setupRequirement !== null}
                 title={setupRequirement?.kind === 'project'
                     ? 'Add your first project'
@@ -458,6 +458,7 @@ function Explorer() {
                         : 'Unable to check setup'}
                 onClose={() => setSetupRequirement(null)}
                 testId="setup-required-popup"
+                size="compact"
             >
                 <p className="text-sm text-gray-600 dark:text-gray-300">
                     {setupRequirement?.kind === 'project'
@@ -487,7 +488,7 @@ function Explorer() {
                         {setupRequirement?.kind === 'error' ? 'Retry' : 'Go to settings'}
                     </button>
                 </div>
-            </Popup>
+            </ModalShell>
 
             <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">
