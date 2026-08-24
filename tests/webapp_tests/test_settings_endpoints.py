@@ -8,6 +8,7 @@
 import io
 import json
 import os
+import tempfile
 import uuid
 import tarfile
 import pytest
@@ -15,6 +16,13 @@ from unittest.mock import patch, MagicMock
 from werkzeug.datastructures import MultiDict
 
 from src.bin.webapp import create_app
+from src.controllers.job_context import JobContext
+from src.controllers.operation_registry import (
+    KIND_UPLOAD,
+    LANE_UPLOAD,
+    STATUS_QUEUED,
+    registry,
+)
 from . import write_demo_files, setup_demo_db
 
 
@@ -56,6 +64,79 @@ def app(init_files):
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def clean_registry():
+    """Operations live in a process-wide registry; keep tests independent."""
+    registry.clear()
+    yield
+    registry.clear()
+
+
+@pytest.fixture()
+def queued_import():
+    """Run the queued SBOM import inline and record the arguments it got.
+
+    The endpoint hands a closure to the operation queue instead of starting a
+    thread, so the refresh-source selection is only observable by executing
+    that closure against a recording stand-in for the import body.
+    """
+    calls = []
+
+    def recorder(ctx, file_paths, scan_id, variant_id, refresh_sources=None):
+        calls.append({
+            "ctx": ctx,
+            "file_paths": list(file_paths),
+            "scan_id": scan_id,
+            "variant_id": variant_id,
+            "refresh_sources": refresh_sources,
+        })
+
+    def run_inline(op_id, lane, runner, ctx):
+        submissions.append({"op_id": op_id, "lane": lane, "ctx": ctx})
+        runner(ctx)
+
+    submissions = []
+    with patch("src.routes.settings._process_sbom_background", recorder), \
+            patch("src.routes.settings.operation_queue.submit", run_inline):
+        yield {"calls": calls, "submissions": submissions}
+
+    for call in calls:
+        for path in call["file_paths"]:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+@pytest.fixture()
+def upload_temp_files(monkeypatch):
+    """Record every temp file the upload endpoint creates for an SBOM input."""
+    created = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, path = real_mkstemp(*args, **kwargs)
+        if str(kwargs.get("prefix", "")).startswith("vulnscout_"):
+            created.append(path)
+        return fd, path
+
+    monkeypatch.setattr("src.routes.settings.tempfile.mkstemp", recording_mkstemp)
+    return created
+
+
+def _register_upload_operation(op_id="upload:direct-test", scope=None):
+    """Register an upload operation and return a context bound to it."""
+    registry.create(
+        op_id=op_id,
+        kind=KIND_UPLOAD,
+        source="sbom",
+        label="SBOM import",
+        lane=LANE_UPLOAD,
+        scope=scope,
+    )
+    return JobContext(op_id)
 
 
 def _get_project_id(client, name="demo"):
@@ -549,10 +630,8 @@ def _make_spdx_tar_archive(member_name="archive.spdx.json", package_name="archiv
 class TestSBOMUpload:
     """Tests for POST /api/sbom/upload (multi-file support)."""
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_single_file(self, mock_thread, client):
-        """Single file upload returns 202 with upload_id and scan_id."""
-        mock_thread.return_value = MagicMock()
+    def test_upload_single_file(self, queued_import, client):
+        """Single file upload returns 202 with op_id and scan_id."""
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
 
@@ -566,14 +645,12 @@ class TestSBOMUpload:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 202
         body = resp.get_json()
-        assert "upload_id" in body
+        assert body["op_id"].startswith("upload:")
         assert "scan_id" in body
-        mock_thread.return_value.start.assert_called_once()
-        assert mock_thread.call_args.kwargs["args"][-1] == {"epss", "euvd"}
+        assert len(queued_import["calls"]) == 1
+        assert queued_import["calls"][0]["refresh_sources"] == {"epss", "euvd"}
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_defaults_to_epss_refresh(self, mock_thread, client):
-        mock_thread.return_value = MagicMock()
+    def test_upload_defaults_to_epss_refresh(self, queued_import, client):
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         data = {
@@ -585,7 +662,7 @@ class TestSBOMUpload:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
 
         assert resp.status_code == 202
-        assert mock_thread.call_args.kwargs["args"][-1] == {"epss"}
+        assert queued_import["calls"][0]["refresh_sources"] == {"epss"}
 
     def test_upload_rejects_unknown_refresh_source(self, client):
         pid = _get_project_id(client)
@@ -602,10 +679,8 @@ class TestSBOMUpload:
         assert resp.status_code == 400
         assert "Unknown refresh source" in resp.get_json()["error"]
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_none_sentinel_disables_all_refresh(self, mock_thread, client):
+    def test_upload_none_sentinel_disables_all_refresh(self, queued_import, client):
         """The 'none' sentinel must not fall back to the epss default."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         data = {
@@ -618,7 +693,7 @@ class TestSBOMUpload:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
 
         assert resp.status_code == 202
-        assert mock_thread.call_args.kwargs["args"][-1] == set()
+        assert queued_import["calls"][0]["refresh_sources"] == set()
 
     def test_upload_rejects_none_mixed_with_other_sources(self, client):
         pid = _get_project_id(client)
@@ -635,10 +710,8 @@ class TestSBOMUpload:
         assert resp.status_code == 400
         assert "Unknown refresh source" in resp.get_json()["error"]
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_multiple_files(self, mock_thread, client):
+    def test_upload_multiple_files(self, queued_import, client):
         """Multiple files upload creates one scan with multiple SBOM documents."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
 
@@ -654,14 +727,13 @@ class TestSBOMUpload:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 202
         body = resp.get_json()
-        assert "upload_id" in body
+        assert body["op_id"].startswith("upload:")
         assert "scan_id" in body
-        mock_thread.return_value.start.assert_called_once()
+        assert len(queued_import["calls"]) == 1
+        assert len(queued_import["calls"][0]["file_paths"]) == 2
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_multiple_files_same_scan(self, mock_thread, client, app):
+    def test_upload_multiple_files_same_scan(self, queued_import, client, app):
         """All uploaded files belong to the same scan."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
 
@@ -755,10 +827,8 @@ class TestSBOMUpload:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_invalid_json_file(self, mock_thread, client):
+    def test_upload_invalid_json_file(self, queued_import, client):
         """Non-JSON file should return 400."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         data = {
@@ -769,11 +839,10 @@ class TestSBOMUpload:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
         assert "Could not parse" in resp.get_json()["error"]
+        assert queued_import["calls"] == []
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_tar_archive_is_extracted(self, mock_thread, client):
+    def test_upload_tar_archive_is_extracted(self, queued_import, client):
         """A tar archive containing SPDX JSON files is accepted and extracted."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
 
@@ -784,13 +853,12 @@ class TestSBOMUpload:
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 202
-        assert "upload_id" in resp.get_json()
-        mock_thread.return_value.start.assert_called_once()
+        assert resp.get_json()["op_id"].startswith("upload:")
+        assert len(queued_import["calls"]) == 1
+        assert len(queued_import["calls"][0]["file_paths"]) == 1
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_empty_tar_archive_rejected(self, mock_thread, client):
+    def test_upload_empty_tar_archive_rejected(self, queued_import, client):
         """A tar archive without SPDX JSON files is rejected."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
 
@@ -807,12 +875,11 @@ class TestSBOMUpload:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
         assert "No .spdx.json files" in resp.get_json()["error"]
+        assert queued_import["calls"] == []
 
-    @patch("src.routes.settings.threading.Thread")
     @patch("src.routes.settings.subprocess.run")
-    def test_upload_tar_zst_archive_is_extracted(self, mock_run, mock_thread, client):
+    def test_upload_tar_zst_archive_is_extracted(self, mock_run, queued_import, client):
         """A .tar.zst archive is decompressed and extracted like a normal tar."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
 
@@ -840,19 +907,19 @@ class TestSBOMUpload:
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 202
-        mock_thread.return_value.start.assert_called_once()
+        assert len(queued_import["calls"]) == 1
 
 
-class TestUploadStatus:
+class TestUploadOperationVisibility:
+    """The per-upload status endpoint was replaced by the operation stream."""
 
-    def test_status_unknown_id(self, client):
+    def test_retired_status_endpoint_is_gone(self, client):
         resp = client.get(f"/api/sbom/upload/{uuid.uuid4()}/status")
         assert resp.status_code == 404
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_status_after_upload(self, mock_thread, client):
-        """After upload the status endpoint returns 'processing'."""
-        mock_thread.return_value = MagicMock()
+    def test_upload_is_registered_as_an_operation(self, queued_import, client):
+        """After upload the import is visible as an operation, which is what
+        /api/events/stream serves to the browser."""
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         content = _make_spdx_json()
@@ -862,39 +929,22 @@ class TestUploadStatus:
             "files": (io.BytesIO(content), "sbom.spdx.json"),
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
-        upload_id = resp.get_json()["upload_id"]
+        op_id = resp.get_json()["op_id"]
 
-        status_resp = client.get(f"/api/sbom/upload/{upload_id}/status")
-        assert status_resp.status_code == 200
-        assert status_resp.get_json()["status"] == "processing"
-
-
-class TestUploadHelpers:
-
-    def test_prune_upload_status_removes_stale_entries(self):
-        from src.routes.settings import _prune_upload_status, _upload_status, _UPLOAD_STATUS_TTL
-
-        original = dict(_upload_status)
-        try:
-            now = 10_000.0
-            _upload_status.clear()
-            _upload_status.update({
-                "keep": {"status": "processing", "ts": now},
-                "done-old": {"status": "done", "ts": now - _UPLOAD_STATUS_TTL - 1},
-                "error-old": {"status": "error", "ts": now - _UPLOAD_STATUS_TTL - 1},
-                "done-fresh": {"status": "done", "ts": now},
-            })
-
-            with patch("src.routes.settings.time.time", return_value=now):
-                _prune_upload_status()
-
-            assert "keep" in _upload_status
-            assert "done-fresh" in _upload_status
-            assert "done-old" not in _upload_status
-            assert "error-old" not in _upload_status
-        finally:
-            _upload_status.clear()
-            _upload_status.update(original)
+        operation = registry.get(op_id)
+        assert operation is not None
+        assert operation["kind"] == KIND_UPLOAD
+        assert operation["source"] == "sbom"
+        assert operation["lane"] == LANE_UPLOAD
+        assert operation["label"] == "SBOM import"
+        assert operation["status"] == STATUS_QUEUED
+        assert operation["scope"] == {
+            "variant_id": vid,
+            "variant_name": "default",
+            "project_id": pid,
+        }
+        assert queued_import["submissions"][0]["lane"] == LANE_UPLOAD
+        assert queued_import["submissions"][0]["op_id"] == op_id
 
 
 # ---------------------------------------------------------------------------
@@ -930,12 +980,19 @@ class TestDetectFormat:
 
     def test_yocto_vex_via_cpes(self):
         from src.routes.settings import _detect_format
-        data = {"package": [{"name": "openssl", "cpes": ["cpe:2.3:a:openssl:openssl:3.0.2:*:*:*:*:*:*:*"], "issue": []}]}
+        data = {"package": [{
+            "name": "openssl",
+            "cpes": ["cpe:2.3:a:openssl:openssl:3.0.2:*:*:*:*:*:*:*"],
+            "issue": [],
+        }]}
         assert _detect_format("vex.json", data) == "yocto_vex"
 
     def test_yocto_vex_via_patch_file(self):
         from src.routes.settings import _detect_format
-        data = {"package": [{"name": "openssl", "issue": [{"id": "CVE-2022-0778", "patch-file": "/patches/fix.patch"}]}]}
+        data = {"package": [{
+            "name": "openssl",
+            "issue": [{"id": "CVE-2022-0778", "patch-file": "/patches/fix.patch"}],
+        }]}
         assert _detect_format("vex.json", data) == "yocto_vex"
 
     def test_yocto_vex_via_detail(self):
@@ -1051,11 +1108,9 @@ class TestUploadContentType:
 class TestProcessSBOMBackground:
     """Test the background SBOM processing function directly."""
 
-    def test_process_sets_done_status(self, app, monkeypatch):
-        """Processing an SPDX SBOM file sets status to 'done'."""
-        from src.routes.settings import (
-            _process_sbom_background, _upload_status,
-        )
+    def test_process_reports_the_done_message(self, app, monkeypatch):
+        """Processing an SPDX SBOM file ends on the final progress step."""
+        from src.routes.settings import _process_sbom_background
         from src.extensions import db
         from src.models.project import Project
         from src.models.variant import Variant
@@ -1070,7 +1125,6 @@ class TestProcessSBOMBackground:
             scan = Scan.create("", variant.id)
 
             # Write a minimal SPDX JSON to a temp file
-            import tempfile
             sbom_data = {
                 "spdxVersion": "SPDX-2.3",
                 "SPDXID": "SPDXRef-DOCUMENT",
@@ -1089,12 +1143,6 @@ class TestProcessSBOMBackground:
                 json.dump(sbom_data, f)
             os.close(fd)
 
-            SBOMDocument(
-                path=tmp_path,
-                source_name="test.spdx.json",
-                format="spdx",
-                scan_id=scan.id,
-            )
             db.session.add(
                 SBOMDocument(
                     path=tmp_path,
@@ -1105,42 +1153,56 @@ class TestProcessSBOMBackground:
             )
             db.session.commit()
 
-            upload_id = "bg-test-1"
-            _process_sbom_background(
-                app, upload_id, [tmp_path], scan.id, variant.id
-            )
+            ctx = _register_upload_operation("upload:bg-test-1")
+            _process_sbom_background(ctx, [tmp_path], scan.id, variant.id)
+            ctx.flush()
 
-            assert _upload_status[upload_id]["status"] == "done"
+            operation = registry.get("upload:bg-test-1")
+            assert operation["progress"] == {
+                "current": 3, "total": 3, "message": "SBOM imported successfully.",
+            }
+            assert operation["logs"][-1] == "SBOM imported successfully."
+            assert not os.path.exists(tmp_path)
 
-    def test_process_error_sets_error_status(self, app):
-        """Processing with an invalid file path sets status to 'error'."""
-        from src.routes.settings import (
-            _process_sbom_background, _upload_status,
-        )
+    def test_process_unparsable_file_raises_and_cleans_up(self, app):
+        """A document that cannot be parsed surfaces as a RuntimeError."""
+        from src.routes.settings import _process_sbom_background
         from src.extensions import db
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
 
         with app.app_context():
             project = Project.create("BgErrProject")
             variant = Variant.create("BgErrVariant", project.id)
             scan = Scan.create("", variant.id)
 
-            # No SBOM documents registered — parser should fail
-            upload_id = "bg-test-err"
-            _process_sbom_background(
-                app, upload_id, ["/nonexistent/file.json"],
-                scan.id, variant.id
+            fd, broken_path = tempfile.mkstemp(suffix=".spdx.json")
+            with open(broken_path, "w") as f:
+                f.write("this is not JSON")
+            os.close(fd)
+
+            db.session.add(
+                SBOMDocument(
+                    path=broken_path,
+                    source_name="broken.spdx.json",
+                    format="spdx",
+                    scan_id=scan.id,
+                )
             )
+            db.session.commit()
 
-            status = _upload_status[upload_id]
-            # Should either succeed (no docs to parse) or fail gracefully
-            assert status["status"] in ("done", "error")
+            ctx = _register_upload_operation("upload:bg-test-err")
+            with pytest.raises(RuntimeError) as excinfo:
+                _process_sbom_background(ctx, [broken_path], scan.id, variant.id)
 
-    def test_process_read_inputs_failure_sets_error_status(self, app, monkeypatch, tmp_path):
-        """A processing failure inside read_inputs is converted to an error status."""
-        from src.routes.settings import _process_sbom_background, _upload_status
+            assert str(excinfo.value) == "SBOM import failed. Check server logs for details."
+            assert not os.path.exists(broken_path)
+
+    def test_process_read_inputs_failure_raises_and_cleans_up(self, app, monkeypatch, tmp_path):
+        """A processing failure inside read_inputs is converted to a RuntimeError."""
+        from src.routes.settings import _process_sbom_background
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -1158,10 +1220,12 @@ class TestProcessSBOMBackground:
                 lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
             )
 
-            upload_id = "bg-test-read-inputs-fail"
-            _process_sbom_background(app, upload_id, [str(sbom_path)], scan.id, variant.id)
+            ctx = _register_upload_operation("upload:bg-test-read-inputs-fail")
+            with pytest.raises(RuntimeError) as excinfo:
+                _process_sbom_background(ctx, [str(sbom_path)], scan.id, variant.id)
 
-            assert _upload_status[upload_id]["status"] == "error"
+            assert str(excinfo.value) == "SBOM import failed. Check server logs for details."
+            assert not sbom_path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -2319,7 +2383,7 @@ class TestCopyAssessmentsMatchModes:
 
 class TestSBOMUploadEdgeCases:
 
-    def test_upload_corrupt_archive_returns_400(self, client):
+    def test_upload_corrupt_archive_returns_400(self, upload_temp_files, client):
         """A file with a .tar extension that is not a valid tar archive triggers a 400."""
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
@@ -2332,11 +2396,11 @@ class TestSBOMUploadEdgeCases:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
         assert "Could not extract archive" in resp.get_json()["error"]
+        assert upload_temp_files
+        assert not any(os.path.exists(path) for path in upload_temp_files)
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_unknown_format_json_returns_400(self, mock_thread, client):
+    def test_upload_unknown_format_json_returns_400(self, upload_temp_files, queued_import, client):
         """Valid JSON that does not match any known SBOM format is rejected."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         unknown = json.dumps({"totally": "unrecognized", "structure": True}).encode()
@@ -2348,11 +2412,13 @@ class TestSBOMUploadEdgeCases:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
         assert "Unrecognized SBOM format" in resp.get_json()["error"]
+        assert queued_import["calls"] == []
+        assert not any(os.path.exists(path) for path in upload_temp_files)
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_second_file_error_cleans_up_first_file(self, mock_thread, client):
+    def test_upload_second_file_error_cleans_up_first_file(
+        self, upload_temp_files, queued_import, client,
+    ):
         """When the second uploaded file is invalid, temp files from the first are cleaned up."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         data = MultiDict([
@@ -2364,11 +2430,12 @@ class TestSBOMUploadEdgeCases:
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
         assert "Could not parse" in resp.get_json()["error"]
+        assert queued_import["calls"] == []
+        assert len(upload_temp_files) == 2
+        assert not any(os.path.exists(path) for path in upload_temp_files)
 
-    @patch("src.routes.settings.threading.Thread")
-    def test_upload_file_with_empty_filename_skipped(self, mock_thread, client):
+    def test_upload_file_with_empty_filename_skipped(self, queued_import, client):
         """A file entry with an empty filename is skipped; the valid file still processes."""
-        mock_thread.return_value = MagicMock()
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         data = MultiDict([
@@ -2379,7 +2446,8 @@ class TestSBOMUploadEdgeCases:
         ])
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 202
-        mock_thread.return_value.start.assert_called_once()
+        assert len(queued_import["calls"]) == 1
+        assert len(queued_import["calls"][0]["file_paths"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2389,9 +2457,8 @@ class TestSBOMUploadEdgeCases:
 class TestProcessSBOMBackgroundEpss:
 
     def test_epss_failure_is_swallowed_and_processing_completes(self, app, monkeypatch):
-        """A post_treatment (EPSS) exception is caught; final status is still 'done'."""
-        import tempfile as _tempfile
-        from src.routes.settings import _process_sbom_background, _upload_status
+        """A post_treatment (EPSS) exception is caught; the import still completes."""
+        from src.routes.settings import _process_sbom_background
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -2409,10 +2476,14 @@ class TestProcessSBOMBackgroundEpss:
             variant = Variant.create("EpssFailVariant", project.id)
             scan = Scan.create("", variant.id)
 
-            upload_id = "epss-coverage-test"
-            _process_sbom_background(app, upload_id, [], scan.id, variant.id)
+            ctx = _register_upload_operation("upload:epss-coverage-test")
+            _process_sbom_background(ctx, [], scan.id, variant.id)
+            ctx.flush()
 
-            assert _upload_status[upload_id]["status"] == "done"
+            operation = registry.get("upload:epss-coverage-test")
+            assert operation["progress"] == {
+                "current": 3, "total": 3, "message": "SBOM imported successfully.",
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -2421,9 +2492,9 @@ class TestProcessSBOMBackgroundEpss:
 
 class TestProcessSBOMBackgroundRefreshIsolation:
 
-    def test_provider_reported_failure_is_in_upload_status(self, app, monkeypatch):
+    def test_provider_reported_failure_reaches_the_operation(self, app, monkeypatch):
         """A provider that swallows a lookup failure still marks its refresh incomplete."""
-        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.routes.settings import _process_sbom_background
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -2450,17 +2521,18 @@ class TestProcessSBOMBackgroundRefreshIsolation:
             variant = Variant.create("ProviderResultVariant", project.id)
             scan = Scan.create("", variant.id)
 
-            upload_id = "provider-result-failure-test"
-            _process_sbom_background(app, upload_id, [], scan.id, variant.id, {"nvd"})
+            ctx = _register_upload_operation("upload:provider-result-failure-test")
+            _process_sbom_background(ctx, [], scan.id, variant.id, {"nvd"})
+            ctx.flush()
 
-            status = _upload_status[upload_id]
-            assert status["status"] == "done"
-            assert "NVD refresh failed" in status["message"]
+            operation = registry.get("upload:provider-result-failure-test")
+            assert "NVD refresh failed" in operation["progress"]["message"]
+            assert any("NVD refresh failed" in line for line in operation["logs"])
 
     def test_one_source_failure_does_not_block_the_others(self, app, monkeypatch):
         """A failure in one selected refresh source must not prevent the
         remaining selected sources from running."""
-        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.routes.settings import _process_sbom_background
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -2497,19 +2569,18 @@ class TestProcessSBOMBackgroundRefreshIsolation:
             variant = Variant.create("PartialFailVariant", project.id)
             scan = Scan.create("", variant.id)
 
-            upload_id = "partial-fail-test"
-            _process_sbom_background(
-                app, upload_id, [], scan.id, variant.id, {"epss", "nvd"},
-            )
+            ctx = _register_upload_operation("upload:partial-fail-test")
+            _process_sbom_background(ctx, [], scan.id, variant.id, {"epss", "nvd"})
+            ctx.flush()
 
             assert called == ["epss", "nvd"]
-            status = _upload_status[upload_id]
-            assert status["status"] == "done"
-            assert "EPSS refresh failed" in status["message"]
+            operation = registry.get("upload:partial-fail-test")
+            assert "EPSS refresh failed" in operation["progress"]["message"]
+            assert any("EPSS refresh failed" in line for line in operation["logs"])
 
     def test_no_arg_defaults_to_epss(self, app, monkeypatch):
         """Callers that omit refresh_sources keep the historical epss-only default."""
-        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.routes.settings import _process_sbom_background
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -2518,12 +2589,27 @@ class TestProcessSBOMBackgroundRefreshIsolation:
         monkeypatch.setattr("src.bin.cmd_process.read_inputs", lambda *a, **k: None)
         monkeypatch.setattr("src.bin.cmd_process.populate_observations", lambda *a, **k: None)
 
+        selected: list[set[str]] = []
+
+        def recording_refresh(controllers, vulnerability_ids, refresh_sources, on_source_start=None):
+            selected.append(set(refresh_sources))
+            return []
+
+        monkeypatch.setattr(
+            "src.routes.settings.refresh_vulnerability_sources", recording_refresh,
+        )
+
         with app.app_context():
             project = Project.create("NoArgDefaultProject")
             variant = Variant.create("NoArgDefaultVariant", project.id)
             scan = Scan.create("", variant.id)
 
-            upload_id = "no-arg-default-test"
-            _process_sbom_background(app, upload_id, [], scan.id, variant.id)
+            ctx = _register_upload_operation("upload:no-arg-default-test")
+            _process_sbom_background(ctx, [], scan.id, variant.id)
+            ctx.flush()
 
-            assert _upload_status[upload_id]["status"] == "done"
+            assert selected == [{"epss"}]
+            operation = registry.get("upload:no-arg-default-test")
+            assert operation["progress"] == {
+                "current": 3, "total": 3, "message": "SBOM imported successfully.",
+            }
