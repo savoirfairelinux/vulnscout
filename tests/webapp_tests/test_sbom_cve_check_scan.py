@@ -1,38 +1,28 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for the sbom-cve-check scan trigger and status endpoints.
+"""sbom-cve-check scan behaviour, exercised through ``run_scc_scan``.
 
-Covers routes/scan_triggers.py lines 744-900, 905.
+The job reports through its :class:`JobContext`, so progress and log
+assertions read the operation back from the registry.  Failures are raised
+rather than recorded by the job itself; the queue is what turns them into an
+``error`` operation.
 """
 
-import json
 import os
-import uuid
 import pytest
 from unittest.mock import patch, MagicMock
 
 from src.bin.webapp import create_app
+from src.controllers.job_context import JobContext
+from src.controllers.operation_registry import KIND_SCAN, LANE_PIPELINE, registry
+from src.controllers.scan_jobs import run_scc_scan
 from src.extensions import db as _db
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _sync_thread_patch():
-    """Run background scan threads synchronously in tests."""
-    return patch(
-        "threading.Thread",
-        side_effect=lambda **kwargs: type(
-            "SyncThread", (), {
-                "_target": kwargs.get("target"),
-                "start": lambda self: kwargs.get("target")(),
-                "daemon": True,
-            }
-        )(),
-    )
-
 
 class _SimpleComputed:
     """Minimal stand-in for sbom_cve_check ComputedVulnInfo."""
@@ -43,6 +33,26 @@ class _SimpleComputed:
     external_refs = []
     cvss_metrics = []
     vex_assessment = None
+
+
+def _context(variant_id, **options):
+    """Register an operation and return the context its job would receive."""
+    op_id = f"scan:scc:{variant_id}"
+    registry.create(
+        op_id=op_id, kind=KIND_SCAN, source="scc",
+        label="sbom-cve-check scan", lane=LANE_PIPELINE,
+    )
+    return JobContext(op_id, {"variant_id": variant_id, **options})
+
+
+def _run(app, ctx):
+    """Run the job the way the queue does, then publish what it buffered."""
+    with app.app_context():
+        try:
+            run_scc_scan(ctx)
+        finally:
+            ctx.flush()
+    return registry.get(ctx.op_id)
 
 
 # ---------------------------------------------------------------------------
@@ -95,224 +105,118 @@ def app(tmp_path):
 
 
 @pytest.fixture()
-def client(app):
-    return app.test_client()
-
-
-@pytest.fixture()
 def ids(app):
     return app._test_ids
 
 
-# ---------------------------------------------------------------------------
-# sbom-cve-check scan — status route (line 905)
-# ---------------------------------------------------------------------------
-
-class TestSbomCveCheckScanStatus:
-    def test_idle_when_never_started(self, client):
-        """Covers line 905: return scan_status_response(...)"""
-        fake_id = str(uuid.uuid4())
-        resp = client.get(f"/api/variants/{fake_id}/sbom-cve-check-scan/status")
-        assert resp.status_code == 200
-        data = json.loads(resp.data)
-        assert data["status"] == "idle"
-
-    def test_invalid_variant_id_status(self, client):
-        resp = client.get("/api/variants/not-a-uuid/sbom-cve-check-scan/status")
-        assert resp.status_code == 400
-
-    @patch("threading.Thread")
-    def test_running_after_trigger(self, mock_thread, client, ids):
-        mock_t = MagicMock()
-        mock_thread.return_value = mock_t
-        with patch("src.controllers.scc_engine.get_engine"):
-            client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        resp = client.get(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan/status")
-        assert resp.status_code == 200
-        data = json.loads(resp.data)
-        assert data["status"] == "running"
+@pytest.fixture(autouse=True)
+def clean_registry():
+    registry.clear()
+    yield
+    registry.clear()
 
 
 # ---------------------------------------------------------------------------
-# sbom-cve-check scan — trigger route (lines 744-755+)
+# sbom-cve-check scan job
 # ---------------------------------------------------------------------------
 
-class TestTriggerSbomCveCheckScan:
-    def test_invalid_variant_id(self, client):
-        resp = client.post("/api/variants/not-a-uuid/sbom-cve-check-scan")
-        assert resp.status_code == 400
-        assert b"Invalid variant id" in resp.data
-
-    def test_variant_not_found(self, client):
-        fake_id = str(uuid.uuid4())
-        resp = client.post(f"/api/variants/{fake_id}/sbom-cve-check-scan")
-        assert resp.status_code == 404
-        assert b"Variant not found" in resp.data
-
-    @patch("threading.Thread")
-    def test_scan_starts_successfully(self, mock_thread, client, ids):
-        """Covers lines 749-755: vid_str, init_progress, thread creation."""
-        mock_t = MagicMock()
-        mock_thread.return_value = mock_t
-        with patch("src.controllers.scc_engine.get_engine"):
-            resp = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        assert resp.status_code == 202
-        data = json.loads(resp.data)
-        assert data["status"] == "started"
-        assert data["variant_id"] == ids["variant_id"]
-        mock_t.start.assert_called_once()
-
-    @patch("threading.Thread")
-    def test_scan_already_running(self, mock_thread, client, ids):
-        """Covers the 409 already-in-progress branch."""
-        mock_t = MagicMock()
-        mock_thread.return_value = mock_t
-        with patch("src.controllers.scc_engine.get_engine"):
-            resp1 = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-            assert resp1.status_code == 202
-            resp2 = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-            assert resp2.status_code == 409
-            assert b"already in progress" in resp2.data
-
-    def test_scan_engine_failure(self, client, ids):
-        """Covers lines ~808-812: get_engine() raises → set_error + early return."""
+class TestSbomCveCheckScan:
+    def test_unavailable_advisory_databases_fail_the_scan(self, app, ids):
+        """A database that cannot be loaded aborts the scan with its cause."""
+        ctx = _context(ids["variant_id"])
         with patch("src.controllers.scc_engine.get_engine",
                    side_effect=RuntimeError("engine unavailable")):
-            with _sync_thread_patch():
-                resp = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        assert resp.status_code == 202
+            with pytest.raises(RuntimeError, match="Failed to load CVE databases"):
+                _run(app, ctx)
 
-        resp_s = client.get(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "engine unavailable" in data.get("error", "") or any(
-            "Failed to load CVE databases" in log
-            for log in data.get("logs", [])
-        )
+        logs = registry.get(ctx.op_id)["logs"]
+        assert any("Loading CVE databases" in line for line in logs)
 
-    def test_scan_empty_results(self, client, ids):
-        """Covers most of _do_sbom_cve_check_scan with an engine that returns no vulns.
+    def test_package_without_matches_is_reported_as_clean(self, app, ids):
+        """A package the engine returns nothing for is logged as clean."""
+        engine = MagicMock()
+        engine.applicable_vulns.return_value = iter([])
 
-        This covers the happy path including:
-        - _SccLogForwarder class definition and usage
-        - logger level manipulation
-        - scan + writer creation
-        - per-package loop with 'no vulnerabilities' log
-        - writer.flush() call
-        - done state update
-        """
-        mock_engine = MagicMock()
-        mock_engine.applicable_vulns.return_value = iter([])
+        ctx = _context(ids["variant_id"])
+        with patch("src.controllers.scc_engine.get_engine", return_value=engine):
+            operation = _run(app, ctx)
 
-        with patch("src.controllers.scc_engine.get_engine", return_value=mock_engine):
-            with _sync_thread_patch():
-                resp = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        assert resp.status_code == 202
+        assert operation["error"] is None
+        assert any("no vulnerabilities" in line for line in operation["logs"])
+        assert operation["progress"]["message"].startswith("Found 0 vulnerabilities")
 
-        resp_s = client.get(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-        assert any("no vulnerabilities" in log for log in data.get("logs", []))
+    def test_matched_vulnerabilities_are_listed_in_the_log(self, app, ids):
+        """Persisted CVE identifiers appear in the per-package log line."""
+        engine = MagicMock()
+        engine.applicable_vulns.return_value = iter([(_SimpleComputed(), "affected")])
 
-    def test_scan_with_vulnerabilities_found(self, client, ids):
-        """Covers the 'has vulns' log path when persisted_ids is non-empty."""
-        computed = _SimpleComputed()
-        mock_engine = MagicMock()
-        mock_engine.applicable_vulns.return_value = iter([(computed, "affected")])
+        ctx = _context(ids["variant_id"])
+        with patch("src.controllers.scc_engine.get_engine", return_value=engine):
+            operation = _run(app, ctx)
 
-        with patch("src.controllers.scc_engine.get_engine", return_value=mock_engine):
-            with _sync_thread_patch():
-                resp = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        assert resp.status_code == 202
+        assert operation["error"] is None
+        assert any("CVE-2024-SCCTEST-01" in line for line in operation["logs"])
 
-        resp_s = client.get(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-        # The log should mention the CVE found
-        all_logs = " ".join(data.get("logs", []))
-        assert "CVE-2024-SCCTEST-01" in all_logs or "vuln" in all_logs.lower()
+    def test_package_level_failure_is_logged_and_scan_continues(self, app, ids):
+        """One unscannable package does not abort the whole run."""
+        engine = MagicMock()
+        engine.applicable_vulns.side_effect = RuntimeError("pkg scan failed")
 
-    def test_scan_per_package_exception(self, client, ids):
-        """Covers the except block inside the per-package loop."""
-        mock_engine = MagicMock()
-        mock_engine.applicable_vulns.side_effect = RuntimeError("pkg scan failed")
+        ctx = _context(ids["variant_id"])
+        with patch("src.controllers.scc_engine.get_engine", return_value=engine):
+            operation = _run(app, ctx)
 
-        with patch("src.controllers.scc_engine.get_engine", return_value=mock_engine):
-            with _sync_thread_patch():
-                resp = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        assert resp.status_code == 202
+        assert operation["error"] is None
+        assert any("ERROR" in line for line in operation["logs"])
+        assert any("pkg scan failed" in line for line in operation["logs"])
 
-        resp_s = client.get(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan/status")
-        data = json.loads(resp_s.data)
-        # Status should be done (the outer try/except completes) or error
-        assert data["status"] in ("done", "error")
-        all_logs = " ".join(data.get("logs", []))
-        assert "ERROR" in all_logs or "pkg scan failed" in all_logs
-
-    def test_scan_no_sbom_scan_for_variant(self, app, client):
-        """Line 772: pkg_err → early return when variant has no SBOM scan.
-
-        Creates a fresh variant with only a 'tool' scan — so
-        active_sbom_scan_ids_for_variant returns empty, pkg_err=True.
-        """
+    def test_variant_without_sbom_scan_fails(self, app):
+        """A variant holding only tool scans has no package set to scan."""
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
+
         with app.app_context():
             project = Project.create("NoSbomProj")
             variant = Variant.create("NoSbomVariant", project.id)
             # Only a tool scan — NOT an sbom scan
             Scan.create("tool only", variant.id, scan_type="tool")
-            from src.extensions import db as _db
             _db.session.commit()
             vid = str(variant.id)
 
+        ctx = _context(vid)
         with patch("src.controllers.scc_engine.get_engine"):
-            with _sync_thread_patch():
-                resp = client.post(f"/api/variants/{vid}/sbom-cve-check-scan")
-        assert resp.status_code == 202
+            with pytest.raises(RuntimeError, match="No SBOM scan found"):
+                _run(app, ctx)
 
-        resp_s = client.get(f"/api/variants/{vid}/sbom-cve-check-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "SBOM" in data.get("error", "") or "packages" in data.get("error", "").lower()
-
-    def test_scan_scc_log_forwarded_to_progress(self, client, ids):
-        """Line 792: _SccLogForwarder.emit is exercised when sbom_cve_check logs."""
-        mock_engine = MagicMock()
-        mock_engine.applicable_vulns.return_value = iter([])
+    def test_engine_library_output_reaches_the_operation_log(self, app, ids):
+        """Both ``sbom_cve_check`` logging and git sync progress are forwarded."""
+        engine = MagicMock()
+        engine.applicable_vulns.return_value = iter([])
 
         def _engine_that_logs(progress=None):
             import logging
             logging.getLogger("sbom_cve_check").info("test-forwarder-msg")
             progress("Synchronizing nvd-fkie: Receiving objects: 50%")
-            return mock_engine
+            return engine
 
-        with patch("src.controllers.scc_engine.get_engine", side_effect=_engine_that_logs):
-            with _sync_thread_patch():
-                resp = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        assert resp.status_code == 202
+        ctx = _context(ids["variant_id"])
+        with patch("src.controllers.scc_engine.get_engine",
+                   side_effect=_engine_that_logs):
+            operation = _run(app, ctx)
 
-        resp_s = client.get(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-        all_logs = " ".join(data.get("logs", []))
-        assert "test-forwarder-msg" in all_logs
-        assert "Synchronizing nvd-fkie: Receiving objects: 50%" in all_logs
+        assert operation["error"] is None
+        assert "test-forwarder-msg" in operation["logs"]
+        assert "Synchronizing nvd-fkie: Receiving objects: 50%" in operation["logs"]
 
-    def test_scan_outer_exception_handler(self, client, ids):
-        """Lines 889-891: outer except block when Scan.create raises unexpectedly."""
-        mock_engine = MagicMock()
-        mock_engine.applicable_vulns.return_value = iter([])
+    def test_unexpected_persistence_failure_fails_the_scan(self, app, ids):
+        """A crash while recording the scan propagates instead of being swallowed."""
+        engine = MagicMock()
+        engine.applicable_vulns.return_value = iter([])
 
-        with patch("src.controllers.scc_engine.get_engine", return_value=mock_engine):
-            with patch("src.routes.scan_triggers.Scan.create",
+        ctx = _context(ids["variant_id"])
+        with patch("src.controllers.scc_engine.get_engine", return_value=engine):
+            with patch("src.controllers.scan_jobs.Scan.create",
                        side_effect=RuntimeError("db crashed unexpectedly")):
-                with _sync_thread_patch():
-                    resp = client.post(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan")
-        assert resp.status_code == 202
-
-        resp_s = client.get(f"/api/variants/{ids['variant_id']}/sbom-cve-check-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "db crashed" in data.get("error", "")
+                with pytest.raises(RuntimeError, match="db crashed unexpectedly"):
+                    _run(app, ctx)
