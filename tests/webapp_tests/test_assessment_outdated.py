@@ -696,7 +696,7 @@ class TestOutdatedFlag:
         ("command", "expected"),
         [
             ("delete-empty-scans", "Deleted 0 empty scans"),
-            ("delete-orphaned-vulnerabilities", "Deleted 0 orphaned vulnerabilities"),
+            ("delete-orphaned-vulns", "Deleted 0 orphaned vulnerabilities"),
         ],
     )
     def test_additional_cleanup_cli_commands(self, command, expected):
