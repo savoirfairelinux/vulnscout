@@ -25,6 +25,8 @@ import GHSAProgressHandler from "../handlers/ghsa_progress";
 import type { GHSAProgress } from "../handlers/ghsa_progress";
 import EUVDProgressHandler from "../handlers/euvd_progress";
 import type { EUVDProgress } from "../handlers/euvd_progress";
+import useDismissablePopover from "../hooks/useDismissablePopover";
+import PopoverSurface from "../components/PopoverSurface";
 
 type SourceBanner = { message: string; type: 'error' | 'success' } | null;
 
@@ -203,20 +205,7 @@ function PublishedDateFilter({
     const isDisabled = (nvdProgress?.in_progress ?? false) || (!nvdReady && !hasAnyPublishedDate);
     const hasActiveFilter = filterType !== '' && (dateValue || daysValue || (dateFrom && dateTo));
 
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-                setIsOpen(false);
-            }
-        };
-
-        if (isOpen) {
-            document.addEventListener("mousedown", handleClickOutside);
-        }
-        return () => {
-            document.removeEventListener("mousedown", handleClickOutside);
-        };
-    }, [isOpen]);
+    useDismissablePopover(isOpen, dropdownRef, () => setIsOpen(false));
 
     const clearFilters = () => {
         setFilterType('');
@@ -1634,49 +1623,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         return () => document.removeEventListener('keydown', handleKeyPress);
     }, [focusedRowIndex, searchFilteredData, handleEditClick]);
 
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (
-                shortcutDropdownRef.current &&
-                shortcutButtonRef.current &&
-                !shortcutDropdownRef.current.contains(event.target as Node) &&
-                !shortcutButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowShortcutHelper(false);
-            }
-            if (
-                searchHelperDropdownRef.current &&
-                searchHelperButtonRef.current &&
-                !searchHelperDropdownRef.current.contains(event.target as Node) &&
-                !searchHelperButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowSearchHelper(false);
-            }
-        };
-
-        if (showShortcutHelper || showSearchHelper) {
-            document.addEventListener('mousedown', handleClickOutside);
-        }
-
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [showShortcutHelper, showSearchHelper]);
-
-    // Close "More Filters" on click outside
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (moreFiltersRef.current && !moreFiltersRef.current.contains(event.target as Node)) {
-                setShowMoreFilters(false);
-            }
-        };
-        if (showMoreFilters) {
-            document.addEventListener('mousedown', handleClickOutside);
-        }
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [showMoreFilters]);
+    useDismissablePopover(showShortcutHelper, [shortcutButtonRef, shortcutDropdownRef], () => setShowShortcutHelper(false));
+    useDismissablePopover(showSearchHelper, [searchHelperButtonRef, searchHelperDropdownRef], () => setShowSearchHelper(false));
+    useDismissablePopover(showMoreFilters, moreFiltersRef, () => setShowMoreFilters(false));
 
 
 
@@ -1730,9 +1679,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     <FontAwesomeIcon icon={faCircleInfo} />
                 </button>
                 {showSearchHelper && (
-                    <div
+                    <PopoverSurface
                         ref={searchHelperDropdownRef}
-                        className="absolute left-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                        className="left-0 right-auto w-[400px]"
                     >
                         <h3 className="font-bold text-white mb-3">Search Syntax</h3>
                         <div className="space-y-2">
@@ -1743,7 +1692,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    </PopoverSurface>
                 )}
             </div>
 
@@ -1980,9 +1929,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     <FontAwesomeIcon icon={faBook} />
                 </a>
                 {showShortcutHelper && (
-                    <div
+                    <PopoverSurface
                         ref={shortcutDropdownRef}
-                        className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                        className="w-[400px]"
                     >
                         <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
                         <div className="space-y-2 text-gray-100">
@@ -1993,7 +1942,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    </PopoverSurface>
                 )}
 
                 <button

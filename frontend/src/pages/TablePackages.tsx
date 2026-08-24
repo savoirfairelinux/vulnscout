@@ -14,6 +14,8 @@ import Vulnerabilities from '../handlers/vulnerabilities';
 import MessageBanner from '../components/MessageBanner';
 import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import { useLocalStorageState } from '../handlers/localStorage';
+import useDismissablePopover from '../hooks/useDismissablePopover';
+import PopoverSurface from '../components/PopoverSurface';
 
 type Props = {
     packages: Package[];
@@ -105,42 +107,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         return () => document.removeEventListener('keydown', handleKeyPress);
     }, []);
 
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (
-                shortcutDropdownRef.current &&
-                shortcutButtonRef.current &&
-                !shortcutDropdownRef.current.contains(event.target as Node) &&
-                !shortcutButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowShortcutHelper(false);
-            }
-            if (
-                searchHelperDropdownRef.current &&
-                searchHelperButtonRef.current &&
-                !searchHelperDropdownRef.current.contains(event.target as Node) &&
-                !searchHelperButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowSearchHelper(false);
-            }
-            if (
-                matchConditionHelperDropdownRef.current &&
-                matchConditionHelperButtonRef.current &&
-                !matchConditionHelperDropdownRef.current.contains(event.target as Node) &&
-                !matchConditionHelperButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowMatchConditionHelper(false);
-            }
-        };
-
-        if (showShortcutHelper || showSearchHelper || showMatchConditionHelper) {
-            document.addEventListener('mousedown', handleClickOutside);
-        }
-
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [showShortcutHelper, showSearchHelper, showMatchConditionHelper]);
+    useDismissablePopover(showShortcutHelper, [shortcutButtonRef, shortcutDropdownRef], () => setShowShortcutHelper(false));
+    useDismissablePopover(showSearchHelper, [searchHelperButtonRef, searchHelperDropdownRef], () => setShowSearchHelper(false));
+    useDismissablePopover(showMatchConditionHelper, [matchConditionHelperButtonRef, matchConditionHelperDropdownRef], () => setShowMatchConditionHelper(false));
 
     const sources_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
         for (const source of pkg.source) {
@@ -578,9 +547,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     <FontAwesomeIcon icon={faCircleQuestion} />
                 </button>
                 {showSearchHelper && (
-                    <div
+                    <PopoverSurface
                         ref={searchHelperDropdownRef}
-                        className="absolute left-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                        className="left-0 right-auto w-[400px]"
                     >
                         <h3 className="font-bold text-white mb-3">Search Syntax</h3>
                         <div className="space-y-2">
@@ -591,7 +560,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    </PopoverSurface>
                 )}
             </div>
 
@@ -622,10 +591,10 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     <FontAwesomeIcon icon={faCircleInfo} />
                 </button>
                 {showMatchConditionHelper && (
-                    <div
+                    <PopoverSurface
                         id="match-condition-help"
                         ref={matchConditionHelperDropdownRef}
-                        className="absolute right-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[360px] text-sm"
+                        className="w-[360px]"
                     >
                         <h3 className="font-bold text-white mb-2">Match condition</h3>
                         <div className="space-y-2 text-gray-100">
@@ -634,7 +603,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                             <p>Facts: <code className="text-cyan-300">cvss</code>, <code className="text-cyan-300">cvss_min</code>, <code className="text-cyan-300">epss</code>, <code className="text-cyan-300">effort</code>, <code className="text-cyan-300">effort_min</code>, <code className="text-cyan-300">effort_max</code>, <code className="text-cyan-300">fixed</code>, <code className="text-cyan-300">ignored</code>, <code className="text-cyan-300">affected</code>, <code className="text-cyan-300">pending</code>, and <code className="text-cyan-300">new</code>.</p>
                             <p>Examples: <code className="text-cyan-300">cvss &gt;= 7 and pending</code>; <code className="text-cyan-300">epss &gt;= 10% or fixed</code>.</p>
                         </div>
-                    </div>
+                    </PopoverSurface>
                 )}
             </div>
 
@@ -705,9 +674,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     <FontAwesomeIcon icon={faBook} />
                 </a>
                 {showShortcutHelper && (
-                    <div
+                    <PopoverSurface
                         ref={shortcutDropdownRef}
-                        className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                        className="w-[400px]"
                     >
                         <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
                         <div className="space-y-2 text-gray-100">
@@ -718,7 +687,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    </PopoverSurface>
                 )}
 
                 <button
