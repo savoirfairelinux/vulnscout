@@ -1,7 +1,5 @@
-import { useEffect } from 'react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faXmark } from '@fortawesome/free-solid-svg-icons';
 import type { Variant } from '../handlers/variant';
+import ModalShell, { ModalActions, ModalButton } from './ModalShell';
 
 type Props = {
     mode: 'import' | 'export';
@@ -44,14 +42,6 @@ function ReviewTransferModal({
     const supportsMultipleVariants = !isOpenVex;
     const isUpdateExport = mode === 'export' && exportMode === 'update';
 
-    useEffect(() => {
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onCancel();
-        };
-        document.addEventListener('keydown', onKeyDown);
-        return () => document.removeEventListener('keydown', onKeyDown);
-    }, [onCancel]);
-
     const toggleVariant = (variantId: string) => {
         onSelectedVariantIdsChange(
             selectedVariantIds.includes(variantId)
@@ -60,17 +50,27 @@ function ReviewTransferModal({
         );
     };
 
-    return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="review-transfer-title">
-            <div className="w-full max-w-lg rounded-lg border border-gray-600 bg-gray-800 shadow-xl">
-                <div className="flex items-center justify-between border-b border-gray-600 px-5 py-4">
-                    <h2 id="review-transfer-title" className="text-lg font-semibold text-white">{title}</h2>
-                    <button type="button" onClick={onCancel} aria-label="Close" className="h-8 w-8 text-gray-300 hover:text-white">
-                        <FontAwesomeIcon icon={faXmark} />
-                    </button>
-                </div>
+    const footer = (
+        <ModalActions>
+            <ModalButton onClick={onCancel}>Cancel</ModalButton>
+            <ModalButton variant="primary" onClick={onConfirm} disabled={(needsVariantSelection && (isOpenVex ? selectedVariantIds.length !== 1 : selectedVariantIds.length === 0)) || (isUpdateExport && (!existingFileName || Boolean(existingFileError)))}>
+                {mode === 'export' ? isUpdateExport ? 'Update export' : 'Export' : 'Choose file'}
+            </ModalButton>
+        </ModalActions>
+    );
 
-                <div className="space-y-5 p-5">
+    return (
+        <ModalShell
+            isOpen={true}
+            title={title}
+            titleId="review-transfer-title"
+            onClose={onCancel}
+            closeLabel="Close"
+            closeOnBackdrop={false}
+            size="compact"
+            contentClassName="space-y-5 p-5 md:p-5"
+            footer={footer}
+        >
                     {mode === 'export' && (
                         <fieldset>
                             <legend className="mb-2 text-sm font-semibold text-gray-200">Export method</legend>
@@ -157,16 +157,7 @@ function ReviewTransferModal({
                             </div>
                         </fieldset>
                     )}
-                </div>
-
-                <div className="flex justify-end gap-3 border-t border-gray-600 px-5 py-4">
-                    <button type="button" onClick={onCancel} className="rounded border border-gray-500 px-4 py-2 text-sm text-gray-200 hover:bg-gray-700">Cancel</button>
-                    <button type="button" onClick={onConfirm} disabled={(needsVariantSelection && (isOpenVex ? selectedVariantIds.length !== 1 : selectedVariantIds.length === 0)) || (isUpdateExport && (!existingFileName || Boolean(existingFileError)))} className="rounded bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50">
-                        {mode === 'export' ? isUpdateExport ? 'Update export' : 'Export' : 'Choose file'}
-                    </button>
-                </div>
-            </div>
-        </div>
+        </ModalShell>
     );
 }
 

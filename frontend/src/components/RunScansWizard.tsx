@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBug, faCircleQuestion, faCrosshairs, faLeaf, faPlay, faShieldHalved, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faBug, faCircleQuestion, faCrosshairs, faLeaf, faPlay, faShieldHalved } from "@fortawesome/free-solid-svg-icons";
 import type { Variant } from "../handlers/variant";
 import { refreshSourcesForScans } from "../helpers/refreshSources";
+import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
 type Props = {
     isOpen: boolean;
@@ -68,15 +69,6 @@ export default function RunScansWizard({
         dialogRef.current?.focus();
     }, [isOpen]);
 
-    useEffect(() => {
-        if (!isOpen) return;
-        function handleEscape(event: KeyboardEvent) {
-            if (event.key === "Escape") onClose();
-        }
-        document.addEventListener("keydown", handleEscape);
-        return () => document.removeEventListener("keydown", handleEscape);
-    }, [isOpen, onClose]);
-
     if (!isOpen) return null;
 
     const availableRefreshTypes: Set<string> = refreshSourcesForScans(selectedScanTypes);
@@ -85,35 +77,40 @@ export default function RunScansWizard({
         : new Set([...selectedRefreshTypes].filter(type => availableRefreshTypes.has(type)));
     const nextDisabled = (step === 1 && selectedScanTypes.size === 0)
         || (step === 2 && selectedVariantIds.size === 0);
+    const footer = (
+        <ModalActions align="between">
+            <ModalButton onClick={() => setStep(value => value - 1)} disabled={step === 1}>Back</ModalButton>
+            {step < reviewStep ? (
+                <ModalButton variant="primary" onClick={() => setStep(value => value + 1)} disabled={nextDisabled}>Next</ModalButton>
+            ) : (
+                <ModalButton variant="primary" onClick={onLaunch}><FontAwesomeIcon icon={faPlay} className="mr-2" />Launch scans</ModalButton>
+            )}
+        </ModalActions>
+    );
 
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-            onMouseDown={(event) => {
-                if (event.target === event.currentTarget) onClose();
-            }}
+        <ModalShell
+            isOpen={isOpen}
+            title="Run scans"
+            subtitle={`Step ${step} of ${reviewStep}`}
+            titleId="scan-wizard-title"
+            onClose={onClose}
+            closeLabel="Close scan wizard"
+            size="standard"
+            panelRef={dialogRef}
+            panelTabIndex={-1}
+            contentClassName="min-h-72 px-6 py-5 md:p-5 md:px-6"
+            footer={footer}
+            headerContent={
+                <ol className="mt-4 grid grid-cols-5 gap-2 text-xs">
+                    {stepLabels.map((label, index) => (
+                        <li key={label} className={index + 1 <= step ? "text-cyan-300" : "text-neutral-500"}>
+                            <span className="mr-1 font-semibold">{index + 1}.</span>{label}
+                        </li>
+                    ))}
+                </ol>
+            }
         >
-            <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="scan-wizard-title" className="w-full max-w-xl rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl outline-none">
-                <div className="border-b border-neutral-700 px-6 py-4">
-                    <div className="flex items-center justify-between gap-4">
-                        <div>
-                            <h2 id="scan-wizard-title" className="text-lg font-semibold text-white">Run scans</h2>
-                            <p className="mt-1 text-sm text-neutral-400">Step {step} of {reviewStep}</p>
-                        </div>
-                        <button type="button" onClick={onClose} className="text-neutral-400 hover:text-white" aria-label="Close scan wizard">
-                            <FontAwesomeIcon icon={faXmark} />
-                        </button>
-                    </div>
-                    <ol className="mt-4 grid grid-cols-5 gap-2 text-xs">
-                        {stepLabels.map((label, index) => (
-                            <li key={label} className={index + 1 <= step ? "text-cyan-300" : "text-neutral-500"}>
-                                <span className="mr-1 font-semibold">{index + 1}.</span>{label}
-                            </li>
-                        ))}
-                    </ol>
-                </div>
-
-                <div className="min-h-72 px-6 py-5">
                     {step === 1 && <>
                         <h3 className="text-base font-semibold text-white">Select scans</h3>
                         <p className="mt-1 text-sm text-neutral-400">Choose the vulnerability scanners to run.</p>
@@ -232,17 +229,6 @@ export default function RunScansWizard({
                             </section>
                         </div>
                     </>}
-                </div>
-
-                <div className="flex items-center justify-between border-t border-neutral-700 px-6 py-4">
-                    <button type="button" onClick={() => setStep(value => value - 1)} disabled={step === 1} className="rounded px-3 py-1.5 text-sm font-semibold text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-600">Back</button>
-                    {step < reviewStep ? (
-                        <button type="button" onClick={() => setStep(value => value + 1)} disabled={nextDisabled} className="rounded bg-cyan-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500">Next</button>
-                    ) : (
-                        <button type="button" onClick={onLaunch} className="rounded bg-cyan-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-cyan-600"><FontAwesomeIcon icon={faPlay} className="mr-2" />Launch scans</button>
-                    )}
-                </div>
-            </div>
-        </div>
+        </ModalShell>
     );
 }

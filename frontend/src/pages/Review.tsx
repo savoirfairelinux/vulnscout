@@ -23,6 +23,9 @@ import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
 import ReviewTransferModal from '../components/ReviewTransferModal';
 import ExplicitSearchInput from '../components/ExplicitSearchInput';
+import ModalShell from '../components/ModalShell';
+import useDismissablePopover from '../hooks/useDismissablePopover';
+import PopoverSurface from '../components/PopoverSurface';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -362,32 +365,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return () => document.removeEventListener('keydown', handleKeyPress);
     }, [editingRow, editSubmitting]);
 
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (
-                shortcutDropdownRef.current &&
-                shortcutButtonRef.current &&
-                !shortcutDropdownRef.current.contains(event.target as Node) &&
-                !shortcutButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowShortcutHelper(false);
-            }
-            if (
-                searchHelperDropdownRef.current &&
-                searchHelperButtonRef.current &&
-                !searchHelperDropdownRef.current.contains(event.target as Node) &&
-                !searchHelperButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowSearchHelper(false);
-            }
-        };
-        if (showShortcutHelper || showSearchHelper) {
-            document.addEventListener('mousedown', handleClickOutside);
-        }
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [showShortcutHelper, showSearchHelper]);
+    useDismissablePopover(showShortcutHelper, [shortcutButtonRef, shortcutDropdownRef], () => setShowShortcutHelper(false));
+    useDismissablePopover(showSearchHelper, [searchHelperButtonRef, searchHelperDropdownRef], () => setShowSearchHelper(false));
 
     const statusList = useMemo(() => {
         const set = new Set<string>();
@@ -1464,9 +1443,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         <FontAwesomeIcon icon={faCircleInfo} />
                     </button>
                     {showSearchHelper && (
-                        <div
+                        <PopoverSurface
                             ref={searchHelperDropdownRef}
-                            className="absolute left-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                            className="left-0 right-auto w-[400px]"
                         >
                             <h3 className="font-bold text-white mb-3">Search Syntax</h3>
                             <div className="space-y-2">
@@ -1477,7 +1456,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                     </div>
                                 ))}
                             </div>
-                        </div>
+                        </PopoverSurface>
                     )}
                 </div>
 
@@ -1539,9 +1518,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         <FontAwesomeIcon icon={faBook} />
                     </a>
                     {showShortcutHelper && (
-                        <div
+                        <PopoverSurface
                             ref={shortcutDropdownRef}
-                            className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                            className="w-[400px]"
                         >
                             <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
                             <div className="space-y-2 text-gray-100">
@@ -1552,7 +1531,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                     </div>
                                 ))}
                             </div>
-                        </div>
+                        </PopoverSurface>
                     )}
 
                     <button
@@ -1805,28 +1784,35 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             />
 
             {editingRow && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => !editSubmitting && setEditingRow(null)}>
-                    <div className="bg-gray-900 rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <h3 className="text-base font-bold text-gray-400 mb-4 font-mono">{editingRow.vuln_id}</h3>
-                        {editSubmitting ? (
-                            <div className="flex items-center justify-center py-8">
-                                <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-                            </div>
-                        ) : (
-                            <EditAssessment
-                                assessment={editingRow}
-                                onSaveAssessment={handleSaveEdit}
-                                onCancel={() => setEditingRow(null)}
-                                triggerBanner={showMessage}
-                                availableVariants={editVariants}
-                                defaultSelectedVariantIds={editingRow._variantIds}
-                                availablePackages={editingRow.packages}
-                                defaultSelectedPackages={editingRow.packages}
-                                variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
-                            />
-                        )}
-                    </div>
-                </div>
+                <ModalShell
+                    isOpen={true}
+                    title={editingRow.vuln_id}
+                    onClose={() => setEditingRow(null)}
+                    closeLabel="Close assessment editor"
+                    closeDisabled={editSubmitting}
+                    closeOnEscape={!editSubmitting}
+                    closeOnBackdrop={!editSubmitting}
+                    size="large"
+                    contentClassName="overflow-y-auto p-6 md:p-6"
+                >
+                    {editSubmitting ? (
+                        <div className="flex items-center justify-center py-8">
+                            <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                        </div>
+                    ) : (
+                        <EditAssessment
+                            assessment={editingRow}
+                            onSaveAssessment={handleSaveEdit}
+                            onCancel={() => setEditingRow(null)}
+                            triggerBanner={showMessage}
+                            availableVariants={editVariants}
+                            defaultSelectedVariantIds={editingRow._variantIds}
+                            availablePackages={editingRow.packages}
+                            defaultSelectedPackages={editingRow.packages}
+                            variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
+                        />
+                    )}
+                </ModalShell>
             )}
         </div>
     );

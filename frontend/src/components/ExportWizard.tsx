@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBoxArchive, faDownload, faFileLines, faLayerGroup, faShieldHalved, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faBoxArchive, faDownload, faFileLines, faLayerGroup, faShieldHalved } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import { queueExport } from "../handlers/exportQueue";
+import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
 export type ExportDocument = {
     id: string;
@@ -107,15 +108,6 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         stepHeadingRef.current?.focus();
     }, [step]);
 
-    useEffect(() => {
-        if (!isOpen) return;
-        const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === "Escape" && !exporting && !embedded) onClose?.();
-        };
-        document.addEventListener("keydown", handleEscape);
-        return () => document.removeEventListener("keydown", handleEscape);
-    }, [embedded, exporting, isOpen, onClose]);
-
     if (!isOpen) return null;
 
     const navigateToStep = (nextStep: WizardStep) => {
@@ -215,34 +207,41 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         }
     };
 
-    return (
-        <div
-            className={embedded ? "w-full" : "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"}
-            onMouseDown={event => {
-                if (!embedded && event.target === event.currentTarget && !exporting) onClose?.();
-            }}
-        >
-            <div ref={dialogRef} tabIndex={-1} role={embedded ? "region" : "dialog"} aria-modal={embedded ? undefined : true} aria-labelledby="export-wizard-title" className={`w-full rounded-lg border border-gray-600 bg-gray-800 shadow-xl outline-none ${embedded ? "[&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_h3]:!text-2xl [&_h4]:!text-xl [&_input]:h-5 [&_input]:w-5" : "max-w-2xl"}`}>
-                <div className={`border-b border-neutral-700 ${embedded ? "px-10 py-8" : "px-6 py-4"}`}>
-                    <div className="flex items-center justify-between gap-4">
-                        <div>
-                            <h2 id="export-wizard-title" className={`${embedded ? "text-3xl" : "text-lg"} font-semibold text-white`}>Create export</h2>
-                            <p className="mt-1 text-sm text-neutral-400">Step {stepIndex + 1} of {activeSteps.length}</p>
-                        </div>
-                        {!embedded && <button type="button" onClick={onClose} disabled={exporting} className="text-neutral-400 hover:text-white disabled:text-neutral-600" aria-label="Close export wizard">
-                            <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
-                        </button>}
-                    </div>
-                    <ol className={`${embedded ? "mt-6" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
-                        {activeSteps.map((currentStep, index) => (
-                            <li key={currentStep} className={index <= stepIndex ? "text-cyan-300" : "text-neutral-500"}>
-                                <span aria-hidden="true" className="mr-1 font-semibold">{index + 1}.</span>{stepLabels[currentStep]}
-                            </li>
-                        ))}
-                    </ol>
-                </div>
+    const footer = (
+        <ModalActions align="between">
+            <ModalButton onClick={() => navigateToStep(activeSteps[stepIndex - 1])} disabled={stepIndex === 0 || exporting}>Back</ModalButton>
+            {step !== "documents" ? <ModalButton variant="primary" onClick={() => navigateToStep(activeSteps[stepIndex + 1])} disabled={(step === "scope" && (!project || selectedVariantIds.size === 0)) || (step === "type" && exportType === null)}>Next</ModalButton> : <ModalButton variant="primary" onClick={launchExport} disabled={selected.size === 0 || exporting}><FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />{exporting ? "Preparing export..." : "Download export"}</ModalButton>}
+        </ModalActions>
+    );
 
-                <div className={`${embedded ? "min-h-[38rem] px-10 py-9" : "min-h-80 px-6 py-5"}`}>
+    return (
+        <ModalShell
+            isOpen={isOpen}
+            embedded={embedded}
+            title="Create export"
+            subtitle={`Step ${stepIndex + 1} of ${activeSteps.length}`}
+            titleId="export-wizard-title"
+            onClose={() => onClose?.()}
+            closeLabel="Close export wizard"
+            showCloseButton={!embedded}
+            closeDisabled={exporting}
+            closeOnEscape={!exporting}
+            closeOnBackdrop={!exporting}
+            size="large"
+            panelRef={dialogRef}
+            panelTabIndex={-1}
+            contentClassName={embedded ? "min-h-[38rem] px-10 py-9 md:px-10 md:py-9" : "min-h-80 px-6 py-5 md:px-6 md:py-5"}
+            footer={footer}
+            headerContent={
+                <ol className={`${embedded ? "mt-6" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
+                    {activeSteps.map((currentStep, index) => (
+                        <li key={currentStep} className={index <= stepIndex ? "text-cyan-300" : "text-neutral-500"}>
+                            <span aria-hidden="true" className="mr-1 font-semibold">{index + 1}.</span>{stepLabels[currentStep]}
+                        </li>
+                    ))}
+                </ol>
+            }
+        >
                     {step === "scope" && <>
                         <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Project scope</h3>
                         {project ? <>
@@ -336,13 +335,6 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                         </div>
                         {error && <div role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">{error}</div>}
                     </>}
-                </div>
-
-                <div className={`flex items-center justify-between border-t border-neutral-700 ${embedded ? "px-10 py-7 [&_button]:px-6 [&_button]:py-3" : "px-6 py-4"}`}>
-                    <button type="button" onClick={() => navigateToStep(activeSteps[stepIndex - 1])} disabled={stepIndex === 0 || exporting} className="rounded px-3 py-1.5 text-sm font-semibold text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-600">Back</button>
-                    {step !== "documents" ? <button type="button" onClick={() => navigateToStep(activeSteps[stepIndex + 1])} disabled={(step === "scope" && (!project || selectedVariantIds.size === 0)) || (step === "type" && exportType === null)} className="rounded bg-cyan-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500">Next</button> : <button type="button" onClick={launchExport} disabled={selected.size === 0 || exporting} className="rounded bg-cyan-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"><FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />{exporting ? "Preparing export..." : "Download export"}</button>}
-                </div>
-            </div>
-        </div>
+        </ModalShell>
     );
 }

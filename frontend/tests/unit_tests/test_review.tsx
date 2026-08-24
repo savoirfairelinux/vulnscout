@@ -434,10 +434,7 @@ describe('Review — editing "Apply to variants"', () => {
         const user = userEvent.setup();
 
         await openEditor(user);
-        // The outermost editing overlay closes on click; the heading shows the vuln id.
-        const heading = screen.getByRole('heading', { name: 'CVE-2020-1111' });
-        const backdrop = heading.closest('.fixed');
-        fireEvent.click(backdrop as Element);
+        fireEvent.mouseDown(screen.getByTestId('modal-backdrop'));
 
         await waitFor(() => {
             expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();

@@ -1,13 +1,14 @@
-import { useEffect, useReducer, useCallback } from "react";
+import { useReducer, useCallback } from "react";
 import React from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCopy, faXmark, faChevronDown, faChevronRight } from "@fortawesome/free-solid-svg-icons";
+import { faCopy, faChevronDown, faChevronRight } from "@fortawesome/free-solid-svg-icons";
 import type {
     CopyAssessmentsPreviewGroup,
     CopyAssessmentsPreviewCandidate,
     CopyAssessmentsSelection,
     CopyAssessmentsAssessmentDetails,
 } from "../handlers/variant";
+import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -167,16 +168,6 @@ type Props = {
 function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm, onCancel }: Readonly<Props>) {
     const [state, dispatch] = useReducer(reducer, groups, buildInitialState);
 
-    // Escape key to close
-    useEffect(() => {
-        if (!isOpen) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onCancel();
-        };
-        document.addEventListener("keydown", onKey);
-        return () => document.removeEventListener("keydown", onKey);
-    }, [isOpen, onCancel]);
-
     const handleConfirm = useCallback(() => {
         const selections: CopyAssessmentsSelection[] = [];
         for (const g of groups) {
@@ -208,38 +199,43 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
         return g.candidates.some((c) => c.selected) && rowState !== undefined;
     }).length;
 
+    const footer = (
+        <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-zinc-400">
+                {selectableCount === 0
+                    ? "Nothing selected — confirm to copy nothing."
+                    : `${selectableCount} assessment${selectableCount !== 1 ? "s" : ""} will be copied.`}
+            </p>
+            <ModalActions>
+                <ModalButton
+                    onClick={onCancel}
+                >
+                    Cancel
+                </ModalButton>
+                <ModalButton
+                    variant="primary"
+                    onClick={handleConfirm}
+                >
+                    <FontAwesomeIcon icon={faCopy} className="mr-2" aria-hidden="true" />
+                    Confirm Copy
+                </ModalButton>
+            </ModalActions>
+        </div>
+    );
+
     return (
-        <div
-            data-testid="copy-review-modal-backdrop"
-            tabIndex={-1}
-            onMouseDown={(e) => {
-                if (e.target === e.currentTarget) onCancel();
-            }}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
+        <ModalShell
+            isOpen={isOpen}
+            title="Review Copy Alignments"
+            subtitle={previewMessage}
+            icon={<FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />}
+            onClose={onCancel}
+            closeLabel="Close"
+            testId="copy-review-modal-backdrop"
+            size="wide"
+            contentClassName="flex min-h-0 flex-1 flex-col p-0 md:p-0"
+            footer={footer}
         >
-            <div className="relative w-full max-w-4xl max-h-[90vh] mx-4 flex flex-col rounded-lg shadow-2xl bg-slate-800 border border-slate-600">
-
-                {/* Header */}
-                <div className="flex items-center justify-between px-5 py-4 border-b border-slate-600">
-                    <div className="flex items-center gap-2">
-                        <FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />
-                        <div>
-                            <h2 className="text-lg font-semibold text-white">Review Copy Alignments</h2>
-                            {previewMessage && (
-                                <p className="text-xs text-cyan-300 mt-0.5">{previewMessage}</p>
-                            )}
-                        </div>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={onCancel}
-                        className="text-zinc-400 hover:text-white hover:bg-slate-700 rounded-lg p-1.5 transition-colors"
-                        aria-label="Close"
-                    >
-                        <FontAwesomeIcon icon={faXmark} className="w-4 h-4" aria-hidden="true" />
-                    </button>
-                </div>
-
                 {/* Toolbar */}
                 <div className="flex items-center gap-3 px-5 py-2 border-b border-slate-700/70 bg-slate-900/30">
                     <span className="text-xs text-zinc-400">
@@ -395,33 +391,7 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                     )}
                 </div>
 
-                {/* Footer */}
-                <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-slate-600 bg-slate-900/40">
-                    <p className="text-xs text-zinc-400">
-                        {selectableCount === 0
-                            ? "Nothing selected — confirm to copy nothing."
-                            : `${selectableCount} assessment${selectableCount !== 1 ? "s" : ""} will be copied.`}
-                    </p>
-                    <div className="flex gap-3">
-                        <button
-                            type="button"
-                            onClick={onCancel}
-                            className="px-4 py-2 text-sm font-medium text-zinc-300 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleConfirm}
-                            className="px-4 py-2 text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-500 rounded-lg transition-colors"
-                        >
-                            <FontAwesomeIcon icon={faCopy} className="mr-2" aria-hidden="true" />
-                            Confirm Copy
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
+        </ModalShell>
     );
 }
 
