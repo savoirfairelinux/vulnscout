@@ -20,6 +20,7 @@ from ._common import DEFAULT_VARIANT_NAME  # noqa: F401 — intentional re-expor
 from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
     create_project_context,
     process_command,
+    refresh_vulnerability_data_command,
     _run_main,
     post_treatment,
     populate_observations,
@@ -53,6 +54,7 @@ def init_app(app) -> None:
     """Register all Flask CLI commands with *app*."""
     app.cli.add_command(create_project_context)
     app.cli.add_command(process_command)
+    app.cli.add_command(refresh_vulnerability_data_command)
     app.cli.add_command(report_command)
     app.cli.add_command(export_command)
     app.cli.add_command(export_custom_vulnscout_data_command)

@@ -14,6 +14,56 @@ beforeEach(() => {
 });
 
 describe("ScansHandler request contracts", () => {
+  test("imports exported scan JSON and preserves API errors", async () => {
+    const result = {
+      scan_id: "scan-1",
+      format: "diff",
+      imported_count: 1,
+      package_count: 2,
+      finding_count: 3,
+      vulnerability_count: 2,
+      assessment_count: 1,
+      is_first: false,
+      scans: [{
+        scan_id: "scan-1",
+        source_scan_id: "source-1",
+        format: "diff",
+        project_name: "Proj",
+        variant_name: "Var",
+        package_count: 2,
+        finding_count: 3,
+        vulnerability_count: 2,
+        assessment_count: 1,
+        is_first: false,
+      }],
+    };
+    fetchSpy.mockResolvedValueOnce(response(result, true, 201));
+    fetchSpy.mockResolvedValueOnce(response({ error: "This scan has already been imported" }, false, 409));
+
+    expect(await ScansHandler.importExport([{ scan_id: "scan-1" }])).toEqual({ ok: true, result });
+    expect(fetchSpy.mock.calls[0]).toEqual([
+      expect.stringContaining("/api/scans/import"),
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify([{ scan_id: "scan-1" }]),
+      }),
+    ]);
+    expect(await ScansHandler.importExport([{ scan_id: "scan-1" }])).toEqual({
+      ok: false,
+      error: "This scan has already been imported",
+    });
+  });
+
+  test("reports a network failure instead of throwing", async () => {
+    fetchSpy.mockRejectedValueOnce(new Error("Failed to fetch"));
+
+    const result = await ScansHandler.importExport([{ scan_id: "scan-1" }]);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("could not reach the server");
+  });
+
   test("lists scans for global, project, and variant scopes", async () => {
     const scan = { id: "scan-1", timestamp: "2026-08-07", variant_id: "variant-1", finding_count: 1 };
     fetchSpy.mockResolvedValueOnce(response([scan]));

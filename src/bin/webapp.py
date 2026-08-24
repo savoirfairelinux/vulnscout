@@ -23,6 +23,7 @@ MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
 MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
+MAX_SCAN_IMPORT_REQUEST_BYTES = 100 * 1024 * 1024
 DEFAULT_BACKGROUND_TASK_DELAY = 120.0
 
 
@@ -118,6 +119,7 @@ def create_app():
     # Allow multipart headers while ensuring Werkzeug rejects oversized bodies
     # before parsing and spooling uploaded files.
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_BYTES
+    app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"] = MAX_SCAN_IMPORT_REQUEST_BYTES
     app._INT_SCAN_FINISHED = False
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE

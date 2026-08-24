@@ -1,3 +1,5 @@
+import type { RefreshType } from "./activeScanQueue";
+
 type Variant = {
     id: string;
     name: string;
@@ -188,7 +190,7 @@ class Variants {
         projectId: string,
         variantId: string,
         files: File[],
-        refreshSources: string[] = ["epss"],
+        refreshSources: RefreshType[] = ["epss"],
     ): Promise<{ upload_id: string; scan_id: string; message: string }> {
         const formData = new FormData();
         for (const file of files) {

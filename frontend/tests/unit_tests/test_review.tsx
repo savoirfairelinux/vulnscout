@@ -273,6 +273,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         // Mutations (PUT / DELETE / POST)
         if (url.includes('/api/assessments/review/import-custom-data')) return JSON.stringify(importResult);
         if (url.includes('/api/assessments/review/import')) return JSON.stringify({ status: 'success' });
+        if (url.includes('/api/assessments/review/export-update')) return JSON.stringify({ version: 1, assessments: [] });
         if (!mutationOk) return { status: 500, body: JSON.stringify({ status: 'error' }) };
         return JSON.stringify({ status: 'success' });
     });
@@ -1534,6 +1535,80 @@ describe('Review — import and export', () => {
         expect(String(exportCall?.[0])).not.toContain('variant_id=v1');
         expect(mockedDownloadJson.mock.calls[0][1]).toContain('review_openvex_Variant_Beta_');
         expect(mockedDownloadJson.mock.calls[0][1]).toContain('.json');
+    });
+
+    test('auto-detects and updates an existing export with a generated filename', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Export'));
+        const dialog = screen.getByRole('dialog');
+        await user.click(within(dialog).getByRole('radio', { name: /^Append\/update existing file/ }));
+        const file = new File(
+            [JSON.stringify({ version: 1, assessments: [], ai_assessments: [], cvss: [], time_estimates: [] })],
+            'tracked-review.json',
+            { type: 'application/json' },
+        );
+        await user.upload(within(dialog).getByLabelText('Existing export file'), file);
+        await within(dialog).findByText(/Detected VulnScout JSON/);
+        await user.click(within(dialog).getByRole('checkbox', { name: 'Variant Beta' }));
+        await user.click(within(dialog).getByRole('button', { name: 'Update export' }));
+
+        await waitFor(() => expect(mockedDownloadJson).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/^custom_data_Variant_Alpha_\d{8}_\d{6}\.json$/)));
+        const updateCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/assessments/review/export-update'));
+        const body = (updateCall?.[1] as RequestInit).body as FormData;
+        expect(updateCall?.[1]).toMatchObject({ method: 'POST' });
+        expect(body.get('project_id')).toBe('proj1');
+        expect(body.getAll('variant_id')).toEqual(['v1']);
+        expect((body.get('file') as File).name).toBe('tracked-review.json');
+    });
+
+    test('reports unsupported existing export files before submission', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Export'));
+        const dialog = screen.getByRole('dialog');
+        await user.click(within(dialog).getByRole('radio', { name: /^Append\/update existing file/ }));
+        await user.upload(
+            within(dialog).getByLabelText('Existing export file'),
+            new File([JSON.stringify({ foo: 'bar' })], 'unsupported.json', { type: 'application/json' }),
+        );
+
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent('Unsupported export format');
+        expect(within(dialog).getByRole('button', { name: 'Update export' })).toBeDisabled();
+        expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/export-update'))).toBe(false);
+    });
+
+    test('ignores an earlier existing export file that finishes reading last', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        const reads: Array<{ reader: FileReader; file: Blob }> = [];
+        const readSpy = jest.spyOn(FileReader.prototype, 'readAsText').mockImplementation(function (this: FileReader, file: Blob) {
+            reads.push({ reader: this, file });
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Export'));
+        const dialog = screen.getByRole('dialog');
+        await user.click(within(dialog).getByRole('radio', { name: /^Append\/update existing file/ }));
+        const input = within(dialog).getByLabelText('Existing export file');
+        await user.upload(input, new File(['first'], 'first.json', { type: 'application/json' }));
+        await user.upload(input, new File(['second'], 'second.json', { type: 'application/json' }));
+
+        Object.defineProperty(reads[1].reader, 'result', { value: JSON.stringify({ version: 1, assessments: [] }) });
+        reads[1].reader.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>);
+        Object.defineProperty(reads[0].reader, 'result', { value: JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] }) });
+        reads[0].reader.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>);
+
+        expect(await within(dialog).findByText(/Detected VulnScout JSON/)).toBeInTheDocument();
+        expect(within(dialog).queryByText(/Detected OpenVEX/)).not.toBeInTheDocument();
+        readSpy.mockRestore();
     });
 
     test('reports an error when export fails', async () => {

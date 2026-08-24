@@ -14,9 +14,12 @@ function renderModal(overrides = {}) {
         selectedVariantIds: [] as string[],
         transferFormat: 'custom' as const,
         timestampPolicy: 'original' as const,
+        exportMode: 'normal' as const,
         onSelectedVariantIdsChange: jest.fn(),
         onTransferFormatChange: jest.fn(),
         onTimestampPolicyChange: jest.fn(),
+        onExportModeChange: jest.fn(),
+        onExistingFileChange: jest.fn(),
         onConfirm: jest.fn(),
         onCancel: jest.fn(),
         ...overrides,
@@ -71,6 +74,13 @@ describe('ReviewTransferModal', () => {
         expect(selectedProps.onSelectedVariantIdsChange).toHaveBeenCalledWith([]);
     });
 
+    test('places Export method before Format and Variants', () => {
+        renderModal({ mode: 'export' as const });
+
+        const legends = Array.from(document.querySelectorAll('legend')).map(legend => legend.textContent);
+        expect(legends).toEqual(['Export method', 'Format', 'Variants']);
+    });
+
     test('toggles individual export variants and resets custom import settings', () => {
         const exportProps = renderModal({
             mode: 'export' as const,
@@ -93,5 +103,36 @@ describe('ReviewTransferModal', () => {
 
         expect(importProps.onTransferFormatChange).toHaveBeenCalledWith('custom');
         expect(importProps.onTimestampPolicyChange).toHaveBeenCalledWith('original');
+    });
+
+    test('requires a valid existing file for append/update export', () => {
+        const props = renderModal({ mode: 'export' as const, selectedVariantIds: ['variant-1'] });
+        fireEvent.click(screen.getByRole('radio', { name: /^Append\/update existing file/ }));
+        expect(props.onExportModeChange).toHaveBeenCalledWith('update');
+
+        cleanup();
+        renderModal({
+            mode: 'export' as const,
+            exportMode: 'update' as const,
+            selectedVariantIds: ['variant-1'],
+        });
+        expect(screen.queryByText('Format')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Update export' })).toBeDisabled();
+
+        cleanup();
+        const updateProps = renderModal({
+            mode: 'export' as const,
+            exportMode: 'update' as const,
+            selectedVariantIds: ['variant-1'],
+            existingFileName: 'review.json',
+        });
+        expect(screen.getByText('Detected VulnScout JSON: review.json')).toBeInTheDocument();
+        const file = new File(['{}'], 'review.json', { type: 'application/json' });
+        fireEvent.change(screen.getByLabelText('Existing export file'), { target: { files: [file] } });
+        fireEvent.click(screen.getByRole('button', { name: 'Update export' }));
+
+        expect(updateProps.onExistingFileChange).toHaveBeenCalledWith(file);
+        expect(updateProps.onConfirm).toHaveBeenCalledTimes(1);
+        expect(screen.queryByRole('radio', { name: /^VulnScout JSON/ })).not.toBeInTheDocument();
     });
 });

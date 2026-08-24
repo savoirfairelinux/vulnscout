@@ -9,9 +9,14 @@ type Props = {
     selectedVariantIds: string[];
     transferFormat: 'custom' | 'openvex';
     timestampPolicy: 'original' | 'current';
+    exportMode: 'normal' | 'update';
+    existingFileName?: string;
+    existingFileError?: string;
     onSelectedVariantIdsChange: (ids: string[]) => void;
     onTransferFormatChange: (format: 'custom' | 'openvex') => void;
     onTimestampPolicyChange: (policy: 'original' | 'current') => void;
+    onExportModeChange: (mode: 'normal' | 'update') => void;
+    onExistingFileChange: (file?: File) => void;
     onConfirm: () => void;
     onCancel: () => void;
 };
@@ -22,9 +27,14 @@ function ReviewTransferModal({
     selectedVariantIds,
     transferFormat,
     timestampPolicy,
+    exportMode,
+    existingFileName,
+    existingFileError,
     onSelectedVariantIdsChange,
     onTransferFormatChange,
     onTimestampPolicyChange,
+    onExportModeChange,
+    onExistingFileChange,
     onConfirm,
     onCancel,
 }: Readonly<Props>) {
@@ -32,6 +42,7 @@ function ReviewTransferModal({
     const isOpenVex = transferFormat === 'openvex';
     const needsVariantSelection = isOpenVex || mode === 'export';
     const supportsMultipleVariants = !isOpenVex;
+    const isUpdateExport = mode === 'export' && exportMode === 'update';
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -60,19 +71,52 @@ function ReviewTransferModal({
                 </div>
 
                 <div className="space-y-5 p-5">
-                    <fieldset>
-                        <legend className="mb-2 text-sm font-semibold text-gray-200">Format</legend>
-                        <div className="grid grid-cols-2 gap-3">
-                            <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${transferFormat === 'custom' ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
-                                <input type="radio" name="review-transfer-format" checked={transferFormat === 'custom'} onChange={() => onTransferFormatChange('custom')} className="mt-0.5 accent-cyan-500" />
-                                <span className="flex flex-col"><span className="text-sm font-medium">VulnScout JSON</span><span className="text-xs text-zinc-400">{mode === 'export' ? 'Assessments, CVSS, and time estimates' : 'Uses the variants recorded in the file'}</span></span>
-                            </label>
-                            <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${isOpenVex ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
-                                <input type="radio" name="review-transfer-format" checked={isOpenVex} onChange={() => onTransferFormatChange('openvex')} className="mt-0.5 accent-cyan-500" />
-                                <span className="flex flex-col"><span className="text-sm font-medium">OpenVEX</span><span className="text-xs text-zinc-400">One variant in a JSON document</span></span>
-                            </label>
-                        </div>
-                    </fieldset>
+                    {mode === 'export' && (
+                        <fieldset>
+                            <legend className="mb-2 text-sm font-semibold text-gray-200">Export method</legend>
+                            <div className="grid grid-cols-2 gap-3">
+                                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${exportMode === 'normal' ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                    <input type="radio" name="review-export-mode" checked={exportMode === 'normal'} onChange={() => onExportModeChange('normal')} className="mt-0.5 accent-cyan-500" />
+                                    <span className="flex flex-col"><span className="text-sm font-medium">Normal export</span><span className="text-xs text-zinc-400">Create a new export file</span></span>
+                                </label>
+                                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${isUpdateExport ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                    <input type="radio" name="review-export-mode" checked={isUpdateExport} onChange={() => onExportModeChange('update')} className="mt-0.5 accent-cyan-500" />
+                                    <span className="flex flex-col"><span className="text-sm font-medium">Append/update existing file</span><span className="text-xs text-zinc-400">Preserve stable content for a minimal Git diff</span></span>
+                                </label>
+                            </div>
+                        </fieldset>
+                    )}
+
+                    {isUpdateExport && (
+                        <label className="block text-sm font-semibold text-gray-200">
+                            Existing export file
+                            <input
+                                type="file"
+                                aria-label="Existing export file"
+                                accept=".json,application/json"
+                                onChange={event => onExistingFileChange(event.target.files?.[0])}
+                                className="mt-2 block w-full rounded border border-slate-600 bg-slate-900 p-2 text-sm font-normal text-zinc-300 file:mr-3 file:rounded file:border-0 file:bg-slate-700 file:px-3 file:py-1 file:text-white"
+                            />
+                            {existingFileName && !existingFileError && <span className="mt-1 block font-normal text-cyan-300">Detected {isOpenVex ? 'OpenVEX' : 'VulnScout JSON'}: {existingFileName}</span>}
+                            {existingFileError && <span role="alert" className="mt-1 block font-normal text-red-300">{existingFileError}</span>}
+                        </label>
+                    )}
+
+                    {!isUpdateExport && (
+                        <fieldset>
+                            <legend className="mb-2 text-sm font-semibold text-gray-200">Format</legend>
+                            <div className="grid grid-cols-2 gap-3">
+                                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${transferFormat === 'custom' ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                    <input type="radio" name="review-transfer-format" checked={transferFormat === 'custom'} onChange={() => onTransferFormatChange('custom')} className="mt-0.5 accent-cyan-500" />
+                                    <span className="flex flex-col"><span className="text-sm font-medium">VulnScout JSON</span><span className="text-xs text-zinc-400">{mode === 'export' ? 'Assessments, CVSS, and time estimates' : 'Uses the variants recorded in the file'}</span></span>
+                                </label>
+                                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${isOpenVex ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                    <input type="radio" name="review-transfer-format" checked={isOpenVex} onChange={() => onTransferFormatChange('openvex')} className="mt-0.5 accent-cyan-500" />
+                                    <span className="flex flex-col"><span className="text-sm font-medium">OpenVEX</span><span className="text-xs text-zinc-400">One variant in a JSON document</span></span>
+                                </label>
+                            </div>
+                        </fieldset>
+                    )}
 
                     {mode === 'import' && (
                         <fieldset>
@@ -117,8 +161,8 @@ function ReviewTransferModal({
 
                 <div className="flex justify-end gap-3 border-t border-gray-600 px-5 py-4">
                     <button type="button" onClick={onCancel} className="rounded border border-gray-500 px-4 py-2 text-sm text-gray-200 hover:bg-gray-700">Cancel</button>
-                    <button type="button" onClick={onConfirm} disabled={needsVariantSelection && (isOpenVex ? selectedVariantIds.length !== 1 : selectedVariantIds.length === 0)} className="rounded bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50">
-                        {mode === 'export' ? 'Export' : 'Choose file'}
+                    <button type="button" onClick={onConfirm} disabled={(needsVariantSelection && (isOpenVex ? selectedVariantIds.length !== 1 : selectedVariantIds.length === 0)) || (isUpdateExport && (!existingFileName || Boolean(existingFileError)))} className="rounded bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50">
+                        {mode === 'export' ? isUpdateExport ? 'Update export' : 'Export' : 'Choose file'}
                     </button>
                 </div>
             </div>

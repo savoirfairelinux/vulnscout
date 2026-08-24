@@ -101,13 +101,14 @@ class OpenVex:
         return [a for a in self.assessmentsCtrl.get_all() if getattr(a, "origin", None) != "ai"]
 
     def to_dict(self, strict_export=False, author=None) -> dict:
+        statements: list[dict] = []
         output = {
             "@context": "https://openvex.dev/ns/v0.2.0",
             "@id": "https://savoirfairelinux.com/sbom/openvex/{}".format(uuid7(as_type='str')),
             "author": author if author is not None else "Savoir-faire Linux",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": 1,
-            "statements": []
+            "statements": statements
         }
         for assess in self._all_assessments():
             stmt = assess.to_openvex_dict()
@@ -152,5 +153,5 @@ class OpenVex:
                 pkg_list.append(product)
             stmt["products"] = pkg_list
 
-            output["statements"].append(stmt)  # type: ignore
+            statements.append(stmt)
         return output

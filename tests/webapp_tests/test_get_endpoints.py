@@ -4,7 +4,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
+import io
 import json
+import os
+import time
+import zipfile
 from src.bin.webapp import create_app
 from . import write_demo_files, setup_demo_db
 
@@ -282,6 +286,231 @@ def test_render_document_adoc(client):
     content = response.data.decode("utf-8")
     assert "Vulnerabilities Report" in content
     assert "| Fixed\n^.^| 0\n^.^| 1\n" in content
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_name"),
+    [
+        ("consolidated", "summary.adoc"),
+        ("per_variant", "default/summary.adoc"),
+    ],
+)
+def test_export_documents_archive(client, mode, expected_name):
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "mode": mode,
+        "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+    })
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        assert archive.namelist() == [expected_name]
+        assert b"Vulnerabilities Report" in archive.read(expected_name)
+
+
+def test_export_documents_archive_selected_variants(app, client):
+    import uuid
+    from src.models.variant import Variant
+
+    with app.app_context():
+        Variant.create("secondary", uuid.UUID("11111111-1111-1111-1111-111111111111"))
+
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "variant_ids": ["22222222-2222-2222-2222-222222222222"],
+        "mode": "per_variant",
+        "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+    })
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        assert archive.namelist() == ["default/summary.adoc"]
+
+
+def test_export_documents_disambiguates_colliding_archive_paths(app, client):
+    import uuid
+    from src.models.variant import Variant
+
+    with app.app_context():
+        Variant.create("default!", uuid.UUID("11111111-1111-1111-1111-111111111111"))
+
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "mode": "per_variant",
+        "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+    })
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        assert archive.namelist() == ["default/summary.adoc", "default/summary_2.adoc"]
+
+
+def test_export_documents_async_progress_and_download(client):
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "mode": "consolidated",
+        "async": True,
+        "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+    })
+
+    assert response.status_code == 202
+    job_id = response.get_json()["job_id"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        status = client.get(f"/api/documents/export/{job_id}").get_json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.01)
+
+    assert status["status"] == "done"
+    assert status["current"] == status["total"] == 1
+    assert status["logs"] == ["Generating 1 of 1 element: summary.adoc (adoc)"]
+
+    from src.routes.documents import _export_jobs, _export_jobs_lock
+    with _export_jobs_lock:
+        archive_path = str(_export_jobs[job_id]["archive_path"])
+    assert os.path.isfile(archive_path)
+
+    download = client.get(f"/api/documents/export/{job_id}/download")
+    assert download.status_code == 200
+    assert download.mimetype == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(download.data)) as archive:
+        assert archive.namelist() == ["summary.adoc"]
+    assert not os.path.exists(archive_path)
+    assert client.get(f"/api/documents/export/{job_id}").status_code == 404
+
+
+def test_export_documents_rejects_when_async_queue_is_full(client):
+    from src.routes.documents import EXPORT_MAX_QUEUED_JOBS, EXPORT_MAX_WORKERS, _export_capacity
+
+    capacity = EXPORT_MAX_WORKERS + EXPORT_MAX_QUEUED_JOBS
+    for _ in range(capacity):
+        assert _export_capacity.acquire(blocking=False)
+    try:
+        response = client.post("/api/documents/export", json={
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "mode": "consolidated",
+            "async": True,
+            "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+        })
+    finally:
+        for _ in range(capacity):
+            _export_capacity.release()
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "5"
+    assert response.get_json() == {"error": "Export queue is full; retry later"}
+
+
+def test_export_documents_rejects_when_sync_capacity_is_full(client):
+    from src.routes.documents import EXPORT_MAX_WORKERS, _sync_export_capacity
+
+    for _ in range(EXPORT_MAX_WORKERS):
+        assert _sync_export_capacity.acquire(blocking=False)
+    try:
+        response = client.post("/api/documents/export", json={
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "mode": "consolidated",
+            "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+        })
+    finally:
+        for _ in range(EXPORT_MAX_WORKERS):
+            _sync_export_capacity.release()
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "5"
+
+
+def test_export_retention_evicts_oldest_archive(monkeypatch, tmp_path):
+    from src.routes import documents
+
+    old_archive = tmp_path / "old.zip"
+    old_archive.write_bytes(b"1234")
+    job_id = "retention-test-job"
+    with documents._export_jobs_lock:
+        documents._export_jobs[job_id] = {
+            "archive_path": str(old_archive),
+            "finished_at": 1.0,
+        }
+        monkeypatch.setattr(documents, "EXPORT_MAX_RETAINED_ARCHIVE_BYTES", 5)
+        documents._reserve_retained_archive(3)
+
+    assert job_id not in documents._export_jobs
+    assert not old_archive.exists()
+
+
+def test_export_missing_tool_does_not_disclose_server_path(monkeypatch, client):
+    def missing_tool(*_args, **_kwargs):
+        raise FileNotFoundError(2, "missing", "/private/server/bin/converter")
+
+    monkeypatch.setattr("src.routes.documents._build_export_archive", missing_tool)
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "mode": "consolidated",
+        "documents": [{"name": "summary.adoc", "extension": "pdf"}],
+    })
+
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "Required conversion tool was not found"}
+    assert "/private/server" not in response.get_data(as_text=True)
+
+
+def test_export_documents_rejects_assets(monkeypatch, client):
+    monkeypatch.setattr("src.routes.documents.list_assets", lambda: [
+        {"id": "logo.png", "extension": "png", "is_template": False, "category": ["assets"]},
+    ])
+
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "mode": "consolidated",
+        "documents": [{"name": "logo.png", "extension": "png"}],
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Unsupported document selection: logo.png (png)"
+
+
+def test_export_documents_rejects_consolidated_sbom(client):
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "variant_ids": ["22222222-2222-2222-2222-222222222222"],
+        "mode": "consolidated",
+        "documents": [{"name": "CycloneDX 1.6", "extension": "json"}],
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "SBOM files must be exported per variant as a ZIP archive"
+
+
+def test_export_documents_archive_multiple_sboms(client):
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "variant_ids": ["22222222-2222-2222-2222-222222222222"],
+        "mode": "per_variant",
+        "documents": [
+            {"name": "SPDX 2.3", "extension": "json"},
+            {"name": "SPDX 2.3", "extension": "xml"},
+            {"name": "SPDX 3.0", "extension": "json"},
+            {"name": "CycloneDX 1.4", "extension": "json"},
+            {"name": "CycloneDX 1.5", "extension": "json"},
+            {"name": "CycloneDX 1.6", "extension": "json"},
+            {"name": "OpenVex", "extension": "json"},
+        ],
+    })
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        assert archive.namelist() == [
+            "default/spdx_v2_3.json",
+            "default/spdx_v2_3.xml",
+            "default/spdx_v3_0.json",
+            "default/cyclonedx_v1_4.json",
+            "default/cyclonedx_v1_5.json",
+            "default/cyclonedx_v1_6.json",
+            "default/openvex.json",
+        ]
 
 
 def test_render_document_with_options(client):

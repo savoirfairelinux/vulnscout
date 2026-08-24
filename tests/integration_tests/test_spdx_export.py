@@ -8,6 +8,7 @@ from src.views.spdx import SPDX
 from src.models.package import Package
 from src.controllers import ControllersCache
 import json
+from xml.etree import ElementTree
 
 
 @pytest.fixture
@@ -31,6 +32,16 @@ def test_export_empty_json(spdx_parser):
     except Exception as e:
         print(json.dumps(output, indent=2))
         raise e
+
+
+def test_export_uses_generated_namespace_when_document_url_is_blank(monkeypatch, spdx_parser):
+    monkeypatch.setenv("DOCUMENT_URL", "")
+
+    json_output = json.loads(spdx_parser.output_as_json(True, "MY_AUTHOR_NAME"))
+    assert json_output["documentNamespace"].startswith("https://spdx.org/spdxdocs/")
+
+    xml_output = spdx_parser.output_as_xml(True, "MY_AUTHOR_NAME")
+    assert ElementTree.fromstring(xml_output).tag == "Document"
 
 
 def test_export_components_json(spdx_parser):

@@ -613,23 +613,29 @@ def test_import_custom_openvex_assessments_unsupported_type(app, tmp_path):
     assert "unsupported file type" in result.output.lower()
 
 
-def test_import_custom_openvex_assessments_requires_variant(app, tmp_path):
-    """OpenVEX import requires an explicit target variant."""
+def test_import_custom_openvex_assessments_defaults_variant(app, tmp_path):
+    """OpenVEX import uses the default variant when --variant is omitted."""
+    from src.controllers.projects import ProjectController
+    from src.models.variant import Variant
+
     doc = {
         "@context": "https://openvex.dev/ns/v0.2.0",
         "statements": [],
     }
-    json_file = tmp_path / "nonexistent_variant.json"
+    json_file = tmp_path / "default_variant.json"
     json_file.write_text(json.dumps(doc))
     with app.app_context():
+        project = ProjectController.get_by_name(_PROJECT_NAME)
+        assert project is not None
+        Variant.create("default", project.id)
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
             str(json_file),
         ])
-    assert result.exit_code == 2
-    assert "missing option '--variant'" in result.output.lower()
+    assert result.exit_code == 0, result.output
+    assert "Imported 0 OpenVEX assessments" in result.output
 
 
 def test_import_custom_openvex_assessments_invalid_json(app, tmp_path):

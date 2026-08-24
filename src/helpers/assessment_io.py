@@ -11,6 +11,7 @@ neither caller needs to re-implement it.
 from __future__ import annotations
 
 import uuid as _uuid
+from collections import defaultdict, deque
 from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
@@ -160,8 +161,238 @@ def is_openvex_doc(doc: object) -> bool:
     """Return ``True`` if *doc* looks like a valid OpenVEX document."""
     if not isinstance(doc, dict):
         return False
-    ctx = doc.get("@context", "")
-    return "openvex" in str(ctx) and isinstance(doc.get("statements"), list)
+    context = doc.get("@context", "")
+    return "openvex" in str(context) and isinstance(doc.get("statements"), list)
+
+
+def _is_review_openvex_export(doc: object) -> bool:
+    """Return whether *doc* has the stable identities needed for reconciliation."""
+    if not is_openvex_doc(doc):
+        return False
+    assert isinstance(doc, dict)
+    if not all(isinstance(doc.get(field), str) and doc[field] for field in ("@id", "author", "timestamp")):
+        return False
+    if not isinstance(doc.get("version"), int):
+        return False
+    return all(
+        isinstance(statement, dict)
+        and isinstance(statement.get("vulnerability"), dict)
+        and isinstance(statement["vulnerability"].get("name"), str)
+        and isinstance(statement.get("status"), str)
+        and isinstance(statement.get("products"), list)
+        and all(isinstance(product, dict) and isinstance(product.get("@id"), str) for product in statement["products"])
+        for statement in doc["statements"]
+    )
+
+
+_CUSTOM_EXPORT_SECTIONS = (
+    "assessments",
+    "ai_assessments",
+    "cvss",
+    "time_estimates",
+)
+
+
+def detect_review_export_format(doc: object) -> str:
+    """Return the supported Review export format represented by *doc*.
+
+    Raises ``ValueError`` with a user-facing explanation for malformed or
+    unsupported input.
+    """
+    if _is_review_openvex_export(doc):
+        return "openvex"
+    if not isinstance(doc, dict):
+        raise ValueError("Export file must contain a JSON object")
+    if doc.get("version") == 1 and isinstance(doc.get("assessments"), list):
+        for section in _CUSTOM_EXPORT_SECTIONS:
+            value = doc.get(section, [])
+            if not isinstance(value, list):
+                raise ValueError(f"Invalid VulnScout JSON: '{section}' must be an array")
+            if not all(
+                isinstance(record, dict)
+                and isinstance(record.get("variant_id"), str)
+                and isinstance(record.get("vuln_id"), str)
+                and (
+                    section not in {"assessments", "ai_assessments"}
+                    or isinstance(record.get("packages"), list)
+                    and all(isinstance(package, str) for package in record["packages"])
+                )
+                for record in value
+            ):
+                raise ValueError(f"Invalid VulnScout JSON: '{section}' contains an invalid record")
+        return "custom"
+    raise ValueError("Unsupported export format. Expected VulnScout JSON or OpenVEX")
+
+
+def _record_identity(section: str, record: dict[str, Any]) -> tuple[Any, ...]:
+    variant_id = record.get("variant_id")
+    vuln_id = record.get("vuln_id")
+    if section in {"assessments", "ai_assessments"}:
+        packages = record.get("packages", [])
+        package_key = tuple(sorted(str(package) for package in packages)) if isinstance(packages, list) else ()
+        return variant_id, vuln_id, package_key
+    return variant_id, vuln_id, None
+
+
+def _openvex_statement_identity(record: dict[str, Any]) -> tuple[Any, ...]:
+    vulnerability = record.get("vulnerability", {})
+    products = record.get("products", [])
+    vuln_name = vulnerability.get("name") if isinstance(vulnerability, dict) else None
+    product_ids = tuple(
+        str(product.get("@id", ""))
+        for product in products
+        if isinstance(product, dict)
+    ) if isinstance(products, list) else ()
+    return vuln_name, product_ids
+
+
+def _record_without_extensions(record: dict[str, Any]) -> dict[str, Any]:
+    """Return generated record content, excluding user-preserved extensions."""
+    return {
+        key: value for key, value in record.items()
+        if not (isinstance(key, str) and key.startswith("x-"))
+    }
+
+
+def _exact_current_index(
+    old_record: dict[str, Any],
+    candidates: deque[int],
+    current: list[Any],
+) -> int | None:
+    """Return an exact generated-content match among candidates."""
+    return next(
+        (index for index in candidates
+         if _record_without_extensions(current[index]) == _record_without_extensions(old_record)),
+        None,
+    )
+
+
+def _timestamp_current_index(
+    old_record: dict[str, Any],
+    candidates: deque[int],
+    current: list[Any],
+) -> int | None:
+    """Return the sole timestamp match among candidates, if one exists."""
+    timestamp_candidates = [
+        index for index in candidates
+        if current[index].get("timestamp") == old_record.get("timestamp")
+    ]
+    return timestamp_candidates[0] if len(timestamp_candidates) == 1 else None
+
+
+def _validate_records(records: list[Any], source: str) -> list[dict[str, Any]]:
+    """Validate records and return them with their dictionary type narrowed."""
+    validated_records: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError(f"{source} export contains an invalid record")
+        validated_records.append(record)
+    return validated_records
+
+
+def _current_record_indices(
+    current: list[dict[str, Any]], identity: Any,
+) -> dict[tuple[Any, ...], deque[int]]:
+    """Index current records by their non-unique reconciliation identity."""
+    indices: dict[tuple[Any, ...], deque[int]] = defaultdict(deque)
+    for index, record in enumerate(current):
+        indices[identity(record)].append(index)
+    return indices
+
+
+def _consume_matches(
+    existing: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+    current_indices: dict[tuple[Any, ...], deque[int]],
+    matched_indices: list[int | None],
+    identity: Any,
+    match_index: Any,
+) -> None:
+    """Consume one match per still-unmatched existing record."""
+    for old_index, old_record in enumerate(existing):
+        if matched_indices[old_index] is not None:
+            continue
+        candidates = current_indices.get(identity(old_record))
+        if candidates is None:
+            continue
+        current_index = match_index(old_record, candidates, current)
+        if current_index is not None:
+            candidates.remove(current_index)
+            matched_indices[old_index] = current_index
+
+
+def _reconcile_records(
+    existing: list[Any],
+    current: list[Any],
+    identity: Any,
+) -> list[Any]:
+    """Retain existing order for matching records and append new records."""
+    current_records = _validate_records(current, "Generated")
+    existing_records = _validate_records(existing, "Existing")
+    current_indices = _current_record_indices(current_records, identity)
+    matched_indices: list[int | None] = [None] * len(existing_records)
+    _consume_matches(
+        existing_records, current_records, current_indices, matched_indices,
+        identity, _exact_current_index,
+    )
+    _consume_matches(
+        existing_records, current_records, current_indices, matched_indices,
+        identity, _timestamp_current_index,
+    )
+
+    reconciled: list[Any] = []
+    consumed: set[int] = set()
+    for old_record, current_index in zip(existing_records, matched_indices):
+        if current_index is None:
+            continue
+        consumed.add(current_index)
+        new_record = current_records[current_index]
+        extensions = {
+            key: value for key, value in old_record.items()
+            if isinstance(key, str) and key.startswith("x-")
+        }
+        reconciled.append(
+            old_record if old_record == new_record
+            else {**_record_without_extensions(new_record), **extensions}
+        )
+
+    reconciled.extend(record for index, record in enumerate(current_records) if index not in consumed)
+    return reconciled
+
+
+def reconcile_review_export(existing: object, current: dict[str, Any]) -> dict[str, Any]:
+    """Update a Review export while minimizing ordering and content churn."""
+    export_format = detect_review_export_format(existing)
+    if detect_review_export_format(current) != export_format:
+        raise ValueError("Existing file format does not match the generated export")
+    assert isinstance(existing, dict)
+
+    result = dict(existing)
+    if export_format == "openvex":
+        for key, value in current.items():
+            if key not in {"@id", "version"}:
+                result[key] = value
+            if type(existing["version"]) is int:
+                result["version"] = existing["version"] + 1
+            else:
+                raise ValueError("Version must be an integer")
+        result["statements"] = _reconcile_records(
+            existing["statements"],
+            current["statements"],
+            _openvex_statement_identity,
+        )
+        return result
+
+    for key, value in current.items():
+        if key not in _CUSTOM_EXPORT_SECTIONS:
+            result[key] = value
+    for section in _CUSTOM_EXPORT_SECTIONS:
+        result[section] = _reconcile_records(
+            existing.get(section, []),
+            current.get(section, []),
+            lambda record, section=section: _record_identity(section, record),
+        )
+    return result
 
 
 def parse_imported_timestamp(raw_ts: object, use_original_timestamps: bool) -> "_dt | None":

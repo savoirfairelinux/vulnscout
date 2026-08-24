@@ -282,9 +282,10 @@ class TestTriggerSbomCveCheckScan:
         mock_engine = MagicMock()
         mock_engine.applicable_vulns.return_value = iter([])
 
-        def _engine_that_logs():
+        def _engine_that_logs(progress=None):
             import logging
             logging.getLogger("sbom_cve_check").info("test-forwarder-msg")
+            progress("Synchronizing nvd-fkie: Receiving objects: 50%")
             return mock_engine
 
         with patch("src.controllers.scc_engine.get_engine", side_effect=_engine_that_logs):
@@ -297,6 +298,7 @@ class TestTriggerSbomCveCheckScan:
         assert data["status"] == "done"
         all_logs = " ".join(data.get("logs", []))
         assert "test-forwarder-msg" in all_logs
+        assert "Synchronizing nvd-fkie: Receiving objects: 50%" in all_logs
 
     def test_scan_outer_exception_handler(self, client, ids):
         """Lines 889-891: outer except block when Scan.create raises unexpectedly."""

@@ -192,7 +192,7 @@ def _nvd_scan_api(variant_uuid, packages) -> None:
 def _nvd_scan_local(variant_uuid, packages) -> None:
     """NVD scan using the local NVD-FKIE advisory database."""
     click.echo("Loading local NVD advisory database…")
-    engine = get_engine()
+    engine = get_engine(progress=click.echo)
 
     scan = _create_tool_scan(variant_uuid, "nvd")
     total = len(packages)
@@ -673,7 +673,7 @@ def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
     click.echo(f"Resolved {len(packages)} active packages")
 
     click.echo("Loading local CVE databases (NVD-FKIE + CVEList) and building index…")
-    engine = get_engine()
+    engine = get_engine(progress=click.echo)
     click.echo("Index ready — scanning packages")
 
     scan = _create_tool_scan(variant_uuid, "scc")

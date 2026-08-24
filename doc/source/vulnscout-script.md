@@ -90,7 +90,7 @@ The same global cleanup is available to automation and CI:
 ```bash
 ./vulnscout --delete-outdated
 ./vulnscout --delete-empty-scans
-./vulnscout --delete-orphaned-vulnerabilities
+./vulnscout --delete-orphaned-vulns
 ```
 
 The cleanup removes outdated package observations, SBOM links, and custom assessments.
@@ -127,6 +127,42 @@ Example:
 ## Input Sources
 
 VulnScout accepts multiple input file types. Commands can be chained and will automatically trigger a scan.
+
+### Refresh Vulnerability Data
+
+Use `--refresh-vulnerability-data` with an input command to enrich the vulnerabilities
+imported by that run with current EPSS, NVD, ENISA EUVD, and GitHub Advisory data:
+
+```bash
+./vulnscout \
+  --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --refresh-vulnerability-data
+```
+
+Inside the container, the equivalent Flask command is:
+
+```bash
+flask --app src.bin.webapp process --refresh-vulnerability-data
+```
+
+The option can also refresh vulnerability data already in the database. Omit
+`--project` to refresh every vulnerability, or supply it to restrict the refresh to
+that project's active vulnerabilities:
+
+```bash
+./vulnscout --refresh-vulnerability-data
+./vulnscout --project demo --refresh-vulnerability-data
+./vulnscout --project demo --variant x86 --refresh-vulnerability-data
+```
+
+Inside the container, use `flask --app src.bin.webapp refresh-vulnerability-data`
+with optional `--project` and `--variant` arguments. A variant requires its project
+because variant names are project-local.
+
+The refresh enriches existing imported CVE and GHSA records; it does not discover new
+findings. Providers with no applicable vulnerability identifiers are skipped. If any
+applicable provider fails, processing continues through the remaining providers and the
+command exits with an error listing the failed sources.
 
 ### SPDX SBOM
 
@@ -431,7 +467,7 @@ Example:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VULNSCOUT_CONTAINER` | Name of the container | `vulnscout` |
-| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.20` |
+| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.21` |
 | `VULNSCOUT_BUILD_DIR` | Root build directory on the host | `./.vulnscout` |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |

@@ -176,6 +176,8 @@ class TestExportScanDiff:
         assert r.status_code == 200
         data = json.loads(r.data)
         assert data["scan_id"] == ids["scan_a_id"]
+        assert data["export_format"] == "scan-diff"
+        assert data["export_version"] == 1
         assert data["scan_type"] == "import_sbom"
         assert data["project_name"] == "ExportProject"
         assert data["variant_name"] == "ExportVariant"
@@ -243,6 +245,8 @@ class TestExportScanResult:
         assert r.status_code == 200
         data = json.loads(r.data)
         assert data["scan_id"] == ids["scan_b_id"]
+        assert data["export_format"] == "full-result"
+        assert data["export_version"] == 1
         assert data["scan_type"] == "import_sbom"
         assert "packages" in data
         assert "findings" in data
@@ -290,6 +294,363 @@ class TestExportScanResult:
         data = json.loads(r.data)
         assert data["project_name"] == "ExportProject"
         assert data["variant_name"] == "ExportVariant"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/scans/import
+# ---------------------------------------------------------------------------
+
+class TestImportScan:
+    @staticmethod
+    def _set_fresh_destination(app, *payloads):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        project_name = f"DestinationProject-{uuid.uuid4()}"
+        variant_name = "DestinationVariant"
+        with app.app_context():
+            project = Project.create(project_name)
+            Variant.create(variant_name, project.id)
+        for payload in payloads:
+            payload.update({
+                "project_name": project_name,
+                "variant_name": variant_name,
+            })
+
+    def test_imports_full_result(self, app, client, ids):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_b_id']}/export-result"
+        ).data)
+        payload.update({
+            "scan_id": str(uuid.uuid4()),
+            "project_name": "DestinationProject",
+            "variant_name": "DestinationVariant",
+        })
+        with app.app_context():
+            project = Project.create("DestinationProject")
+            Variant.create("DestinationVariant", project.id)
+
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 201
+        assert response.get_json()["format"] == "full"
+
+    def test_imports_legacy_full_result(self, app, client, ids):
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_b_id']}/export-result"
+        ).data)
+        payload.pop("export_version")
+        payload.pop("export_format")
+        payload["scan_id"] = str(uuid.uuid4())
+        self._set_fresh_destination(app, payload)
+
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 201
+        assert response.get_json()["format"] == "full"
+
+    def test_imports_non_first_diff_from_its_top_level_state(self, app, client, ids):
+        """A later scan's diff export carries its full state and imports fine.
+
+        The ``diff`` block describes the *source* variant's history and is
+        ignored: the destination recomputes its own diff.
+        """
+        from src.models.scan import Scan
+
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_b_id']}/export-diff"
+        ).data)
+        assert "diff" in payload  # precondition: this is not a first-scan export
+        self._set_fresh_destination(app, payload)
+
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 201
+        body = response.get_json()
+        assert body["format"] == "diff"
+        # scan_b holds cairo + libpng, both of which must land in the copy.
+        assert body["package_count"] == 2
+        assert body["finding_count"] == 2
+        assert body["is_first"] is True  # first scan in the empty destination
+        with app.app_context():
+            imported = _db.session.get(Scan, uuid.UUID(body["scan_id"]))
+            assert {o.finding.package.name for o in imported.observations} == {
+                "cairo", "libpng",
+            }
+
+    def test_imports_export_all_diffs(self, app, client, ids):
+        """The Export All (diff) file round-trips through import as a whole."""
+        payload = json.loads(client.get("/api/scans/export?type=diff").data)
+        assert len(payload) >= 2
+        self._set_fresh_destination(app, *payload)
+
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 201
+        assert response.get_json()["imported_count"] == len(payload)
+
+    def test_import_diff_uses_current_state_and_skips_duplicate(self, app, client, ids):
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_a_id']}/export-diff"
+        ).data)
+        payload["scan_id"] = str(uuid.uuid4())
+        self._set_fresh_destination(app, payload)
+
+        response = client.post("/api/scans/import", json=payload)
+        duplicate = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 201
+        assert json.loads(response.data)["format"] == "diff"
+        assert duplicate.status_code == 201
+        assert json.loads(duplicate.data)["imported_count"] == 0
+        assert json.loads(duplicate.data)["skipped_count"] == 1
+
+    def test_imports_export_all_results(self, app, client, ids):
+        payload = json.loads(client.get("/api/scans/export?type=total").data)
+        for export in payload:
+            export["scan_id"] = str(uuid.uuid4())
+            export["assessments"] = []
+        self._set_fresh_destination(app, *payload)
+
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 201
+        assert response.get_json()["imported_count"] == len(payload)
+
+    def test_import_allows_json_larger_than_default_request_limit(self, app, client, ids):
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_a_id']}/export-diff"
+        ).data)
+        payload["scan_id"] = str(uuid.uuid4())
+        payload["padding"] = "x" * app.config["MAX_CONTENT_LENGTH"]
+        self._set_fresh_destination(app, payload)
+
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 201
+
+    def test_import_rejects_request_larger_than_import_limit(self, app, client):
+        app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"] = 1
+
+        response = client.post("/api/scans/import", json={})
+
+        assert response.status_code == 413
+        # The message reports the limit actually configured, not a constant.
+        assert response.get_json() == {
+            "error": "Scan import exceeds the 1 B size limit",
+        }
+
+    def test_import_needs_no_schema_change(self, app):
+        """Import works against the schema as it already exists on disk.
+
+        The importer identifies scans by their own content, so it must not
+        depend on any column added for its benefit.
+        """
+        from src.models.scan import Scan
+
+        with app.app_context():
+            columns = set(Scan.__table__.columns.keys())
+        assert columns == {
+            "id", "description", "scan_type", "scan_source", "timestamp",
+            "variant_id",
+        }
+
+    def test_import_rejects_malformed_json_body(self, client):
+        response = client.post(
+            "/api/scans/import",
+            data="{not json",
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+        assert "valid JSON" in response.get_json()["error"]
+
+    def test_import_rolls_back_when_persistence_fails(
+        self, app, client, ids, monkeypatch
+    ):
+        from src.models.scan import Scan
+
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_a_id']}/export-diff"
+        ).data)
+        self._set_fresh_destination(app, payload)
+
+        def fail_persist(_item):
+            raise RuntimeError("persistence failure")
+
+        monkeypatch.setattr("src.routes.scans._persist_scan_import", fail_persist)
+
+        with app.app_context():
+            before = len(Scan.get_all())
+
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == 500
+        assert response.get_json() == {"error": "Failed to import scan data"}
+        with app.app_context():
+            assert len(Scan.get_all()) == before
+
+    def test_import_rejects_whole_batch_when_one_entry_is_invalid(self, app, client, ids):
+        """A bad entry aborts the request and names its position."""
+        from src.models.scan import Scan
+
+        good = json.loads(client.get(
+            f"/api/scans/{ids['scan_a_id']}/export-diff"
+        ).data)
+        other = json.loads(client.get(
+            f"/api/scans/{ids['scan_b_id']}/export-diff"
+        ).data)
+        self._set_fresh_destination(app, good, other)
+        broken = dict(other, timestamp="not-a-timestamp")
+
+        with app.app_context():
+            before = len(Scan.get_all())
+
+        response = client.post("/api/scans/import", json=[good, broken])
+
+        assert response.status_code == 400
+        assert "Export #2 of 2" in response.get_json()["error"]
+        with app.app_context():
+            assert len(Scan.get_all()) == before
+
+    def test_import_rejects_duplicate_entries_within_one_request(self, app, client, ids):
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_a_id']}/export-diff"
+        ).data)
+        self._set_fresh_destination(app, payload)
+
+        response = client.post("/api/scans/import", json=[payload, payload])
+
+        assert response.status_code == 409
+        assert "appears more than once" in response.get_json()["error"]
+
+    def test_import_rejects_too_many_exports(self, app, client, ids):
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_a_id']}/export-diff"
+        ).data)
+        self._set_fresh_destination(app, payload)
+
+        response = client.post("/api/scans/import", json=[payload] * 201)
+
+        assert response.status_code == 400
+        assert "Too many exports" in response.get_json()["error"]
+
+    def test_import_persists_assessments_without_duplicating_them(
+        self, app, client, ids
+    ):
+        """Assessments are imported, and re-importing them adds no copies."""
+        from src.models.assessment import Assessment
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_b_id']}/export-result"
+        ).data)
+        payload["assessments"] = [{
+            "vulnerability_id": "CVE-2020-35492",
+            "status": "fixed",
+            "simplified_status": "fixed",
+            "justification": "patched upstream",
+            "impact_statement": "",
+            "status_notes": "",
+        }]
+        self._set_fresh_destination(app, payload)
+
+        first = client.post("/api/scans/import", json=payload)
+        assert first.status_code == 201
+        assert first.get_json()["assessment_count"] == 1
+
+        def variant_assessments():
+            with app.app_context():
+                project = Project.get_by_name(payload["project_name"])
+                variant = Variant.get_by_name_and_project(
+                    payload["variant_name"], project.id
+                )
+                return _db.session.execute(
+                    _db.select(Assessment).where(Assessment.variant_id == variant.id)
+                ).scalars().all()
+
+        assert len(variant_assessments()) == 1
+
+        # A genuinely different scan that re-states the same assessment: the
+        # scan is new, the assessment is not, so only the scan is stored.
+        second_payload = dict(
+            payload, scan_id=str(uuid.uuid4()), timestamp="2027-03-04T05:06:07+00:00",
+        )
+        second = client.post("/api/scans/import", json=second_payload)
+
+        assert second.status_code == 201
+        assert second.get_json()["assessment_count"] == 0
+        assert len(variant_assessments()) == 1
+
+    def test_import_reuses_existing_packages_and_findings(self, app, client, ids):
+        """Importing into a populated DB links to existing rows, not copies."""
+        from src.models.finding import Finding
+        from src.models.package import Package
+
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_b_id']}/export-result"
+        ).data)
+        self._set_fresh_destination(app, payload)
+        with app.app_context():
+            packages_before = len(Package.get_all())
+            findings_before = len(Finding.get_all())
+
+        assert client.post("/api/scans/import", json=payload).status_code == 201
+
+        with app.app_context():
+            assert len(Package.get_all()) == packages_before
+            assert len(Finding.get_all()) == findings_before
+
+    @pytest.mark.parametrize("payload, status", [
+        ({}, 400),
+        ({"scan_id": "not-a-uuid"}, 400),
+        ({
+            "export_format": "scan-diff",
+            "export_version": 1,
+            "scan_id": "00000000-0000-0000-0000-000000000001",
+            "project_name": "Missing",
+            "variant_name": "Missing",
+            "scan_type": "import_sbom",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "packages": [],
+            "findings": [],
+        }, 404),
+    ])
+    def test_import_rejects_invalid_payloads(self, client, payload, status):
+        response = client.post("/api/scans/import", json=payload)
+
+        assert response.status_code == status
+        assert json.loads(response.data)["error"]
+
+    def test_import_rejects_malformed_state_arrays_and_assessments(
+        self, app, client, ids
+    ):
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_a_id']}/export-diff"
+        ).data)
+        self._set_fresh_destination(app, payload)
+
+        # An assessment missing its status, and one whose vulnerability has no
+        # finding in this scan, are both rejected.
+        no_status = dict(payload, assessments=[{"vulnerability_id": "CVE-1"}])
+        unmatched = dict(payload, assessments=[
+            {"vulnerability_id": "CVE-1", "status": "fixed"},
+        ])
+        missing_findings = dict(payload)
+        del missing_findings["findings"]
+        missing_packages = dict(payload)
+        del missing_packages["packages"]
+
+        assert client.post("/api/scans/import", json=no_status).status_code == 400
+        unmatched_response = client.post("/api/scans/import", json=unmatched)
+        assert unmatched_response.status_code == 400
+        assert "no matching finding" in unmatched_response.get_json()["error"]
+        assert client.post("/api/scans/import", json=missing_findings).status_code == 400
+        assert client.post("/api/scans/import", json=missing_packages).status_code == 400
 
 
 # ---------------------------------------------------------------------------

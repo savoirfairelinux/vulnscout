@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from collections.abc import Iterable
 
 from .active_scans import (
     active_sbom_scan_ids_for_variant,
@@ -45,16 +46,32 @@ class ExportScope:
     variant_ids: set[uuid.UUID] = field(default_factory=set)
 
 
-def _as_uuid(value) -> uuid.UUID:
+def _as_uuid(value: uuid.UUID | str) -> uuid.UUID:
     return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
 
 
-def compute_export_scope(*, project_id=None, variant_id=None) -> ExportScope | None:
-    """Build an :class:`ExportScope` for *variant_id* or *project_id*.
+def compute_export_scope(
+    *,
+    project_id: uuid.UUID | str | None = None,
+    variant_id: uuid.UUID | str | None = None,
+    variant_ids: Iterable[uuid.UUID | str] | None = None,
+) -> ExportScope | None:
+    """Build an :class:`ExportScope` for selected variants, one variant, or a project.
 
-    ``variant_id`` takes precedence over ``project_id``. Returns ``None`` when
-    neither is provided (i.e. a global, unscoped export).
+    ``variant_ids`` takes precedence over ``variant_id`` and ``project_id``.
+    Returns ``None`` when no scope is provided (i.e. a global export).
     """
+    if variant_ids is not None:
+        selected_ids: set[uuid.UUID] = {_as_uuid(value) for value in variant_ids}
+        scan_ids: list[uuid.UUID] = [
+            scan_id
+            for selected_id in selected_ids
+            for scan_id in active_sbom_scan_ids_for_variant(selected_id)
+        ]
+        return ExportScope(
+            package_ids=active_package_ids_for_scans(scan_ids),
+            variant_ids=selected_ids,
+        )
     if variant_id is not None:
         vid = _as_uuid(variant_id)
         scan_ids = active_sbom_scan_ids_for_variant(vid)

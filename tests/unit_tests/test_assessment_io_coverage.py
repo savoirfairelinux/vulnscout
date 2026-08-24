@@ -21,6 +21,8 @@ from src.helpers.assessment_io import (
     import_custom_data,
     import_statements,
     build_custom_data_export,
+    detect_review_export_format,
+    reconcile_review_export,
 )
 
 
@@ -166,6 +168,137 @@ class TestBuildCustomDataExport:
             "variant_id": str(var.id),
             "variant": "io-cov-var",
         }]
+
+
+class TestReconcileReviewExport:
+    def test_custom_export_preserves_order_updates_and_removes_variants(self):
+        unchanged = {
+            "vuln_id": "CVE-1", "variant_id": "variant-a",
+            "packages": ["a@1"], "status": "affected",
+        }
+        changed = {
+            "vuln_id": "CVE-2", "variant_id": "variant-a",
+            "packages": ["b@1"], "status": "affected",
+            "justification": "obsolete", "x-local-note": "keep",
+        }
+        removed = {
+            "vuln_id": "CVE-3", "variant_id": "variant-b",
+            "packages": ["c@1"], "status": "affected",
+        }
+        existing = {
+            "version": 1,
+            "exported_at": "old",
+            "custom_header": "preserved",
+            "assessments": [changed, removed, unchanged],
+            "ai_assessments": [], "cvss": [], "time_estimates": [],
+        }
+        current = {
+            "version": 1,
+            "exported_at": "new",
+            "assessments": [
+                unchanged,
+                {
+                    "vuln_id": "CVE-2", "variant_id": "variant-a",
+                    "packages": ["b@1"], "status": "fixed",
+                },
+                {"vuln_id": "CVE-4", "variant_id": "variant-a", "packages": [], "status": "affected"},
+            ],
+            "ai_assessments": [], "cvss": [], "time_estimates": [],
+        }
+
+        result = reconcile_review_export(existing, current)
+
+        assert result["custom_header"] == "preserved"
+        assert result["exported_at"] == "new"
+        assert [item["vuln_id"] for item in result["assessments"]] == ["CVE-2", "CVE-1", "CVE-4"]
+        assert result["assessments"][0]["status"] == "fixed"
+        assert result["assessments"][0]["x-local-note"] == "keep"
+        assert "justification" not in result["assessments"][0]
+
+    def test_openvex_preserves_document_id_and_statement_order(self):
+        existing = {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "@id": "stable-id",
+            "author": "old",
+            "timestamp": "old",
+            "version": 1,
+            "statements": [
+                {"vulnerability": {"name": "CVE-2"}, "products": [], "status": "affected"},
+                {"vulnerability": {"name": "CVE-1"}, "products": [], "status": "affected"},
+            ],
+        }
+        current = {
+            **existing,
+            "@id": "generated-id",
+            "author": "new",
+            "timestamp": "new",
+            "statements": [
+                {"vulnerability": {"name": "CVE-1"}, "products": [], "status": "fixed"},
+                {"vulnerability": {"name": "CVE-2"}, "products": [], "status": "affected"},
+            ],
+        }
+
+        result = reconcile_review_export(existing, current)
+
+        assert result["@id"] == "stable-id"
+        assert result["author"] == "new"
+        assert result["version"] == 2
+        assert [item["vulnerability"]["name"] for item in result["statements"]] == ["CVE-2", "CVE-1"]
+        assert result["statements"][1]["status"] == "fixed"
+
+    def test_openvex_requires_an_integer_version(self):
+        document = {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "@id": "stable-id",
+            "author": "author",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "version": True,
+            "statements": [],
+        }
+
+        with pytest.raises(ValueError):
+            reconcile_review_export(document, {**document, "version": 1})
+
+    def test_duplicate_records_match_exact_values_before_timestamp_updates(self):
+        first = {
+            "vuln_id": "CVE-1", "variant_id": "variant-a", "packages": ["pkg@1"],
+            "status": "affected", "timestamp": "2026-01-01T00:00:00+00:00", "x-note": "first",
+        }
+        second = {
+            "vuln_id": "CVE-1", "variant_id": "variant-a", "packages": ["pkg@1"],
+            "status": "not_affected", "timestamp": "2026-01-02T00:00:00+00:00", "x-note": "second",
+        }
+        existing = {"version": 1, "assessments": [first, second], "ai_assessments": [], "cvss": [], "time_estimates": []}
+        current = {
+            "version": 1,
+            "assessments": [
+                {**second, "x-note": "ignored"},
+                {**first, "status": "fixed"},
+                {"vuln_id": "CVE-1", "variant_id": "variant-a", "packages": ["pkg@1"], "status": "affected", "timestamp": "2026-01-03T00:00:00+00:00"},
+            ],
+            "ai_assessments": [], "cvss": [], "time_estimates": [],
+        }
+
+        result = reconcile_review_export(existing, current)
+
+        assert result["assessments"][0]["x-note"] == "first"
+        assert result["assessments"][0]["status"] == "fixed"
+        assert result["assessments"][1] == second
+        assert "x-note" not in result["assessments"][2]
+
+    @pytest.mark.parametrize("payload", [[], {"version": 1}, {"foo": "bar"}])
+    def test_rejects_unsupported_or_malformed_exports(self, payload):
+        with pytest.raises(ValueError):
+            detect_review_export_format(payload)
+
+    @pytest.mark.parametrize("payload", [
+        {"@context": "openvex", "statements": []},
+        {"version": 1, "assessments": [{"variant_id": "variant-a"}]},
+        {"version": 1, "assessments": ["not-a-record"]},
+    ])
+    def test_rejects_malformed_review_record_identities(self, payload):
+        with pytest.raises(ValueError):
+            detect_review_export_format(payload)
 
 
 # ===========================================================================

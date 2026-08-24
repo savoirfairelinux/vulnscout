@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
-from unittest.mock import patch, MagicMock, ANY
+from unittest.mock import patch, MagicMock, ANY, call
 from src.bin.webapp import create_app
 from tests.webapp_tests import write_demo_files, setup_demo_db
 
@@ -1639,15 +1639,24 @@ class TestBulkNvdRefreshMode:
 
         with patch("src.routes.bulk_refresh.get_cve_json") as mock_local, \
              patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh._get_scc_engine"), \
+             patch("src.routes.bulk_refresh._get_scc_engine") as mock_engine, \
              patch("src.routes.bulk_refresh.db"), \
              patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             mock_local.return_value = None
+            mock_engine.side_effect = lambda progress: progress(
+                "Synchronizing nvd-fkie: Receiving objects: 50%"
+            )
             captured["target"]()
 
         mock_local.assert_called_once_with(existing_cve_id)
         MockNVD.return_value.api_get_cve.assert_not_called()
+        assert call(
+            "database_sync",
+            0,
+            1,
+            "Synchronizing nvd-fkie: Receiving objects: 50%",
+        ) in MockTracker.update.call_args_list
 
     def test_api_mode_background_uses_nvd_db(self, client, existing_cve_id):
         """_run() uses NVD_DB (REST API) when mode is 'api'."""

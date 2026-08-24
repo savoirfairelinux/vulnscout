@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import NavigationBar from "../components/NavigationBar";
 import OperationQueueModal from "../components/OperationQueueModal";
+import { subscribe as exportSubscribe, getSnapshot as exportGetSnapshot } from "../handlers/exportQueue";
 import MessageBanner from "../components/MessageBanner";
+import Popup from "../components/Popup";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
@@ -73,13 +75,21 @@ function Explorer() {
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
+    const [setupRequirement, setSetupRequirement] = useState<
+        { kind: 'project' } | { kind: 'variant'; projectId: string } | { kind: 'error' } | null
+    >(null);
+    const [settingsDestination, setSettingsDestination] = useState<
+        { tab: 'projects'; projectId?: string } | null
+    >(null);
     const hadActiveScans = useRef(false);
+    const setupCheckGeneration = useRef(0);
     const grypeScanEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
     const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
     const osvScanEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
     const sccScanEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
     const refreshQueueEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
-    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries];
+    const exportEntries = useSyncExternalStore(exportSubscribe, exportGetSnapshot);
+    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries, ...exportEntries];
     const trackedScanCount = scanEntries.length;
     const finishedScanCount = scanEntries
         .filter(entry => entry.status === "done" || entry.status === "error" || entry.status === "cancelled").length;
@@ -108,6 +118,30 @@ function Explorer() {
         }).catch(() => undefined);
         return () => { cancelled = true; };
     }, []);
+
+    const loadSetupRequirement = useCallback(() => {
+        const generation = ++setupCheckGeneration.current;
+        return Promise.all([Projects.list(), Variants.listAll()])
+            .then(([projects, variants]) => {
+                if (generation !== setupCheckGeneration.current) return;
+                if (projects.length === 0) {
+                    setSetupRequirement({ kind: 'project' });
+                } else if (variants.length === 0) {
+                    setSetupRequirement({ kind: 'variant', projectId: projects[0].id });
+                } else {
+                    setSetupRequirement(null);
+                }
+            })
+            .catch(() => {
+                if (generation === setupCheckGeneration.current) {
+                    setSetupRequirement({ kind: 'error' });
+                }
+            });
+    }, []);
+
+    useEffect(() => {
+        void loadSetupRequirement();
+    }, [loadSetupRequirement]);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -387,6 +421,7 @@ function Explorer() {
             setFilterValue(undefined);
             setFilterVulnerabilityIds(undefined);
         }
+        if (newTab === 'settings') setSettingsDestination(null);
         setTab(newTab);
     }
 
@@ -414,6 +449,45 @@ function Explorer() {
                 />
             </header>
             <OperationQueueModal isOpen={operationQueueOpen} onClose={() => setOperationQueueOpen(false)} />
+            <Popup
+                isOpen={tab === 'metrics' && setupRequirement !== null}
+                title={setupRequirement?.kind === 'project'
+                    ? 'Add your first project'
+                    : setupRequirement?.kind === 'variant'
+                        ? 'Add a project variant'
+                        : 'Unable to check setup'}
+                onClose={() => setSetupRequirement(null)}
+                testId="setup-required-popup"
+            >
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                    {setupRequirement?.kind === 'project'
+                        ? 'Projects organize your software variants, vulnerability data, scans, and assessments. Create one to get started.'
+                        : setupRequirement?.kind === 'variant'
+                            ? 'VulnScout needs a variant before it can display metrics for your project.'
+                            : 'VulnScout could not load the project list. Check the connection and try again.'}
+                </p>
+                <div className="mt-5 flex justify-end">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (setupRequirement?.kind === 'error') {
+                                void loadSetupRequirement();
+                                return;
+                            }
+                            setSettingsDestination({
+                                tab: 'projects',
+                                projectId: setupRequirement?.kind === 'variant'
+                                    ? setupRequirement.projectId
+                                    : undefined,
+                            });
+                            setTab('settings');
+                        }}
+                        className="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    >
+                        {setupRequirement?.kind === 'error' ? 'Retry' : 'Go to settings'}
+                    </button>
+                </div>
+            </Popup>
 
             <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">
@@ -481,12 +555,13 @@ function Explorer() {
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
-                {tab === 'settings' && <Settings onDataChanged={(message) => {
+                {tab === 'settings' && <Settings initialTab={settingsDestination?.tab} onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     Config.get().then(config => setDefaultConfig(config)).catch(() => {});
+                    loadSetupRequirement();
                     setSelectorKey(k => k + 1);
                     loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                }} projectId={currentProjectId} onLoadingMessage={(msg) => {
+                }} projectId={settingsDestination ? settingsDestination.projectId : currentProjectId} onLoadingMessage={(msg) => {
                     if (msg) {
                         setLoadingMessage(msg);
                         setIsLoadingData(true);

@@ -35,9 +35,10 @@ import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
 import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faFileImport, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
+import MessageBanner from "../components/MessageBanner";
 import RunScansWizard from "../components/RunScansWizard";
 import { refreshSourcesForScans } from "../helpers/refreshSources";
 import Variants from "../handlers/variant";
@@ -1112,13 +1113,16 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [showNvd, setShowNvd] = useState(true);
     const [showScc, setShowScc] = useState(true);
 
+    // Import state
+    const [importing, setImporting] = useState(false);
+    const [importNotice, setImportNotice] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+    const importInputRef = useRef<HTMLInputElement>(null);
+
     // Export state
     const [exportMenuScanId, setExportMenuScanId] = useState<string | null>(null);
     const [exportingScanId, setExportingScanId] = useState<string | null>(null);
-    const [exportAllMenuOpen, setExportAllMenuOpen] = useState(false);
     const [exportingAll, setExportingAll] = useState(false);
     const exportMenuRef = useRef<HTMLDivElement>(null);
-    const exportAllMenuRef = useRef<HTMLDivElement>(null);
 
     // Scan wizard state
     const [scanWizardOpen, setScanWizardOpen] = useState(false);
@@ -1195,6 +1199,82 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         }
     }
 
+    /**
+     * Read the selected export files and import them in a single request.
+     *
+     * Each file holds either one export object or an array of them (as the
+     * Export All download does). They are flattened into one payload so the
+     * server imports the whole selection atomically: either every scan lands
+     * or none does, which is what makes a failed import safe to retry.
+     */
+    async function handleImportFile(event: React.ChangeEvent<HTMLInputElement>) {
+        const files = Array.from(event.target.files ?? []);
+        if (files.length === 0) return;
+        setImporting(true);
+        setImportNotice(null);
+        try {
+            const exports: unknown[] = [];
+            for (const file of files) {
+                let parsed: unknown;
+                try {
+                    parsed = JSON.parse(await file.text());
+                } catch (err) {
+                    const reason = err instanceof SyntaxError
+                        ? 'it is not valid JSON'
+                        : 'it could not be read';
+                    setImportNotice({
+                        tone: 'error',
+                        text: `Import failed: "${file.name}" was skipped because ${reason}.`,
+                    });
+                    return;
+                }
+                if (Array.isArray(parsed)) exports.push(...parsed);
+                else exports.push(parsed);
+            }
+            if (exports.length === 0) {
+                setImportNotice({
+                    tone: 'error',
+                    text: 'Import failed: the selected file contains no scan exports.',
+                });
+                return;
+            }
+
+            const response = await ScansHandler.importExport(exports);
+            if (!response.ok) {
+                setImportNotice({ tone: 'error', text: response.error });
+                return;
+            }
+            const { result } = response;
+            const scanLabel = result.imported_count === 1
+                ? (result.format === 'diff' ? '1 scan diff' : '1 full scan result')
+                : `${result.imported_count.toLocaleString()} scans`;
+            const parts = [
+                `${result.package_count.toLocaleString()} packages`,
+                `${result.finding_count.toLocaleString()} findings`,
+            ];
+            if (result.assessment_count > 0) {
+                parts.push(`${result.assessment_count.toLocaleString()} assessments`);
+            }
+            const skipped = result.skipped_count > 0
+                ? ` Skipped ${result.skipped_count.toLocaleString()} already imported scan${result.skipped_count === 1 ? '' : 's'}.`
+                : '';
+            setImportNotice({
+                tone: 'success',
+                text: `Imported ${scanLabel} with ${parts.join(', ')}.${skipped}`,
+            });
+            refreshScans();
+            onScanComplete?.();
+        } catch {
+            setImportNotice({
+                tone: 'error',
+                text: 'Import failed while reading the selected files.',
+            });
+        } finally {
+            event.target.value = '';
+            setImporting(false);
+        }
+    }
+
     // Derive the effective variant IDs to scan: explicit prop or unique IDs from loaded scans
     const effectiveVariantIds: string[] = variantId
         ? [variantId]
@@ -1262,18 +1342,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             return () => document.removeEventListener('mousedown', handleClickOutside);
         }
     }, [exportMenuScanId]);
-
-    useEffect(() => {
-        function handleClickOutside(e: MouseEvent) {
-            if (exportAllMenuRef.current && !exportAllMenuRef.current.contains(e.target as Node)) {
-                setExportAllMenuOpen(false);
-            }
-        }
-        if (exportAllMenuOpen) {
-            document.addEventListener('mousedown', handleClickOutside);
-            return () => document.removeEventListener('mousedown', handleClickOutside);
-        }
-    }, [exportAllMenuOpen]);
 
     function toggleVariant(vid: string) {
         setSelectedVariantIds(prev => {
@@ -1412,14 +1480,13 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     });
 
     // -- Export All (grouped by project/variant) --
-    async function handleExportAll(type: 'diff' | 'total') {
-        setExportAllMenuOpen(false);
+    async function handleExportAll() {
         setExportingAll(true);
         try {
-            const params = new URLSearchParams({ type });
+            const params = new URLSearchParams({ type: 'diff' });
             if (variantId) params.set('variant_id', variantId);
             else if (projectId) params.set('project_id', projectId);
-            await downloadFromEndpoint(`/api/scans/export?${params}`, `scans_${type}.json`);
+            await downloadFromEndpoint(`/api/scans/export?${params}`, 'scans_diff.json');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to export scans.');
         } finally {
@@ -1440,6 +1507,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // Column sizing — single lane
     const LANE_W = 36;            // px – timeline column
     const mainCX = LANE_W / 2;    // center-x of the lane
+
+    const importNoticeBanner = importNotice && (
+        <div className="sticky top-0 z-40">
+            <MessageBanner
+                type={importNotice.tone}
+                message={importNotice.text}
+                isVisible={true}
+                onClose={() => setImportNotice(null)}
+            />
+        </div>
+    );
 
     const menuBar = (
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
@@ -1508,7 +1586,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 sbom-cve-check
             </button>
 
-            {/* Right side: doc link + export + scan menu */}
+            {/* Right side: doc link + import/export + scan menu */}
             <div className="ml-auto flex items-center gap-3">
                 <a
                     href={docUrl}
@@ -1521,41 +1599,48 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                     <FontAwesomeIcon icon={faBook} />
                 </a>
 
-                {/* Export All dropdown */}
-                {filteredScans.length > 0 && (
-                    <div className="relative" ref={exportAllMenuRef}>
-                        <button
-                            onClick={() => setExportAllMenuOpen(o => !o)}
-                            disabled={exportingAll}
-                            className={[
-                                "inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-semibold transition-colors",
-                                exportingAll
-                                    ? "bg-sky-800/50 text-sky-300 cursor-wait"
-                                    : "bg-sky-900 hover:bg-sky-950 text-white",
-                            ].join(' ')}
-                            title="Export scan history"
-                        >
-                            <FontAwesomeIcon icon={faDownload} />
-                            {exportingAll ? 'Exporting…' : 'Export'}
-                        </button>
+                <button
+                    type="button"
+                    onClick={() => importInputRef.current?.click()}
+                    disabled={importing}
+                    className={[
+                        "flex items-center gap-1.5 px-3 py-1 rounded text-white border border-green-500",
+                        importing
+                            ? "bg-green-800/50 cursor-wait"
+                            : "bg-green-700 hover:bg-green-600",
+                    ].join(' ')}
+                    title="Import exported scan data (one or more VulnScout JSON exports)"
+                >
+                    <FontAwesomeIcon icon={faFileImport} />
+                    {importing ? 'Importing…' : 'Import'}
+                </button>
+                <input
+                    ref={importInputRef}
+                    type="file"
+                    multiple
+                    accept=".json,application/json"
+                    className="hidden"
+                    aria-label="Choose exported scan data"
+                    onChange={handleImportFile}
+                />
 
-                        {exportAllMenuOpen && (
-                            <div className="absolute right-0 top-full mt-1 z-50 w-52 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-2">
-                                <button
-                                    onClick={() => handleExportAll('diff')}
-                                    className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
-                                >
-                                    Export All Diffs
-                                </button>
-                                <button
-                                    onClick={() => handleExportAll('total')}
-                                    className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
-                                >
-                                    Export All Scan Results
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                {/* Export all scan diffs */}
+                {filteredScans.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={handleExportAll}
+                        disabled={exportingAll}
+                        className={[
+                            "flex items-center gap-1.5 px-3 py-1 rounded text-white border border-green-500",
+                            exportingAll
+                                ? "bg-green-800/50 cursor-wait"
+                                : "bg-green-700 hover:bg-green-600",
+                        ].join(' ')}
+                        title="Export all scan diffs"
+                    >
+                        <FontAwesomeIcon icon={faDownload} />
+                        {exportingAll ? 'Exporting…' : 'Export'}
+                    </button>
                 )}
 
                 {/* Run scans wizard */}
@@ -1611,6 +1696,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     if (error) {
         return (
             <div className="w-full px-6 py-6">
+                {importNoticeBanner}
                 {menuBar}
                 <div className="flex items-center justify-center h-32 text-red-400">
                     {error}
@@ -1621,6 +1707,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     if (scans.length === 0) {
         return (
             <div className="w-full px-6 py-6">
+                {importNoticeBanner}
                 {menuBar}
                 <div className="flex items-center justify-center h-32 text-gray-400 dark:text-neutral-400">
                     No scans found.
@@ -1657,6 +1744,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             />
 
             <div className="w-full px-6 py-6">
+                {importNoticeBanner}
                 {menuBar}
 
                 {/* Timeline rows */}

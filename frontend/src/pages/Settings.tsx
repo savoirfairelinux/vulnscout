@@ -18,6 +18,7 @@ import {
   faGear,
   faRightLeft,
   faCircleQuestion,
+  faFileExport,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
@@ -31,22 +32,31 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
 import Popup from "../components/Popup";
 import Transfer from "./Transfer";
+import type { RefreshType } from "../handlers/activeScanQueue";
+import {
+  allVulnerabilityRefreshTypes,
+  resolveRefreshSources,
+  vulnerabilityRefreshSources,
+} from "../helpers/refreshSources";
+import type { RefreshMode } from "../helpers/refreshSources";
+import CustomExportContentManager from "../components/CustomExportContentManager";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
   onLoadingMessage?: (message: string | null) => void;
   projectId?: string;
+  initialTab?: SettingsTab;
 };
 
-type SettingsTab = "general" | "transfer" | "projects" | "variants";
+type SettingsTab = "general" | "transfer" | "custom-export" | "projects" | "variants";
 type FeedbackMsg = { text: string; type: "success" | "error" } | null;
 type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
   | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
 
-function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props>) {
+function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Readonly<Props>) {
   // ---- Active category tab ----
-  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
 
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
@@ -446,6 +456,16 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
   const [deleteProjectMsg, setDeleteProjectMsg] = useState<FeedbackMsg>(null);
+  const initialProjectAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (initialProjectAppliedRef.current || initialTab !== "projects" || !projectId) return;
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) return;
+    setRenameProjectId(project.id);
+    setRenameProjectName(project.name);
+    initialProjectAppliedRef.current = true;
+  }, [initialTab, projectId, projects]);
 
   const handleRenameProject = async () => {
     if (!renameProjectId || !renameProjectName.trim()) return;
@@ -621,7 +641,11 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
-  const [importRefreshSources, setImportRefreshSources] = useState<Set<string>>(new Set(["epss"]));
+  const [importRefreshMode, setImportRefreshMode] = useState<RefreshMode>("complete");
+  const [importCustomRefreshSources, setImportCustomRefreshSources] = useState<Set<RefreshType>>(
+    () => new Set(allVulnerabilityRefreshTypes),
+  );
+  const importRefreshSources = resolveRefreshSources(importRefreshMode, importCustomRefreshSources);
 
   const clearImportState = () => {
     setImportFiles([]);
@@ -732,6 +756,9 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
   } else if (activeTab === "transfer") {
     crumbs.push("Transfer");
     pageTitle = "Transfer Assessments";
+  } else if (activeTab === "custom-export") {
+    crumbs.push("Custom reports & assets");
+    pageTitle = "Custom reports & assets";
   } else {
     crumbs.push("General Settings");
   }
@@ -765,6 +792,17 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
             >
               <FontAwesomeIcon icon={faRightLeft} className="w-4 text-sky-400" aria-hidden="true" />
               Transfer Assessments
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("custom-export")}
+              aria-current={activeTab === "custom-export" ? "page" : undefined}
+              className={`mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                activeTab === "custom-export" ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
+              }`}
+            >
+              <FontAwesomeIcon icon={faFileExport} className="w-4 text-sky-400" aria-hidden="true" />
+              Custom reports &amp; assets
             </button>
 
             <div className="my-3 border-t border-slate-700" />
@@ -1379,6 +1417,10 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
           <Transfer projectId={projectId} onDataChanged={onDataChanged} />
         )}
 
+        {activeTab === "custom-export" && (
+          <CustomExportContentManager />
+        )}
+
         {/* ======== Variants Settings tab ======== */}
         {activeTab === "variants" && !variantProjectId && (
         <section aria-labelledby="settings-heading-variant-empty">
@@ -1499,27 +1541,62 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
               </p>
             </div>
 
-            <fieldset className="space-y-2">
+            <fieldset className="space-y-3" disabled={importBusy}>
               <legend className="block text-sm text-zinc-300 mb-1">Refresh vulnerability data</legend>
-              <div className="flex flex-wrap gap-x-5 gap-y-2">
-                {(["epss", "nvd", "euvd", "ghsa"] as const).map((source) => (
-                  <label key={source} className="flex items-center gap-2 text-sm text-zinc-200 cursor-pointer">
+              <p className="text-xs text-zinc-400">Optionally fetch current vulnerability data after the SBOM is imported.</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {([
+                  ["complete", "Complete refresh", "Refresh every supported data source."],
+                  ["custom", "Custom refresh", "Choose which data sources to refresh."],
+                ] as const).map(([mode, label, description]) => (
+                  <label key={mode} className={[
+                    "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 text-sm transition-colors",
+                    importRefreshMode === mode
+                      ? "border-cyan-500 bg-cyan-950/40 text-white"
+                      : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                  ].join(" ")}>
                     <input
-                      type="checkbox"
-                      aria-label={source.toUpperCase()}
-                      checked={importRefreshSources.has(source)}
-                      disabled={importBusy}
-                      onChange={() => setImportRefreshSources((previous) => {
+                      type="radio"
+                      name="import-refresh-mode"
+                      checked={importRefreshMode === mode}
+                      onChange={() => setImportRefreshMode(mode)}
+                      className="mt-0.5 accent-cyan-500"
+                    />
+                    <span className="flex flex-col">
+                      <span className="font-medium">{label}</span>
+                      <span className="mt-1 text-xs text-zinc-400">{description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {importRefreshMode === "custom" && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {vulnerabilityRefreshSources.map(({ source, label }) => (
+                    <label key={source} className={[
+                      "flex cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm transition-colors",
+                      importCustomRefreshSources.has(source)
+                        ? "border-cyan-600 bg-cyan-950/30 text-zinc-100"
+                        : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                    ].join(" ")}>
+                      <input
+                        type="checkbox"
+                        aria-label={label}
+                        checked={importCustomRefreshSources.has(source)}
+                        onChange={() => setImportCustomRefreshSources((previous) => {
                         const next = new Set(previous);
                         if (next.has(source)) next.delete(source); else next.add(source);
                         return next;
                       })}
                       className="rounded accent-cyan-500"
                     />
-                    {source.toUpperCase()}
-                  </label>
-                ))}
-              </div>
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              )}
+              {importRefreshMode === "custom" && importRefreshSources.size === 0 && (
+                <p className="text-xs text-zinc-400">The SBOM will be imported without refreshing vulnerability data.</p>
+              )}
             </fieldset>
 
             {/* ---- Submit ---- */}

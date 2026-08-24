@@ -1,512 +1,265 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import "@testing-library/jest-dom";
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
-
 import Exports from '../../src/pages/Exports';
 
+const documents = [
+    { id: 'summary.adoc', category: ['built-in'], extension: 'adoc | pdf' },
+    { id: 'assets/lolcat.jpg', category: ['custom'], extension: 'jpg' },
+    { id: 'SPDX 2.3', category: ['sbom'], extension: 'json | xml' },
+    { id: 'CycloneDX 1.6', category: ['sbom'], extension: 'json' },
+    { id: 'logo.png', category: ['assets'], extension: 'png' },
+];
+
+function loadProject() {
+    fetchMock
+        .mockResponseOnce(JSON.stringify(documents))
+        .mockResponseOnce(JSON.stringify([{ id: 'project-1', name: 'Demo Project' }]))
+        .mockResponseOnce(JSON.stringify([
+            { id: 'variant-1', name: 'alpha', project_id: 'project-1' },
+            { id: 'variant-2', name: 'beta', project_id: 'project-1' },
+        ]));
+}
+
 describe('Exports Page', () => {
+    beforeEach(() => fetchMock.resetMocks());
 
-    test('render file and allow direct download', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            {
-                id: "hello.adoc",
-                category: ['misc'],
-                extension: "adoc|pdf"
-            }
-        ]));
-
-        // ARRANGE
-        render(<Exports />);
-
-        // ASSERT - Just test that it renders without crashing
-        const exportTitle = await screen.findByText(/export/i);
-        expect(exportTitle).toBeInTheDocument();
-    })
-
-    test('handles empty response', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        // ARRANGE
-        render(<Exports />);
-
-        // ASSERT - Component should render without crashing
-        const exportTitle = await screen.findByText(/export/i);
-        expect(exportTitle).toBeInTheDocument();
-    })
-
-    test('handles fetch error gracefully', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockRejectOnce(new Error('Network error'));
-        const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-        // ARRANGE & ACT
-        render(<Exports />);
-
-        // ASSERT - Component should still render without crashing
-        const exportTitle = await screen.findByText(/export/i);
-        expect(exportTitle).toBeInTheDocument();
-        await waitFor(() => {
-            expect(consoleSpy).toHaveBeenCalledWith('Error:', expect.any(Error));
-        });
-        consoleSpy.mockRestore();
-    })
-
-    test('handles invalid document data gracefully', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { invalid: "data" },
-            { id: "valid.txt", category: ['misc'] }
-        ]));
-
-        // ARRANGE & ACT
-        render(<Exports />);
-
-        // ASSERT - Component should still render without crashing
-        const exportTitle = await screen.findByText(/export/i);
-        expect(exportTitle).toBeInTheDocument();
-    })
-
-    test('renders and displays documents in all tab', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" },
-            { id: "custom.pdf", category: ['custom'], extension: "pdf" },
-            { id: "sbom.json", category: ['sbom'], extension: "json" }
-        ]));
-
-        render(<Exports />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-        });
-
-        expect(screen.getByText(/custom\.pdf/i)).toBeInTheDocument();
-        expect(screen.getByText(/sbom\.json/i)).toBeInTheDocument();
-    })
-
-    test('filters documents by built-in tab', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" },
-            { id: "custom.pdf", category: ['custom'], extension: "pdf" },
-            { id: "sbom.json", category: ['sbom'], extension: "json" }
-        ]));
-
-        render(<Exports />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-        });
-
-        const builtInButton = screen.getByText('Built-in reports');
-        fireEvent.click(builtInButton);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-        });
-        expect(screen.queryByText(/custom\.pdf/i)).not.toBeInTheDocument();
-        expect(screen.queryByText(/sbom\.json/i)).not.toBeInTheDocument();
-    })
-
-    test('filters documents by custom tab', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" },
-            { id: "custom.pdf", category: ['custom'], extension: "pdf" }
-        ]));
-
-        render(<Exports />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-        });
-
-        const customButton = screen.getByText('Custom reports');
-        fireEvent.click(customButton);
-
-        await waitFor(() => {
-            expect(screen.getByText(/custom\.pdf/i)).toBeInTheDocument();
-        });
-        expect(screen.queryByText(/report\.adoc/i)).not.toBeInTheDocument();
-    })
-
-    test('keeps custom assets separate from custom reports', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" },
-            { id: "custom.pdf", category: ['custom'], extension: "pdf" }
-        ]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/custom\.pdf/i);
-
-        fireEvent.click(screen.getByRole('button', { name: 'Custom assets' }));
-
-        expect(screen.queryByText(/report\.adoc/i)).not.toBeInTheDocument();
-        expect(screen.queryByText(/custom\.pdf/i)).not.toBeInTheDocument();
-        expect(screen.getByText('No documents found')).toBeInTheDocument();
-        expect(container.querySelectorAll('input[type="file"]')).toHaveLength(1);
-        expect(screen.getByText(/Assets: \.png, \.jpg, \.webp, \.gif/i)).toBeInTheDocument();
-    })
-
-    test('filters documents by sbom tab', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" },
-            { id: "sbom.json", category: ['sbom'], extension: "json" }
-        ]));
-
-        render(<Exports />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-        });
-
-        const sbomButton = screen.getByText('SBOM files');
-        fireEvent.click(sbomButton);
-
-        await waitFor(() => {
-            expect(screen.getByText(/sbom\.json/i)).toBeInTheDocument();
-        });
-        expect(screen.queryByText(/report\.adoc/i)).not.toBeInTheDocument();
-    })
-
-    test('shows no documents message when filter has no results', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" }
-        ]));
-
-        render(<Exports />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-        });
-
-        const customButton = screen.getByText('Custom reports');
-        fireEvent.click(customButton);
-
-        await waitFor(() => {
-            expect(screen.getByText('No documents found')).toBeInTheDocument();
-        });
-    })
-
-    test('shows custom template message for custom tab with no documents', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        render(<Exports />);
-
-        const customButton = await screen.findByText('Custom reports');
-        fireEvent.click(customButton);
-
-        await waitFor(() => {
-            expect(screen.getByText('No documents found')).toBeInTheDocument();
-            expect(screen.getByText(/You can upload your own templates/i)).toBeInTheDocument();
-        });
-    })
-
-    test('handles documents without extension field', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.txt", category: ['built-in'] }
-        ]));
-
-        render(<Exports />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.txt/i)).toBeInTheDocument();
-        });
-    })
-
-    test('switches back to all tab', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" },
-            { id: "custom.pdf", category: ['custom'], extension: "pdf" }
-        ]));
-
-        render(<Exports />);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-        });
-
-        const customButton = screen.getByText('Custom reports');
-        fireEvent.click(customButton);
-
-        await waitFor(() => {
-            expect(screen.queryByText(/report\.adoc/i)).not.toBeInTheDocument();
-        });
-
-        const allButton = screen.getByText('All');
-        fireEvent.click(allButton);
-
-        await waitFor(() => {
-            expect(screen.getByText(/report\.adoc/i)).toBeInTheDocument();
-            expect(screen.getByText(/custom\.pdf/i)).toBeInTheDocument();
-        });
-    })
-
-    test('handles non-array response from API', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify({ invalid: 'response' }));
-
-        render(<Exports />);
-
-        const exportTitle = await screen.findByText(/export/i);
-        expect(exportTitle).toBeInTheDocument();
-    })
-
-    test('clicking a file tag toggles its opened state', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: "report.adoc", category: ['built-in'], extension: "adoc" }
-        ]));
-
-        render(<Exports />);
-
-        const fileButton = await screen.findByText(/report\.adoc/i);
-        fireEvent.click(fileButton);
-
-        // Clicking the file tag should toggle the download options
-        await waitFor(() => {
-            expect(screen.getByText(/Download/i)).toBeInTheDocument();
-        });
-
-        // Clicking again should close it
-        fireEvent.click(fileButton);
-    })
-
-    const uploadInput = (container: HTMLElement): HTMLInputElement =>
-        container.querySelector('input[type="file"]') as HTMLInputElement;
-
-    test('renders one upload dropzone for reports and assets', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-
-        await screen.findByText(/export/i);
-        expect(screen.getByRole('button', { name: /Upload a custom report or asset/i }))
-            .toBeInTheDocument();
-        expect(screen.getByText(/Drag & drop a custom report or asset here, or click to browse/i)).toBeInTheDocument();
-        expect(container.querySelectorAll('input[type="file"]')).toHaveLength(1);
-    })
-
-    test('routes report uploads through the shared file input', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/export/i);
-
-        fetchMock.mockResponseOnce(JSON.stringify({ id: 'report.adoc' }));
-        fireEvent.change(uploadInput(container), {
-            target: { files: [new File(['report'], 'report.adoc', { type: 'text/asciidoc' })] }
-        });
-
-        await screen.findByText(/Imported "report\.adoc"/i);
-        const [url] = fetchMock.mock.calls[fetchMock.mock.calls.length - 2];
-        expect(url).toContain('/api/documents/templates');
-    })
-
-    test('uploads an image asset successfully via the file input', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/export/i);
-
-        fetchMock.mockResponseOnce(JSON.stringify({ name: 'logo.png' }));
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: 'logo.png', category: ['assets'], extension: 'png' }
-        ]));
-
-        const file = new File(['binary'], 'logo.png', { type: 'image/png' });
-        fireEvent.change(uploadInput(container), { target: { files: [file] } });
-
-        await screen.findByText(/Uploaded "logo\.png"/i);
-    await screen.findByRole('button', { name: /logo\.png/i });
-
-        const assetRequest = fetchMock.mock.calls.find(([request]) =>
-            (typeof request === 'string' ? request : request?.url ?? '')
-                .includes('/api/documents/assets')
-        );
-        expect(assetRequest).toBeDefined();
-        const [url, options] = assetRequest!;
-        expect(typeof url === 'string' ? url : url?.url)
-            .toContain('/api/documents/assets');
-        expect(options?.method).toBe('POST');
-        const body = options?.body as FormData;
-        expect(body.get('file')).toBeInstanceOf(File);
-    })
-
-    test('shows the server error message when asset upload fails', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/export/i);
-
-        fetchMock.mockResponseOnce(JSON.stringify({ error: 'Invalid file type' }), { status: 400 });
-
-        const file = new File(['data'], 'bad.exe', { type: 'application/octet-stream' });
-        fireEvent.change(uploadInput(container), { target: { files: [file] } });
-
-        await screen.findByRole('alert');
-        expect(screen.getByText('Invalid file type')).toBeInTheDocument();
-    })
-
-    test('shows a generic error message when asset upload fails without a JSON body', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/export/i);
-
-        fetchMock.mockResponseOnce('', { status: 500 });
-
-        const file = new File(['data'], 'bad.png', { type: 'image/png' });
-        fireEvent.change(uploadInput(container), { target: { files: [file] } });
-
-        await screen.findByText(/Upload failed \(500\)/i);
-    })
-
-    test('shows an error message when asset upload fails due to a network error', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/export/i);
-
-        fetchMock.mockRejectOnce(new Error('Network down'));
-
-        const file = new File(['data'], 'logo.png', { type: 'image/png' });
-        fireEvent.change(uploadInput(container), { target: { files: [file] } });
-
-        await screen.findByText('Network down');
-    })
-
-    test('shows an uploading state while the asset upload is in progress', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/export/i);
-
-        let resolveUpload: (response: Response) => void = () => {};
-        fetchMock.mockImplementationOnce(() => new Promise((resolve) => { resolveUpload = resolve; }));
-
-        const file = new File(['binary'], 'logo.png', { type: 'image/png' });
-        fireEvent.change(uploadInput(container), { target: { files: [file] } });
-
-        await screen.findByText(/Uploading file…/i);
-
-        resolveUpload({
-            ok: true,
-            json: () => Promise.resolve({ name: 'logo.png' })
-        } as Response);
-
-        await screen.findByText(/Uploaded "logo\.png"/i);
-    })
-
-    test('dismisses the asset upload success message', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        const { container } = render(<Exports />);
-        await screen.findByText(/export/i);
-
-        fetchMock.mockResponseOnce(JSON.stringify({ name: 'logo.png' }));
-
-        const file = new File(['binary'], 'logo.png', { type: 'image/png' });
-        fireEvent.change(uploadInput(container), { target: { files: [file] } });
-
-        await screen.findByText(/Uploaded "logo\.png"/i);
-
-        fireEvent.click(screen.getByRole('button', { name: 'Dismiss message' }));
-
-        await waitFor(() => {
-            expect(screen.queryByText(/Uploaded "logo\.png"/i)).not.toBeInTheDocument();
-        });
-    })
-
-    test('drag and drop uploads an image asset and toggles the active drag style', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        render(<Exports />);
-        await screen.findByText(/export/i);
-
-        fetchMock.mockResponseOnce(JSON.stringify({ name: 'dropped.png' }));
-
-        const dropzone = screen.getByRole('button', { name: /Upload a custom report or asset/i });
-        const file = new File(['binary'], 'dropped.png', { type: 'image/png' });
-
-        fireEvent.dragEnter(dropzone);
-        expect(dropzone.className).toContain('border-sky-400');
-
-        fireEvent.dragLeave(dropzone);
-        expect(dropzone.className).not.toContain('border-sky-400');
-
-        fireEvent.dragOver(dropzone);
-        expect(dropzone.className).toContain('border-sky-400');
-
-        fireEvent.drop(dropzone, { dataTransfer: { files: [file] } });
-
-        await screen.findByText(/Uploaded "dropped\.png"/i);
-        expect(dropzone.className).not.toContain('border-sky-400');
-    })
-
-    test('clicking the asset dropzone opens the file browser', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-
-        render(<Exports />);
-        await screen.findByText(/export/i);
-
-        const clickSpy = jest.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
-
-        const dropzone = screen.getByRole('button', { name: /Upload a custom report or asset/i });
-        fireEvent.click(dropzone);
-
-        expect(clickSpy).toHaveBeenCalled();
-        clickSpy.mockRestore();
-    })
-
-    test('confirms the export scope before downloading', async () => {
-        fetchMock.resetMocks();
+    test('shows the in-page wizard and Settings management reminder', async () => {
         fetchMock
+            .mockResponseOnce(JSON.stringify(documents))
+            .mockResponseOnce(JSON.stringify([]));
+
+        render(<Exports />);
+
+        expect(await screen.findByRole('heading', { name: 'Export' })).toBeInTheDocument();
+        expect(screen.getByRole('region', { name: 'Create export' })).toBeInTheDocument();
+        expect(screen.getByText(/Settings > Custom reports & assets/i)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /upload a custom report or asset/i })).not.toBeInTheDocument();
+    });
+
+    test('shows report layout with export type before document selection', async () => {
+        loadProject();
+        render(<Exports projectId="project-1" variantId="variant-1" variantIds={['variant-1']} />);
+
+        expect(await screen.findByText(/choose the variants to export/i)).toHaveTextContent('Demo Project');
+        const alpha = screen.getByRole('checkbox', { name: 'alpha' });
+        const beta = screen.getByRole('checkbox', { name: 'beta' });
+        expect(alpha).toBeChecked();
+        expect(beta).toBeChecked();
+        fireEvent.click(beta);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        fireEvent.click(screen.getByRole('radio', { name: /^Reports/i }));
+        expect(screen.getByRole('heading', { name: 'Output layout' })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('radio', { name: /one set per variant/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+        expect(screen.queryByRole('checkbox', { name: /logo\.png/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('checkbox', { name: /lolcat\.jpg/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Custom assets' })).not.toBeInTheDocument();
+        const summary = screen.getByRole('group', { name: 'summary.adoc' });
+        const adoc = within(summary).getByRole('checkbox', { name: /^adoc$/i });
+        const pdf = within(summary).getByRole('checkbox', { name: /^pdf$/i });
+        expect(adoc).toBeDisabled();
+        expect(pdf).toBeDisabled();
+        const includeSummary = within(summary).getByRole('checkbox', { name: 'Include' });
+        expect(within(summary).queryByRole('checkbox', { name: 'summary.adoc' })).not.toBeInTheDocument();
+        fireEvent.click(includeSummary);
+        expect(adoc).toBeEnabled();
+        expect(pdf).toBeEnabled();
+        fireEvent.click(adoc);
+        expect(screen.queryByRole('checkbox', { name: /cyclonedx/i })).not.toBeInTheDocument();
+
+        fetchMock
+            .mockResponseOnce(JSON.stringify({ job_id: 'export-job-1' }), { status: 202 })
+            .mockResponseOnce(JSON.stringify({
+                status: 'done', current: 1, total: 1, progress: 'Export ready', logs: ['Generating 1 of 1 element: summary.adoc (adoc)'], error: null,
+            }))
+            .mockResponseOnce('zip-content', {
+            headers: {
+                'Content-Type': 'application/zip',
+                'Content-Disposition': 'attachment; filename="Demo_Project_by_variant_export.zip"',
+            },
+            });
+        const createObjectURL = jest.fn(() => 'blob:export');
+        const revokeObjectURL = jest.fn();
+        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        fireEvent.click(screen.getByRole('button', { name: /download export/i }));
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/documents/export'),
+            expect.objectContaining({ method: 'POST' }),
+        ));
+        const exportRequest = fetchMock.mock.calls.find(([, request]) => request?.method === 'POST');
+        expect(JSON.parse(String(exportRequest?.[1]?.body))).toEqual({
+            async: true,
+            project_id: 'project-1',
+            variant_ids: ['variant-1'],
+            mode: 'per_variant',
+            documents: [
+                { name: 'summary.adoc', extension: 'adoc' },
+            ],
+        });
+        await waitFor(() => expect(click).toHaveBeenCalled());
+
+        expect(createObjectURL).toHaveBeenCalled();
+        expect(revokeObjectURL).toHaveBeenCalledWith('blob:export');
+        delete (URL as Partial<typeof URL>).createObjectURL;
+        delete (URL as Partial<typeof URL>).revokeObjectURL;
+        click.mockRestore();
+    });
+
+    test('focuses each step heading after wizard navigation', async () => {
+        loadProject();
+        render(<Exports projectId="project-1" />);
+
+        await screen.findByRole('checkbox', { name: 'alpha' });
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        expect(screen.getByRole('heading', { name: 'What do you want to export?' })).toHaveFocus();
+
+        fireEvent.click(screen.getByRole('radio', { name: /^Reports/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        expect(screen.getByRole('heading', { name: 'Select reports' })).toHaveFocus();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        expect(screen.getByRole('heading', { name: 'What do you want to export?' })).toHaveFocus();
+    });
+
+    test('skips layout and forces per-variant ZIP for SBOM exports', async () => {
+        loadProject();
+        render(<Exports projectId="project-1" />);
+
+        await screen.findByRole('checkbox', { name: 'alpha' });
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        fireEvent.click(screen.getByRole('radio', { name: /^SBOM files/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+        expect(screen.getByRole('heading', { name: 'Select SBOM files' })).toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: /Consolidated/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('checkbox', { name: /summary\.adoc/i })).not.toBeInTheDocument();
+        const spdx = screen.getByRole('group', { name: 'SPDX 2.3' });
+        const spdxJson = within(spdx).getByRole('checkbox', { name: /json/i });
+        const spdxXml = within(spdx).getByRole('checkbox', { name: /xml/i });
+        expect(spdxJson).toBeDisabled();
+        expect(spdxXml).toBeDisabled();
+        fireEvent.click(within(spdx).getByRole('checkbox', { name: 'Include' }));
+        expect(spdxJson).toBeEnabled();
+        expect(spdxXml).toBeEnabled();
+        fireEvent.click(spdxXml);
+        expect(spdxXml).toBeChecked();
+        fireEvent.click(within(spdx).getByRole('checkbox', { name: 'Include' }));
+        expect(spdxXml).toBeDisabled();
+        expect(spdxXml).not.toBeChecked();
+        fireEvent.click(within(spdx).getByRole('checkbox', { name: 'Include' }));
+        fireEvent.click(spdxXml);
+
+        const cycloneDx = screen.getByRole('group', { name: 'CycloneDX 1.6' });
+        fireEvent.click(within(cycloneDx).getByRole('checkbox', { name: 'Include' }));
+        const cycloneDxJson = within(cycloneDx).getByRole('checkbox', { name: /json/i });
+        expect(cycloneDxJson).toBeChecked();
+        expect(cycloneDxJson).toBeDisabled();
+
+        fetchMock
+            .mockResponseOnce(JSON.stringify({ job_id: 'export-job-2' }), { status: 202 })
+            .mockResponseOnce(JSON.stringify({
+                status: 'done', current: 4, total: 4, progress: 'Export ready', logs: ['Generating 4 of 4 element: beta: CycloneDX 1.6 (json)'], error: null,
+            }))
+            .mockResponseOnce('zip-content', {
+                headers: { 'Content-Type': 'application/zip' },
+            });
+        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: jest.fn(() => 'blob:sbom') });
+        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: jest.fn() });
+        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        fireEvent.click(screen.getByRole('button', { name: /download export/i }));
+
+        await waitFor(() => expect(click).toHaveBeenCalled());
+        const exportRequest = fetchMock.mock.calls.find(([, request]) => request?.method === 'POST');
+        expect(JSON.parse(String(exportRequest?.[1]?.body))).toEqual({
+            async: true,
+            project_id: 'project-1',
+            variant_ids: ['variant-1', 'variant-2'],
+            mode: 'per_variant',
+            documents: [
+                { name: 'SPDX 2.3', extension: 'xml' },
+                { name: 'CycloneDX 1.6', extension: 'json' },
+            ],
+        });
+
+        delete (URL as Partial<typeof URL>).createObjectURL;
+        delete (URL as Partial<typeof URL>).revokeObjectURL;
+        click.mockRestore();
+    });
+
+    test('requires at least one selected variant', async () => {
+        loadProject();
+        render(<Exports projectId="project-1" />);
+
+        await screen.findByRole('checkbox', { name: 'alpha' });
+        fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+
+        expect(screen.getByText(/0 of 2 selected/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
+        expect(screen.getByText(/2 of 2 selected/i)).toBeInTheDocument();
+    });
+
+    test('selects and clears all reports visible in a category', async () => {
+        loadProject();
+        render(<Exports projectId="project-1" />);
+
+        await screen.findByRole('checkbox', { name: 'alpha' });
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        fireEvent.click(screen.getByRole('radio', { name: /^Reports/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Built-in reports' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Select visible' }));
+        expect(screen.getByText('2 selected')).toBeInTheDocument();
+        expect(within(screen.getByRole('group', { name: 'summary.adoc' })).getByRole('checkbox', { name: 'Include' })).toBeChecked();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Clear visible' }));
+        expect(screen.getByText('0 selected')).toBeInTheDocument();
+        expect(within(screen.getByRole('group', { name: 'summary.adoc' })).getByRole('checkbox', { name: 'Include' })).not.toBeChecked();
+    });
+
+    test('requires a navbar project selection', async () => {
+        fetchMock
+            .mockResponseOnce(JSON.stringify(documents))
+            .mockResponseOnce(JSON.stringify([]));
+        render(<Exports />);
+
+        expect(await screen.findByText(/select a project from the navigation bar/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    });
+
+    test('ignores variants returned for an earlier project', async () => {
+        let resolveFirst: (value: Response) => void = () => undefined;
+        fetchMock
+            .mockResponseOnce(JSON.stringify(documents))
             .mockResponseOnce(JSON.stringify([
-                { id: "report.adoc", category: ['built-in'], extension: "pdf" }
+                { id: 'project-1', name: 'First' },
+                { id: 'project-2', name: 'Second' },
             ]))
+            .mockImplementationOnce(() => new Promise<Response>(resolve => { resolveFirst = resolve; }))
             .mockResponseOnce(JSON.stringify([
-                { id: "project-1", name: "Demo Project" }
-            ]))
-            .mockResponseOnce(JSON.stringify([
-                { id: "variant-1", name: "v1", project_id: "project-1" },
-                { id: "variant-2", name: "v2", project_id: "project-1" }
+                { id: 'variant-2', name: 'second variant', project_id: 'project-2' },
             ]));
+        const { rerender } = render(<Exports projectId="project-1" />);
+        rerender(<Exports projectId="project-2" />);
 
-        render(<Exports projectId="project-1" variantIds={["variant-1", "variant-2"]} />);
+        expect(await screen.findByRole('checkbox', { name: 'second variant' })).toBeInTheDocument();
+        resolveFirst(new Response(JSON.stringify([
+            { id: 'variant-1', name: 'first variant', project_id: 'project-1' },
+        ]), { status: 200 }));
 
-        const fileButton = await screen.findByText(/report\.adoc/i);
-        fireEvent.click(fileButton);
-        fireEvent.click(screen.getByRole('link', { name: /download pdf/i }));
-
-        expect(await screen.findByText(/this will export report\.adoc \(pdf document\) for the project demo project/i)).toBeInTheDocument();
-        expect(screen.getByText('v1')).toBeInTheDocument();
-        expect(screen.getByText('v2')).toBeInTheDocument();
-        expect(screen.getByText(/change the export scope using the selector/i)).toBeInTheDocument();
-
-        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-        expect(screen.queryByText(/this will export/i)).not.toBeInTheDocument();
-    })
+        await waitFor(() => expect(screen.queryByRole('checkbox', { name: 'first variant' })).not.toBeInTheDocument());
+    });
 });

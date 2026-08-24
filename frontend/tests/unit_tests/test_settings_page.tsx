@@ -115,6 +115,14 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.queryByRole("heading", { name: "Add Project" })).not.toBeInTheDocument();
   });
 
+  test("opens an initial project from the project list", async () => {
+    render(<Settings initialTab="projects" projectId={project.id} />);
+
+    expect(await screen.findByDisplayValue("Apollo")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Add Project" })).not.toBeInTheDocument();
+  });
+
   test("the project add-variant action opens an add form scoped to that project", async () => {
     render(<Settings />);
 
@@ -137,6 +145,9 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.getByRole("heading", { name: "Rename Variant" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete Variant" })).toBeInTheDocument();
     expect(screen.getByLabelText("SBOM Files")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Complete refresh/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Custom refresh/ })).not.toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: "NVD" })).not.toBeInTheDocument();
   });
 
   test("saves report metadata and Grype memory settings", async () => {
@@ -268,19 +279,71 @@ describe("Settings scoped project and variant views", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
 
     expect(await screen.findByText("Upload rejected")).toBeInTheDocument();
-    expect(variantsUploadSBOM).toHaveBeenCalledWith(project.id, variant.id, [file], ["epss"]);
+    expect(variantsUploadSBOM).toHaveBeenCalledWith(
+      project.id,
+      variant.id,
+      [file],
+      ["nvd", "epss", "ghsa", "euvd"],
+    );
   });
 
-  test("updates import refresh sources, removes selected files, and navigates settings sections", async () => {
+  test("custom import refresh submits only selected sources", async () => {
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Release" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Custom refresh/ }));
+    expect(screen.getByRole("checkbox", { name: "NVD" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "EPSS" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "GHSA" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "ENISA EUVD" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "NVD" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "GHSA" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "ENISA EUVD" }));
+    const file = new File(["{}"], "sbom.json", { type: "application/json" });
+    fireEvent.change(screen.getByLabelText("SBOM Files"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
+      project.id,
+      variant.id,
+      [file],
+      ["epss"],
+    ));
+  });
+
+  test("custom import refresh can be disabled without disabling import", async () => {
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Release" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Custom refresh/ }));
+    for (const source of ["NVD", "EPSS", "GHSA", "ENISA EUVD"]) {
+      fireEvent.click(screen.getByRole("checkbox", { name: source }));
+    }
+    expect(screen.getByText("The SBOM will be imported without refreshing vulnerability data.")).toBeInTheDocument();
+
+    const file = new File(["{}"], "sbom.json", { type: "application/json" });
+    fireEvent.change(screen.getByLabelText("SBOM Files"), { target: { files: [file] } });
+    expect(screen.getByRole("button", { name: "Import" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
+      project.id,
+      variant.id,
+      [file],
+      [],
+    ));
+  });
+
+  test("removes selected import files and navigates settings sections", async () => {
     render(<Settings />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
     fireEvent.click(screen.getByRole("button", { name: "Release" }));
     const file = new File(["{}"], "sbom.json", { type: "application/json" });
     fireEvent.change(await screen.findByLabelText("SBOM Files"), { target: { files: [file] } });
-    fireEvent.click(screen.getByLabelText("NVD"));
-    fireEvent.click(screen.getByLabelText("EUVD"));
-    fireEvent.click(screen.getByLabelText("GHSA"));
     fireEvent.click(screen.getByRole("button", { name: "Remove file sbom.json" }));
     expect(screen.queryByText("sbom.json")).not.toBeInTheDocument();
 
@@ -288,6 +351,37 @@ describe("Settings scoped project and variant views", () => {
     expect(await screen.findByRole("heading", { name: "Copy Custom Assessments" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
     expect(await screen.findByRole("heading", { name: "Report Metadata" })).toBeInTheDocument();
+  });
+
+  test("manages custom reports and assets from its Settings tab", async () => {
+    const fetchFunction = global.fetch as jest.Mock;
+    fetchFunction.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve([
+        { id: "custom.adoc", category: ["custom"], extension: "adoc" },
+        { id: "logo.png", category: ["assets"], extension: "png" },
+      ]),
+    } as Response);
+    const { container } = render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Custom reports & assets" }));
+
+    expect(await screen.findByRole("heading", { name: "Custom reports (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Custom assets (1)" })).toBeInTheDocument();
+    expect(screen.getByText("custom.adoc")).toBeInTheDocument();
+    expect(screen.getByText("logo.png")).toBeInTheDocument();
+
+    fetchFunction
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "new.adoc" }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response);
+    fireEvent.change(container.querySelector('input[type="file"][accept*=".adoc"]')!, {
+      target: { files: [new File(["report"], "new.adoc", { type: "text/asciidoc" })] },
+    });
+
+    expect(await screen.findByText(/Imported "new\.adoc"/)).toBeInTheDocument();
+    expect(fetchFunction.mock.calls.some(([url, options]) =>
+      String(url).includes("/api/documents/templates") && options?.method === "POST"
+    )).toBe(true);
   });
 
   test("opens and cancels editing an existing NVD API key", async () => {

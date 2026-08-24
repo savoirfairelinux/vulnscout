@@ -1,351 +1,90 @@
-import { useEffect, useState, useCallback, useRef } from "react";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-    faThumbTack, faFolderOpen, faFileShield, faBoxes, faCloudArrowUp, faSpinner, faXmark, faImage,
-} from "@fortawesome/free-solid-svg-icons";
-import FileTag from "../components/FileTag";
-import PopupExportOptions from "../components/PopupExportOptions";
-import type { Options as PopupOptions } from "../components/PopupExportOptions";
-import ConfirmationModal from "../components/ConfirmationModal";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faGear } from "@fortawesome/free-solid-svg-icons";
+import ExportWizard from "../components/ExportWizard";
+import type { ExportDocument } from "../components/ExportWizard";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
 
-
-type ExportDoc = {
-    id: string;
-    category: string[];
-    extension: string;
-}
-
-const assetExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
-const templateAccept = ".adoc,.asciidoc,.html,.htm,.md,.markdown,.csv,.txt,.json,.xml,.tex,.j2,.jinja,.jinja2";
-const assetAccept = ".png,.jpg,.jpeg,.gif,.webp";
-
-const asExportDoc = (data: any): ExportDoc | [] => {
-    if (typeof data !== "object") return [];
-    if (typeof data?.id !== "string") return [];
-    let item: ExportDoc = {
+const asExportDocument = (data: any): ExportDocument | [] => {
+    if (typeof data !== "object" || typeof data?.id !== "string") return [];
+    return {
         id: data.id,
-        category: [],
-        extension: "unk"
+        category: Array.isArray(data.category)
+            ? data.category.filter((entry: any) => typeof entry === "string")
+            : [],
+        extension: typeof data.extension === "string"
+            ? data.extension
+            : data.id.split(".").at(-1) ?? "unk",
     };
-    if (Array.isArray(data?.category))
-        item.category = data.category.filter((e: any) => typeof e === "string");
-    if (typeof data?.extension === "string")
-        item.extension = data.extension;
-    else if (typeof data?.id?.split('.')?.at(-1) === "string")
-        item.extension = data.id.split('.').at(-1);
-    return item
-}
-
-
-type PendingDownload = {
-  exportType: string;
-  url: string;
 };
 
 type Props = {
-  variantId?: string;
-  projectId?: string;
-  variantIds?: string[];
+    projectId?: string;
+    variantId?: string;
+    variantIds?: string[];
 };
 
-function Exports ({ variantId, projectId, variantIds }: Readonly<Props>) {
-    const [tab, setTab] = useState<string>("all");
-    const [docs, setDocs] = useState<ExportDoc[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [variants, setVariants] = useState<Variant[]>([]);
-    const [openDl, setOpenDl] = useState<string | null>(null);
-  const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(null);
-    const [popupOptions, setPopupOptions] = useState<PopupOptions|undefined>(undefined);
-    const [dragActive, setDragActive] = useState<boolean>(false);
-    const [uploading, setUploading] = useState<boolean>(false);
-    const [uploadError, setUploadError] = useState<string | null>(null);
-    const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
+function Exports({ projectId }: Readonly<Props>) {
+    const [documents, setDocuments] = useState<ExportDocument[]>([]);
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [variants, setVariants] = useState<Variant[]>([]);
+    const variantLoadGeneration = useRef(0);
 
-    const loadDocs = useCallback(() => {
-        fetch(import.meta.env.VITE_API_URL + "/api/documents", {
-            mode: 'cors'
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (Array.isArray(data)) {
-                setDocs(data.flatMap(asExportDoc));
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-        })
+    const loadDocuments = useCallback(() => {
+        fetch(import.meta.env.VITE_API_URL + "/api/documents", { mode: "cors" })
+            .then(response => response.json())
+            .then(data => setDocuments(Array.isArray(data) ? data.flatMap(asExportDocument) : []))
+            .catch(error => {
+                console.error("Error:", error);
+                setDocuments([]);
+            });
     }, []);
 
+    useEffect(() => loadDocuments(), [loadDocuments]);
     useEffect(() => {
-        loadDocs();
-    }, [loadDocs]);
-
-    useEffect(() => {
-      Projects.list().then(setProjects).catch(() => setProjects([]));
+        Projects.list().then(setProjects).catch(() => setProjects([]));
     }, []);
-
     useEffect(() => {
-      if (!projectId) {
+        const generation = ++variantLoadGeneration.current;
         setVariants([]);
-        return;
-      }
-      Variants.list(projectId).then(setVariants).catch(() => setVariants([]));
+        if (!projectId) {
+            return;
+        }
+        Variants.list(projectId)
+            .then(result => {
+                if (generation === variantLoadGeneration.current) setVariants(result);
+            })
+            .catch(() => {
+                if (generation === variantLoadGeneration.current) setVariants([]);
+            });
     }, [projectId]);
 
-    const uploadTemplate = useCallback((file: File) => {
-        setUploadError(null);
-        setUploadSuccess(null);
-        setUploading(true);
-        const body = new FormData();
-        body.append("file", file);
-        fetch(import.meta.env.VITE_API_URL + "/api/documents/templates", {
-            mode: 'cors',
-            method: 'POST',
-            body,
-        })
-        .then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(data?.error || `Import failed (${res.status})`);
-            }
-            setUploadSuccess(`Imported "${data?.id ?? file.name}".`);
-            setTab("custom");
-            loadDocs();
-        })
-        .catch((error) => {
-            setUploadError(error instanceof Error ? error.message : String(error));
-        })
-        .finally(() => {
-            setUploading(false);
-        });
-    }, [loadDocs]);
+    const project = projects.find(current => current.id === projectId);
 
-    const uploadAsset = useCallback((file: File) => {
-        setUploadError(null);
-        setUploadSuccess(null);
-        setUploading(true);
-        const body = new FormData();
-        body.append("file", file);
-        fetch(import.meta.env.VITE_API_URL + "/api/documents/assets", {
-            mode: 'cors',
-            method: 'POST',
-            body,
-        })
-        .then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(data?.error || `Upload failed (${res.status})`);
-            }
-            setUploadSuccess(`Uploaded "${data?.name ?? file.name}".`);
-            setTab("assets");
-            loadDocs();
-        })
-        .catch((error) => {
-            setUploadError(error instanceof Error ? error.message : String(error));
-        })
-        .finally(() => {
-            setUploading(false);
-        });
-    }, [loadDocs]);
-
-    const onFilesSelected = useCallback((files: FileList | null) => {
-        if (files && files.length > 0) {
-        const extension = files[0].name.split(".").pop()?.toLowerCase() ?? "";
-        if (tab === "assets" || (tab === "all" && assetExtensions.has(extension))) {
-                uploadAsset(files[0]);
-            } else {
-                uploadTemplate(files[0]);
-            }
-        }
-    }, [tab, uploadAsset, uploadTemplate]);
-
-    const onDrop = useCallback((e: React.DragEvent<HTMLElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setDragActive(false);
-        onFilesSelected(e.dataTransfer.files);
-    }, [onFilesSelected]);
-
-    const visibleDocs = docs.filter((doc) =>
-      (doc.category.includes(tab) || tab === "all")
-      && (tab !== "custom" || !assetExtensions.has(doc.extension.toLowerCase()))
-    );
-    const selectedVariantIds = variantIds?.length ? variantIds : (variantId ? [variantId] : []);
-    const scopedVariants = selectedVariantIds.length
-      ? variants.filter(variant => selectedVariantIds.includes(variant.id))
-      : variants;
-    const projectName = projects.find(project => project.id === projectId)?.name ?? 'the selected project';
-
-    const handleContinueDownload = () => {
-      if (!pendingDownload) return;
-      window.open(pendingDownload.url, '_blank', 'noopener,noreferrer');
-      setPendingDownload(null);
-    };
-
-
-    return (<>
-        <div className="w-full pt-32 flex justify-center" onClick={() => setOpenDl(null)}>
-        <div className="w-[70%]">
-            <h1 className="text-3xl font-bold mb-4">Export</h1>
-            <p className="mb-6">Generate reports and SBOM files from your scan results.</p>
-
-            {/* Tabs */}
-            <div className="flex gap-2 bg-sky-800 rounded-2xl p-2 shadow-lg backdrop-blur-md justify-center">
-            {[
-                { key: "all", icon: faBoxes, label: "All" },
-
-                { key: "built-in", icon: faThumbTack, label: "Built-in reports" },
-                { key: "custom", icon: faFolderOpen, label: "Custom reports" },
-                { key: "assets", icon: faImage, label: "Custom assets" },
-                { key: "sbom", icon: faFileShield, label: "SBOM files" },
-            ].map(({ key, icon, label }) => (
-                <button
-                key={key}
-                onClick={(e) => {
-                    e.stopPropagation()
-                    setTab(key)
-                    setOpenDl(null)
-                }}
-                className={[
-                    "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200",
-                    tab === key
-                    ? "bg-white/20 text-white shadow-inner"
-                    : "text-white/70 hover:text-white hover:bg-white/10",
-                ].join(" ")}
-                >
-                <FontAwesomeIcon icon={icon} className="w-4 h-4" />
-                {label}
-                </button>
-            ))}
+    return <div className="w-full space-y-6">
+        <div className="space-y-6">
+            <div>
+                <h1 className="text-3xl font-bold text-white">Export</h1>
+                <p className="mt-2 text-base text-neutral-400">Generate reports and SBOM files for the selected project.</p>
             </div>
-    </div>
-</div>
 
-<div className="w-full pt-4 flex justify-center">
-  <div className="w-[70%] bg-gray-700 from-zinc-800 to-zinc-900 rounded-3xl p-6 grid grid-cols-3 gap-6 justify-center shadow-xl border border-white/10 backdrop-blur-sm">
-    {visibleDocs.map((doc) => (
-      <FileTag
-        name={doc.id}
-        key={encodeURIComponent(doc.id)}
-        extension={doc.extension}
-        variantId={variantId}
-        projectId={projectId}
-        opened={openDl === doc.id}
-        onOpen={() => openDl === doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
-        onRequestDownload={(exportType, url) => setPendingDownload({ exportType, url })}
-      />
-    ))}
+            <div className="flex items-center gap-4 rounded-lg border border-sky-800/70 bg-sky-950/30 px-6 py-5 text-lg text-sky-100">
+                <FontAwesomeIcon icon={faGear} className="shrink-0 text-sky-400" aria-hidden="true" />
+                <p>Custom report templates and their image assets can be managed from <span className="font-semibold text-white">Settings &gt; Custom reports &amp; assets</span>.</p>
+            </div>
 
-    {visibleDocs.length === 0 && (
-      <div className="col-span-2 flex flex-col items-center justify-center text-white/70 w-full py-10">
-        <div className="text-lg font-medium">No documents found</div>
-        {tab === 'custom' && (
-          <div className="mt-2 text-sm">
-            You can upload your own templates in
-            <code className="p-1 mx-1 bg-white/10 rounded">.vulnscout/templates</code>
-          </div>
-        )}
-      </div>
-    )}
-  </div>
-</div>
-
-{(tab === 'custom' || tab === 'assets' || tab === 'all') && (
-<div className="w-full pt-4 flex justify-center">
-  <div className="w-[70%]">
-    <input
-      ref={fileInputRef}
-      type="file"
-      className="hidden"
-      accept={tab === "assets" ? assetAccept : tab === "all" ? `${templateAccept},${assetAccept}` : templateAccept}
-      onChange={(e) => { onFilesSelected(e.target.files); e.target.value = ""; }}
-    />
-    <button
-      type="button"
-      onClick={() => !uploading && fileInputRef.current?.click()}
-      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragActive(true); }}
-      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDragActive(true); }}
-      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragActive(false); }}
-      onDrop={onDrop}
-      aria-label="Upload a custom report or asset"
-      className={[
-        "w-full flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed",
-        "px-6 py-8 text-center transition-colors duration-150 cursor-pointer",
-        dragActive
-          ? "border-sky-400 bg-sky-900/40 text-white"
-          : "border-white/20 bg-gray-700/40 text-white/70 hover:border-white/35 hover:text-white",
-        uploading && "cursor-wait opacity-70",
-      ].filter(Boolean).join(" ")}
-      disabled={uploading}
-    >
-      <FontAwesomeIcon
-        icon={uploading ? faSpinner : faCloudArrowUp}
-        className={["text-2xl", uploading && "animate-spin"].filter(Boolean).join(" ")}
-        aria-hidden="true"
-      />
-      <div className="text-base font-medium">
-        {uploading ? "Uploading file…" : "Drag & drop a custom report or asset here, or click to browse"}
-      </div>
-      <div className="text-xs text-white/60">
-        {tab === "assets"
-          ? "Assets: .png, .jpg, .webp, .gif (SVG is not accepted for upload)"
-          : tab === "custom"
-            ? "Reports: .adoc, .html, .md, .csv, .txt, .json, .xml, .tex, .j2"
-            : "Reports: .adoc, .html, .md, .csv, .txt, .json, .xml, .tex, .j2 · Assets: .png, .jpg, .webp, .gif"}
-      </div>
-    </button>
-    {uploadError && (
-      <div role="alert" className="mt-3 text-sm text-red-300 bg-red-900/40 border border-red-700 rounded-lg px-4 py-2">
-        {uploadError}
-      </div>
-    )}
-    {uploadSuccess && (
-      <div role="status" className="mt-3 flex items-start justify-between gap-2 text-sm text-green-300 bg-green-900/40 border border-green-700 rounded-lg px-4 py-2">
-        <span>{uploadSuccess}</span>
-        <button
-          type="button"
-          onClick={() => setUploadSuccess(null)}
-          aria-label="Dismiss message"
-          className="shrink-0 text-green-300/80 hover:text-white transition-colors"
-        >
-          <FontAwesomeIcon icon={faXmark} className="w-4 h-4" />
-        </button>
-      </div>
-    )}
-
-  </div>
-</div>
-)}
-
-
-
-        {popupOptions && <PopupExportOptions
-            docName={popupOptions.docName}
-            extension={popupOptions.extension}
-            onClose={() => {setPopupOptions(undefined)}}
-        ></PopupExportOptions>}
-        <ConfirmationModal
-          isOpen={pendingDownload !== null}
-          title="Confirm export"
-          message=""
-          confirmText="Continue"
-          cancelText="Cancel"
-          onConfirm={handleContinueDownload}
-          onCancel={() => setPendingDownload(null)}
-        >
-          <p>This will export {pendingDownload?.exportType} for the project {projectName}.</p>
-          <p className="mt-4">It covers the following variants:</p>
-          <ul className="mt-2 list-disc list-inside text-left">
-            {scopedVariants.map(variant => <li key={variant.id}>{variant.name}</li>)}
-          </ul>
-          <p className="mt-4">You can change the export scope using the selector in the upper-right corner of the page.</p>
-        </ConfirmationModal>
-    </>);
+            <ExportWizard
+                isOpen={true}
+                embedded={true}
+                project={project}
+                variants={variants}
+                documents={documents}
+            />
+        </div>
+    </div>;
 }
 
 export default Exports;

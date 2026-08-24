@@ -394,9 +394,15 @@ class Templates:
     def list_documents(self):
         docs = []
         try:
-            internal = self.internal_loader.list_templates()
+            internal = [
+                template for template in self.internal_loader.list_templates()
+                if not template.startswith("assets/")
+            ]
             docs.extend([{"id": doc, "is_template": True, "category": ["built-in"]} for doc in internal])
-            external = self.external_loader.list_templates()
+            external = [
+                template for template in self.external_loader.list_templates()
+                if not template.startswith("assets/")
+            ]
             docs.extend([{"id": doc, "is_template": True, "category": ["custom"]} for doc in external])
         except Exception as e:
             print(e)

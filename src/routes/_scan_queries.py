@@ -39,6 +39,9 @@ AssessmentRow: TypeAlias = Row[Tuple[
     Optional[str],      # status_notes
     str,                # vulnerability_id
     Optional[str],      # origin
+    Optional[str],      # package name
+    Optional[str],      # package version
+    Optional[str],      # package supplier
 ]]
 
 
@@ -218,13 +221,21 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
     Returns a list of tuples:
         (scan_id, assessment_id, assessment_timestamp,
          status, simplified_status, justification, impact_statement,
-         status_notes, vulnerability_id, origin)
+         status_notes, vulnerability_id, origin,
+         package_name, package_version, package_supplier)
+
+    The package columns identify the finding the assessment is attached to.
+    An assessment applies to one (package, vulnerability) pair, not to a
+    vulnerability across every package, so consumers that serialise it — the
+    scan export in particular — need the package to round-trip it faithfully.
+    They are appended last so existing positional access stays valid.
 
     The query logic:
       - Start FROM observation
       - JOIN finding ON finding.id = observation.finding_id
       - JOIN assessment ON assessment.finding_id = finding.id
       - JOIN scan ON scan.id = observation.scan_id
+      - JOIN package ON package.id = finding.package_id
       - WHERE observation.scan_id IN (scan_ids)
             AND assessment.variant_id = scan.variant_id
     """
@@ -245,11 +256,15 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
             Assessment.status_notes,
             Finding.vulnerability_id,
             Assessment.origin,
+            Package.name,
+            Package.version,
+            Package.supplier,
         )
         .select_from(Observation)
         .join(Finding, Finding.id == Observation.finding_id)
         .join(Assessment, Assessment.finding_id == Finding.id)
         .join(Scan, Scan.id == Observation.scan_id)
+        .join(Package, Package.id == Finding.package_id)
         .where(
             Observation.scan_id.in_(scan_ids),
             Assessment.variant_id == Scan.variant_id,
@@ -431,6 +446,11 @@ def _assessments_detail_for_scan(
             "justification": row[5] or "",
             "impact_statement": row[6] or "",
             "status_notes": row[7] or "",
+            # The finding this assessment belongs to, so consumers can tell it
+            # apart from an assessment of the same vulnerability elsewhere.
+            "package_name": row[10] or "",
+            "package_version": row[11] or "",
+            "package_supplier": row[12] or "",
         }
         # "Added" = created during this scan's window [scan_ts, next_scan_ts)
         is_added = False
@@ -482,6 +502,9 @@ def _assessments_detail_for_scan(
                     "justification": row[5] or "",
                     "impact_statement": row[6] or "",
                     "status_notes": row[7] or "",
+                    "package_name": row[10] or "",
+                    "package_version": row[11] or "",
+                    "package_supplier": row[12] or "",
                 })
         removed_list.sort(key=lambda e: e["vulnerability_id"])
 

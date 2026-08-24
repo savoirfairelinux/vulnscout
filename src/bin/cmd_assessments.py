@@ -14,6 +14,7 @@ from ..helpers.assessment_io import (
     import_statements,
     build_custom_data_export,
     import_custom_data,
+    reconcile_review_export,
 )
 from ..models.assessment import Assessment as DBAssessment
 from ..models.variant import Variant as DBVariant
@@ -61,8 +62,10 @@ def _print_custom_data_import_result(result: dict) -> None:
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help="Variant name. If empty, all project variants are exported.")
+@click.option("--amend", is_flag=True,
+              help="Update the existing output file while preserving stable review ordering.")
 @with_appcontext
-def export_custom_vulnscout_data_command(output_dir: str, project: str, variant: str | None) -> None:
+def export_custom_vulnscout_data_command(output_dir: str, project: str, variant: str | None, amend: bool) -> None:
     """Export custom VulnScout JSON data for one or all project variants."""
     project_obj = resolve_project(project)
     if variant:
@@ -83,6 +86,8 @@ def export_custom_vulnscout_data_command(output_dir: str, project: str, variant:
         raise click.ClickException("No custom VulnScout data to export.")
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"custom_vulnscout_data_{filename_label}{_JSON_SUFFIX}")
+    if amend:
+        data = reconcile_review_export(_load_json_file(output_path), data)
     with open(output_path, "w") as file:
         _json.dump(data, file, indent=2)
     click.echo(f"Custom VulnScout data exported: {output_path}")
@@ -119,10 +124,12 @@ def import_custom_vulnscout_data_command(
 @click.command("export-custom-openvex-assessments")
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
-@click.option("--project", "-p", required=True, help="Project name.")
-@click.option("--variant", "-v", required=True, help="Variant name to export.")
+@click.option("--project", "-p", default="default", show_default=True, help="Project name.")
+@click.option("--variant", "-v", default="default", show_default=True, help="Variant name to export.")
+@click.option("--amend", is_flag=True,
+              help="Update the existing output file while preserving stable review ordering.")
 @with_appcontext
-def export_custom_openvex_assessments_command(output_dir: str, project: str, variant: str) -> None:
+def export_custom_openvex_assessments_command(output_dir: str, project: str, variant: str, amend: bool) -> None:
     """Export custom assessments for one variant as an OpenVEX JSON file."""
     _, variant_obj = resolve_project_variant(project, variant, create=False)
     handmade = DBAssessment.get_by_origin([variant_obj.id])
@@ -136,6 +143,8 @@ def export_custom_openvex_assessments_command(output_dir: str, project: str, var
         output_dir,
         f"custom_openvex_{sanitize_variant_name(variant_obj.name)}{_JSON_SUFFIX}",
     )
+    if amend:
+        document = reconcile_review_export(_load_json_file(output_path), document)
     with open(output_path, "w") as file:
         _json.dump(document, file, indent=2)
     click.echo(f"Custom OpenVEX assessments exported: {output_path}")
@@ -143,8 +152,8 @@ def export_custom_openvex_assessments_command(output_dir: str, project: str, var
 
 @click.command("import-custom-openvex-assessments")
 @click.argument("file_path")
-@click.option("--project", "-p", required=True, help="Project name.")
-@click.option("--variant", "-v", required=True, help="Variant name to import into.")
+@click.option("--project", "-p", default="default", show_default=True, help="Project name.")
+@click.option("--variant", "-v", default="default", show_default=True, help="Variant name to import into.")
 @click.option(
     "--use-original-timestamps/--use-current-timestamps",
     default=True,

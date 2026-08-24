@@ -161,41 +161,50 @@ function AIContext() {
      
     }, [selectedProjectId]);
 
-    // Load context when selections change
-    const loadContext = useCallback(() => {
+    // The project description is project-bound, so it is loaded only when the project
+    // changes. Reloading it on every variant change would discard unsaved edits.
+    const loadProjectContext = useCallback(() => {
         if (!selectedProjectId) return;
-        if (selectedVariantId) {
-            Context.get(selectedProjectId, selectedVariantId)
-                .then(ctx => {
-                    if (unmountedRef.current) return;
-                    setDescription(ctx.description ?? '');
-                    setVariantDescription(ctx.variant_description ?? '');
-                    setCodebasePath(ctx.codebase_path ?? '');
-                    setEnvironment(ctx.environment ?? '');
-                    setThreatModel(ctx.threat_model ?? '');
-                    setRisks(ctx.risks ?? '');
-                    setOtherInfo(ctx.other_info ?? '');
-                }).catch((e: any) => {
-                    if (!unmountedRef.current)
-                        showBanner(e?.message || "Failed to load context.", "error");
-                });
-        } else {
+        Context.getProject(selectedProjectId)
+            .then(ctx => {
+                if (unmountedRef.current) return;
+                setDescription(ctx.description ?? '');
+            }).catch((e: any) => {
+                if (!unmountedRef.current)
+                    showBanner(e?.message || "Failed to load project context.", "error");
+            });
+    }, [selectedProjectId]);
+
+    useEffect(() => {
+        loadProjectContext();
+    }, [loadProjectContext]);
+
+    // Variant-bound fields only. The merged endpoint also returns the project
+    // description; it is deliberately ignored here.
+    const loadVariantContext = useCallback(() => {
+        if (!selectedProjectId || !selectedVariantId) {
             // Variant cleared or not yet selected — clear variant-bound fields
             clearVariantFields();
-            Context.getProject(selectedProjectId)
-                .then(ctx => {
-                    if (unmountedRef.current) return;
-                    setDescription(ctx.description ?? '');
-                }).catch((e: any) => {
-                    if (!unmountedRef.current)
-                        showBanner(e?.message || "Failed to load project context.", "error");
-                });
+            return;
         }
+        Context.get(selectedProjectId, selectedVariantId)
+            .then(ctx => {
+                if (unmountedRef.current) return;
+                setVariantDescription(ctx.variant_description ?? '');
+                setCodebasePath(ctx.codebase_path ?? '');
+                setEnvironment(ctx.environment ?? '');
+                setThreatModel(ctx.threat_model ?? '');
+                setRisks(ctx.risks ?? '');
+                setOtherInfo(ctx.other_info ?? '');
+            }).catch((e: any) => {
+                if (!unmountedRef.current)
+                    showBanner(e?.message || "Failed to load context.", "error");
+            });
     }, [selectedProjectId, selectedVariantId]);
 
     useEffect(() => {
-        loadContext();
-    }, [loadContext]);
+        loadVariantContext();
+    }, [loadVariantContext]);
 
     const validate = (): boolean => {
         const errors: Record<string, string> = {};
@@ -309,7 +318,9 @@ function AIContext() {
                 `Import complete: ${result.imported.length} of ${total} imported, ` +
                 `${result.ignored.length} ignored, ${result.failed.length} failed.`;
             showBanner(msg, result.failed.length > 0 ? "error" : "success");
-            loadContext();
+            // Import overwrites stored context, so both scopes are reloaded.
+            loadProjectContext();
+            loadVariantContext();
         } catch (err: any) {
             if (!unmountedRef.current) showBanner(err?.message || "Import failed.", "error");
         } finally {
