@@ -1,7 +1,7 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-FROM node:20 AS buildfront
+FROM node:24 AS buildfront
 
 RUN mkdir -p /frontend /src/static
 WORKDIR /frontend
@@ -20,7 +20,7 @@ RUN echo 'VITE_API_URL=' > .env
 RUN npm run build
 
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN mkdir -p /scan/inputs /scan/tmp /scan/outputs /cache/vulnscout
 WORKDIR /scan
@@ -41,21 +41,21 @@ RUN apk add --no-cache \
     zstd \
     postgresql-client \
     libpq-dev \
-    && gem install asciidoctor-pdf --version 2.3.15
+    && gem install asciidoctor-pdf --version 2.3.24
 
 # Install OSV Scanner
-ARG OSV_SCANNER_VERSION=v2.2.1
+ARG OSV_SCANNER_VERSION=v2.5.1
 RUN curl -L "https://github.com/google/osv-scanner/releases/download/$OSV_SCANNER_VERSION/osv-scanner_linux_amd64" -o /usr/local/bin/osv-scanner \
     && chmod +x /usr/local/bin/osv-scanner
 
 # Install CycloneDX
-ARG CYCLONEDX_VERSION=v0.29.1
+ARG CYCLONEDX_VERSION=v0.33.1
 RUN curl -sSfL "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CYCLONEDX_VERSION/cyclonedx-linux-musl-x64" -o cyclonedx-cli && \
     chmod +x cyclonedx-cli && \
     mv cyclonedx-cli /usr/local/bin/
 
 # Install Grype
-ARG GRYPE_VERSION=v0.97.2
+ARG GRYPE_VERSION=v0.117.0
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
 
 # ARG PYSPY_VERSION=0.4.1
