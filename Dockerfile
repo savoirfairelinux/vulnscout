@@ -43,17 +43,6 @@ RUN apk add --no-cache \
     libpq-dev \
     && gem install asciidoctor-pdf --version 2.3.24
 
-# Install OSV Scanner
-ARG OSV_SCANNER_VERSION=v2.5.1
-RUN curl -L "https://github.com/google/osv-scanner/releases/download/$OSV_SCANNER_VERSION/osv-scanner_linux_amd64" -o /usr/local/bin/osv-scanner \
-    && chmod +x /usr/local/bin/osv-scanner
-
-# Install CycloneDX
-ARG CYCLONEDX_VERSION=v0.33.1
-RUN curl -sSfL "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CYCLONEDX_VERSION/cyclonedx-linux-musl-x64" -o cyclonedx-cli && \
-    chmod +x cyclonedx-cli && \
-    mv cyclonedx-cli /usr/local/bin/
-
 # Install Grype
 ARG GRYPE_VERSION=v0.117.0
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
