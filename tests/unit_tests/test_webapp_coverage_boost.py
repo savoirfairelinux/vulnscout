@@ -9,6 +9,10 @@ import pytest
 from flask import Flask
 
 from src.bin import webapp as webapp_mod
+from src.controllers import operation_queue as operation_queue_mod
+from src.controllers.operation_registry import (
+    KIND_ENRICHMENT, LANE_PIPELINE, registry,
+)
 
 
 class _InlineThread:
@@ -23,42 +27,85 @@ class _InlineThread:
         self._target()
 
 
-def test_launch_enrichment_executes_epss(monkeypatch):
-    calls: list[str] = []
+@pytest.fixture()
+def captured_submissions(monkeypatch):
+    """Record what ``_launch_enrichment`` hands to the operation queue."""
+    registry.clear()
+    submissions: list[dict] = []
 
-    fake_session = SimpleNamespace(autoflush=True)
-    fake_db = SimpleNamespace(session=fake_session)
+    def _submit(op_id, lane, runner, ctx):
+        submissions.append(
+            {"op_id": op_id, "lane": lane, "runner": runner, "ctx": ctx}
+        )
 
-    def _record_post_treatment(_controllers):
-        calls.append("epss")
+    monkeypatch.setattr(operation_queue_mod.queue, "submit", _submit)
+    yield submissions
+    registry.clear()
 
-    monkeypatch.setattr(webapp_mod, "db", fake_db)
-    monkeypatch.setattr(webapp_mod.threading, "Thread", _InlineThread)
-    monkeypatch.setattr(webapp_mod, "post_treatment", _record_post_treatment)
 
+def test_boot_enrichment_is_registered_as_a_pipeline_operation(
+    captured_submissions,
+):
+    webapp_mod._launch_enrichment(Flask(__name__))
+
+    operation = registry.get("enrichment:boot")
+    assert operation is not None
+    assert operation["kind"] == KIND_ENRICHMENT
+    assert operation["source"] == "epss"
+    assert operation["lane"] == LANE_PIPELINE
+
+    assert len(captured_submissions) == 1
+    submission = captured_submissions[0]
+    assert submission["op_id"] == "enrichment:boot"
+    assert submission["lane"] == LANE_PIPELINE
+    assert submission["ctx"].op_id == "enrichment:boot"
+
+
+def test_boot_enrichment_is_not_queued_twice(captured_submissions):
     app = Flask(__name__)
     webapp_mod._launch_enrichment(app)
+    webapp_mod._launch_enrichment(app)
+
+    assert len(captured_submissions) == 1
+
+
+def test_boot_enrichment_runs_post_treatment_with_a_reporter(
+    captured_submissions, monkeypatch
+):
+    fake_session = SimpleNamespace(autoflush=True)
+    monkeypatch.setattr(webapp_mod, "db", SimpleNamespace(session=fake_session))
+
+    reporters: list[object] = []
+    monkeypatch.setattr(
+        webapp_mod, "post_treatment",
+        lambda _controllers, reporter=None: reporters.append(reporter),
+    )
+
+    webapp_mod._launch_enrichment(Flask(__name__))
+    submission = captured_submissions[0]
+    submission["runner"](submission["ctx"])
 
     assert fake_session.autoflush is False
-    assert "epss" in calls
+    assert reporters == [submission["ctx"]]
 
 
-def test_launch_enrichment_catches_and_logs_failures(monkeypatch, capsys):
-    fake_session = SimpleNamespace(autoflush=True)
-    fake_db = SimpleNamespace(session=fake_session)
+def test_boot_enrichment_failure_reaches_the_queue(
+    captured_submissions, monkeypatch
+):
+    """The runner raises so the queue can mark the operation as failed."""
+    monkeypatch.setattr(
+        webapp_mod, "db", SimpleNamespace(session=SimpleNamespace(autoflush=True))
+    )
 
-    def _raise_in_post_treatment(_controllers):
+    def _raise(_controllers, reporter=None):
         raise RuntimeError("epss failure")
 
-    monkeypatch.setattr(webapp_mod, "db", fake_db)
-    monkeypatch.setattr(webapp_mod.threading, "Thread", _InlineThread)
-    monkeypatch.setattr(webapp_mod, "post_treatment", _raise_in_post_treatment)
+    monkeypatch.setattr(webapp_mod, "post_treatment", _raise)
 
-    app = Flask(__name__)
-    webapp_mod._launch_enrichment(app)
-
-    out = capsys.readouterr().out
-    assert "[enrichment/epss]" in out
+    webapp_mod._launch_enrichment(Flask(__name__))
+    submission = captured_submissions[0]
+    with pytest.raises(RuntimeError, match="epss failure"):
+        submission["runner"](submission["ctx"])
 
 
 def test_create_app_schedules_background_tasks_when_scan_finished(monkeypatch, tmp_path):
