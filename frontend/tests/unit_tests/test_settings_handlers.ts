@@ -292,7 +292,7 @@ describe('Variants.uploadSBOM', () => {
 
     test('sends POST with files array in FormData', async () => {
         fetchMock.mockResponseOnce(JSON.stringify({
-            upload_id: 'uid-1',
+            op_id: 'uid-1',
             scan_id: 'sid-1',
             message: 'accepted',
         }));
@@ -302,7 +302,7 @@ describe('Variants.uploadSBOM', () => {
 
         const result = await Variants.uploadSBOM('p1', 'v1', [file1, file2], ['epss', 'nvd']);
 
-        expect(result.upload_id).toBe('uid-1');
+        expect(result.op_id).toBe('uid-1');
         expect(result.scan_id).toBe('sid-1');
         expect(fetchMock).toHaveBeenCalledWith(
             expect.stringContaining('/api/sbom/upload'),
@@ -320,7 +320,7 @@ describe('Variants.uploadSBOM', () => {
 
     test('sends single file correctly', async () => {
         fetchMock.mockResponseOnce(JSON.stringify({
-            upload_id: 'uid-2',
+            op_id: 'uid-2',
             scan_id: 'sid-2',
             message: 'accepted',
         }));
@@ -328,7 +328,7 @@ describe('Variants.uploadSBOM', () => {
         const file = new File(['{}'], 'sbom.json', { type: 'application/json' });
         const result = await Variants.uploadSBOM('p1', 'v1', [file]);
 
-        expect(result.upload_id).toBe('uid-2');
+        expect(result.op_id).toBe('uid-2');
         const calledBody = (fetchMock.mock.calls[0] as any[])[1].body as FormData;
         expect(calledBody.getAll('refresh_sources')).toEqual(['epss']);
         const files = calledBody.getAll('files');
@@ -337,7 +337,7 @@ describe('Variants.uploadSBOM', () => {
 
     test('sends the "none" sentinel when every refresh source is unchecked', async () => {
         fetchMock.mockResponseOnce(JSON.stringify({
-            upload_id: 'uid-3',
+            op_id: 'uid-3',
             scan_id: 'sid-3',
             message: 'accepted',
         }));
@@ -377,55 +377,6 @@ describe('Variants.uploadSBOM', () => {
     });
 });
 
-
-// ---------------------------------------------------------------------------
-// Variants.getUploadStatus
-// ---------------------------------------------------------------------------
-
-describe('Variants.getUploadStatus', () => {
-    beforeEach(() => { fetchMock.resetMocks(); });
-
-    test('returns status from server', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify({ status: 'done', message: 'SBOM imported.' }));
-
-        const result = await Variants.getUploadStatus('uid-1');
-
-        expect(result).toEqual({ status: 'done', message: 'SBOM imported.' });
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/sbom/upload/uid-1/status'),
-            expect.objectContaining({ mode: 'cors' })
-        );
-    });
-
-    test('returns processing status', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify({ status: 'processing', message: 'Parsing...' }));
-
-        const result = await Variants.getUploadStatus('uid-2');
-
-        expect(result.status).toBe('processing');
-        expect(result.message).toBe('Parsing...');
-    });
-
-    test('returns error on failed fetch', async () => {
-        fetchMock.mockResponseOnce('', { status: 404 });
-
-        const result = await Variants.getUploadStatus('bad-id');
-
-        expect(result.status).toBe('error');
-        expect(result.message).toContain('Failed to check');
-    });
-
-    test('encodes upload id in URL', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify({ status: 'done', message: 'ok' }));
-
-        await Variants.getUploadStatus('id with spaces');
-
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('id%20with%20spaces'),
-            expect.anything()
-        );
-    });
-});
 
 
 // ---------------------------------------------------------------------------

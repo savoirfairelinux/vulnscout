@@ -6,6 +6,9 @@ import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
 import Exports from '../../src/pages/Exports';
+import { queueExport } from '../../src/handlers/exportQueue';
+
+jest.mock('../../src/handlers/exportQueue', () => ({ queueExport: jest.fn(() => Promise.resolve()) }));
 
 const documents = [
     { id: 'summary.adoc', category: ['built-in'], extension: 'adoc | pdf' },
@@ -74,46 +77,16 @@ describe('Exports Page', () => {
         fireEvent.click(adoc);
         expect(screen.queryByRole('checkbox', { name: /cyclonedx/i })).not.toBeInTheDocument();
 
-        fetchMock
-            .mockResponseOnce(JSON.stringify({ job_id: 'export-job-1' }), { status: 202 })
-            .mockResponseOnce(JSON.stringify({
-                status: 'done', current: 1, total: 1, progress: 'Export ready', logs: ['Generating 1 of 1 element: summary.adoc (adoc)'], error: null,
-            }))
-            .mockResponseOnce('zip-content', {
-            headers: {
-                'Content-Type': 'application/zip',
-                'Content-Disposition': 'attachment; filename="Demo_Project_by_variant_export.zip"',
-            },
-            });
-        const createObjectURL = jest.fn(() => 'blob:export');
-        const revokeObjectURL = jest.fn();
-        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
-        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
-        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-
         fireEvent.click(screen.getByRole('button', { name: /download export/i }));
 
-        await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/documents/export'),
-            expect.objectContaining({ method: 'POST' }),
-        ));
-        const exportRequest = fetchMock.mock.calls.find(([, request]) => request?.method === 'POST');
-        expect(JSON.parse(String(exportRequest?.[1]?.body))).toEqual({
-            async: true,
+        await waitFor(() => expect(queueExport).toHaveBeenCalledWith({
             project_id: 'project-1',
             variant_ids: ['variant-1'],
             mode: 'per_variant',
             documents: [
                 { name: 'summary.adoc', extension: 'adoc' },
             ],
-        });
-        await waitFor(() => expect(click).toHaveBeenCalled());
-
-        expect(createObjectURL).toHaveBeenCalled();
-        expect(revokeObjectURL).toHaveBeenCalledWith('blob:export');
-        delete (URL as Partial<typeof URL>).createObjectURL;
-        delete (URL as Partial<typeof URL>).revokeObjectURL;
-        click.mockRestore();
+        }, 'Demo Project'));
     });
 
     test('focuses each step heading after wizard navigation', async () => {
@@ -166,24 +139,9 @@ describe('Exports Page', () => {
         expect(cycloneDxJson).toBeChecked();
         expect(cycloneDxJson).toBeDisabled();
 
-        fetchMock
-            .mockResponseOnce(JSON.stringify({ job_id: 'export-job-2' }), { status: 202 })
-            .mockResponseOnce(JSON.stringify({
-                status: 'done', current: 4, total: 4, progress: 'Export ready', logs: ['Generating 4 of 4 element: beta: CycloneDX 1.6 (json)'], error: null,
-            }))
-            .mockResponseOnce('zip-content', {
-                headers: { 'Content-Type': 'application/zip' },
-            });
-        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: jest.fn(() => 'blob:sbom') });
-        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: jest.fn() });
-        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-
         fireEvent.click(screen.getByRole('button', { name: /download export/i }));
 
-        await waitFor(() => expect(click).toHaveBeenCalled());
-        const exportRequest = fetchMock.mock.calls.find(([, request]) => request?.method === 'POST');
-        expect(JSON.parse(String(exportRequest?.[1]?.body))).toEqual({
-            async: true,
+        await waitFor(() => expect(queueExport).toHaveBeenCalledWith({
             project_id: 'project-1',
             variant_ids: ['variant-1', 'variant-2'],
             mode: 'per_variant',
@@ -191,11 +149,7 @@ describe('Exports Page', () => {
                 { name: 'SPDX 2.3', extension: 'xml' },
                 { name: 'CycloneDX 1.6', extension: 'json' },
             ],
-        });
-
-        delete (URL as Partial<typeof URL>).createObjectURL;
-        delete (URL as Partial<typeof URL>).revokeObjectURL;
-        click.mockRestore();
+        }, 'Demo Project'));
     });
 
     test('requires at least one selected variant', async () => {

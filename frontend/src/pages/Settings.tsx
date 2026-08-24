@@ -32,7 +32,9 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
 import Popup from "../components/Popup";
 import Transfer from "./Transfer";
-import type { RefreshType } from "../handlers/activeScanQueue";
+import { getOperation, subscribe as subscribeToOperations } from "../handlers/operationStore";
+import type { Operation, RefreshSource } from "../types/operation";
+import { isActive } from "../types/operation";
 import {
   allVulnerabilityRefreshTypes,
   resolveRefreshSources,
@@ -53,6 +55,33 @@ type FeedbackMsg = { text: string; type: "success" | "error" } | null;
 type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
   | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
+
+const UPLOAD_TIMEOUT_MS = 600_000;
+
+/** Resolves with the settled operation, or null if it never settles in time. */
+function watchOperation(
+  opId: string,
+  onMessage: (message: string) => void,
+  timeoutMs = UPLOAD_TIMEOUT_MS,
+): Promise<Operation | null> {
+  return new Promise((resolve) => {
+    let unsubscribe = () => { };
+    const timer = setTimeout(() => { unsubscribe(); resolve(null); }, timeoutMs);
+    const check = () => {
+      const operation = getOperation(opId);
+      if (!operation) return;
+      if (isActive(operation)) {
+        onMessage(operation.progress.message);
+        return;
+      }
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(operation);
+    };
+    unsubscribe = subscribeToOperations(check);
+    check();
+  });
+}
 
 function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Readonly<Props>) {
   // ---- Active category tab ----
@@ -642,7 +671,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
   const [importBusy, setImportBusy] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [importRefreshMode, setImportRefreshMode] = useState<RefreshMode>("complete");
-  const [importCustomRefreshSources, setImportCustomRefreshSources] = useState<Set<RefreshType>>(
+  const [importCustomRefreshSources, setImportCustomRefreshSources] = useState<Set<RefreshSource>>(
     () => new Set(allVulnerabilityRefreshTypes),
   );
   const importRefreshSources = resolveRefreshSources(importRefreshMode, importCustomRefreshSources);
@@ -682,30 +711,23 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
       );
       onLoadingMessage?.("Processing SBOM...");
 
-      const uploadId = result.upload_id;
-      const poll = async () => {
-        for (let i = 0; i < 600; i++) {
-          if (unmountedRef.current) { onLoadingMessage?.(null); return; }
-          await new Promise((r) => setTimeout(r, 1000));
-          if (unmountedRef.current) { onLoadingMessage?.(null); return; }
-          const status = await Variants.getUploadStatus(uploadId);
-          if (status.status === "done") {
-            setImportFiles([]);
-            onLoadingMessage?.(null);
-            onDataChanged?.("Importing SBOM...");
-            return;
-          }
-          if (status.status === "error") {
-            setImportMsg(status.message);
-            onLoadingMessage?.(null);
-            return;
-          }
-          onLoadingMessage?.(status.message);
-        }
+      const operation = await watchOperation(result.op_id, (message) => {
+        if (!unmountedRef.current) onLoadingMessage?.(message);
+      });
+      if (unmountedRef.current) { onLoadingMessage?.(null); return; }
+      if (operation === null) {
         setImportMsg("Upload processing timed out.");
         onLoadingMessage?.(null);
-      };
-      await poll();
+        return;
+      }
+      if (operation.status === "done") {
+        setImportFiles([]);
+        onLoadingMessage?.(null);
+        onDataChanged?.("Importing SBOM...");
+        return;
+      }
+      setImportMsg(operation.error || operation.progress.message || "SBOM processing failed.");
+      onLoadingMessage?.(null);
     } catch (e: any) {
       setImportMsg(e.message);
       onLoadingMessage?.(null);

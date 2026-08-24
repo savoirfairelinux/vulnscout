@@ -1,4 +1,48 @@
+import { waitFor } from '@testing-library/react';
+
+import { queueExport } from '../../src/handlers/exportQueue';
 import type { ExportRequest } from '../../src/handlers/exportQueue';
+import {
+    __reset,
+    __setEventSourceFactory,
+    getOperation,
+    getSnapshot,
+} from '../../src/handlers/operationStore';
+import type { Operation } from '../../src/types/operation';
+
+/** Stand-in for the browser EventSource so export progress can be driven directly. */
+class FakeEventSource {
+    static instances: FakeEventSource[] = [];
+
+    readonly url: string;
+    closed = false;
+    onerror: (() => void) | null = null;
+    private readonly handlers = new Map<string, Array<(event: MessageEvent) => void>>();
+
+    constructor(url: string) {
+        this.url = url;
+        FakeEventSource.instances.push(this);
+    }
+
+    addEventListener(type: string, handler: (event: MessageEvent) => void) {
+        const existing = this.handlers.get(type) ?? [];
+        existing.push(handler);
+        this.handlers.set(type, existing);
+    }
+
+    close() {
+        this.closed = true;
+    }
+
+    send(type: string, data: unknown) {
+        const event = { data: JSON.stringify(data) } as MessageEvent;
+        (this.handlers.get(type) ?? []).forEach(handler => handler(event));
+    }
+
+    static latest(): FakeEventSource {
+        return FakeEventSource.instances[FakeEventSource.instances.length - 1];
+    }
+}
 
 const request: ExportRequest = {
     project_id: 'project-1',
@@ -9,6 +53,28 @@ const request: ExportRequest = {
         { name: 'SPDX 2.3', extension: 'json' },
     ],
 };
+
+const exportOperation = (overrides: Partial<Operation> = {}): Operation => ({
+    op_id: 'export-1',
+    kind: 'export',
+    source: 'documents',
+    label: 'Demo Project export',
+    lane: 'export',
+    scope: null,
+    status: 'running',
+    progress: { current: 2, total: 4, message: 'Generating 2 of 4' },
+    logs: ['second file'],
+    error: null,
+    queue_id: null,
+    position: null,
+    options: {},
+    cancellable: false,
+    created_at: '2026-08-19T10:00:00+00:00',
+    started_at: '2026-08-19T10:00:00+00:00',
+    finished_at: null,
+    result: null,
+    ...overrides,
+});
 
 function response({
     body = {},
@@ -33,139 +99,146 @@ function response({
 }
 
 describe('export queue', () => {
+    let restoreFactory: () => void;
+    let fetchSpy: jest.MockedFunction<typeof global.fetch>;
+
     beforeEach(() => {
-        jest.resetModules();
-        jest.useFakeTimers();
-        global.fetch = jest.fn();
+        FakeEventSource.instances = [];
+        restoreFactory = __setEventSourceFactory(url => new FakeEventSource(url) as unknown as EventSource);
+        fetchSpy = jest.fn() as jest.MockedFunction<typeof global.fetch>;
+        global.fetch = fetchSpy;
+        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: jest.fn(() => 'blob:export') });
+        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: jest.fn() });
     });
 
     afterEach(() => {
-        jest.useRealTimers();
+        __reset();
+        restoreFactory();
         jest.restoreAllMocks();
         delete (URL as Partial<typeof URL>).createObjectURL;
         delete (URL as Partial<typeof URL>).revokeObjectURL;
     });
 
-    test('publishes progress, downloads the completed archive, and dismisses it', async () => {
-        const fetch = global.fetch as jest.MockedFunction<typeof global.fetch>;
-        fetch
-            .mockResolvedValueOnce(response({ body: { job_id: 'job-1' }, status: 202 }))
-            .mockResolvedValueOnce(response({ body: {
-                status: 'running', current: 2, total: 4, progress: 'Generating 2 of 4', logs: ['second file'], error: null,
-            } }))
-            .mockResolvedValueOnce(response({ body: {
-                status: 'done', current: 4, total: 4, progress: 'Export ready', logs: ['complete'], error: null,
-            } }))
-            .mockResolvedValueOnce(response({
-                headers: { 'Content-Disposition': 'attachment; filename="project-files.zip"' },
-            }));
-        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: jest.fn(() => 'blob:export') });
-        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: jest.fn() });
-        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-        const queue = await import('../../src/handlers/exportQueue');
-        const listener = jest.fn();
-        const unsubscribe = queue.subscribe(listener);
+    test('asks the backend to build the archive and waits for the operation it returns', async () => {
+        fetchSpy.mockResolvedValueOnce(response({ body: { op_id: 'export-1' }, status: 202 }));
 
-        await queue.queueExport(request, 'Demo Project');
-        await jest.advanceTimersByTimeAsync(0);
+        await queueExport(request, 'Demo Project');
 
-        expect(queue.getSnapshot()).toEqual([expect.objectContaining({
-            status: 'running',
-            progress: 'Generating 2 of 4',
-            total: 4,
-            doneCount: 1,
-        })]);
-        queue.dismiss('export-1');
-        expect(queue.getSnapshot()).toHaveLength(1);
-
-        await jest.advanceTimersByTimeAsync(1000);
-
-        expect(queue.getSnapshot()).toEqual([expect.objectContaining({
-            status: 'done',
-            progress: 'Export ready',
-            doneCount: 4,
-        })]);
-        expect(click).toHaveBeenCalledTimes(1);
-        expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
-        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:export');
-        expect(document.querySelector('a')).toBeNull();
-
-        queue.dismiss('export-1');
-        expect(queue.getSnapshot()).toEqual([]);
-        expect(listener).toHaveBeenCalled();
-        unsubscribe();
-    });
-
-    test('records and rethrows an error when the export cannot be queued', async () => {
-        const fetch = global.fetch as jest.MockedFunction<typeof global.fetch>;
-        fetch.mockResolvedValueOnce(response({ body: { error: 'No export documents selected' }, ok: false, status: 400 }));
-        const queue = await import('../../src/handlers/exportQueue');
-
-        await expect(queue.queueExport(request, 'Demo Project')).rejects.toThrow('No export documents selected');
-
-        expect(queue.getSnapshot()).toEqual([expect.objectContaining({
-            status: 'error',
-            error: 'No export documents selected',
-            progress: 'Export failed',
-            logs: ['No export documents selected'],
-        })]);
-        expect(fetch).toHaveBeenCalledWith('http://localhost/api/documents/export', expect.objectContaining({
+        expect(fetchSpy).toHaveBeenCalledWith('http://localhost/api/documents/export', expect.objectContaining({
             method: 'POST',
             body: JSON.stringify({ ...request, async: true }),
         }));
+        expect(FakeEventSource.instances).toHaveLength(1);
     });
 
-    test('records polling and download failures without rejecting queue creation', async () => {
-        const fetch = global.fetch as jest.MockedFunction<typeof global.fetch>;
-        fetch
-            .mockResolvedValueOnce(response({ body: { job_id: 'job-2' }, status: 202 }))
-            .mockResolvedValueOnce(response({ body: {
-                status: 'done', current: 4, total: 4, progress: 'Export ready', logs: [], error: null,
-            } }))
-            .mockResolvedValueOnce(response({ ok: false, status: 503 }));
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-            fetch
-                .mockResolvedValueOnce(response({ body: {
-                    status: 'done', current: 4, total: 4, progress: 'Export ready', logs: [], error: null,
-                } }))
-                .mockResolvedValueOnce(response({ ok: false, status: 503 }));
-        }
-        const queue = await import('../../src/handlers/exportQueue');
+    test('publishes export progress on the shared stream', async () => {
+        fetchSpy.mockResolvedValueOnce(response({ body: { op_id: 'export-1' }, status: 202 }));
+        await queueExport(request, 'Demo Project');
 
-        await expect(queue.queueExport(request, 'Demo Project')).resolves.toBeUndefined();
-        await jest.advanceTimersByTimeAsync(0);
-        await jest.advanceTimersByTimeAsync(3000);
+        FakeEventSource.latest().send('snapshot', { seq: 1, operations: [exportOperation()] });
 
-        expect(queue.getSnapshot()).toEqual([expect.objectContaining({
-            status: 'error',
-            error: 'Failed to download export (503)',
-            logs: ['Failed to download export (503)'],
-        })]);
-        queue.dismiss('missing-operation');
-        expect(queue.getSnapshot()).toHaveLength(1);
+        expect(getSnapshot()).toHaveLength(1);
+        expect(getOperation('export-1')).toMatchObject({
+            status: 'running',
+            progress: { current: 2, total: 4, message: 'Generating 2 of 4' },
+            logs: ['second file'],
+        });
     });
 
-    test('recovers after a transient polling failure', async () => {
-        const fetch = global.fetch as jest.MockedFunction<typeof global.fetch>;
-        fetch
-            .mockResolvedValueOnce(response({ body: { job_id: 'job-3' }, status: 202 }))
-            .mockResolvedValueOnce(response({ ok: false, status: 503 }))
-            .mockResolvedValueOnce(response({ body: {
-                status: 'done', current: 4, total: 4, progress: 'Export ready', logs: [], error: null,
-            } }))
+    test('downloads the archive under its server-provided name once the export completes', async () => {
+        fetchSpy
+            .mockResolvedValueOnce(response({ body: { op_id: 'export-1' }, status: 202 }))
+            .mockResolvedValueOnce(response({
+                headers: { 'Content-Disposition': 'attachment; filename="project-files.zip"' },
+            }));
+        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const downloaded: string[] = [];
+        click.mockImplementation(function (this: HTMLAnchorElement) { downloaded.push(this.download); });
+
+        await queueExport(request, 'Demo Project');
+        const stream = FakeEventSource.latest();
+        stream.send('snapshot', { seq: 1, operations: [exportOperation()] });
+        expect(click).not.toHaveBeenCalled();
+
+        stream.send('operation', exportOperation({
+            status: 'done',
+            progress: { current: 4, total: 4, message: 'Export ready' },
+            result: { download_ready: true },
+        }));
+
+        await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+        expect(fetchSpy).toHaveBeenLastCalledWith(
+            'http://localhost/api/documents/export/export-1/download',
+            { mode: 'cors' },
+        );
+        expect(downloaded).toEqual(['project-files.zip']);
+        expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:export');
+        expect(document.querySelector('a')).toBeNull();
+    });
+
+    test('names the archive after the project when the server does not', async () => {
+        fetchSpy
+            .mockResolvedValueOnce(response({ body: { op_id: 'export-1' }, status: 202 }))
             .mockResolvedValueOnce(response());
-        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: jest.fn(() => 'blob:export') });
-        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: jest.fn() });
-        jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-        const queue = await import('../../src/handlers/exportQueue');
+        const downloaded: string[] = [];
+        jest.spyOn(HTMLAnchorElement.prototype, 'click')
+            .mockImplementation(function (this: HTMLAnchorElement) { downloaded.push(this.download); });
 
-        await queue.queueExport(request, 'Demo Project');
-        await jest.advanceTimersByTimeAsync(0);
-        expect(queue.getSnapshot()).toEqual([expect.objectContaining({
-            status: 'running', progress: 'Reconnecting to export',
-        })]);
+        await queueExport({ ...request, mode: 'consolidated' }, 'Demo Project');
+        FakeEventSource.latest().send('snapshot', {
+            seq: 1,
+            operations: [exportOperation({ status: 'done' })],
+        });
 
-        await jest.advanceTimersByTimeAsync(1000);
-        expect(queue.getSnapshot()).toEqual([expect.objectContaining({ status: 'done' })]);
+        await waitFor(() => expect(downloaded).toEqual(['Demo Project_consolidated_export.zip']));
+    });
+
+    test('rethrows the reason the backend refused to queue the export', async () => {
+        fetchSpy.mockResolvedValueOnce(response({ body: { error: 'No export documents selected' }, ok: false, status: 400 }));
+
+        await expect(queueExport(request, 'Demo Project')).rejects.toThrow('No export documents selected');
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test('refuses an accepted response that carries no operation to follow', async () => {
+        fetchSpy.mockResolvedValueOnce(response({ body: {}, status: 202 }));
+
+        await expect(queueExport(request, 'Demo Project')).rejects.toThrow('Export failed (202)');
+    });
+
+    test('reports a failed download without breaking the caller', async () => {
+        fetchSpy
+            .mockResolvedValueOnce(response({ body: { op_id: 'export-1' }, status: 202 }))
+            .mockResolvedValueOnce(response({ ok: false, status: 503 }));
+        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        await expect(queueExport(request, 'Demo Project')).resolves.toBeUndefined();
+        FakeEventSource.latest().send('snapshot', {
+            seq: 1,
+            operations: [exportOperation({ status: 'done' })],
+        });
+
+        await waitFor(() => expect(consoleError).toHaveBeenCalledWith(
+            'Export download failed:',
+            expect.objectContaining({ message: 'Failed to download export (503)' }),
+        ));
+        expect(click).not.toHaveBeenCalled();
+    });
+
+    test('downloads nothing when the export ends in failure', async () => {
+        fetchSpy.mockResolvedValueOnce(response({ body: { op_id: 'export-1' }, status: 202 }));
+        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        await queueExport(request, 'Demo Project');
+        FakeEventSource.latest().send('snapshot', {
+            seq: 1,
+            operations: [exportOperation({ status: 'error', error: 'renderer crashed' })],
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(click).not.toHaveBeenCalled();
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 });
