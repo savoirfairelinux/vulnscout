@@ -49,6 +49,31 @@ grep -q -- '/scan/src/entrypoint.sh --project cli --refresh-vulnerability-data' 
 grep -q -- '/scan/src/entrypoint.sh --variant default --project cli --refresh-vulnerability-data' "$VULNSCOUT_TEST_LOG"
 
 : > "$VULNSCOUT_TEST_LOG"
+"$ROOT_DIR/vulnscout" --match-condition affected
+grep -q -- '/scan/src/entrypoint.sh --match-condition affected' "$VULNSCOUT_TEST_LOG"
+if grep -q -- '--project\|--variant' "$VULNSCOUT_TEST_LOG"; then
+    echo "Default scope was forwarded as explicit scope." >&2
+    exit 1
+fi
+
+: > "$VULNSCOUT_TEST_LOG"
+"$ROOT_DIR/vulnscout" --project cli --match-condition affected
+grep -q -- '/scan/src/entrypoint.sh --project cli --match-condition affected' "$VULNSCOUT_TEST_LOG"
+
+: > "$VULNSCOUT_TEST_LOG"
+"$ROOT_DIR/vulnscout" --project cli --variant release --match-condition affected
+grep -q -- '/scan/src/entrypoint.sh --project cli --variant release --match-condition affected' "$VULNSCOUT_TEST_LOG"
+
+: > "$VULNSCOUT_TEST_LOG"
+"$ROOT_DIR/vulnscout" --project cli --add-spdx "$SBOM" --match-condition affected
+grep -q -- '--project cli --add-spdx /tmp/vulnscout_stage_input.spdx.json --match-condition affected' \
+    "$VULNSCOUT_TEST_LOG"
+if grep -q -- '--variant' "$VULNSCOUT_TEST_LOG"; then
+    echo "Default variant was forwarded as an explicit variant." >&2
+    exit 1
+fi
+
+: > "$VULNSCOUT_TEST_LOG"
 "$ROOT_DIR/vulnscout" --project cli --variant default \
     --add-spdx "$SBOM" --refresh-vulnerability-data
 grep -q -- \

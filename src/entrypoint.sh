@@ -163,8 +163,10 @@ Commands with optional --project and --variant (uses "default" project and varia
         --export-custom-openvex-assessments Export custom OpenVEX assessments
         --import-custom-openvex-assessments <path> Import custom OpenVEX assessments
 
-        Test for vulnerabilities matching a condition in the selected project/variant:
+        Test for vulnerabilities matching a condition:
         --match-condition <expr>        Test for vulnerabilities matching a condition
+                         --project without --variant tests all project variants
+                         No scope tests the default project/variant
 
 Commands only requiring --project (uses default project if not specified):
 
@@ -509,6 +511,10 @@ cmd_scan() {
         # triggered fail condition) is still propagated through the pipeline.
         local -a process_args=()
         [[ "${REFRESH_VULNERABILITY_DATA:-false}" == "true" ]] && process_args+=(--refresh-vulnerability-data)
+        if [[ -n "${MATCH_CONDITION:-}" ]]; then
+            [[ "$PROJECT_SPECIFIED" == "true" ]] && process_args+=(--project "$PROJECT_NAME")
+            [[ "$VARIANT_SPECIFIED" == "true" ]] && process_args+=(--variant "$VARIANT_NAME")
+        fi
         (cd "$BASE_DIR" && flask --app src.bin.webapp process "${process_args[@]}") | \
             while IFS= read -r _line; do
                 if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then

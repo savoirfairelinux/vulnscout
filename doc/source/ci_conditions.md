@@ -10,9 +10,16 @@ Evaluate and enforce conditions on vulnerabilities within a project.
 
 ## Description
 
-The `vulnscout` command can optionally accept a `--match-condition CONDITION` argument that causes the command to exit with code **2** if the specified condition is met by any vulnerability found in the project.
+The `vulnscout` command can optionally accept a `--match-condition CONDITION` argument that causes the command to exit with code **2** if the specified condition is met by any vulnerability in scope.
 
-The `CONDITION` is a boolean expression that is evaluated against each vulnerability identified. If the condition is met, the IDs of the matching vulnerabilities are displayed in the output. The command returns an exit code of **2** if at least one vulnerability meets the condition.
+The scope is selected as follows:
+
+- With no `--project` or `--variant`, the condition is evaluated for the `default/default` project and variant.
+- With `--project NAME` and no variant, the condition is evaluated across all variants in that project.
+- With `--project NAME --variant NAME`, the condition is evaluated only for that variant.
+- With `--variant NAME` alone, the variant is selected from the `default` project.
+
+The `CONDITION` is a boolean expression that is evaluated against each vulnerability identified. If the condition is met, the IDs of the matching vulnerabilities are displayed in the output. A vulnerability shared by multiple variants is displayed once for a project-wide evaluation. The command returns an exit code of **2** if at least one vulnerability meets the condition.
 
 Match conditions can be combined with input files in a single invocation:
 
@@ -39,7 +46,7 @@ If the `CONDITION` is invalid, the configuration is not found, or an error occur
 ./vulnscout --project demo --match-condition "cvss >= 7.0"
 ```
 
-This example will cause the command to exit with code **2** if any vulnerability with a CVSS score of 7.0 or higher is found.
+This example evaluates every variant in `demo` and exits with code **2** if any vulnerability has a CVSS score of 7.0 or higher. Add `--variant NAME` to limit evaluation to one variant. An unknown project or variant exits with code **1**.
 
 ---
 

@@ -112,8 +112,10 @@ Commands with optional --project and --variant (uses "default" project and varia
     --export-custom-openvex-assessments Export custom OpenVEX assessments
     --import-custom-openvex-assessments <path> Import custom OpenVEX assessments
 
-    Test for vulnerabilities matching a condition in the selected project/variant:
+    Test for vulnerabilities matching a condition:
     --match-condition <expr>        Test for vulnerabilities matching a condition
+                                     --project without --variant tests all project variants
+                                     No scope tests the default project/variant
 
 Commands only requiring --project (uses default project if not specified):
 
@@ -547,7 +549,10 @@ parse_and_run() {
         local -a scan_args=()
         [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
         [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ] && scan_args+=(--refresh-vulnerability-data)
-        exec_container --project "$PROJECT" --variant "$VARIANT" "${PENDING_ARGS[@]}" "${scan_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
+        local -a scan_scope_args=()
+        [ "$PROJECT_SPECIFIED" = true ] && scan_scope_args+=(--project "$PROJECT")
+        [ "$VARIANT_SPECIFIED" = true ] && scan_scope_args+=(--variant "$VARIANT")
+        exec_container "${scan_scope_args[@]}" "${PENDING_ARGS[@]}" "${scan_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
     elif [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ]; then
         local -a refresh_args=(--refresh-vulnerability-data)
         [ "$PROJECT_SPECIFIED" = true ] && refresh_args=(--project "$PROJECT" "${refresh_args[@]}")
@@ -558,7 +563,12 @@ parse_and_run() {
     elif [ -n "$MATCH_CONDITION" ] || [ ${#REPORT_ARGS[@]} -gt 0 ] || [ ${#EXPORT_ARGS[@]} -gt 0 ]; then
         # No new inputs but a match-condition, report, or export was given: run against existing DB data
         ensure_running
-        local -a mc_args=(--project "$PROJECT")
+        local -a mc_args=()
+        if [ -n "$MATCH_CONDITION" ]; then
+            [ "$PROJECT_SPECIFIED" = true ] && mc_args+=(--project "$PROJECT")
+        else
+            mc_args+=(--project "$PROJECT")
+        fi
         [ "$VARIANT_SPECIFIED" = true ] && mc_args+=(--variant "$VARIANT")
         [ -n "$MATCH_CONDITION" ] && mc_args+=(--match-condition "$MATCH_CONDITION")
         exec_container "${mc_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
