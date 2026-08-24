@@ -20,6 +20,7 @@ from ..controllers.scc_engine import get_cve_json
 from ..controllers.nvd_extract import api_weaknesses_to_list_str, api_references_filter_patches
 from ..helpers.verbose import verbose
 from ._base import to_dict_with_fallback
+from .progress_reporter import NULL_REPORTER, ProgressReporter
 from ..models.cvss import CVSS
 from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
@@ -345,8 +346,7 @@ class VulnerabilitiesController:
             return True
         return False
 
-    def fetch_epss_scores(self) -> EnrichmentResult:
-        from ..controllers.epss_progress import EPSSProgressTracker
+    def fetch_epss_scores(self, reporter: ProgressReporter = NULL_REPORTER) -> EnrichmentResult:
         start_time = time.time()
         nb_vuln = 0
         failed = 0
@@ -377,9 +377,7 @@ class VulnerabilitiesController:
             msg += f" ({', '.join(extra)})"
         print(msg, flush=True)
 
-        tracker = EPSSProgressTracker
-        tracker.start("epss_enrichment")
-        tracker.update("epss_enrichment", 0, total, f"EPSS enrichment: 0/{total}")
+        reporter.report(0, total, f"EPSS enrichment: 0/{total}")
 
         # Batch in chunks of 100 (FIRST.org API limit).
         # DB commits happen every 500 CVEs to minimise write-transaction overhead.
@@ -396,7 +394,7 @@ class VulnerabilitiesController:
                 verbose(f"[fetch_epss_scores batch {chunk_idx}] {e}")
                 failed += len(chunk)
                 processed += len(chunk)
-                tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
+                reporter.report(processed, total, f"EPSS enrichment: {processed}/{total}")
                 continue
 
             for cve_id in chunk:
@@ -421,7 +419,7 @@ class VulnerabilitiesController:
                     verbose(f"[fetch_epss_scores {cve_id!r}] {e}")
                     failed += 1
             processed += len(chunk)
-            tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
+            reporter.report(processed, total, f"EPSS enrichment: {processed}/{total}")
             # Commit once every 500 CVEs processed.
             if processed % DB_COMMIT_EVERY < BATCH_SIZE:
                 _batch_commit(processed, total, "EPSS")
@@ -434,7 +432,6 @@ class VulnerabilitiesController:
             db.session.rollback()
             failed += 1
 
-        tracker.complete()
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
         return EnrichmentResult(successful=nb_vuln, failed=failed)
 
@@ -558,7 +555,7 @@ class VulnerabilitiesController:
                     except Exception:
                         pass
 
-    def fetch_nvd_data(self) -> EnrichmentResult:
+    def fetch_nvd_data(self, reporter: ProgressReporter = NULL_REPORTER) -> EnrichmentResult:
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
         CVE-prefixed IDs are looked up via the NVD API. GHSA-prefixed IDs use
@@ -566,11 +563,8 @@ class VulnerabilitiesController:
         the in-memory vulnerability objects and persisted to the main DB.
         All per-CVE failures are logged and silently skipped so that a single
         unreachable CVE never aborts the whole enrichment run.
-        Progress is reported via the NVDProgressTracker singleton so that
-        /api/nvd/progress reflects the live enrichment state.
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from ..controllers.nvd_progress import NVDProgressTracker
 
         start_time = time.time()
         nb_vuln = 0
@@ -587,8 +581,7 @@ class VulnerabilitiesController:
         total = len(nvd_vulns) + len(ghsa_vulns)
         msg = f"=== NVD: starting enrichment — {len(nvd_vulns)} CVEs + {len(ghsa_vulns)} GHSAs"
         print(msg, flush=True)
-        tracker = NVDProgressTracker
-        tracker.start("nvd_enrichment")
+        reporter.report(0, total, f"NVD enrichment: 0/{total}")
 
         # NVD lookups via local FKIE database
         DB_COMMIT_EVERY = 100
@@ -651,7 +644,7 @@ class VulnerabilitiesController:
                 verbose(f"[fetch_nvd_data {vuln.id!r}] {e}")
                 failed += 1
             done += 1
-            tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
+            reporter.report(done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
             if done % DB_COMMIT_EVERY == 0:
                 _batch_commit(done, total, "NVD")
 
@@ -687,7 +680,7 @@ class VulnerabilitiesController:
                         print(f"Error for {vid}: {e}")
                         failed += 1
                     done += 1
-                    tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vid})")
+                    reporter.report(done, total, f"NVD enrichment: {done}/{total} ({vid})")
 
         # Final commit for any remaining deferred NVD/GHSA updates.
         try:
@@ -696,7 +689,6 @@ class VulnerabilitiesController:
             verbose(f"[fetch_nvd_data final commit] {e}")
             db.session.rollback()
             failed += 1
-        tracker.complete()
         print(
             f"=== NVD: done — enriched {nb_vuln}/{total} vulnerabilities in {time.time() - start_time:.1f}s.",
             flush=True,
