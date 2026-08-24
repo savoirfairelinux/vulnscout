@@ -18,7 +18,7 @@ test_frontend:
 	npm run lint && \
 	if [ $$? -eq 0 ]; then \
 		echo "Running frontend tests with full coverage reporters"; \
-		npm test -- --coverage; \
+		NODE_OPTIONS=--max-old-space-size=1536 npm test -- --coverage --runInBand; \
 	fi
 
 test_ci:

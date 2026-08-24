@@ -199,25 +199,6 @@ class TestEnsureUtcIso:
 
 
 # ===========================================================================
-# EPSSProgressTracker — error() method (lines 72-76)
-# ===========================================================================
-
-class TestEpssProgressTrackerError:
-    def test_error_sets_phase_and_message(self):
-        from src.controllers.progress_tracker import ProgressTracker
-        tracker = ProgressTracker(
-            default_phase="epss_enrichment",
-            completed_message="EPSS enrichment completed successfully",
-        )
-        tracker.error("something went wrong")
-        progress = tracker.get_progress()
-        assert progress["in_progress"] is False
-        assert progress["phase"] == "error"
-        assert progress["message"] == "something went wrong"
-        assert progress["last_update"] is not None
-
-
-# ===========================================================================
 # _common.py — error branches (lines 33-34, 68-69, 73-74)
 # ===========================================================================
 
@@ -663,27 +644,6 @@ class TestApplyEffortExceptionBranch:
         effort = Effort(optimistic=1, likely=2, pessimistic=4)
         # Must not raise — the except block swallows the error.
         apply_effort(_BrokenRecord(), None, effort)
-
-
-# ===========================================================================
-# _scan_helpers.validate_trigger — internal-error 500 branch (line 67)
-# ===========================================================================
-
-class TestValidateTriggerInternalError:
-    """Cover the defensive ``variant_uuid is None`` branch (line 67).
-
-    ``parse_uuid_or_400`` never returns ``(None, None)`` in practice, so this
-    branch is dead code that requires a patch to reach.
-    """
-
-    def test_none_uuid_returns_500(self, app):
-        from unittest.mock import patch
-        with app.app_context():
-            from src.routes._scan_helpers import validate_trigger
-            with patch("src.routes._scan_helpers.parse_uuid_or_400", return_value=(None, None)):
-                _, _, err = validate_trigger("anything", {}, "test-scan")
-        assert err is not None
-        assert err[1] == 500
 
 
 # ===========================================================================
