@@ -10,6 +10,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.21.0] - 2026-08-24
+
+### Added
+- Review exports: add a guided export workflow, stable export updates, and an amend option.
+- Imports: support scan history imports and refresh modes for SBOM imports.
+- Setup: add an initial setup assistant popup.
+- Vulnerability data: allow standalone refreshes.
+
+### Changed
+- CLI: update the VulnScout helper for consistency.
+- SCC database: show Git progress during synchronization.
+- Dependencies: update Python requirements.
+
+### Fixed
+- Projects: preserve the project description when changing variants.
+- Setup: fix initial project checks and stabilize setup response timing.
+- Podman: use IPv4 for scan readiness checks.
+
+---
+
 ## [0.20.0] - 2026-08-11
 
 ### Added
