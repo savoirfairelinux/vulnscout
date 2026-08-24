@@ -1,15 +1,24 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for _run_grype_scan inner logic, tool-scan diffs, and
-newly-detected computation in scan list serialisation."""
+"""Tests for the Grype scan job, tool-scan diffs, and newly-detected
+computation in scan list serialisation."""
 
 import json
 import os
+import subprocess
 import pytest
 from unittest.mock import patch, MagicMock
 
 from src.bin.webapp import create_app
+from src.controllers.job_context import JobContext
+from src.controllers.operation_registry import KIND_SCAN, LANE_PIPELINE, registry
+from src.controllers.scan_jobs import (
+    _resolve_grype_memlimit,
+    run_grype_scan,
+    run_nvd_scan,
+    run_osv_scan,
+)
 from src.extensions import db as _db
 
 
@@ -128,6 +137,13 @@ def client(app):
 @pytest.fixture()
 def ids(app):
     return app._test_ids
+
+
+@pytest.fixture(autouse=True)
+def clean_registry():
+    registry.clear()
+    yield
+    registry.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -292,25 +308,76 @@ class TestGlobalResultToolScanSources:
 
 
 # ---------------------------------------------------------------------------
-# _run_grype_scan logic (covers lines 845-916 via subprocess mocking)
+# Scan jobs — shared harness
 # ---------------------------------------------------------------------------
 
-def _make_sync_thread_patch():
-    """Return a context-manager patch that makes Thread.start() synchronous."""
-    return patch(
-        "threading.Thread",
-        side_effect=lambda **kwargs: type(
-            "SyncThread", (), {
-                "_target": kwargs.get("target"),
-                "start": lambda self: kwargs.get("target")(),
-                "daemon": True,
-            }
-        )(),
+def _context(source, variant_id, **options):
+    """Register an operation and return the context its job would receive."""
+    op_id = f"scan:{source}:{variant_id}"
+    registry.create(
+        op_id=op_id, kind=KIND_SCAN, source=source,
+        label=f"{source} scan", lane=LANE_PIPELINE,
     )
+    return JobContext(op_id, {"variant_id": variant_id, **options})
 
 
-class TestRunGrypeScan:
-    """Test the _run_grype_scan inner function with mocked subprocesses."""
+def _run_job(application, runner, ctx):
+    """Run a scan job the way the queue does, then publish what it buffered."""
+    with application.app_context():
+        try:
+            runner(ctx)
+        finally:
+            ctx.flush()
+    return registry.get(ctx.op_id)
+
+
+class _FakeProcess:
+    """Subprocess handle whose outcome the calling test decides."""
+
+    def __init__(self, returncode=0, stderr="", times_out=False):
+        self.returncode = returncode
+        self._stderr = stderr
+        self._times_out = times_out
+        self.killed = False
+
+    def communicate(self, timeout=None):
+        if self._times_out:
+            self._times_out = False
+            raise subprocess.TimeoutExpired(cmd="flask", timeout=timeout)
+        return "", self._stderr
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        self.killed = True
+
+
+def _grype_pipeline(export_payload=None, grype_output='{"matches": []}'):
+    """Popen side effect writing the artifacts each pipeline step expects.
+
+    Passing ``None`` for either payload simulates a step that reports success
+    while producing nothing.
+    """
+    def _spawn(command, **kwargs):
+        if "export" in command:
+            if export_payload is not None:
+                out_dir = command[command.index("--output-dir") + 1]
+                target = os.path.join(out_dir, "sbom_cyclonedx_v1_6.cdx.json")
+                with open(target, "w") as handle:
+                    json.dump(export_payload, handle)
+        elif "grype" in command and grype_output is not None:
+            kwargs["stdout"].write(grype_output)
+        return _FakeProcess()
+    return _spawn
+
+
+# ---------------------------------------------------------------------------
+# Grype scan job
+# ---------------------------------------------------------------------------
+
+class TestGrypeScanJob:
+    """The Grype pipeline: CycloneDX export, scan, merge, process."""
 
     @pytest.fixture()
     def grype_app(self, tmp_path):
@@ -351,212 +418,113 @@ class TestRunGrypeScan:
         finally:
             os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_grype_scan_success(
-        self, mock_which, mock_sp_run, grype_app, tmp_path
+    def test_successful_pipeline_reports_four_completed_steps(
+        self, which, popen, grype_app
     ):
-        """Grype scan completes when subprocess calls succeed."""
-        # Make subprocess.run create the expected files
-        def subprocess_side_effect(*args, **kwargs):
-            cmd = args[0] if args else kwargs.get("args", [])
-            if isinstance(cmd, list) and "export" in cmd:
-                # Simulate export creating the CDX file
-                out_dir = cmd[cmd.index("--output-dir") + 1]
-                cdx_path = os.path.join(
-                    out_dir, "sbom_cyclonedx_v1_6.cdx.json"
-                )
-                with open(cdx_path, "w") as f:
-                    f.write("{}")
-            elif isinstance(cmd, list) and "grype" in cmd:
-                # grype writes to stdout which is redirected to a file
-                stdout_file = kwargs.get("stdout")
-                if stdout_file and hasattr(stdout_file, "write"):
-                    stdout_file.write('{"matches": []}')
-            return MagicMock(returncode=0)
+        """Every stage runs and the operation ends on the final step."""
+        popen.side_effect = _grype_pipeline(export_payload={})
 
-        mock_sp_run.side_effect = subprocess_side_effect
-        client = grype_app.test_client()
-        vid = grype_app._test_ids["variant_id"]
+        ctx = _context("grype", grype_app._test_ids["variant_id"])
+        operation = _run_job(grype_app, run_grype_scan, ctx)
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        assert operation["error"] is None
+        assert operation["progress"] == {
+            "current": 4, "total": 4, "message": "Scan complete",
+        }
+        assert any("\u2713" in line for line in operation["logs"])
 
-        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-        assert data["error"] is None
-        assert data["progress"] == "Scan complete"
-        assert data["total"] == 4
-        assert data["done_count"] == 4
-        assert any("\u2713" in line for line in data["logs"])
-
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_grype_scan_export_no_file(
-        self, mock_which, mock_sp_run, grype_app
+    def test_missing_cyclonedx_export_fails_the_scan(
+        self, which, popen, grype_app
     ):
-        """Grype scan errors when export produces no CDX file."""
-        mock_sp_run.return_value = MagicMock(returncode=0)
-        client = grype_app.test_client()
-        vid = grype_app._test_ids["variant_id"]
+        """A silent export failure is caught before Grype is invoked."""
+        popen.side_effect = _grype_pipeline(export_payload=None)
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        ctx = _context("grype", grype_app._test_ids["variant_id"])
+        with pytest.raises(RuntimeError, match="CycloneDX export produced no file"):
+            _run_job(grype_app, run_grype_scan, ctx)
 
-        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "CycloneDX export produced no file" in data["error"]
-        assert any("ERROR" in line for line in data.get("logs", []))
-
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_grype_scan_timeout(
-        self, mock_which, mock_sp_run, grype_app
-    ):
-        """Grype scan handles timeout."""
-        import subprocess
-        mock_sp_run.side_effect = subprocess.TimeoutExpired(
-            cmd="flask export", timeout=120
-        )
-        client = grype_app.test_client()
-        vid = grype_app._test_ids["variant_id"]
+    def test_subprocess_timeout_fails_the_scan(self, which, popen, grype_app):
+        popen.return_value = _FakeProcess(times_out=True)
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        ctx = _context("grype", grype_app._test_ids["variant_id"])
+        with pytest.raises(RuntimeError, match="Grype scan timed out"):
+            _run_job(grype_app, run_grype_scan, ctx)
 
-        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "timed out" in data["error"]
-        assert any("ERROR" in line for line in data.get("logs", []))
-
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_grype_scan_command_failure(
-        self, mock_which, mock_sp_run, grype_app
+    def test_failing_subprocess_surfaces_its_stderr(
+        self, which, popen, grype_app
     ):
-        """Grype scan handles CalledProcessError."""
-        import subprocess
-        mock_sp_run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd="flask export", stderr="something failed"
-        )
-        client = grype_app.test_client()
-        vid = grype_app._test_ids["variant_id"]
+        popen.return_value = _FakeProcess(returncode=1, stderr="something failed")
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        ctx = _context("grype", grype_app._test_ids["variant_id"])
+        with pytest.raises(RuntimeError, match="Command failed: something failed"):
+            _run_job(grype_app, run_grype_scan, ctx)
 
-        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "Command failed" in data["error"]
-        assert any("ERROR" in line for line in data.get("logs", []))
-
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_grype_scan_generic_exception(
-        self, mock_which, mock_sp_run, grype_app
+    def test_unexpected_spawn_failure_fails_the_scan(
+        self, which, popen, grype_app
     ):
-        """Grype scan handles unexpected exceptions."""
-        mock_sp_run.side_effect = RuntimeError("unexpected")
-        client = grype_app.test_client()
-        vid = grype_app._test_ids["variant_id"]
+        popen.side_effect = RuntimeError("unexpected")
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        ctx = _context("grype", grype_app._test_ids["variant_id"])
+        with pytest.raises(RuntimeError, match="unexpected"):
+            _run_job(grype_app, run_grype_scan, ctx)
 
-        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "unexpected" in data["error"]
-        assert any("ERROR" in line for line in data.get("logs", []))
-
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_grype_scan_grype_no_output(
-        self, mock_which, mock_sp_run, grype_app, tmp_path
-    ):
-        """Grype scan errors when grype produces an empty output file."""
-        def subprocess_side_effect(*args, **kwargs):
-            cmd = args[0] if args else kwargs.get("args", [])
-            if isinstance(cmd, list) and "export" in cmd:
-                out_dir = cmd[cmd.index("--output-dir") + 1]
-                cdx_path = os.path.join(
-                    out_dir, "sbom_cyclonedx_v1_6.cdx.json"
-                )
-                with open(cdx_path, "w") as f:
-                    f.write("{}")
-            # grype call — don't write anything to stdout
-            return MagicMock(returncode=0)
+    def test_empty_grype_output_fails_the_scan(self, which, popen, grype_app):
+        """Grype exiting cleanly with no findings file is still a failure."""
+        popen.side_effect = _grype_pipeline(export_payload={}, grype_output=None)
 
-        mock_sp_run.side_effect = subprocess_side_effect
-        client = grype_app.test_client()
-        vid = grype_app._test_ids["variant_id"]
-
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
-
-        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "Grype produced no output" in data["error"]
-        assert any("ERROR" in line for line in data.get("logs", []))
+        ctx = _context("grype", grype_app._test_ids["variant_id"])
+        with pytest.raises(RuntimeError, match="Grype produced no output"):
+            _run_job(grype_app, run_grype_scan, ctx)
 
 
 # ---------------------------------------------------------------------------
-# NVD / OSV scans with two scan types → break at line 1008/1280
+# NVD / OSV scans on a variant carrying both SBOM and tool scans
 # ---------------------------------------------------------------------------
 
-class TestNvdScanWithToolAndSbom:
-    """NVD scan on a variant that has both sbom and tool scans
-    (triggers the ``break`` at line 1008)."""
+class TestNvdScanWithToolAndSbomScans:
+    """The scanned package set comes from the SBOM scan, not the tool scans."""
 
     @patch("src.controllers.nvd_db.NVD_DB")
-    def test_nvd_scans_variant_two_types(self, MockNvdDb, app, client, ids):
-        mock_nvd = MagicMock()
-        MockNvdDb.return_value = mock_nvd
-        mock_nvd.api_get_cves_by_cpe.return_value = []
+    def test_nvd_scan_completes_on_a_variant_holding_both_scan_types(
+        self, MockNvdDb, app, ids
+    ):
+        nvd = MagicMock()
+        MockNvdDb.return_value = nvd
+        nvd.api_get_cves_by_cpe.return_value = []
 
-        with _make_sync_thread_patch():
-            resp = client.post(
-                f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api"
-            )
-        assert resp.status_code == 202
+        ctx = _context("nvd", ids["variant_id"], mode="api")
+        operation = _run_job(app, run_nvd_scan, ctx)
 
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
+        assert operation["error"] is None
+        assert "0 CVEs" in operation["progress"]["message"]
 
 
-class TestOsvScanWithToolAndSbom:
-    """OSV scan on a variant that has both sbom and tool scans
-    (triggers the ``break`` at line 1280)."""
+class TestOsvScanWithToolAndSbomScans:
+    """The scanned package set comes from the SBOM scan, not the tool scans."""
 
     @patch("src.controllers.osv_client.OSVClient.query_by_purl")
-    def test_osv_scans_variant_two_types(self, mock_query, app, client, ids):
-        mock_query.return_value = []
+    def test_osv_scan_completes_on_a_variant_holding_both_scan_types(
+        self, query, app, ids
+    ):
+        query.return_value = []
 
-        with _make_sync_thread_patch():
-            resp = client.post(
-                f"/api/variants/{ids['variant_id']}/osv-scan"
-            )
-        assert resp.status_code == 202
+        ctx = _context("osv", ids["variant_id"])
+        operation = _run_job(app, run_osv_scan, ctx)
 
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
+        assert operation["error"] is None
+        assert "0 vulnerabilities" in operation["progress"]["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -575,34 +543,28 @@ class TestResolveGrypeMemlimit:
 
     def test_explicit_value_returned_verbatim(self):
         """An explicit GRYPE_MEMLIMIT value is forwarded to GOMEMLIMIT as-is."""
-        from src.routes.scan_triggers import _resolve_grype_memlimit
         os.environ["GRYPE_MEMLIMIT"] = "24GiB"
         assert _resolve_grype_memlimit() == "24GiB"
 
     def test_explicit_bytes_returned_verbatim(self):
         """A plain-integer GRYPE_MEMLIMIT is forwarded unchanged."""
-        from src.routes.scan_triggers import _resolve_grype_memlimit
         os.environ["GRYPE_MEMLIMIT"] = "6442450944"
         assert _resolve_grype_memlimit() == "6442450944"
 
     def test_off_returns_none(self):
-        from src.routes.scan_triggers import _resolve_grype_memlimit
         os.environ["GRYPE_MEMLIMIT"] = "off"
         assert _resolve_grype_memlimit() is None
 
     def test_zero_returns_none(self):
-        from src.routes.scan_triggers import _resolve_grype_memlimit
         os.environ["GRYPE_MEMLIMIT"] = "0"
         assert _resolve_grype_memlimit() is None
 
     def test_disabled_returns_none(self):
-        from src.routes.scan_triggers import _resolve_grype_memlimit
         os.environ["GRYPE_MEMLIMIT"] = "disabled"
         assert _resolve_grype_memlimit() is None
 
     def test_auto_mode_uses_proc_meminfo(self, tmp_path):
         """Auto mode reads /proc/meminfo and returns ~80 % as bytes."""
-        from src.routes.scan_triggers import _resolve_grype_memlimit
         import builtins as _builtins
         fake_meminfo = tmp_path / "meminfo"
         # 8 GiB = 8388608 kB
@@ -622,7 +584,6 @@ class TestResolveGrypeMemlimit:
 
     def test_auto_mode_returns_integer_string(self, tmp_path):
         """Auto mode result is a plain integer string (valid GOMEMLIMIT)."""
-        from src.routes.scan_triggers import _resolve_grype_memlimit
         import builtins as _builtins
         fake_meminfo = tmp_path / "meminfo"
         fake_meminfo.write_text("MemTotal:        4194304 kB\n")
@@ -644,7 +605,7 @@ class TestResolveGrypeMemlimit:
 # ---------------------------------------------------------------------------
 
 class TestGrypeScanMemlimit:
-    """Assert that _run_grype_scan passes GOMEMLIMIT to the grype subprocess."""
+    """The Grype subprocess is the only one that receives GOMEMLIMIT."""
 
     @pytest.fixture()
     def grype_app_ml(self, tmp_path):
@@ -676,164 +637,107 @@ class TestGrypeScanMemlimit:
             os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
             os.environ.pop("GRYPE_MEMLIMIT", None)
 
-    def _subprocess_side_effect(self, grype_tmp):
-        """Return a side_effect that creates the expected CDX export file."""
-        def _side_effect(*args, **kwargs):
-            cmd = args[0] if args else kwargs.get("args", [])
-            if isinstance(cmd, list) and "export" in cmd:
-                out_dir = cmd[cmd.index("--output-dir") + 1]
-                import json as _json
-                cdx_path = os.path.join(out_dir, "sbom_cyclonedx_v1_6.cdx.json")
-                with open(cdx_path, "w") as f:
-                    _json.dump({"components": []}, f)
-            elif isinstance(cmd, list) and "grype" in cmd:
-                stdout_file = kwargs.get("stdout")
-                if stdout_file and hasattr(stdout_file, "write"):
-                    stdout_file.write('{"matches": []}')
-            return MagicMock(returncode=0)
-        return _side_effect
+    @staticmethod
+    def _call_for(popen, executable):
+        return next(
+            (call for call in popen.call_args_list
+             if isinstance(call.args[0], list) and executable in call.args[0]),
+            None,
+        )
 
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
     def test_explicit_grype_memlimit_sets_gomemlimit(
-        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+        self, which, popen, grype_app_ml
     ):
-        """When GRYPE_MEMLIMIT is set, grype subprocess receives GOMEMLIMIT."""
+        """When GRYPE_MEMLIMIT is set, the Grype subprocess receives GOMEMLIMIT."""
         os.environ["GRYPE_MEMLIMIT"] = "8GiB"
-        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
-        client = grype_app_ml.test_client()
-        vid = grype_app_ml._test_ids["variant_id"]
+        popen.side_effect = _grype_pipeline(export_payload={"components": []})
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        ctx = _context("grype", grype_app_ml._test_ids["variant_id"])
+        _run_job(grype_app_ml, run_grype_scan, ctx)
 
-        # Find the grype subprocess call (the one whose cmd contains "grype")
-        grype_call = next(
-            (c for c in mock_sp_run.call_args_list
-             if isinstance(c.args[0], list) and "grype" in c.args[0]),
-            None,
-        )
+        grype_call = self._call_for(popen, "grype")
         assert grype_call is not None, "grype subprocess was never called"
-        env_passed = grype_call.kwargs.get("env", {})
-        assert env_passed.get("GOMEMLIMIT") == "8GiB"
+        assert grype_call.kwargs.get("env", {}).get("GOMEMLIMIT") == "8GiB"
 
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
     def test_off_grype_memlimit_does_not_set_gomemlimit(
-        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+        self, which, popen, grype_app_ml
     ):
-        """When GRYPE_MEMLIMIT=off, grype subprocess should NOT have GOMEMLIMIT."""
+        """When GRYPE_MEMLIMIT=off, the Grype subprocess has no GOMEMLIMIT."""
         os.environ["GRYPE_MEMLIMIT"] = "off"
-        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
-        client = grype_app_ml.test_client()
-        vid = grype_app_ml._test_ids["variant_id"]
+        popen.side_effect = _grype_pipeline(export_payload={"components": []})
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        ctx = _context("grype", grype_app_ml._test_ids["variant_id"])
+        _run_job(grype_app_ml, run_grype_scan, ctx)
 
-        grype_call = next(
-            (c for c in mock_sp_run.call_args_list
-             if isinstance(c.args[0], list) and "grype" in c.args[0]),
-            None,
-        )
+        grype_call = self._call_for(popen, "grype")
         assert grype_call is not None, "grype subprocess was never called"
-        env_passed = grype_call.kwargs.get("env", {})
-        # GOMEMLIMIT must not be injected
-        assert "GOMEMLIMIT" not in env_passed
+        assert "GOMEMLIMIT" not in grype_call.kwargs.get("env", {})
 
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
     def test_flask_export_does_not_receive_gomemlimit(
-        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+        self, which, popen, grype_app_ml
     ):
-        """GOMEMLIMIT must only reach grype, not the flask export subprocess."""
+        """GOMEMLIMIT must only reach Grype, not the flask export subprocess."""
         os.environ["GRYPE_MEMLIMIT"] = "4GiB"
-        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
-        client = grype_app_ml.test_client()
-        vid = grype_app_ml._test_ids["variant_id"]
+        popen.side_effect = _grype_pipeline(export_payload={"components": []})
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/grype-scan")
-        assert resp.status_code == 202
+        ctx = _context("grype", grype_app_ml._test_ids["variant_id"])
+        _run_job(grype_app_ml, run_grype_scan, ctx)
 
-        export_call = next(
-            (c for c in mock_sp_run.call_args_list
-             if isinstance(c.args[0], list) and "export" in c.args[0]),
-            None,
-        )
+        export_call = self._call_for(popen, "export")
         assert export_call is not None, "flask export subprocess was never called"
-        # The export call should not have an env kwarg (inherits from process)
+        # The export call inherits the process environment untouched.
         export_env = export_call.kwargs.get("env")
         if export_env is not None:
             assert "GOMEMLIMIT" not in export_env
 
-    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_memlimit_logged_in_scan_progress(
-        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+    def test_memlimit_is_recorded_in_the_operation_log(
+        self, which, popen, grype_app_ml
     ):
-        """Applied GOMEMLIMIT is recorded in the scan progress logs."""
+        """The applied GOMEMLIMIT is visible to whoever watches the scan."""
         os.environ["GRYPE_MEMLIMIT"] = "12GiB"
-        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
-        client = grype_app_ml.test_client()
-        vid = grype_app_ml._test_ids["variant_id"]
+        popen.side_effect = _grype_pipeline(export_payload={"components": []})
 
-        with _make_sync_thread_patch():
-            client.post(f"/api/variants/{vid}/grype-scan")
+        ctx = _context("grype", grype_app_ml._test_ids["variant_id"])
+        operation = _run_job(grype_app_ml, run_grype_scan, ctx)
 
-        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
-        data = json.loads(resp_s.data)
         assert any("GOMEMLIMIT" in line and "12GiB" in line
-                   for line in data.get("logs", []))
+                   for line in operation["logs"])
 
 
 # ---------------------------------------------------------------------------
-# NVD / OSV scans outer exception handler (lines 1187-1189 / 1479-1481)
+# NVD / OSV scans propagate unexpected crashes
 # ---------------------------------------------------------------------------
 
-class TestNvdScanOuterException:
-    """NVD scan outer except catches unexpected crashes."""
+class TestNvdScanCrashPropagation:
+    """An unexpected crash surfaces instead of being swallowed."""
 
     @patch("src.controllers.nvd_db.NVD_DB")
-    def test_nvd_scan_outer_crash(self, MockNvdDb, app, client, ids):
-        """An exception in the NVD scan body is caught and reported."""
+    def test_nvd_scan_reraises_an_unexpected_crash(self, MockNvdDb, app, ids):
         MockNvdDb.side_effect = RuntimeError("crashed at construction")
 
-        with _make_sync_thread_patch():
-            resp = client.post(
-                f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api"
-            )
-        assert resp.status_code == 202
-
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "crashed at construction" in data["error"]
+        ctx = _context("nvd", ids["variant_id"], mode="api")
+        with pytest.raises(RuntimeError, match="crashed at construction"):
+            _run_job(app, run_nvd_scan, ctx)
 
 
-class TestOsvScanOuterException:
-    """OSV scan outer except catches unexpected crashes."""
+class TestOsvScanCrashPropagation:
+    """An unexpected crash surfaces instead of being swallowed."""
 
     @patch("src.controllers.osv_client.OSVClient")
-    def test_osv_scan_outer_crash(self, MockOsv, app, client, ids):
+    def test_osv_scan_reraises_an_unexpected_crash(self, MockOsv, app, ids):
         MockOsv.side_effect = RuntimeError("osv crash")
 
-        with _make_sync_thread_patch():
-            resp = client.post(
-                f"/api/variants/{ids['variant_id']}/osv-scan"
-            )
-        assert resp.status_code == 202
-
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "osv crash" in data["error"]
+        ctx = _context("osv", ids["variant_id"])
+        with pytest.raises(RuntimeError, match="osv crash"):
+            _run_job(app, run_osv_scan, ctx)
 
 
 # ---------------------------------------------------------------------------

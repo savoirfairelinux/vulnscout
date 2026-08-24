@@ -1,19 +1,23 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests exercising the NVD and OSV scan *logic* (``_do_nvd_scan`` / ``_do_osv_scan``).
+"""NVD and OSV scan behaviour, exercised through the queued job entry points.
 
-The inner helper functions are closures inside ``init_app``, so the cleanest
-way to test them is to let the trigger endpoint run the thread target
-synchronously (by making ``Thread.start()`` call ``target()`` immediately).
+``run_nvd_scan`` / ``run_osv_scan`` receive a :class:`JobContext` and report
+through it, so the assertions read the resulting operation straight from the
+registry instead of polling a status endpoint.  A job signals failure by
+raising, which is what the queue turns into an ``error`` operation.
 """
 
-import json
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 
 from src.bin.webapp import create_app
+from src.controllers.job_context import JobContext
 from src.controllers.nvd_db import NVD_DB as _RealNvdDb
+from src.controllers.operation_registry import KIND_SCAN, LANE_PIPELINE, registry
+from src.controllers.scan_jobs import run_nvd_scan, run_osv_scan
 from src.extensions import db as _db
 
 
@@ -71,7 +75,6 @@ def _build_nvd_osv_db(app):
 
 @pytest.fixture()
 def app(tmp_path):
-    import os
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
     os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
@@ -86,217 +89,250 @@ def app(tmp_path):
 
 
 @pytest.fixture()
-def client(app):
-    return app.test_client()
-
-
-@pytest.fixture()
 def ids(app):
     return app._test_ids
 
 
-def _make_sync_thread_patch():
-    """Return a patch that makes Thread.start() run target synchronously."""
-    return patch(
-        "threading.Thread",
-        side_effect=lambda **kwargs: type(
-            "SyncThread", (), {
-                "_target": kwargs.get("target"),
-                "start": lambda self: kwargs.get("target")(),
-                "daemon": True,
-            }
-        )(),
+@pytest.fixture(autouse=True)
+def clean_registry():
+    registry.clear()
+    yield
+    registry.clear()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _context(source, variant_id, **options):
+    """Register an operation and return the context its job would receive."""
+    op_id = f"scan:{source}:{variant_id}"
+    registry.create(
+        op_id=op_id, kind=KIND_SCAN, source=source,
+        label=f"{source} scan", lane=LANE_PIPELINE,
     )
+    return JobContext(op_id, {"variant_id": variant_id, **options})
+
+
+def _run(app, runner, ctx):
+    """Run a scan job the way the queue does, then publish what it buffered."""
+    with app.app_context():
+        try:
+            runner(ctx)
+        finally:
+            ctx.flush()
+    return registry.get(ctx.op_id)
 
 
 # ---------------------------------------------------------------------------
-# _do_nvd_scan — full logic
+# NVD scan
 # ---------------------------------------------------------------------------
 
-class TestDoNvdScan:
-    """Test the NVD scan logic end-to-end via synchronous thread execution."""
+class TestNvdScan:
+    """NVD scan against the REST API."""
 
     @patch("src.controllers.nvd_db.NVD_DB")
-    def test_nvd_scan_finds_cves(self, MockNvdDb, app, client, ids):
-        """Scan completes and creates findings for discovered CVEs."""
-        mock_nvd = MagicMock()
-        MockNvdDb.return_value = mock_nvd
+    def test_discovered_cves_are_persisted(self, MockNvdDb, app, ids):
+        """Every CVE returned for a CPE becomes a vulnerability record."""
+        nvd = MagicMock()
+        MockNvdDb.return_value = nvd
         MockNvdDb.extract_cve_details = _RealNvdDb.extract_cve_details
-        mock_nvd.api_get_cves_by_cpe.return_value = [
+        nvd.api_get_cves_by_cpe.return_value = [
             {"cve": {"id": "CVE-2023-0001"}},
             {"cve": {"id": "CVE-2023-0002"}},
         ]
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
-        assert resp.status_code == 202
+        ctx = _context("nvd", ids["variant_id"], mode="api")
+        operation = _run(app, run_nvd_scan, ctx)
 
-        # Check the scan status was set to done
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        assert data["status"] == "done"
-        assert data["error"] is None
-        assert data["total"] >= 1
-        assert data["done_count"] >= 1
+        assert operation["error"] is None
+        assert operation["progress"]["total"] >= 1
+        assert operation["progress"]["current"] >= 1
 
-        # Verify CVEs were actually created in DB
         with app.app_context():
             from src.models.vulnerability import Vulnerability
-            v1 = _db.session.get(Vulnerability, "CVE-2023-0001")
-            v2 = _db.session.get(Vulnerability, "CVE-2023-0002")
-            assert v1 is not None
-            assert v2 is not None
+            assert _db.session.get(Vulnerability, "CVE-2023-0001") is not None
+            assert _db.session.get(Vulnerability, "CVE-2023-0002") is not None
 
     @patch("src.controllers.nvd_db.NVD_DB")
-    def test_nvd_scan_no_cves(self, MockNvdDb, app, client, ids):
-        """No CVEs found — scan completes successfully with 0 CVEs."""
-        mock_nvd = MagicMock()
-        MockNvdDb.return_value = mock_nvd
-        mock_nvd.api_get_cves_by_cpe.return_value = []
+    def test_scan_without_matches_reports_zero_cves(self, MockNvdDb, app, ids):
+        """A scan that matches nothing still completes and says so."""
+        nvd = MagicMock()
+        MockNvdDb.return_value = nvd
+        nvd.api_get_cves_by_cpe.return_value = []
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
-        assert resp.status_code == 202
+        ctx = _context("nvd", ids["variant_id"], mode="api")
+        operation = _run(app, run_nvd_scan, ctx)
 
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        assert data["status"] == "done"
-        assert "0 CVEs" in data["progress"]
+        assert "0 CVEs" in operation["progress"]["message"]
 
     @patch("src.controllers.nvd_db.NVD_DB")
-    def test_nvd_scan_api_error_continues(self, MockNvdDb, app, client, ids):
-        """API error on one CPE doesn't crash the whole scan."""
-        mock_nvd = MagicMock()
-        MockNvdDb.return_value = mock_nvd
-        mock_nvd.api_get_cves_by_cpe.side_effect = Exception("NVD timeout")
+    def test_failed_cpe_query_is_logged_and_scan_continues(
+        self, MockNvdDb, app, ids
+    ):
+        """An API failure on one CPE is recorded without aborting the scan."""
+        nvd = MagicMock()
+        MockNvdDb.return_value = nvd
+        nvd.api_get_cves_by_cpe.side_effect = Exception("NVD timeout")
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
-        assert resp.status_code == 202
+        ctx = _context("nvd", ids["variant_id"], mode="api")
+        operation = _run(app, run_nvd_scan, ctx)
 
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        # Should complete (done) — errors per CPE are logged but don't fail
-        assert data["status"] == "done"
-        any_error_log = any("ERROR" in log for log in data.get("logs", []))
-        assert any_error_log
+        assert any("ERROR" in line for line in operation["logs"])
+        assert any("NVD timeout" in line for line in operation["logs"])
+        assert "0 CVEs" in operation["progress"]["message"]
 
-    def test_nvd_scan_empty_variant(self, app, client, ids):
-        """Variant with no scans produces an error."""
-        with _make_sync_thread_patch():
-            resp = client.post(
-                f"/api/variants/{ids['variant_empty_id']}/nvd-scan"
+    def test_variant_without_sbom_scan_fails(self, app, ids):
+        """A variant that was never imported cannot be scanned."""
+        ctx = _context("nvd", ids["variant_empty_id"])
+        with pytest.raises(RuntimeError, match="No SBOM scan found"):
+            _run(app, run_nvd_scan, ctx)
+
+    @patch("src.controllers.nvd_db.NVD_DB")
+    def test_known_vulnerability_is_not_duplicated(self, MockNvdDb, app, ids):
+        """Re-discovering a CVE reuses the existing record."""
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            Vulnerability.create_record(
+                id="CVE-2023-9876", description="pre-existing"
             )
-        assert resp.status_code == 202
+            _db.session.commit()
 
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_empty_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        assert data["status"] == "error"
-        assert "No SBOM scan found" in data["error"]
+        nvd = MagicMock()
+        MockNvdDb.return_value = nvd
+        MockNvdDb.extract_cve_details = _RealNvdDb.extract_cve_details
+        nvd.api_get_cves_by_cpe.return_value = [{"cve": {"id": "CVE-2023-9876"}}]
+
+        ctx = _context("nvd", ids["variant_id"], mode="api")
+        operation = _run(app, run_nvd_scan, ctx)
+
+        assert operation["error"] is None
+        with app.app_context():
+            rows = _db.session.execute(
+                _db.select(Vulnerability).where(
+                    Vulnerability.id == "CVE-2023-9876"
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+
+    @patch("src.controllers.nvd_db.NVD_DB")
+    def test_long_cve_list_is_truncated_in_the_log(self, MockNvdDb, app, ids):
+        """Only the first ten CVEs are listed, the rest become an ellipsis."""
+        nvd = MagicMock()
+        MockNvdDb.return_value = nvd
+        MockNvdDb.extract_cve_details = _RealNvdDb.extract_cve_details
+        nvd.api_get_cves_by_cpe.return_value = [
+            {"cve": {"id": f"CVE-2023-{i:04d}"}} for i in range(15)
+        ]
+
+        ctx = _context("nvd", ids["variant_id"], mode="api")
+        operation = _run(app, run_nvd_scan, ctx)
+
+        listing = next(line for line in operation["logs"] if "CVE(s):" in line)
+        assert listing.count("CVE-2023-") == 10
+        assert listing.endswith("…")
 
 
 # ---------------------------------------------------------------------------
-# _do_osv_scan — full logic
+# OSV scan
 # ---------------------------------------------------------------------------
 
-class TestDoOsvScan:
-    """Test the OSV scan logic end-to-end via synchronous thread execution."""
+class TestOsvScan:
+    """OSV scan against osv.dev."""
 
     @patch("src.controllers.osv_client.OSVClient.query_by_purl")
-    def test_osv_scan_finds_vulns(self, mock_query, app, client, ids):
-        """Scan completes and creates findings for discovered vulns."""
-        mock_query.return_value = [
+    def test_advisory_and_its_cve_alias_are_persisted(self, query, app, ids):
+        """An advisory is recorded under its own id and under its aliases."""
+        query.return_value = [
             {"id": "GHSA-1234-5678", "aliases": ["CVE-2023-9999"]},
         ]
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/osv-scan")
-        assert resp.status_code == 202
+        ctx = _context("osv", ids["variant_id"])
+        operation = _run(app, run_osv_scan, ctx)
 
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        assert data["status"] == "done"
-        assert data["error"] is None
-        assert data["total"] >= 1
+        assert operation["error"] is None
+        assert operation["progress"]["total"] >= 1
 
-        # Verify vulns were created in DB
         with app.app_context():
             from src.models.vulnerability import Vulnerability
-            v1 = _db.session.get(Vulnerability, "GHSA-1234-5678")
-            assert v1 is not None
-            # CVE alias should also be created
-            v2 = _db.session.get(Vulnerability, "CVE-2023-9999")
-            assert v2 is not None
+            assert _db.session.get(Vulnerability, "GHSA-1234-5678") is not None
+            assert _db.session.get(Vulnerability, "CVE-2023-9999") is not None
 
     @patch("src.controllers.osv_client.OSVClient.query_by_purl")
-    def test_osv_scan_no_vulns(self, mock_query, app, client, ids):
-        """No vulns found — scan completes with 0."""
-        mock_query.return_value = []
+    def test_scan_without_matches_reports_zero_vulnerabilities(
+        self, query, app, ids
+    ):
+        query.return_value = []
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/osv-scan")
-        assert resp.status_code == 202
+        ctx = _context("osv", ids["variant_id"])
+        operation = _run(app, run_osv_scan, ctx)
 
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        assert data["status"] == "done"
-        assert "0 vulnerabilities" in data["progress"]
+        assert "0 vulnerabilities" in operation["progress"]["message"]
 
     @patch("src.controllers.osv_client.OSVClient.query_by_purl")
-    def test_osv_scan_api_error_continues(self, mock_query, app, client, ids):
-        """API error on one PURL doesn't crash the whole scan."""
-        mock_query.side_effect = Exception("OSV timeout")
+    def test_failed_purl_query_is_logged_and_scan_continues(
+        self, query, app, ids
+    ):
+        query.side_effect = Exception("OSV timeout")
 
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/osv-scan")
-        assert resp.status_code == 202
+        ctx = _context("osv", ids["variant_id"])
+        operation = _run(app, run_osv_scan, ctx)
 
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        assert data["status"] == "done"
-        any_error_log = any("ERROR" in log for log in data.get("logs", []))
-        assert any_error_log
+        assert any("ERROR" in line for line in operation["logs"])
+        assert any("OSV timeout" in line for line in operation["logs"])
+        assert "0 vulnerabilities" in operation["progress"]["message"]
 
-    def test_osv_scan_empty_variant(self, app, client, ids):
-        """Variant with no scans produces an error."""
-        with _make_sync_thread_patch():
-            resp = client.post(
-                f"/api/variants/{ids['variant_empty_id']}/osv-scan"
-            )
-        assert resp.status_code == 202
+    def test_variant_without_sbom_scan_fails(self, app, ids):
+        ctx = _context("osv", ids["variant_empty_id"])
+        with pytest.raises(RuntimeError, match="No SBOM scan found"):
+            _run(app, run_osv_scan, ctx)
 
-        resp_status = client.get(
-            f"/api/variants/{ids['variant_empty_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_status.data)
-        assert data["status"] == "error"
-        assert "No SBOM scan found" in data["error"]
+    @patch("src.controllers.osv_client.OSVClient.query_by_purl")
+    def test_known_vulnerability_is_not_duplicated(self, query, app, ids):
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            Vulnerability.create_record(id="GHSA-0000-1111", description="pre")
+            _db.session.commit()
+
+        query.return_value = [{"id": "GHSA-0000-1111", "aliases": []}]
+
+        ctx = _context("osv", ids["variant_id"])
+        operation = _run(app, run_osv_scan, ctx)
+
+        assert operation["error"] is None
+        with app.app_context():
+            rows = _db.session.execute(
+                _db.select(Vulnerability).where(
+                    Vulnerability.id == "GHSA-0000-1111"
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+
+    @patch("src.controllers.osv_client.OSVClient.query_by_purl")
+    def test_long_advisory_list_is_truncated_in_the_log(self, query, app, ids):
+        query.return_value = [
+            {"id": f"GHSA-{i:04d}", "aliases": []} for i in range(12)
+        ]
+
+        ctx = _context("osv", ids["variant_id"])
+        operation = _run(app, run_osv_scan, ctx)
+
+        listing = next(line for line in operation["logs"] if "vuln(s):" in line)
+        assert listing.count("GHSA-") == 10
+        assert listing.endswith("…")
 
 
 # ---------------------------------------------------------------------------
-# NVD scan — no valid CPEs edge case
+# NVD scan — no usable CPE identifiers
 # ---------------------------------------------------------------------------
 
 class TestNvdScanNoCpes:
-    """Test NVD scan when packages have no CPEs."""
+    """NVD needs a CPE carrying a concrete version field."""
 
     @pytest.fixture()
     def app_no_cpe(self, tmp_path):
-        import os
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -327,37 +363,27 @@ class TestNvdScanNoCpes:
                 sbom = SBOMDocument.create("/t/sbom.json", "spdx", scan.id)
                 SBOMPackage.create(sbom.id, pkg.id)
                 _db.session.commit()
-                application._test_ids = {
-                    "variant_id": str(variant.id),
-                }
+                application._test_ids = {"variant_id": str(variant.id)}
             yield application
         finally:
             os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
     @patch("src.controllers.nvd_db.NVD_DB")
-    def test_no_valid_cpes(self, MockNvdDb, app_no_cpe):
-        client = app_no_cpe.test_client()
-        vid = app_no_cpe._test_ids["variant_id"]
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/nvd-scan?mode=api")
-        assert resp.status_code == 202
-
-        resp_s = client.get(f"/api/variants/{vid}/nvd-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "No packages with valid CPE" in data["error"]
+    def test_wildcard_only_cpes_fail_the_scan(self, MockNvdDb, app_no_cpe):
+        ctx = _context("nvd", app_no_cpe._test_ids["variant_id"], mode="api")
+        with pytest.raises(RuntimeError, match="No packages with valid CPE"):
+            _run(app_no_cpe, run_nvd_scan, ctx)
 
 
 # ---------------------------------------------------------------------------
-# OSV scan — no valid PURLs edge case
+# OSV scan — no usable PURL identifiers
 # ---------------------------------------------------------------------------
 
 class TestOsvScanNoPurls:
-    """Test OSV scan when packages have no PURLs."""
+    """OSV needs at least one ``pkg:`` identifier."""
 
     @pytest.fixture()
     def app_no_purl(self, tmp_path):
-        import os
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -384,254 +410,57 @@ class TestOsvScanNoPurls:
                 sbom = SBOMDocument.create("/t/sbom.json", "spdx", scan.id)
                 SBOMPackage.create(sbom.id, pkg.id)
                 _db.session.commit()
-                application._test_ids = {
-                    "variant_id": str(variant.id),
-                }
+                application._test_ids = {"variant_id": str(variant.id)}
             yield application
         finally:
             os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
-    def test_no_valid_purls(self, app_no_purl):
-        client = app_no_purl.test_client()
-        vid = app_no_purl._test_ids["variant_id"]
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/osv-scan")
-        assert resp.status_code == 202
-
-        resp_s = client.get(f"/api/variants/{vid}/osv-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "No packages with valid PURL" in data["error"]
+    def test_packages_without_purls_fail_the_scan(self, app_no_purl):
+        ctx = _context("osv", app_no_purl._test_ids["variant_id"])
+        with pytest.raises(RuntimeError, match="No packages with valid PURL"):
+            _run(app_no_purl, run_osv_scan, ctx)
 
 
 # ---------------------------------------------------------------------------
-# NVD scan — variant with no packages
+# Scans of a variant whose SBOM scan carries no packages
 # ---------------------------------------------------------------------------
 
-class TestNvdScanNoPackages:
-    """Test NVD scan when variant has scans but no packages."""
+@pytest.fixture()
+def app_no_packages(tmp_path):
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
 
-    @pytest.fixture()
-    def app_no_pkgs(self, tmp_path):
-        import os
-        from src.models.project import Project
-        from src.models.variant import Variant
-        from src.models.scan import Scan
-
-        scan_file = tmp_path / "scan_status.txt"
-        scan_file.write_text("__END_OF_SCAN_SCRIPT__")
-        os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-        try:
-            application = create_app()
-            application.config.update({
-                "TESTING": True, "SCAN_FILE": str(scan_file),
-            })
-            with application.app_context():
-                _db.drop_all()
-                _db.create_all()
-                project = Project.create("NoPkgProject")
-                variant = Variant.create("NoPkgVariant", project.id)
-                # Scan exists but has no SBOM documents → no packages
-                Scan.create("empty scan", variant.id)
-                _db.session.commit()
-                application._test_ids = {
-                    "variant_id": str(variant.id),
-                }
-            yield application
-        finally:
-            os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
-
-    @patch("src.controllers.nvd_db.NVD_DB")
-    def test_no_packages(self, MockNvdDb, app_no_pkgs):
-        client = app_no_pkgs.test_client()
-        vid = app_no_pkgs._test_ids["variant_id"]
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/nvd-scan?mode=api")
-        assert resp.status_code == 202
-
-        resp_s = client.get(f"/api/variants/{vid}/nvd-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "No packages found" in data["error"]
-
-
-# ---------------------------------------------------------------------------
-# OSV scan — variant with no packages
-# ---------------------------------------------------------------------------
-
-class TestOsvScanNoPackages:
-    """Test OSV scan when variant has scans but no packages."""
-
-    @pytest.fixture()
-    def app_no_pkgs(self, tmp_path):
-        import os
-        from src.models.project import Project
-        from src.models.variant import Variant
-        from src.models.scan import Scan
-
-        scan_file = tmp_path / "scan_status.txt"
-        scan_file.write_text("__END_OF_SCAN_SCRIPT__")
-        os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-        try:
-            application = create_app()
-            application.config.update({
-                "TESTING": True, "SCAN_FILE": str(scan_file),
-            })
-            with application.app_context():
-                _db.drop_all()
-                _db.create_all()
-                project = Project.create("NoPkgProject2")
-                variant = Variant.create("NoPkgVariant2", project.id)
-                Scan.create("empty scan", variant.id)
-                _db.session.commit()
-                application._test_ids = {
-                    "variant_id": str(variant.id),
-                }
-            yield application
-        finally:
-            os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
-
-    def test_no_packages(self, app_no_pkgs):
-        client = app_no_pkgs.test_client()
-        vid = app_no_pkgs._test_ids["variant_id"]
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/osv-scan")
-        assert resp.status_code == 202
-
-        resp_s = client.get(f"/api/variants/{vid}/osv-scan/status")
-        data = json.loads(resp_s.data)
-        assert data["status"] == "error"
-        assert "No packages found" in data["error"]
-
-
-# ---------------------------------------------------------------------------
-# NVD scan — existing vulnerability gets add_found_by("nvd")
-# ---------------------------------------------------------------------------
-
-class TestNvdScanExistingVuln:
-    """NVD scan with a pre-existing vulnerability still completes."""
-
-    @patch("src.controllers.nvd_db.NVD_DB")
-    def test_existing_vuln_no_duplicate(self, MockNvdDb, app, client, ids):
-        from src.models.vulnerability import Vulnerability
-
-        # Pre-create the vulnerability
-        with app.app_context():
-            Vulnerability.create_record(
-                id="CVE-2023-9876", description="pre-existing"
-            )
+    scan_file = tmp_path / "scan_status.txt"
+    scan_file.write_text("__END_OF_SCAN_SCRIPT__")
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True, "SCAN_FILE": str(scan_file),
+        })
+        with application.app_context():
+            _db.drop_all()
+            _db.create_all()
+            project = Project.create("NoPkgProject")
+            variant = Variant.create("NoPkgVariant", project.id)
+            # Scan exists but has no SBOM documents → no packages
+            Scan.create("empty scan", variant.id)
             _db.session.commit()
-
-        mock_nvd = MagicMock()
-        MockNvdDb.return_value = mock_nvd
-        MockNvdDb.extract_cve_details = _RealNvdDb.extract_cve_details
-        mock_nvd.api_get_cves_by_cpe.return_value = [
-            {"cve": {"id": "CVE-2023-9876"}},
-        ]
-
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
-        assert resp.status_code == 202
-
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-
-        # Vulnerability still exists and was not duplicated
-        with app.app_context():
-            v = _db.session.get(Vulnerability, "CVE-2023-9876")
-            assert v is not None
+            application._test_ids = {"variant_id": str(variant.id)}
+        yield application
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
 
-# ---------------------------------------------------------------------------
-# OSV scan — existing vulnerability gets add_found_by("osv")
-# ---------------------------------------------------------------------------
-
-class TestOsvScanExistingVuln:
-    """OSV scan with a pre-existing vulnerability still completes."""
-
-    @patch("src.controllers.osv_client.OSVClient.query_by_purl")
-    def test_existing_vuln_no_duplicate(self, mock_query, app, client, ids):
-        from src.models.vulnerability import Vulnerability
-
-        with app.app_context():
-            Vulnerability.create_record(
-                id="GHSA-0000-1111", description="pre"
-            )
-            _db.session.commit()
-
-        mock_query.return_value = [
-            {"id": "GHSA-0000-1111", "aliases": []},
-        ]
-
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/osv-scan")
-        assert resp.status_code == 202
-
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-
-        # Vulnerability still exists and was not duplicated
-        with app.app_context():
-            v = _db.session.get(Vulnerability, "GHSA-0000-1111")
-            assert v is not None
+@patch("src.controllers.nvd_db.NVD_DB")
+def test_nvd_scan_of_a_packageless_variant_fails(MockNvdDb, app_no_packages):
+    ctx = _context("nvd", app_no_packages._test_ids["variant_id"], mode="api")
+    with pytest.raises(RuntimeError, match="No packages found"):
+        _run(app_no_packages, run_nvd_scan, ctx)
 
 
-# ---------------------------------------------------------------------------
-# NVD scan — multiple CVEs returned (> 10 triggers ellipsis in log)
-# ---------------------------------------------------------------------------
-
-class TestNvdScanManyCves:
-    """NVD scan with >10 CVEs per CPE shows ellipsis in log."""
-
-    @patch("src.controllers.nvd_db.NVD_DB")
-    def test_many_cves_ellipsis(self, MockNvdDb, app, client, ids):
-        mock_nvd = MagicMock()
-        MockNvdDb.return_value = mock_nvd
-        MockNvdDb.extract_cve_details = _RealNvdDb.extract_cve_details
-        mock_nvd.api_get_cves_by_cpe.return_value = [
-            {"cve": {"id": f"CVE-2023-{i:04d}"}} for i in range(15)
-        ]
-
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
-        assert resp.status_code == 202
-
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/nvd-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-        log_text = "\n".join(data.get("logs", []))
-        assert "…" in log_text  # ellipsis for >10 CVEs
-
-
-# ---------------------------------------------------------------------------
-# OSV scan — multiple vulns returned (> 10 triggers ellipsis in log)
-# ---------------------------------------------------------------------------
-
-class TestOsvScanManyVulns:
-    """OSV scan with >10 vulns per PURL shows ellipsis in log."""
-
-    @patch("src.controllers.osv_client.OSVClient.query_by_purl")
-    def test_many_vulns_ellipsis(self, mock_query, app, client, ids):
-        mock_query.return_value = [
-            {"id": f"GHSA-{i:04d}", "aliases": []} for i in range(12)
-        ]
-
-        with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/osv-scan")
-        assert resp.status_code == 202
-
-        resp_s = client.get(
-            f"/api/variants/{ids['variant_id']}/osv-scan/status"
-        )
-        data = json.loads(resp_s.data)
-        assert data["status"] == "done"
-        log_text = "\n".join(data.get("logs", []))
-        assert "…" in log_text
+def test_osv_scan_of_a_packageless_variant_fails(app_no_packages):
+    ctx = _context("osv", app_no_packages._test_ids["variant_id"])
+    with pytest.raises(RuntimeError, match="No packages found"):
+        _run(app_no_packages, run_osv_scan, ctx)
