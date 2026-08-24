@@ -27,6 +27,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
+import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
 type Props = {
     vuln: Vulnerability;
@@ -1358,17 +1359,110 @@ type VariantScopedSnapshot = {
         }
     };
 
+    const headerActions = (
+        <>
+            <div className="relative flex items-center gap-2 px-2 py-2">
+                <button
+                    ref={shortcutButtonRef}
+                    aria-label="shortcut helper"
+                    title="View keyboard shortcuts"
+                    type="button"
+                    className="transition-colors hover:text-blue-400"
+                    onClick={() => setShowShortcutHelper(!showShortcutHelper)}
+                >
+                    <FontAwesomeIcon icon={faCircleQuestion} size="lg" />
+                </button>
+                <a
+                    href={docUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="documentation"
+                    title="Open documentation"
+                    className="transition-colors hover:text-blue-400"
+                >
+                    <FontAwesomeIcon icon={faBook} size="lg" />
+                </a>
+                {showShortcutHelper && (
+                    <div ref={dropdownRef} className="absolute right-0 top-full z-50 mt-1 w-[300px] rounded-lg border border-cyan-700 bg-cyan-900 p-4 text-sm shadow-lg">
+                        <h3 className="mb-3 font-bold text-white">Keyboard Shortcuts</h3>
+                        <div className="space-y-2 text-gray-100">
+                            <div className="flex justify-between"><span className="font-semibold text-cyan-300">← / →</span><span>Previous/Next vulnerability</span></div>
+                            <div className="flex justify-between"><span className="font-semibold text-cyan-300">Esc</span><span>Close modal</span></div>
+                        </div>
+                    </div>
+                )}
+            </div>
+            {!readOnly && (
+                <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        onClick={handleRefresh}
+                        disabled={refreshing}
+                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
+                        type="button"
+                        className={`rounded-lg border bg-transparent px-3 py-2 text-sm font-medium transition-colors focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
+                            bothRefreshed
+                                ? "border-green-600 text-green-400 hover:bg-green-900"
+                                : partialRefreshed
+                                    ? "border-yellow-600 text-yellow-400 hover:bg-yellow-900"
+                                    : "border-gray-600 text-gray-300 hover:bg-gray-600 hover:text-white"
+                        }`}
+                    >
+                        <FontAwesomeIcon icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate} className={refreshing ? "animate-spin" : ""} />
+                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
+                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
+                    </button>
+                    {refreshError && <span className="text-xs text-red-400">{refreshError}</span>}
+                </div>
+            )}
+            {!readOnly && (
+                <button
+                    onClick={() => setIsEditing(!isEditing)}
+                    type="button"
+                    className={`rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${isEditing ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-600 hover:bg-blue-700"}`}
+                    title={isEditing ? "Exit editing mode" : "Enter editing mode"}
+                >
+                    <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
+                    {isEditing ? "Exit editing" : "Edit"}
+                </button>
+            )}
+        </>
+    );
+
+    const footer = (
+        <ModalActions align="between">
+            {vulnerabilities && currentIndex !== undefined ? (
+                <div className="flex items-center space-x-2">
+                    <button onClick={() => navigateTo(currentIndex - 1)} disabled={!canNavigatePrevious} type="button" aria-label="Previous vulnerability" className="rounded-lg border border-gray-600 bg-gray-800 px-5 py-2.5 text-sm font-medium text-gray-400 hover:bg-gray-700 hover:text-white focus:outline-none focus:ring-4 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
+                        <FontAwesomeIcon icon={faChevronLeft} className="mr-2 h-3 w-3" />
+                    </button>
+                    <button onClick={() => navigateTo(currentIndex + 1)} disabled={!canNavigateNext} type="button" aria-label="Next vulnerability" className="rounded-lg border border-gray-600 bg-gray-800 px-5 py-2.5 text-sm font-medium text-gray-400 hover:bg-gray-700 hover:text-white focus:outline-none focus:ring-4 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
+                        <FontAwesomeIcon icon={faChevronRight} className="ml-2 h-3 w-3" />
+                    </button>
+                    {navigationInfo && <span className="px-3 text-sm text-gray-400" id="navigation-info">{navigationInfo}</span>}
+                </div>
+            ) : <div />}
+            <ModalButton onClick={handleClose}>Close</ModalButton>
+        </ModalActions>
+    );
+
     return (
-        <div
+        <>
+        <ModalShell
             key={vuln.id}
-            data-testid="vuln-modal-backdrop"
-            tabIndex={-1}
-            onMouseDown={(event) => {
-                if (event.target === event.currentTarget) {
-                    handleClose();
-                }
-            }}
-            className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
+            isOpen={true}
+            title={vuln.id}
+            size="fullscreen"
+            titleId="vulnerability_modal_title"
+            onClose={handleClose}
+            closeLabel="Close modal"
+            closeOnEscape={false}
+            closeOnPanel={true}
+            testId="vuln-modal-backdrop"
+            panelRef={modalRef}
+            panelTabIndex={-1}
+            headerActions={headerActions}
+            contentClassName="relative flex min-h-0 flex-1 flex-col p-0 md:p-0"
+            footer={footer}
         >
             {submittingMessage && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -1378,121 +1472,6 @@ type VariantScopedSnapshot = {
                     </div>
                 </div>
             )}
-            <div
-                className="relative p-16 h-full"
-                onMouseDown={(event) => {
-                    if (event.target === event.currentTarget) {
-                        handleClose();
-                    }
-                }}
-            >
-                <div
-                    ref={modalRef}
-                    tabIndex={-1}
-                    className="relative rounded-lg shadow bg-gray-700 h-full flex flex-col overflow-hidden">
-
-                    {/* Modal header */}
-                    <div className="shrink-0 flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
-                        <h3 id="vulnerability_modal_title" className="text-xl font-semibold text-gray-900 dark:text-white">
-                            {vuln.id}
-                        </h3>
-                        <div className="flex items-center space-x-2">
-                            {/* Keyboard Shortcut Helper */}
-                            <div className="px-2 py-2 flex items-center gap-2 relative">
-                                <button
-                                    ref={shortcutButtonRef}
-                                    aria-label='shortcut helper'
-                                    title='View keyboard shortcuts'
-                                    type='button'
-                                    className='hover:text-blue-400 transition-colors'
-                                    onClick={() => setShowShortcutHelper(!showShortcutHelper)}
-                                >
-                                    <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
-                                </button>
-                                <a
-                                    href={docUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    aria-label="documentation"
-                                    title="Open documentation"
-                                    className="hover:text-blue-400 transition-colors"
-                                >
-                                    <FontAwesomeIcon icon={faBook} size='lg' />
-                                </a>
-                                {showShortcutHelper && (
-                                    <div
-                                        ref={dropdownRef}
-                                        className="absolute top-full mt-1 right-0 bg-cyan-900 border border-cyan-700 rounded-lg shadow-lg p-4 z-50 w-[300px] text-sm"
-                                    >
-                                        <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
-                                        <div className="space-y-2 text-gray-100">
-                                            <div className="flex justify-between">
-                                                <span className="font-semibold text-cyan-300">← / →</span>
-                                                <span>Previous/Next vulnerability</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="font-semibold text-cyan-300">Esc</span>
-                                                <span>Close modal</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            {!readOnly && (
-                                <div className="flex items-center gap-2 flex-wrap">
-                                    <button
-                                        onClick={handleRefresh}
-                                        disabled={refreshing}
-                                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
-                                        type="button"
-                                        className={`px-3 py-2 text-sm font-medium focus:outline-none rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                                            bothRefreshed
-                                                ? 'text-green-400 border-green-600 hover:bg-green-900 bg-transparent'
-                                                : partialRefreshed
-                                                    ? 'text-yellow-400 border-yellow-600 hover:bg-yellow-900 bg-transparent'
-                                                    : 'border-gray-600 hover:bg-gray-600 hover:text-white bg-transparent text-gray-300'
-                                        }`}
-                                    >
-                                        <FontAwesomeIcon
-                                            icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate}
-                                            className={refreshing ? "animate-spin" : ""}
-                                        />
-                                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
-                                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
-                                    </button>
-                                    {refreshError && (
-                                        <span className="text-xs text-red-400">{refreshError}</span>
-                                    )}
-                                </div>
-                            )}
-
-                            {!readOnly && <button
-                                onClick={() => setIsEditing(!isEditing)}
-                                type="button"
-                                className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-                                    isEditing
-                                        ? "bg-blue-700 hover:bg-blue-800 text-white"
-                                        : "bg-blue-600 hover:bg-blue-700 text-white"
-                                }`}
-                                title={isEditing ? "Exit editing mode" : "Enter editing mode"}
-                            >
-                                <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
-                                {isEditing ? "Exit editing" : "Edit"}
-                            </button>}
-                            <button
-                                onClick={handleClose}
-                                type="button"
-                                className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors"
-                            >
-                                <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
-                                    <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
-                                </svg>
-                                <span className="sr-only">Close modal</span>
-                            </button>
-                        </div>
-                    </div>
-
                     {/* Scrollable content region (only the body scrolls) */}
                     <div className="flex-1 overflow-y-auto min-h-0">
 
@@ -1993,48 +1972,7 @@ type VariantScopedSnapshot = {
                     </div>
 
                     </div>
-                    {/* Modal footer */}
-                    <div className="shrink-0 flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
-                        {vulnerabilities && currentIndex !== undefined ? (
-                            <div className="flex items-center space-x-2">
-                                <button
-                                    onClick={() => navigateTo(currentIndex - 1)}
-                                    disabled={!canNavigatePrevious}
-                                    type="button"
-                                    aria-label="Previous vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
-                                >
-                                    <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
-                                </button>
-                                <button
-                                    onClick={() => navigateTo(currentIndex + 1)}
-                                    disabled={!canNavigateNext}
-                                    type="button"
-                                    aria-label="Next vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
-                                >
-                                    <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
-                                </button>
-                                {navigationInfo && (
-                                    <span className="text-sm text-gray-400 px-3" id="navigation-info">
-                                        {navigationInfo}
-                                    </span>
-                                )}
-                            </div>
-                        ) : (
-                            <div />
-                        )}
-                        <button
-                            onClick={handleClose}
-                            type="button"
-                            className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800"
-                        >
-                            Close
-                        </button>
-                    </div>
-
-                </div>
-            </div>
+        </ModalShell>
 
             <ConfirmationModal
                 isOpen={showConfirmClose}
@@ -2061,7 +1999,7 @@ type VariantScopedSnapshot = {
                 onConfirm={handleConfirmDelete}
                 onCancel={handleCancelDelete}
             />
-        </div>
+        </>
     );
 }
 
