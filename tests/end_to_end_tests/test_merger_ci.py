@@ -140,24 +140,30 @@ def test_invalid_cdx(app, init_files, monkeypatch):
     _run_main()
 
 
-def test_ci_mode(app, monkeypatch):
+def test_ci_mode(app, monkeypatch, capsys):
     monkeypatch.setenv("MATCH_CONDITION", "false")
-    _run_main()
+    _run_main(project_name=_PROJECT_NAME)
 
     monkeypatch.setenv("MATCH_CONDITION", "true")
+    capsys.readouterr()
     with pytest.raises(SystemExit) as e:
-        _run_main()
+        _run_main(project_name=_PROJECT_NAME)
     assert e.type == SystemExit
     assert e.value.code == 2
+    matched_lines = [
+        line for line in capsys.readouterr().out.splitlines()
+        if line.startswith("Vulnerability triggered fail condition:")
+    ]
+    assert len(matched_lines) == len(set(matched_lines))
 
     monkeypatch.setenv("MATCH_CONDITION", "cvss >= 8")
     with pytest.raises(SystemExit) as e:
-        _run_main()
+        _run_main(project_name=_PROJECT_NAME)
     assert e.type == SystemExit
     assert e.value.code == 2
 
     monkeypatch.setenv("MATCH_CONDITION", "cvss >= 8 and epss == 1.23456%")
-    _run_main()
+    _run_main(project_name=_PROJECT_NAME)
 
 
 def test_spdx_output_completeness(app):

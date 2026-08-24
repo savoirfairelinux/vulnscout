@@ -8,6 +8,7 @@ Targets uncovered branches reported by the CI coverage run:
 
 import json
 import pytest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
@@ -29,8 +30,13 @@ def _build_db(app):
         _db.drop_all()
         _db.create_all()
 
+        default_project = Project.create("default")
+        Variant.create("default", default_project.id)
+        Variant.create("release", default_project.id)
+
         project = Project.create("ProcessProject")
         variant = Variant.create("ProcessVariant", project.id)
+        Variant.create("SecondVariant", project.id)
         Scan.create("scan", variant.id, scan_type="sbom")
         _db.session.commit()
 
@@ -60,7 +66,11 @@ class TestCmdProcessCoverage:
             runner = app.test_cli_runner()
             result = runner.invoke(args=["process"])
         assert result.exit_code == 0
-        mock_main.assert_called_once_with(refresh_vulnerability_data=False)
+        mock_main.assert_called_once_with(
+            refresh_vulnerability_data=False,
+            project_name=None,
+            variant_name=None,
+        )
 
     def test_process_command_propagates_refresh_flag(self, app):
         with patch("src.bin.cmd_process._run_main") as run_main:
@@ -68,7 +78,124 @@ class TestCmdProcessCoverage:
             result = runner.invoke(args=["process", "--refresh-vulnerability-data"])
 
         assert result.exit_code == 0
-        run_main.assert_called_once_with(refresh_vulnerability_data=True)
+        run_main.assert_called_once_with(
+            refresh_vulnerability_data=True,
+            project_name=None,
+            variant_name=None,
+        )
+
+    def test_process_command_propagates_condition_scope(self, app):
+        with patch("src.bin.cmd_process._run_main") as run_main:
+            result = app.test_cli_runner().invoke(
+                args=[
+                    "process", "--project", "ProcessProject",
+                    "--variant", "ProcessVariant",
+                ]
+            )
+
+        assert result.exit_code == 0
+        run_main.assert_called_once_with(
+            refresh_vulnerability_data=False,
+            project_name="ProcessProject",
+            variant_name="ProcessVariant",
+        )
+
+    def test_condition_scope_defaults_to_default_variant(self, app):
+        from src.bin.cmd_process import _condition_scope
+
+        with app.app_context():
+            scope = _condition_scope(None, None)
+
+        assert len(scope.variant_ids) == 1
+
+    def test_condition_scope_includes_all_project_variants(self, app):
+        from src.bin.cmd_process import _condition_scope
+
+        with app.app_context():
+            scope = _condition_scope("ProcessProject", None)
+
+        assert len(scope.variant_ids) == 2
+
+    def test_condition_scope_selects_one_variant(self, app):
+        from src.bin.cmd_process import _condition_scope
+
+        with app.app_context():
+            scope = _condition_scope("ProcessProject", "ProcessVariant")
+
+        assert len(scope.variant_ids) == 1
+
+    def test_condition_scope_uses_default_project_for_variant(self, app):
+        from src.bin.cmd_process import _condition_scope
+
+        with app.app_context():
+            scope = _condition_scope(None, "release")
+
+        assert len(scope.variant_ids) == 1
+
+    def test_project_condition_matches_each_variant_independently(self, app):
+        from src.bin.cmd_process import _condition_scope, _evaluate_condition_in_scope
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.package import Package
+        from src.models.project import Project
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.scan import Scan
+        from src.models.variant import Variant
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            project = Project.get_by_name("ProcessProject")
+            variants = {variant.name: variant for variant in Variant.get_by_project(project.id)}
+            first_variant = variants["ProcessVariant"]
+            second_variant = variants["SecondVariant"]
+            first_scan = Scan.get_by_variant_id(first_variant.id)[0]
+            second_scan = Scan.create("second-scan", second_variant.id, scan_type="sbom")
+            package = Package.create("shared-package", "1.0")
+            for scan in (first_scan, second_scan):
+                document = SBOMDocument.create(f"/{scan.id}.spdx", "spdx", scan.id)
+                SBOMPackage.create(document.id, package.id)
+
+            vulnerability = Vulnerability.get_or_create("CVE-2026-0001")
+            finding = Finding.get_or_create(package.id, vulnerability.id)
+            now = datetime.now(timezone.utc)
+            Assessment.create(
+                "affected",
+                finding_id=finding.id,
+                variant_id=first_variant.id,
+                timestamp=now - timedelta(days=1),
+            )
+            Assessment.create(
+                "not_affected",
+                finding_id=finding.id,
+                variant_id=second_variant.id,
+                timestamp=now,
+            )
+
+            matched = _evaluate_condition_in_scope(
+                _condition_scope("ProcessProject", None),
+                "affected",
+            )
+
+        assert matched == [vulnerability.id]
+
+    @pytest.mark.parametrize(
+        ("project_name", "variant_name", "message"),
+        [
+            ("MissingProject", None, "project not found: MissingProject"),
+            ("ProcessProject", "MissingVariant", "variant not found: MissingVariant"),
+        ],
+    )
+    def test_condition_scope_rejects_unknown_names(
+        self, app, capsys, project_name, variant_name, message
+    ):
+        from src.bin.cmd_process import _condition_scope
+
+        with app.app_context(), pytest.raises(SystemExit) as exc_info:
+            _condition_scope(project_name, variant_name)
+
+        assert exc_info.value.code == 1
+        assert message in capsys.readouterr().out
 
     def test_standalone_refresh_uses_all_vulnerabilities(self, app):
         with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh:

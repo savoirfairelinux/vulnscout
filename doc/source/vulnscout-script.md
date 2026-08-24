@@ -312,6 +312,8 @@ For CI pipelines or automated scans, use the `--match-condition` argument instea
 
 If vulnerabilities match the condition, the script exits with **code 2**, allowing CI systems to fail the pipeline.
 
+When `--project demo` is supplied without `--variant`, the condition is evaluated across all variants in `demo`. Supplying both options limits evaluation to one variant. Omitting both options evaluates `default/default`; supplying only `--variant` selects that variant from the `default` project. Unknown names exit with **code 1**.
+
 See the [Match Conditions](ci_conditions.md) page for the full syntax and token reference.
 
 ---

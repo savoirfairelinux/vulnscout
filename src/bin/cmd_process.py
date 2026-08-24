@@ -28,7 +28,7 @@ import os
 from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
-from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
+from ._common import DEFAULT_VARIANT_NAME, resolve_project, resolve_project_variant
 from ..controllers.projects import ProjectController
 from ..helpers.export_scope import compute_export_scope
 
@@ -328,10 +328,20 @@ def create_project_context(
     is_flag=True,
     help="Refresh EPSS, NVD, EUVD, and GHSA data for imported vulnerabilities.",
 )
+@click.option("--project", "project_name", default=None, help="Evaluate conditions in this project.")
+@click.option("--variant", "variant_name", default=None, help="Evaluate conditions in this project variant.")
 @with_appcontext
-def process_command(refresh_vulnerability_data: bool) -> None:
+def process_command(
+    refresh_vulnerability_data: bool,
+    project_name: str | None,
+    variant_name: str | None,
+) -> None:
     """Parse all SBOM inputs, persist results to the DB and generate output files."""
-    _run_main(refresh_vulnerability_data=refresh_vulnerability_data)
+    _run_main(
+        refresh_vulnerability_data=refresh_vulnerability_data,
+        project_name=project_name,
+        variant_name=variant_name,
+    )
 
 
 @click.command("refresh-vulnerability-data")
@@ -433,7 +443,35 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
         print(f"Warning: could not populate observations table: {e}")
 
 
-def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
+def _condition_scope(project_name: str | None, variant_name: str | None):
+    project = project_name or "default"
+    if project_name is not None and variant_name is None:
+        project_obj = resolve_project(project)
+        return compute_export_scope(project_id=project_obj.id)
+
+    _, variant_obj = resolve_project_variant(project, variant_name)
+    return compute_export_scope(variant_id=variant_obj.id)
+
+
+def _evaluate_condition_in_scope(scope, condition: str) -> list[str]:
+    matched_vulns: list[str] = []
+    for variant_id in sorted(scope.variant_ids, key=str):
+        variant_controllers = ControllersCache(
+            scope=compute_export_scope(variant_id=variant_id)
+        )
+        matched_vulns.extend(evaluate_condition(
+            variant_controllers.vulnerabilities,
+            variant_controllers.assessments,
+            condition,
+        ))
+    return list(dict.fromkeys(matched_vulns))
+
+
+def _run_main(
+    refresh_vulnerability_data: bool = False,
+    project_name: str | None = None,
+    variant_name: str | None = None,
+) -> ControllersCache:
     """Core processing logic (usable both from the CLI command and directly)."""
     controllers = ControllersCache()
     vulnCtrl: VulnerabilitiesController = controllers.vulnerabilities
@@ -493,7 +531,10 @@ def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
     failed_vulns = []
     if match_condition:
         verbose("merger_ci: Start evaluating conditions")
-        failed_vulns = evaluate_condition(controllers.vulnerabilities, controllers.assessments, match_condition)
+        failed_vulns = _evaluate_condition_in_scope(
+            _condition_scope(project_name, variant_name),
+            match_condition,
+        )
         verbose("merger_ci: Finished evaluating conditions")
         # Cache result so flask report can reuse it without re-evaluating
         try:
