@@ -10,9 +10,6 @@ import Variants from '../../src/handlers/variant';
 import Packages from '../../src/handlers/packages';
 import Vulnerabilities from '../../src/handlers/vulnerabilities';
 import Assessments from '../../src/handlers/assessments';
-import ScansHandler from '../../src/handlers/scans';
-import { restoreFromStatus as grypeRestore } from '../../src/handlers/grypeScanState';
-import { restoreActiveRefreshes } from '../../src/handlers/activeScanQueue';
 
 jest.mock('../../src/handlers/config', () => ({
     __esModule: true,
@@ -37,33 +34,11 @@ jest.mock('../../src/handlers/variant', () => ({
     default: { list: jest.fn(), listAll: jest.fn() },
 }));
 
-jest.mock('../../src/handlers/scans', () => ({
-    __esModule: true,
-    default: { getRunningScans: jest.fn() },
-}));
-
-jest.mock('../../src/handlers/grypeScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/nvdScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/osvScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/sccScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/activeScanQueue', () => {
+jest.mock('../../src/handlers/operationStore', () => {
     const snapshot: never[] = [];
     return {
-        subscribeToRefreshQueue: () => () => undefined,
-        getRefreshQueueSnapshot: () => snapshot,
-        restoreActiveRefreshes: jest.fn(() => Promise.resolve()),
+        subscribe: () => () => undefined,
+        getSnapshot: () => snapshot,
     };
 });
 
@@ -187,9 +162,6 @@ const mockVariantsListAll = Variants.listAll as jest.MockedFunction<typeof Varia
 const mockPackagesList = Packages.list as jest.MockedFunction<typeof Packages.list>;
 const mockVulnerabilitiesList = Vulnerabilities.list as jest.MockedFunction<typeof Vulnerabilities.list>;
 const mockAssessmentsList = Assessments.list as jest.MockedFunction<typeof Assessments.list>;
-const mockGetRunningScans = ScansHandler.getRunningScans as jest.MockedFunction<typeof ScansHandler.getRunningScans>;
-const mockGrypeRestore = grypeRestore as jest.MockedFunction<typeof grypeRestore>;
-const mockRestoreActiveRefreshes = restoreActiveRefreshes as jest.MockedFunction<typeof restoreActiveRefreshes>;
 
 const SERVER_CONFIG = {
     project: { id: 'default-project', name: 'Default Project' },
@@ -217,7 +189,6 @@ describe('Explorer saved-scope validation', () => {
         mockVulnerabilitiesList.mockResolvedValue([]);
         mockAssessmentsList.mockResolvedValue([]);
         mockVariantsListAll.mockResolvedValue([]);
-        mockGetRunningScans.mockResolvedValue({ grype: [], nvd: [], osv: [], 'sbom-cve-check': [] });
     });
 
     afterEach(() => {
@@ -280,51 +251,6 @@ describe('Explorer saved-scope validation', () => {
             expect(mockPackagesList).toHaveBeenCalledWith('default-variant', undefined, undefined, undefined, undefined, undefined);
         });
         expect(mockClearFrontendScope).not.toHaveBeenCalled();
-    });
-
-    test('restores backend-running scans on application mount', async () => {
-        mockGetFrontendScope.mockReturnValue(null);
-        mockVariantsListAll.mockResolvedValue([
-            { id: 'variant-1', name: 'Variant 1', project_id: 'project-1' },
-        ]);
-        mockGetRunningScans.mockResolvedValue({
-            grype: [{ variant_id: 'variant-1', status: 'running', progress: 'Scanning' }],
-            nvd: [],
-            osv: [],
-            'sbom-cve-check': [],
-        });
-
-        render(<Explorer />);
-
-        expect(mockRestoreActiveRefreshes).toHaveBeenCalledTimes(1);
-        await waitFor(() => expect(mockGrypeRestore).toHaveBeenCalledWith([
-            {
-                variantId: 'variant-1',
-                name: 'Variant 1',
-                status: { variant_id: 'variant-1', status: 'running', progress: 'Scanning' },
-            },
-        ]));
-    });
-
-    test('restores running scans with their IDs when variant lookup fails', async () => {
-        mockGetFrontendScope.mockReturnValue(null);
-        mockVariantsListAll.mockRejectedValue(new Error('variants unavailable'));
-        mockGetRunningScans.mockResolvedValue({
-            grype: [{ variant_id: 'variant-1', status: 'running' }],
-            nvd: [],
-            osv: [],
-            'sbom-cve-check': [],
-        });
-
-        render(<Explorer />);
-
-        await waitFor(() => expect(mockGrypeRestore).toHaveBeenCalledWith([
-            {
-                variantId: 'variant-1',
-                name: 'variant-1',
-                status: { variant_id: 'variant-1', status: 'running' },
-            },
-        ]));
     });
 
     test('opens the add project settings view when no projects exist', async () => {
