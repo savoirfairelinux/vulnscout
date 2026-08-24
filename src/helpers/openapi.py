@@ -22,6 +22,7 @@ _SCAN_EXEMPT_PATHS = {
     "/api/openapi/ui",
     "/api/scan/status",
     "/api/version",
+    "/api/events/stream",
 }
 
 

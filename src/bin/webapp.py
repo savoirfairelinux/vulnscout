@@ -8,8 +8,10 @@
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
 from ..extensions import db, migrate, setup_write_serialization
+from ..controllers.operation_queue import queue as operation_queue
 from ..routes import init_app
 from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
+from ..routes.events import STREAM_PATH
 from .. import models  # noqa: F401
 from .merger_ci import init_app as init_merger_cli, post_treatment
 import sys
@@ -28,26 +30,34 @@ DEFAULT_BACKGROUND_TASK_DELAY = 120.0
 
 
 def _launch_enrichment(app):
-    """Spawn background thread for EPSS enrichment.
+    """Queue boot EPSS enrichment so its progress reaches the event stream."""
+    from ..controllers.job_context import JobContext
+    from ..controllers.operation_queue import queue
+    from ..controllers.operation_registry import (
+        KIND_ENRICHMENT, LANE_PIPELINE, registry,
+    )
 
-    Runs in its own thread so it doesn't block Flask request handlers
-    (WAL journal mode allows concurrent reads).
-    """
-    def _enrich_epss():
-        with app.app_context():
-            # Disable autoflush: without this, every SELECT triggers a flush
-            # which acquires the write-lock and holds it across the slow HTTP
-            # calls until the next explicit commit().  With autoflush=False
-            # the lock is only held during commit() itself (milliseconds).
-            db.session.autoflush = False
-            try:
-                from ..controllers import ControllersCache
-                controllers = ControllersCache()
-                post_treatment(controllers)
-            except Exception as e:
-                print(f"[enrichment/epss] {e}", flush=True)
+    op_id = "enrichment:boot"
+    if registry.has_active(op_id):
+        return
 
-    threading.Thread(target=_enrich_epss, name="enrichment-epss", daemon=True).start()
+    def _enrich_epss(ctx):
+        # Disable autoflush: without this, every SELECT triggers a flush which
+        # acquires the write-lock and holds it across the slow HTTP calls until
+        # the next explicit commit(). With autoflush=False the lock is only
+        # held during commit() itself (milliseconds).
+        db.session.autoflush = False
+        from ..controllers import ControllersCache
+        post_treatment(ControllersCache(), reporter=ctx)
+
+    registry.create(
+        op_id=op_id,
+        kind=KIND_ENRICHMENT,
+        source="epss",
+        label="EPSS enrichment",
+        lane=LANE_PIPELINE,
+    )
+    queue.submit(op_id, LANE_PIPELINE, _enrich_epss, JobContext(op_id))
 
 
 def _warm_scan_list_cache(app):
@@ -238,12 +248,18 @@ def create_app():
 
     @app.middleware("/api")
     def fail_scan_not_finished(*args, **kw):
-        if request.path in {"/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui"}:
+        # The event stream is exempt like /api/scan/status: the UI opens it
+        # during boot import so it can render enrichment progress live.
+        if request.path in {
+            "/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui",
+            STREAM_PATH,
+        }:
             return None
         if not is_scan_finished():
             return {"error": "Scan not finished"}, 503
 
     init_app(app)
+    operation_queue.init_app(app)
     init_merger_cli(app)
     return app
 
