@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -1560,6 +1560,89 @@ describe('Review — deleting an assessment', () => {
         await waitFor(() => {
             expect(deleteCalls()).toHaveLength(0);
         });
+    });
+});
+
+// ===========================================================================
+// Copying assessment / group ids
+// ===========================================================================
+
+describe('Review — copying assessment ids', () => {
+    /** Replace the clipboard userEvent installs so writes are observable. */
+    const stubClipboard = (writeText: jest.Mock) => {
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText },
+            configurable: true,
+        });
+    };
+
+    test('copies the assessment id of an ungrouped row', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(writeText).toHaveBeenCalledWith('assessment:a1');
+    });
+
+    test('copies the group id when the row is a group', async () => {
+        mockNetwork([makeAssessment('a1', 'v1', 'g1'), makeAssessment('a2', 'v2', 'g1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy group id'));
+
+        expect(writeText).toHaveBeenCalledWith('group:g1');
+    });
+
+    test('confirms the copy on the button, then reverts', async () => {
+        jest.useFakeTimers();
+        try {
+            mockNetwork([makeAssessment('a1', 'v1')]);
+            render(<Review projectId="proj1" />);
+            const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+            const writeText = jest.fn().mockResolvedValue(undefined);
+            stubClipboard(writeText);
+
+            await user.click(await screen.findByTitle('Copy assessment id'));
+
+            await screen.findByTitle('Copied');
+            await act(async () => { jest.advanceTimersByTime(2000); });
+            await screen.findByTitle('Copy assessment id');
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('stays quiet when the browser denies clipboard access', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockRejectedValue(new Error('denied'));
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(screen.queryByTitle('Copied')).not.toBeInTheDocument();
+    });
+
+    test('copies ids from the AI assessments tab too', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(writeText).toHaveBeenCalledWith('assessment:ai1');
     });
 });
 
