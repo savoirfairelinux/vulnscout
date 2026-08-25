@@ -10,7 +10,7 @@ import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
@@ -108,6 +108,37 @@ function toReviewRow(
     };
 }
 
+// How long the copy button shows its "copied" confirmation before reverting.
+const COPIED_FEEDBACK_MS = 2000;
+
+/** The clipboard payload for a row: its group id when grouped, otherwise the
+ *  id of its single assessment. Mirrors VulnModal's copy buttons. */
+const rowCopyKey = (row: ReviewRow) =>
+    row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
+
+/** Copies a row's group/assessment id, swapping to a check while confirmed.
+ *  The action cell is narrow, so the confirmation replaces the icon rather
+ *  than adding a "Copied" label beside it. */
+function CopyIdButton({ row, copiedKey, onCopy }: {
+    row: ReviewRow;
+    copiedKey: string | null;
+    onCopy: (row: ReviewRow) => void;
+}) {
+    const copied = copiedKey === rowCopyKey(row);
+    const label = row.group_id ? 'Copy group id' : 'Copy assessment id';
+    return (
+        <button
+            type="button"
+            onClick={() => onCopy(row)}
+            className="text-amber-300 hover:text-amber-100 transition-colors"
+            title={copied ? 'Copied' : label}
+            aria-label={copied ? 'Copied' : label}
+        >
+            <FontAwesomeIcon icon={copied ? faCheck : faCopy} className="w-4 h-4" />
+        </button>
+    );
+}
+
 const columnHelper = createColumnHelper<ReviewRow>();
 const teColumnHelper = createColumnHelper<ReviewTimeEstimate>();
 const cvssColumnHelper = createColumnHelper<ReviewCustomCvss>();
@@ -187,6 +218,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
+    // Identifies which copy button was last used, so only that one confirms.
+    const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
     const [selectedAssessments, setSelectedAssessments] = useState<RowSelectionState>({});
     const [selectedAiAssessments, setSelectedAiAssessments] = useState<RowSelectionState>({});
     const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<RowSelectionState>({});
@@ -219,6 +252,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -730,6 +764,25 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setRowToDelete(null);
     }, [rowToDelete, refreshAssessments, onAssessmentChanged, showMessage]);
 
+    const copyRowId = useCallback(async (row: ReviewRow) => {
+        const text = rowCopyKey(row);
+        try {
+            await navigator.clipboard.writeText(text);
+            // Confirm the copy on the button itself: the clipboard gives no
+            // visible feedback of its own, so without this it looks inert.
+            setCopiedRowKey(text);
+            if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+            copiedResetTimer.current = setTimeout(() => setCopiedRowKey(null), COPIED_FEEDBACK_MS);
+        } catch {
+            // Clipboard access can be denied by the browser; nothing more to do.
+        }
+    }, []);
+
+    // Drop the pending reset if the page unmounts while the confirmation shows.
+    useEffect(() => () => {
+        if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+    }, []);
+
     const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
         try {
             const groupId = row.group_id ?? await Assessments.promoteToGroup(row.assessment_ids[0]);
@@ -1177,7 +1230,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.display({
             id: 'actions',
             header: () => <div className="flex items-center justify-center">Actions</div>,
-            size: 70,
+            size: 100,
             cell: info => (
                 <div className="flex items-center justify-center gap-3 h-full">
                     <button
@@ -1194,15 +1247,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     >
                         <FontAwesomeIcon icon={faTrash} className="w-4 h-4" />
                     </button>
+                    <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
                 </div>
             ),
         }),
-    ], [handleVulnClickWithNav, variantNames]);
+    ], [handleVulnClickWithNav, variantNames, copiedRowKey, copyRowId]);
 
     const aiActionsColumn = useMemo(() => columnHelper.display({
         id: 'ai-actions',
         header: () => <div className="flex items-center justify-center">Actions</div>,
-        size: 110,
+        size: 140,
         cell: info => (
             <div className="flex flex-wrap items-center justify-center gap-2 h-full">
                 <button
@@ -1221,9 +1275,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <FontAwesomeIcon icon={faXmark} className="w-3 h-3" />
                     Reject
                 </button>
+                    <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
         ),
-    }), [handleApproveAiRow, handleRejectAiRow]);
+    }), [handleApproveAiRow, handleRejectAiRow, copiedRowKey, copyRowId]);
 
     const aiColumns = useMemo(
         () => columns.map(c => (c.id === 'actions' ? aiActionsColumn : c)),
