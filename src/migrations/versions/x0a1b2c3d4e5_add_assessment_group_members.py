@@ -40,19 +40,29 @@ def backfill_groups(connection):
     timestamp and content across different CVEs are not fused.  Only tuples
     with more than one row become a group; single-row tuples are skipped, which
     is what keeps the table sparse.
+
+    The key also carries the owning project, resolved through the assessment's
+    variant.  Reads are project-filtered while group mutations (delete,
+    reconcile, approve/reject) load every member by ``group_id``, so a group
+    spanning two projects would let one project silently mutate the other's
+    assessments.  Assessments without a variant have no project; they fall into
+    their own ``NULL`` bucket and never join a project's group.
     """
     rows = connection.execute(sa.text("""
         SELECT a.id AS assessment_id,
                f.vulnerability_id AS vuln_id,
+               v.project_id AS project_id,
                a.timestamp, a.status, a.simplified_status, a.status_notes,
                a.justification, a.impact_statement, a.workaround, a.origin
         FROM assessments a
         JOIN findings f ON f.id = a.finding_id
+        LEFT JOIN variants v ON v.id = a.variant_id
     """)).mappings().all()
 
     buckets: dict[tuple, list] = {}
     for row in rows:
         key = (
+            row["project_id"],
             row["vuln_id"], row["timestamp"], row["status"],
             row["simplified_status"], row["status_notes"], row["justification"],
             row["impact_statement"], row["workaround"], row["origin"],
