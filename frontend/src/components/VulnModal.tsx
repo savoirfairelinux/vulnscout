@@ -221,6 +221,11 @@ type VariantScopedSnapshot = {
     // Re-fetch the full assessment list after a group mutation (reconcile,
     // approve/reject, delete) so vuln.assessments/allVulnAssessments — and
     // therefore the status table above the history — reflect the write.
+    // vuln.assessments is rebuilt from the returned list rather than patched
+    // by id, because a reconcile can create and delete rows: a merge by id
+    // would keep deleted records and miss the new ones. Returns the list
+    // scoped the way the modal is scoped, which is what callers must use to
+    // recompute the vulnerability status summary.
     const refreshAllVulnAssessments = useCallback(async (): Promise<Assessment[] | null> => {
         const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
         try {
@@ -228,16 +233,18 @@ type VariantScopedSnapshot = {
             const data = await r.json();
             if (Array.isArray(data)) {
                 const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
-                const fullById = new Map(fullAssessments.map(a => [a.id, a]));
-                vuln.assessments = vuln.assessments.map(a => fullById.get(a.id) ?? a);
+                const scopedAssessments = variantId
+                    ? fullAssessments.filter(a => a.variant_id === variantId)
+                    : fullAssessments;
+                vuln.assessments = scopedAssessments;
                 setAllVulnAssessments(fullAssessments);
-                return fullAssessments;
+                return scopedAssessments;
             }
         } catch {
             // Keep whatever was previously loaded.
         }
         return null;
-    }, [vuln, projectId]);
+    }, [vuln, projectId, variantId]);
 
     // Fetch server-built assessment groups for this vulnerability (Task 8/11),
     // replacing the old client-side grouping heuristic. When this request is
@@ -807,10 +814,10 @@ type VariantScopedSnapshot = {
                     timestamp: editSharedTimestamp,
                 };
                 await Assessments.reconcileGroup(groupId, body);
-                await refreshAllVulnAssessments();
+                const reconciledAssessments = await refreshAllVulnAssessments();
                 await refreshAssessmentGroups();
 
-                const updatedAssessments = [...vuln.assessments];
+                const updatedAssessments = [...(reconciledAssessments ?? vuln.assessments)];
                 const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
                 vuln.simplified_status = statusSummary.dominant_status;
                 vuln.status_summary = statusSummary;
