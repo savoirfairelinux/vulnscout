@@ -400,6 +400,14 @@ class Assessments {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ assessments: items }),
         });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            // The batch endpoint reports per-item failures in `errors`, not `error`.
+            const detail = Array.isArray(err.errors) && err.errors.length > 0
+                ? err.errors.map((e: { error?: string }) => e.error).filter(Boolean).join('; ')
+                : err.error;
+            throw new Error(detail || `HTTP ${response.status}`);
+        }
         return await response.json();
     }
 }

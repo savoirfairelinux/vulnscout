@@ -141,4 +141,24 @@ describe("Assessments group handlers", () => {
     }));
     expect(result.count).toBe(2);
   });
+
+  test("createBatch throws with the backend detail when the batch is rejected", async () => {
+    fetchSpy.mockResolvedValueOnce(response({
+      status: "error",
+      errors: [{ vuln_id: "CVE-2026-0001", error: "variant_id is required" }],
+      error_count: 1,
+    }, false, 400));
+
+    await expect(Assessments.createBatch([
+      { vuln_id: "CVE-2026-0001", packages: ["pkg-a"], status: "not_affected" },
+    ])).rejects.toThrow("variant_id is required");
+  });
+
+  test("createBatch throws the status code when the failure body has no error text", async () => {
+    fetchSpy.mockResolvedValueOnce(response({}, false, 500));
+
+    await expect(Assessments.createBatch([
+      { vuln_id: "CVE-2026-0001", packages: ["pkg-a"], status: "not_affected" },
+    ])).rejects.toThrow("HTTP 500");
+  });
 });
