@@ -430,6 +430,201 @@ Returns all distinct variants that have a finding for this vulnerability.
 ]
 ```
 
+### Assessment Groups
+
+Assessments written by one user action share a **group**: the same verdict applied
+to several packages and/or variants of a vulnerability. Group endpoints read and
+edit that whole set at once, so the front-ends never reimplement grouping.
+
+**Group object:**
+```json
+{
+  "group_id": "uuid, or null for an assessment that belongs to no group",
+  "vuln_id": "CVE-2024-1234",
+  "status": "not_affected",
+  "simplified_status": "not_affected",
+  "status_notes": "",
+  "justification": "vulnerable_code_not_present",
+  "impact_statement": "",
+  "workaround": "",
+  "origin": "custom",
+  "responses": [],
+  "timestamp": "2024-01-01T00:00:00+00:00",
+  "targets": [
+    {
+      "variant_id": "uuid or null",
+      "package": "pkg@1.0::supplier",
+      "outdated": false,
+      "assessment_id": "uuid"
+    }
+  ],
+  "assessment_ids": ["uuid"]
+}
+```
+
+Groups are returned newest first. An assessment with no group is returned in the
+same shape with `group_id` set to `null` and a single target, so callers never
+branch on whether a group exists.
+
+#### List Assessment Groups for a Vulnerability
+
+```
+GET /api/vulnerabilities/<vuln_id>/assessment-groups
+```
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `project_id` | UUID | Restrict results to variants of one project |
+
+**Response:** array of group objects.
+
+#### Get Single Assessment Group
+
+```
+GET /api/assessment-groups/<group_id>
+```
+
+**Response:** one group object. `404` if the group does not exist.
+
+#### List Assessment Groups for Review
+
+```
+GET /api/reviews/assessment-groups
+```
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | Restrict results to one variant |
+| `project_id` | UUID | Restrict results to variants of one project |
+| `origin` | string | Restrict results to one origin (e.g. `custom`, `ai`) |
+
+**Response:** array of group objects, each enriched with a `vuln_texts` array
+holding the vulnerability texts of its CVE for front-end tooltips.
+
+#### Reconcile an Assessment Group
+
+Brings the group to the requested state in a single transaction: rows are
+updated, created, or deleted so the group ends up covering exactly the given
+packages and variants.
+
+```
+POST /api/assessment-groups/<group_id>/reconcile
+```
+
+**Request body:**
+```json
+{
+  "vuln_id": "CVE-2024-1234",
+  "packages": ["pkg@1.0::supplier"],
+  "variant_ids": ["uuid"],
+  "existing_ids": ["uuid"],
+  "status": "not_affected",
+  "status_notes": "",
+  "justification": "vulnerable_code_not_present",
+  "impact_statement": "",
+  "workaround": "",
+  "responses": [],
+  "update_timestamp": true,
+  "timestamp": "2024-01-01T00:00:00+00:00"
+}
+```
+
+`packages` and `variant_ids` are required and must be non-empty; `vuln_id` must
+match the group's vulnerability. `responses` is only applied when the key is
+present, so omitting it preserves the stored VEX responses. `update_timestamp`
+defaults to `true`.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "group_id": "uuid",
+  "updated": [],
+  "created": [],
+  "deleted": []
+}
+```
+
+`400` on an invalid payload, a `vuln_id` that does not match the group, or a
+request that would delete a pending AI assessment. `404` if the group does not
+exist.
+
+#### Approve an AI Assessment Group
+
+Converts every assessment in the group from `ai` origin to `custom`.
+
+```
+POST /api/assessment-groups/<group_id>/approve
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "assessments": [ { } ]
+}
+```
+
+`400` if the group holds any non-AI assessment (`Not a pending AI group`).
+`404` if the group does not exist.
+
+#### Reject an AI Assessment Group
+
+Deletes every assessment in the group.
+
+```
+POST /api/assessment-groups/<group_id>/reject
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "deleted": ["uuid"]
+}
+```
+
+`400` if the group holds any non-AI assessment. `404` if the group does not exist.
+
+#### Delete an Assessment Group
+
+```
+DELETE /api/assessment-groups/<group_id>
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "deleted_ids": ["uuid"]
+}
+```
+
+`400` if the group holds AI assessments — use the approve/reject endpoints for
+those. `404` if the group does not exist.
+
+#### Put an Assessment into a Group
+
+An assessment written on its own has no group until an edit gives it a second
+target; this endpoint creates that group lazily and is idempotent.
+
+```
+POST /api/assessments/<assessment_id>/group
+```
+
+**Response:**
+```json
+{
+  "group_id": "uuid"
+}
+```
+
+`404` if the assessment does not exist.
+
 ### Create Assessment
 
 ```
@@ -469,20 +664,38 @@ POST /api/assessments/batch
 ```json
 {
   "assessments": [
-    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "status": "affected" },
-    { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "status": "not_affected", "justification": "code_not_reachable" }
+    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_id": "uuid", "status": "affected" },
+    { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "variant_id": "uuid", "status": "not_affected", "justification": "code_not_reachable" }
   ]
 }
 ```
 
+`variant_id` is required on every item. The batch is one user action: if any
+item is invalid, nothing is written. Assessments are grouped per vulnerability,
+so approving one CVE's group never touches another's.
+
 **Response:**
-```
+```json
 {
   "status": "success",
-  "assessments": [...],
+  "assessments": [],
   "count": 2,
-  "errors": [],
-  "error_count": 0
+  "vuln_count": 2
+}
+```
+
+On failure (`400` for an invalid payload, `500` for a database error) the same
+shape is returned with `status` `"error"`, empty `assessments`, and the failures
+listed:
+
+```json
+{
+  "status": "error",
+  "assessments": [],
+  "count": 0,
+  "vuln_count": 0,
+  "errors": [ { "vuln_id": "CVE-2024-1234", "error": "variant_id is required" } ],
+  "error_count": 1
 }
 ```
 
