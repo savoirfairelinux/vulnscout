@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import importlib
+import json
 import uuid
 
 import sqlalchemy as sa
@@ -37,7 +38,8 @@ def _build_schema(connection):
             workaround TEXT,
             timestamp TEXT,
             finding_id TEXT,
-            variant_id TEXT
+            variant_id TEXT,
+            responses TEXT
         )
         """
     ))
@@ -78,6 +80,7 @@ def _add_assessment(
     *,
     status: str = "not_affected",
     timestamp: str = SHARED_TIMESTAMP,
+    responses: "list[str] | None" = None,
 ) -> str:
     assessment_id = _new_id()
     connection.execute(
@@ -86,11 +89,11 @@ def _add_assessment(
             INSERT INTO assessments (
                 id, origin, status, simplified_status, status_notes,
                 justification, impact_statement, workaround, timestamp,
-                finding_id, variant_id
+                finding_id, variant_id, responses
             ) VALUES (
                 :id, 'import', :status, 'fixed', 'notes',
                 'code_not_reachable', 'no impact', 'none', :timestamp,
-                :finding_id, :variant_id
+                :finding_id, :variant_id, :responses
             )
             """
         ),
@@ -100,6 +103,7 @@ def _add_assessment(
             "timestamp": timestamp,
             "finding_id": finding_id,
             "variant_id": variant_id,
+            "responses": json.dumps(responses) if responses is not None else None,
         },
     )
     return assessment_id
@@ -204,3 +208,92 @@ def test_backfill_stays_sparse_for_unique_assessments():
         groups = _groups(connection)
 
     assert groups == {}
+
+
+def test_backfill_never_groups_assessments_with_different_responses():
+    """Otherwise-identical rows carrying different VEX responses stay apart.
+
+    The group serializer exposes only the head's ``responses`` and reconcile
+    applies one response set to every member, so fusing these rows would hide
+    one set and mutate both as a single action.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0005")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["will_not_fix"])
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["update"])
+
+        migration.backfill_groups(connection)
+
+        groups = _groups(connection)
+
+    assert first not in groups
+    assert second not in groups
+
+
+def test_backfill_groups_rows_whose_responses_only_differ_in_order():
+    """Response order is not meaningful, so it must not split a real group."""
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0006")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["update", "will_not_fix"])
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["will_not_fix", "update"])
+
+        migration.backfill_groups(connection)
+
+        groups = _groups(connection)
+
+    assert set(groups) == {first, second}
+    assert groups[first] == groups[second]
+
+
+def test_backfill_treats_missing_and_empty_responses_as_equal():
+    """A NULL column and an empty list both mean "no responses"."""
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0007")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=None)
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=[])
+
+        migration.backfill_groups(connection)
+
+        groups = _groups(connection)
+
+    assert set(groups) == {first, second}
+    assert groups[first] == groups[second]
+
+
+def test_responses_key_normalizes_equivalent_encodings():
+    """Decoded (PostgreSQL) and text (SQLite) JSON must produce one key."""
+    assert migration.responses_key(None) == migration.responses_key("[]")
+    assert migration.responses_key(["update"]) == migration.responses_key('["update"]')
+
+
+def test_responses_key_falls_back_to_the_raw_text_when_unparsable():
+    """An unparsable value keeps rows apart instead of fusing them."""
+    assert migration.responses_key("not json") == "not json"
+
+
+def test_responses_key_handles_a_non_list_json_value():
+    assert migration.responses_key('{"b": 1, "a": 2}') == '{"a": 2, "b": 1}'
