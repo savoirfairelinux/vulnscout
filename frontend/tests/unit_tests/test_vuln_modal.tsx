@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
+import { render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -3026,8 +3026,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
 
         const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
-        // Each variant name shows up twice per group: once on the package badge
-        // row and once on the id tag that pins the id to its variant.
+        // The variant name shows up on each group's package badge row.
         await waitFor(() => {
             expect(within(history).getAllByText(/Production/).length).toBeGreaterThan(0);
             expect(within(history).getAllByText(/Staging/).length).toBeGreaterThan(0);
@@ -4020,51 +4019,6 @@ describe("VulnModal AI review block", () => {
         await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
 
         expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument();
-    });
-
-    test("shows a copyable id for custom assessments only", async () => {
-        mockReviews({});
-
-        await renderModalWithAssessment({ id: "assess-1", origin: "sbom" });
-
-        expect(screen.queryByText(/^id assess-1$/)).not.toBeInTheDocument();
-    });
-
-    test("labels the id with the package it covers", async () => {
-        // Arrange
-        mockReviews({});
-
-        // Act
-        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
-
-        // Assert — a group can hold several ids, so the id itself has to say
-        // which package (and variant, when there is one) it belongs to.
-        const tag = (await screen.findByText("assess-1")).parentElement as HTMLElement;
-        expect(tag).toHaveTextContent("pkgA@1.0.0");
-        expect(tag).toHaveAttribute(
-            "title",
-            "Assessment assess-1\nVariant: —\nPackages: pkgA@1.0.0",
-        );
-    });
-
-    test("copies the full id, not the truncated one", async () => {
-        // Arrange — the tag shows only the first 8 chars, so the copy button has
-        // to reach past what is rendered.
-        mockReviews({});
-        const writeText = jest.fn().mockResolvedValue(undefined);
-        // fireEvent, not userEvent: userEvent.setup() swaps in its own
-        // navigator.clipboard stub and would discard this spy.
-        Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-
-        // Act
-        await renderModalWithAssessment({ id: "assess-1-with-a-long-suffix", origin: "custom" });
-        // The timeline re-renders as the assessments fetch settles, swapping the
-        // button node, so re-query and click inside waitFor rather than holding
-        // on to a stale element.
-        await waitFor(() => {
-            fireEvent.click(screen.getByTitle(/copy this assessment id/i));
-            expect(writeText).toHaveBeenCalledWith("assess-1-with-a-long-suffix");
-        });
     });
 
     test("discarding a review removes the block", async () => {
