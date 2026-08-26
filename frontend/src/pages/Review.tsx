@@ -9,7 +9,6 @@ import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
-import AssessmentIdTag from "../components/AssessmentIdTag";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
@@ -119,19 +118,6 @@ const COPIED_FEEDBACK_MS = 2000;
  *  VulnModal's copy buttons. */
 const rowCopyKey = (row: ReviewRow) =>
     `${isMultiTarget(row.targets) ? 'group' : 'assessment'}:${row.id}`;
-
-/** The per-variant tag data for a row. A single assessment can target several
- *  variants, so each tag's packages are recovered from the row's targets. */
-const rowAssessmentTags = (row: ReviewRow) => {
-    const variantIds = [...new Set(row.targets.map(t => t.variant_id))];
-    return variantIds.map(variantId => ({
-        id: row.id,
-        variant_id: variantId ?? undefined,
-        packages: [...new Set(
-            row.targets.filter(t => t.variant_id === variantId).map(t => t.package)
-        )],
-    }));
-};
 
 /** The review attached to a row's assessment, if any. */
 const rowReviews = (row: ReviewRow, reviews: Record<string, AssessmentReview>) => {
@@ -1156,27 +1142,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <span className="text-sm text-gray-300">{formatDate(info.getValue())}</span>
                 </div>
             ),
-        }),
-        columnHelper.display({
-            id: "assessment_id",
-            header: "ID",
-            size: 200,
-            // An assessment can span several variants, so list the id once per
-            // variant it belongs to rather than collapsing to a bare count.
-            // Packages stay in the tag's tooltip to keep the column narrow.
-            cell: ({ row }) => {
-                return (
-                    <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto py-1">
-                        {rowAssessmentTags(row.original).map(a => (
-                            <AssessmentIdTag
-                                key={`${a.id}-${a.variant_id ?? 'none'}`}
-                                assessment={a}
-                                variantName={a.variant_id ? variantNames[a.variant_id] : undefined}
-                            />
-                        ))}
-                    </div>
-                );
-            },
         }),
         columnHelper.display({
             id: "ai_review",
