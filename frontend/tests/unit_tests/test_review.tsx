@@ -1600,7 +1600,7 @@ describe('Review — copying assessment ids', () => {
         expect(writeText).toHaveBeenCalledWith('group:g1');
     });
 
-    test('confirms the copy on the button, then reverts', async () => {
+    test('confirms the copy next to the button, then reverts', async () => {
         jest.useFakeTimers();
         try {
             mockNetwork([makeAssessment('a1', 'v1')]);
@@ -1611,8 +1611,9 @@ describe('Review — copying assessment ids', () => {
 
             await user.click(await screen.findByTitle('Copy assessment id'));
 
-            await screen.findByTitle('Copied');
+            await screen.findByRole('status');
             await act(async () => { jest.advanceTimersByTime(2000); });
+            await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
             await screen.findByTitle('Copy assessment id');
         } finally {
             jest.useRealTimers();
@@ -1628,7 +1629,7 @@ describe('Review — copying assessment ids', () => {
 
         await user.click(await screen.findByTitle('Copy assessment id'));
 
-        expect(screen.queryByTitle('Copied')).not.toBeInTheDocument();
+        expect(screen.queryByText('Copied')).not.toBeInTheDocument();
     });
 
     test('copies ids from the AI assessments tab too', async () => {
