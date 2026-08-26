@@ -12,7 +12,7 @@ from sqlalchemy import event
 
 from src.extensions import db
 from src.models.assessment import Assessment
-from src.models.assessment_review import AssessmentReview
+from src.models.assessment_review import AssessmentReview, fingerprint_assessment
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.models.finding import Finding
@@ -506,3 +506,196 @@ def test_get_for_variants_query_count_does_not_scale_with_n(finding, variant):
     # reviews (join), independent of how many rows come back.
     assert len(reviews) == 5
     assert counter["n"] == 1
+
+
+# ----------------------------------------------------------------------
+# Error handling and scoping on the HTTP surface
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["get", "put", "delete"])
+def test_review_routes_reject_malformed_assessment_id(client, method):
+    # Act
+    resp = getattr(client, method)("/api/assessments/not-a-uuid/review", json={})
+
+    # Assert
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("method", ["get", "put", "delete"])
+def test_review_routes_404_on_unknown_assessment(client, method):
+    # Act
+    resp = getattr(client, method)(f"/api/assessments/{uuid.uuid4()}/review", json={})
+
+    # Assert
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "Assessment not found"
+
+
+def test_put_review_rejects_non_list_responses(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+
+    # Act
+    resp = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "r", "responses": "will_not_fix"},
+    )
+
+    # Assert
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "responses must be a list"
+
+
+def test_list_custom_assessments_rejects_non_integer_limit(client, variant):
+    # Act
+    resp = client.get(f"/api/custom-assessments?variant_id={variant.id}&limit=abc")
+
+    # Assert
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "limit and offset must be integers"
+
+
+def test_list_custom_assessments_orders_ascending(client, finding, variant):
+    # Arrange: two assessments, the second one newer.
+    now = datetime.now(timezone.utc)
+    older = make_assessment(finding, variant, status_notes="older")
+    older.timestamp = now - timedelta(days=1)
+    newer = make_assessment(finding, variant, status_notes="newer")
+    newer.timestamp = now
+    db.session.commit()
+
+    # Act
+    body = client.get(
+        f"/api/custom-assessments?variant_id={variant.id}&order=timestamp_asc"
+    ).get_json()
+
+    # Assert
+    notes = [row["status_notes"] for row in body]
+    assert notes.index("older") < notes.index("newer")
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["/api/custom-assessments?variant_id=nope", "/api/assessment-reviews?variant_id=nope"],
+)
+def test_scoped_routes_reject_malformed_variant_id(client, url):
+    # Act / Assert
+    assert client.get(url).status_code == 400
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["/api/custom-assessments?project_id=nope", "/api/assessment-reviews?project_id=nope"],
+)
+def test_scoped_routes_reject_malformed_project_id(client, url):
+    # Act / Assert
+    assert client.get(url).status_code == 400
+
+
+def test_scoped_routes_accept_a_project_id(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "r"},
+    )
+    project_id = variant.project_id
+
+    # Act
+    listed = client.get(f"/api/custom-assessments?project_id={project_id}").get_json()
+    reviews = client.get(f"/api/assessment-reviews?project_id={project_id}").get_json()
+
+    # Assert: the project scope resolves to its variants, so both endpoints
+    # see the assessment created under ``variant``.
+    assert [row["id"] for row in listed] == [str(assessment.id)]
+    assert str(assessment.id) in reviews
+
+
+def test_scoped_routes_without_scope_return_everything(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "r"},
+    )
+
+    # Act: no variant_id / project_id at all.
+    listed = client.get("/api/custom-assessments").get_json()
+    reviews = client.get("/api/assessment-reviews").get_json()
+
+    # Assert
+    assert [row["id"] for row in listed] == [str(assessment.id)]
+    assert str(assessment.id) in reviews
+
+
+# ----------------------------------------------------------------------
+# Model-level derived values
+# ----------------------------------------------------------------------
+
+
+def test_fingerprint_of_missing_assessment_is_none():
+    # Act / Assert
+    assert fingerprint_assessment(None) is None
+
+
+def test_repr_mentions_status_and_assessment(finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id, status="affected", rationale="r"
+    )
+
+    # Act
+    text = repr(review)
+
+    # Assert
+    assert "affected" in text
+    assert str(assessment.id) in text
+
+
+def test_verdict_differs_when_responses_differ(finding, variant):
+    # Arrange: identical VEX fields, different response lists.
+    assessment = make_assessment(
+        finding, variant, status="affected", justification=None, responses=["will_not_fix"]
+    )
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id,
+        status="affected",
+        rationale="r",
+        status_notes="not in image",
+        impact_statement="",
+        workaround="",
+        responses=["workaround_available"],
+    )
+
+    # Act / Assert
+    assert review.verdict() == "differs"
+
+
+def test_orphan_review_differs_and_is_not_stale(finding, variant):
+    # Arrange: a review whose parent assessment isn't loaded (never persisted).
+    orphan = AssessmentReview(
+        assessment_id=uuid.uuid4(), status="affected", rationale="r"
+    )
+
+    # Act / Assert
+    assert orphan.verdict() == "differs"
+    assert orphan.is_stale() is False
+
+
+def test_legacy_review_without_timestamps_is_not_stale(finding, variant):
+    # Arrange: a pre-fingerprint review whose timestamps are both missing.
+    assessment = make_assessment(finding, variant)
+    review = AssessmentReview.upsert(
+        assessment_id=assessment.id, status="affected", rationale="r"
+    )
+    assert review.assessment is not None  # load the relationship first
+
+    # Act / Assert: kept in-session only, since both columns are NOT NULL in
+    # the schema and only legacy in-memory rows can reach this branch.
+    with db.session.no_autoflush:
+        review.reviewed_fingerprint = None
+        review.timestamp = None
+        assert review.is_stale() is False
+    db.session.rollback()
