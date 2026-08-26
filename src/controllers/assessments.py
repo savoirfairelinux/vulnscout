@@ -298,7 +298,11 @@ class AssessmentsController:
             # Scoped export/report: restrict to the in-scope variants. get_all()
             # merges in-memory + DB and applies the scope filter, so a fallback
             # to the DB never leaks another project's/variant's assessments.
-            return {str(a.id): a.to_dict() for a in self.get_all()}
+            scoped = list(self.get_all())
+            # Resolve group membership once for the whole export instead of
+            # once per serialized row.
+            Assessment.preload_group_ids(scoped)
+            return {str(a.id): a.to_dict() for a in scoped}
         return to_dict_with_fallback(
             self.assessments, Assessment.get_all,
             lambda a: str(a.id), "AssessmentsController",

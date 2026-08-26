@@ -67,10 +67,13 @@ def create_assessment_record(
     variant_id: UUID | None,
     timestamp: datetime | None = None,
     origin: str = "custom",
+    responses: "list[str] | None" = None,
 ) -> "DBAssessment":
     """Create a single DBAssessment row from a validated DTO.
 
     Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
+    ``responses`` overrides the DTO's own responses; group reconcile uses it so
+    a new member inherits the responses the rest of the group already carries.
     """
     return DBAssessment.create(
         status=assessment.status or "",
@@ -82,7 +85,10 @@ def create_assessment_record(
         justification=assessment.justification,
         impact_statement=assessment.impact_statement,
         workaround=getattr(assessment, "workaround", None),
-        responses=list(assessment.responses) if assessment.responses else [],
+        responses=(
+            list(responses) if responses is not None
+            else (list(assessment.responses) if assessment.responses else [])
+        ),
         commit=True,
         timestamp=timestamp,
     )
@@ -282,6 +288,16 @@ def apply_reconcile(
 
     existing_by_key = index_group_rows(rows)
 
+    # New members must satisfy the same group invariant as the rows they join:
+    # a pending AI group stays AI (approving it later needs every member to be
+    # AI), and an edit that sends no responses leaves the group's responses
+    # untouched, so the new sibling inherits them instead of starting empty.
+    new_origin_for_created = "ai" if rows and all(
+        (row.origin or "") == "ai" for row in rows) else "custom"
+    inherited_responses = (
+        None if req.has_responses or not rows else list(rows[0].responses or [])
+    )
+
     updated: list[dict[str, Any]] = []
     created: list[dict[str, Any]] = []
     deleted: list[str] = []
@@ -330,6 +346,8 @@ def apply_reconcile(
                 # keeping the group's timestamp pass it as ``req.timestamp`` so
                 # the new sibling joins the same group instead of splitting it.
                 timestamp=shared_ts,
+                origin=new_origin_for_created,
+                responses=inherited_responses,
             )
             created.append(new_row.to_dict())
 

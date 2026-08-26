@@ -52,6 +52,9 @@ def build_groups(assessments: list[Assessment]) -> list[dict]:
     }
 
     # One call for the whole page: three queries total, not three per group.
+    # The memberships above are handed to the serializer so it does not query
+    # them again once per row.
+    Assessment.preload_group_ids(assessments, memberships)
     member_dicts = [a.to_dict() for a in assessments]
     annotate_assessments_outdated(member_dicts)
     stale_by_assessment = {

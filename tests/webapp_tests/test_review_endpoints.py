@@ -2975,3 +2975,106 @@ def test_reconcile_converts_non_custom_rows_to_custom(client, app, demo_ids):
     assert response.status_code == 200
     for assessment_id in assessment_ids:
         assert _read_row(app, assessment_id, "origin") == "custom"
+
+
+# ── POST /api/assessments/batch — grouping invariants ────────────────────
+
+def _variant_in_another_project(application, demo_ids):
+    """Add a variant under a second project observing the same packages."""
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+
+    with application.app_context():
+        project = Project.create(name="second-project")
+        variant = Variant.create(name="second-variant", project_id=project.id)
+        scan = Scan(id=uuid.uuid4(), variant_id=variant.id)
+        db.session.add(scan)
+        db.session.commit()
+        for pkg_string_id in demo_ids["two_packages"]:
+            package = Package.get_by_string_id(pkg_string_id)
+            finding = Finding.get_or_create(package.id, demo_ids["vuln_id"])
+            db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+        return str(variant.id)
+
+
+def _batch(client, items):
+    return client.post("/api/assessments/batch", json={"assessments": items})
+
+
+def test_batch_never_groups_assessments_across_projects(client, app, demo_ids):
+    """One batch touching two projects must produce one group per project.
+
+    Reads are project-filtered while delete/reconcile/approve/reject load every
+    member by ``group_id``, so a cross-project group would let one project
+    mutate the other's assessments.
+    """
+    other_project_variant = _variant_in_another_project(app, demo_ids)
+    package = demo_ids["two_packages"][0]
+
+    response = _batch(client, [
+        {"vuln_id": demo_ids["vuln_id"], "packages": [package],
+         "status": "affected", "variant_id": demo_ids["variant_id"]},
+        {"vuln_id": demo_ids["vuln_id"], "packages": [package],
+         "status": "affected", "variant_id": other_project_variant},
+    ])
+
+    assert response.status_code == 200, response.get_json()
+    rows = response.get_json()["assessments"]
+    assert len(rows) == 2
+    assert {row["group_id"] for row in rows} == {None}
+
+
+def test_batch_never_groups_assessments_with_different_content(client, demo_ids):
+    """Same CVE, same project, but two statuses are two distinct groups."""
+    packages = demo_ids["two_packages"]
+
+    response = _batch(client, [
+        {"vuln_id": demo_ids["vuln_id"], "packages": packages,
+         "status": "affected", "variant_id": demo_ids["variant_id"]},
+        {"vuln_id": demo_ids["vuln_id"], "packages": packages,
+         "status": "fixed", "variant_id": demo_ids["other_variant_id"]},
+    ])
+
+    assert response.status_code == 200, response.get_json()
+    rows = response.get_json()["assessments"]
+    groups = {row["status"]: row["group_id"] for row in rows}
+    assert groups["affected"] is not None
+    assert groups["fixed"] is not None
+    assert groups["affected"] != groups["fixed"]
+
+
+def test_batch_groups_matching_assessments_across_variants(client, demo_ids):
+    """Identical content in one project still collapses into a single group."""
+    package = demo_ids["two_packages"][0]
+
+    response = _batch(client, [
+        {"vuln_id": demo_ids["vuln_id"], "packages": [package],
+         "status": "affected", "variant_id": demo_ids["variant_id"]},
+        {"vuln_id": demo_ids["vuln_id"], "packages": [package],
+         "status": "affected", "variant_id": demo_ids["other_variant_id"]},
+    ])
+
+    assert response.status_code == 200, response.get_json()
+    group_ids = {row["group_id"] for row in response.get_json()["assessments"]}
+    assert len(group_ids) == 1
+    assert group_ids != {None}
+
+
+def test_batch_never_groups_two_vulnerabilities(client, demo_ids):
+    package = demo_ids["two_packages"][0]
+
+    response = _batch(client, [
+        {"vuln_id": demo_ids["vuln_id"], "packages": [package],
+         "status": "affected", "variant_id": demo_ids["variant_id"]},
+        {"vuln_id": demo_ids["other_vuln_id"], "packages": [package],
+         "status": "affected", "variant_id": demo_ids["variant_id"]},
+    ])
+
+    assert response.status_code == 200, response.get_json()
+    assert {row["group_id"] for row in response.get_json()["assessments"]} == {None}

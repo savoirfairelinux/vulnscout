@@ -96,6 +96,10 @@ RESPONSES_CDX_VEX = [
     "workaround_available"
 ]
 
+#: Marks a row whose group membership has not been resolved yet, so that a
+#: preloaded ``None`` ("this row is ungrouped") is not confused with "unknown".
+_GROUP_ID_UNLOADED = object()
+
 
 # ---------------------------------------------------------------------------
 # Assessment model
@@ -181,6 +185,54 @@ class Assessment(Base):
     @packages.setter
     def packages(self, value: list[str]) -> None:
         self._packages = list(value or [])
+
+    # ------------------------------------------------------------------
+    # group_id — preloadable, so serializing a collection stays O(1) queries
+    # ------------------------------------------------------------------
+
+    @property
+    def group_id(self) -> "uuid.UUID | None":
+        """The group this assessment belongs to, or ``None`` when ungrouped.
+
+        Callers serializing a collection must call :meth:`preload_group_ids`
+        first: without it every row falls back to its own membership query,
+        which turns an N-row response into N extra queries.
+        """
+        cached = getattr(self, "_group_id", _GROUP_ID_UNLOADED)
+        if cached is not _GROUP_ID_UNLOADED:
+            return cached  # type: ignore[return-value]
+        # Function-local import: the two model modules would otherwise import
+        # each other at module load time.
+        from flask import has_app_context
+        from .assessment_group_member import AssessmentGroupMember
+
+        if getattr(self, "id", None) is None or not has_app_context():
+            return None
+        return AssessmentGroupMember.get_group_id(self.id)
+
+    def set_loaded_group_id(self, group_id: "uuid.UUID | None") -> None:
+        """Cache a group id resolved in bulk, so :meth:`to_dict` needs no query."""
+        self._group_id = group_id
+
+    @staticmethod
+    def preload_group_ids(
+        assessments: "list[Assessment]",
+        memberships: "dict[uuid.UUID, uuid.UUID] | None" = None,
+    ) -> None:
+        """Resolve the group id of every assessment with a single query.
+
+        ``memberships`` lets a caller that already loaded the membership rows
+        (``build_groups``) reuse them instead of querying again.
+        """
+        from .assessment_group_member import AssessmentGroupMember
+
+        rows = [a for a in assessments if getattr(a, "id", None) is not None]
+        if not rows:
+            return
+        if memberships is None:
+            memberships = AssessmentGroupMember.get_group_ids([a.id for a in rows])
+        for row in rows:
+            row.set_loaded_group_id(memberships.get(row.id))
 
     def __repr__(self) -> str:
         return (
@@ -345,13 +397,7 @@ class Assessment(Base):
 
     def to_dict(self) -> dict:
         ts = ensure_utc_iso(self.timestamp)
-        # Function-local import: the two model modules would otherwise import
-        # each other at module load time.
-        from flask import has_app_context
-        from .assessment_group_member import AssessmentGroupMember
-        group_id = None
-        if getattr(self, "id", None) is not None and has_app_context():
-            group_id = AssessmentGroupMember.get_group_id(self.id)
+        group_id = self.group_id
         return {
             "id": str(self.id),
             "source": self.source or "",
