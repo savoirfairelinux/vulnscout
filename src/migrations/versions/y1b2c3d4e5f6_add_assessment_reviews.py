@@ -1,7 +1,7 @@
 """add assessment_reviews table
 
-Revision ID: x0a1b2c3d4e5
-Revises: w9f0a1b2c3d4
+Revision ID: y1b2c3d4e5f6
+Revises: x0a1b2c3d4e5
 Create Date: 2026-08-06 00:00:00.000000
 
 """
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = 'x0a1b2c3d4e5'
-down_revision = 'w9f0a1b2c3d4'
+revision = 'y1b2c3d4e5f6'
+down_revision = 'x0a1b2c3d4e5'
 branch_labels = None
 depends_on = None
 
