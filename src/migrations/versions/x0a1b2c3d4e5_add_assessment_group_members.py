@@ -4,6 +4,7 @@ Revision ID: x0a1b2c3d4e5
 Revises: w9f0a1b2c3d4
 Create Date: 2026-08-19 00:00:00.000000
 """
+import json
 import uuid
 from alembic import op
 import sqlalchemy as sa
@@ -32,6 +33,28 @@ def upgrade():
     backfill_groups(op.get_bind())
 
 
+def responses_key(raw):
+    """Return a stable bucket-key fragment for an assessment's VEX responses.
+
+    The column is JSON, and the driver hands it back either already decoded
+    (PostgreSQL) or as text (SQLite), so both shapes are normalized here.
+    Order is irrelevant to the group serializer, so the list is sorted; an
+    unparsable value falls back to its literal text, which at worst keeps two
+    rows apart instead of fusing them.
+    """
+    if raw is None:
+        return "[]"
+    value = raw
+    if isinstance(value, (str, bytes)):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return str(raw)
+    if isinstance(value, list):
+        return json.dumps(sorted(str(item) for item in value))
+    return json.dumps(value, sort_keys=True)
+
+
 def backfill_groups(connection):
     """Recreate today's frontend grouping as stored membership rows.
 
@@ -47,13 +70,19 @@ def backfill_groups(connection):
     spanning two projects would let one project silently mutate the other's
     assessments.  Assessments without a variant have no project; they fall into
     their own ``NULL`` bucket and never join a project's group.
+
+    ``responses`` is part of the key too: the group serializer exposes only the
+    head's responses and reconcile applies one response set to every member, so
+    fusing rows that differ there would hide one set and later mutate both as a
+    single action.
     """
     rows = connection.execute(sa.text("""
         SELECT a.id AS assessment_id,
                f.vulnerability_id AS vuln_id,
                v.project_id AS project_id,
                a.timestamp, a.status, a.simplified_status, a.status_notes,
-               a.justification, a.impact_statement, a.workaround, a.origin
+               a.justification, a.impact_statement, a.workaround, a.origin,
+               a.responses
         FROM assessments a
         JOIN findings f ON f.id = a.finding_id
         LEFT JOIN variants v ON v.id = a.variant_id
@@ -66,6 +95,7 @@ def backfill_groups(connection):
             row["vuln_id"], row["timestamp"], row["status"],
             row["simplified_status"], row["status_notes"], row["justification"],
             row["impact_statement"], row["workaround"], row["origin"],
+            responses_key(row["responses"]),
         )
         buckets.setdefault(key, []).append(row["assessment_id"])
 
