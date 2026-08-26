@@ -466,6 +466,14 @@ Groups are returned newest first. An assessment with no group is returned in the
 same shape with `group_id` set to `null` and a single target, so callers never
 branch on whether a group exists.
 
+**Group invariants.** A group is read through its first member and written as a
+whole (reconcile, approve, reject, delete), so every member must share the same
+project, the same vulnerability, the same content (status, simplified status,
+notes, justification, impact statement, workaround, origin) and the same
+`responses`. Writes that would break this — a batch spanning two projects, or
+joining a group whose content differs — are refused with `400`; such a request
+simply yields separate groups instead.
+
 #### List Assessment Groups for a Vulnerability
 
 ```
@@ -590,6 +598,28 @@ POST /api/assessment-groups/<group_id>/reject
 
 `400` if the group holds any non-AI assessment. `404` if the group does not exist.
 
+#### Approve or Reject a Single AI Assessment (compatibility)
+
+Kept for clients written against the pre-group API. Both endpoints resolve the
+addressed assessment's group and behave exactly like the group endpoints above;
+an ungrouped assessment is treated as a single-member group.
+
+```
+POST /api/assessments/<assessment_id>/approve
+POST /api/assessments/<assessment_id>/reject
+```
+
+**Response:** identical to the matching group endpoint —
+`{"status": "success", "assessments": [ { } ]}` for approve and
+`{"status": "success", "deleted": ["uuid"]}` for reject.
+
+`400` if the addressed assessment is not a pending AI assessment
+(`Not a pending AI assessment`), or if its group holds a non-AI member
+(`Not a pending AI group`). `404` if the assessment does not exist.
+
+Prefer the group endpoints in new code: they address the unit that approval and
+rejection actually operate on.
+
 #### Delete an Assessment Group
 
 ```
@@ -671,8 +701,9 @@ POST /api/assessments/batch
 ```
 
 `variant_id` is required on every item. The batch is one user action: if any
-item is invalid, nothing is written. Assessments are grouped per vulnerability,
-so approving one CVE's group never touches another's.
+item is invalid, nothing is written. Rows are grouped by the group invariant —
+project, vulnerability, content and responses — so one batch can produce several
+groups, and approving or deleting one never touches rows that differ from it.
 
 **Response:**
 ```json

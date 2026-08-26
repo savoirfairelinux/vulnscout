@@ -304,3 +304,164 @@ def test_load_group_is_empty_for_unknown_id(app):
         from src.controllers.assessment_groups import load_group
 
         assert load_group(uuid.uuid4()) == []
+
+
+def _make_variant(project_name: str, variant_name: str):
+    """Create a variant under its own project, for group-invariant tests."""
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    project = Project.create(name=project_name)
+    return Variant.create(name=variant_name, project_id=project.id)
+
+
+def test_create_group_refuses_assessments_from_two_projects(app):
+    """Group reads are project-filtered but writes hit every member."""
+    with app.app_context():
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError)
+        first, second = _make_two_assessments()
+        first.variant_id = _make_variant("project-a", "variant-a").id
+        second.variant_id = _make_variant("project-b", "variant-b").id
+
+        with pytest.raises(GroupInvariantError):
+            AssessmentGroupMember.create_group([first.id, second.id])
+
+
+def test_create_group_refuses_assessments_on_two_vulnerabilities(app):
+    with app.app_context():
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError)
+        from src.models.finding import Finding
+        from src.models.vulnerability import Vulnerability
+        first, second = _make_two_assessments()
+        Vulnerability.create_record(id="CVE-2026-9999")
+        other_finding = Finding.create(
+            package_id=second.finding.package_id, vulnerability_id="CVE-2026-9999")
+        other = Assessment.create(
+            status="not_affected", finding_id=other_finding.id)
+
+        with pytest.raises(GroupInvariantError):
+            AssessmentGroupMember.create_group([first.id, other.id])
+
+
+def test_create_group_refuses_assessments_with_different_content(app):
+    with app.app_context():
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError)
+        first, second = _make_two_assessments()
+        second.status = "affected"
+
+        with pytest.raises(GroupInvariantError):
+            AssessmentGroupMember.create_group([first.id, second.id])
+
+
+def test_create_group_refuses_assessments_with_different_responses(app):
+    """The group exposes one response set, so members must agree on it."""
+    with app.app_context():
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError)
+        first, second = _make_two_assessments()
+        first.responses = ["will_not_fix"]
+        second.responses = ["update"]
+
+        with pytest.raises(GroupInvariantError):
+            AssessmentGroupMember.create_group([first.id, second.id])
+
+
+def test_create_group_ignores_response_order(app):
+    with app.app_context():
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+        first.responses = ["update", "will_not_fix"]
+        second.responses = ["will_not_fix", "update"]
+
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+
+        assert set(AssessmentGroupMember.get_assessment_ids(group_id)) == {
+            first.id, second.id}
+
+
+def test_create_group_refuses_joining_a_group_with_other_content(app):
+    """The incremental join path validates against the group's members too."""
+    with app.app_context():
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError)
+        first, second = _make_two_assessments()
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+        other = Assessment.create(
+            status="affected", finding_id=first.finding_id)
+
+        with pytest.raises(GroupInvariantError):
+            AssessmentGroupMember.create_group([other.id], group_id=group_id)
+
+
+def test_create_group_refuses_unknown_assessment(app):
+    with app.app_context():
+        import uuid as _uuid
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError)
+
+        with pytest.raises(GroupInvariantError):
+            AssessmentGroupMember.create_group([_uuid.uuid4()])
+
+
+def _count_membership_queries(app_ctx_callable):
+    """Run a callable and count the queries hitting assessment_group_members."""
+    from sqlalchemy import event
+    from src.extensions import db
+
+    seen: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        if "assessment_group_members" in statement:
+            seen.append(statement)
+
+    engine = db.session.get_bind()
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        app_ctx_callable()
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+    return len(seen)
+
+
+def test_build_groups_resolves_membership_without_a_query_per_row(app):
+    """Serializing a group must not add one membership query per member."""
+    with app.app_context():
+        from src.controllers.assessment_groups import build_groups
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+        AssessmentGroupMember.create_group([first.id, second.id])
+
+        queries = _count_membership_queries(lambda: build_groups([first, second]))
+
+        assert queries == 1
+
+
+def test_preload_group_ids_serializes_without_further_queries(app):
+    with app.app_context():
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import AssessmentGroupMember
+        first, second = _make_two_assessments()
+        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+        Assessment.preload_group_ids([first, second])
+
+        queries = _count_membership_queries(
+            lambda: [first.to_dict(), second.to_dict()])
+
+        assert queries == 0
+        assert first.to_dict()["group_id"] == str(group_id)
+
+
+def test_group_helpers_short_circuit_on_an_empty_input(app):
+    """No ids means no query and nothing to preload."""
+    with app.app_context():
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        assert AssessmentGroupMember.invariant_keys([]) == {}
+        assert AssessmentGroupMember.get_group_ids([]) == {}
+        assert Assessment.preload_group_ids([]) is None

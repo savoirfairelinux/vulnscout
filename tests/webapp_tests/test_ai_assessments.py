@@ -275,14 +275,38 @@ def test_reject_spans_multiple_variants_via_explicit_group(client, app):
     assert not ({a1, a2} & {a["id"] for a in listed})
 
 
-def test_approve_rejects_group_with_non_ai_member(client):
+def test_joining_a_pending_ai_group_with_a_custom_row_is_refused(client):
+    """A group must stay homogeneous: mixing origins would break approval."""
     aid = _get_first_ai_id(client)
     group_id = _group_id_for(client, aid)
     r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
         "packages": [PKG2], "status": "affected", "variant_id": str(VARIANT_UUID),
         "group_id": group_id,
     })
-    assert r.status_code == 200
+    assert r.status_code == 400
+
+    # the pending AI row must remain untouched and still approvable
+    listed = json.loads(client.get("/api/assessments/review/ai").data)
+    assert any(a["id"] == aid for a in listed)
+    assert client.post(f"/api/assessment-groups/{group_id}/approve").status_code == 200
+
+
+def test_approve_rejects_group_with_non_ai_member(client, app):
+    """Legacy heterogeneous groups are still refused by approve."""
+    aid = _get_first_ai_id(client)
+    group_id = _group_id_for(client, aid)
+    other = json.loads(client.post(
+        f"/api/vulnerabilities/{VULN_ID}/assessments",
+        json={"packages": [PKG2], "status": "affected",
+              "variant_id": str(VARIANT_UUID)},
+    ).data)["assessment"]["id"]
+    # Bypass the write-time invariant the way pre-existing data would.
+    with app.app_context():
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        db.session.add(AssessmentGroupMember(
+            assessment_id=uuid.UUID(other), group_id=uuid.UUID(group_id)))
+        db.session.commit()
 
     resp = client.post(f"/api/assessment-groups/{group_id}/approve")
     assert resp.status_code == 400
@@ -542,3 +566,84 @@ def test_pending_ai_excluded_from_report_templates(client):
 
     # After approval it appears in the report feed.
     assert aid in _report_assessment_ids(client)
+
+
+# ── legacy per-assessment approve/reject (compatibility wrappers) ─────────
+
+def test_legacy_approve_promotes_the_whole_group(client):
+    """Pre-group clients address one id; the whole group is still approved."""
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    ids = {a["id"] for a in body["assessments"]}
+    addressed = body["assessment"]["id"]
+
+    resp = client.post(f"/api/assessments/{addressed}/approve")
+
+    assert resp.status_code == 200
+    approved = json.loads(resp.data)["assessments"]
+    assert {a["id"] for a in approved} == ids
+    assert all(a["origin"] == "custom" for a in approved)
+    assert not json.loads(client.get("/api/assessments/review/ai").data)
+
+
+def test_legacy_approve_works_on_an_ungrouped_assessment(client):
+    aid = _get_first_ai_id(client)
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+
+    assert resp.status_code == 200
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
+
+
+def test_legacy_reject_deletes_the_whole_group(client):
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    ids = {a["id"] for a in body["assessments"]}
+    addressed = body["assessment"]["id"]
+
+    resp = client.post(f"/api/assessments/{addressed}/reject")
+
+    assert resp.status_code == 200
+    assert set(json.loads(resp.data)["deleted"]) == ids
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert not (ids & {a["id"] for a in listed})
+
+
+def test_legacy_approve_rejects_a_non_ai_assessment(client):
+    resp = client.post(
+        f"/api/vulnerabilities/{VULN_ID}/assessments",
+        json={"packages": [PKG], "status": "affected",
+              "variant_id": str(VARIANT_UUID)},
+    )
+    custom_id = json.loads(resp.data)["assessment"]["id"]
+
+    assert client.post(f"/api/assessments/{custom_id}/approve").status_code == 400
+    assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
+
+
+def test_legacy_approve_returns_404_for_unknown_assessment(client):
+    unknown = str(uuid.uuid4())
+
+    assert client.post(f"/api/assessments/{unknown}/approve").status_code == 404
+    assert client.post(f"/api/assessments/{unknown}/reject").status_code == 404
+
+
+def test_legacy_approve_refuses_a_group_with_a_non_ai_member(client, app):
+    """Legacy clients must not approve half of a heterogeneous group."""
+    aid = _get_first_ai_id(client)
+    group_id = _group_id_for(client, aid)
+    other = json.loads(client.post(
+        f"/api/vulnerabilities/{VULN_ID}/assessments",
+        json={"packages": [PKG2], "status": "affected",
+              "variant_id": str(VARIANT_UUID)},
+    ).data)["assessment"]["id"]
+    with app.app_context():
+        from src.models.assessment_group_member import AssessmentGroupMember
+
+        db.session.add(AssessmentGroupMember(
+            assessment_id=uuid.UUID(other), group_id=uuid.UUID(group_id)))
+        db.session.commit()
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["error"] == "Not a pending AI group"
