@@ -116,9 +116,9 @@ const COPIED_FEEDBACK_MS = 2000;
 const rowCopyKey = (row: ReviewRow) =>
     row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
 
-/** Copies a row's group/assessment id, swapping to a check while confirmed.
- *  The action cell is narrow, so the confirmation replaces the icon rather
- *  than adding a "Copied" label beside it. */
+/** Copies a row's group/assessment id, confirming inline like VulnModal does.
+ *  Same styles and confirmation as the copy button in the assessment history,
+ *  so the two views stay recognisably the same control. */
 function CopyIdButton({ row, copiedKey, onCopy }: {
     row: ReviewRow;
     copiedKey: string | null;
@@ -127,15 +127,23 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
     const copied = copiedKey === rowCopyKey(row);
     const label = row.group_id ? 'Copy group id' : 'Copy assessment id';
     return (
-        <button
-            type="button"
-            onClick={() => onCopy(row)}
-            className="text-amber-300 hover:text-amber-100 transition-colors"
-            title={copied ? 'Copied' : label}
-            aria-label={copied ? 'Copied' : label}
-        >
-            <FontAwesomeIcon icon={copied ? faCheck : faCopy} className="w-4 h-4" />
-        </button>
+        <>
+            <button
+                type="button"
+                onClick={() => onCopy(row)}
+                className="text-gray-400 hover:text-gray-200 transition-colors"
+                title={label}
+                aria-label={label}
+            >
+                <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
+            </button>
+            {copied && (
+                <span role="status" className="inline-flex items-center gap-1 text-xs text-green-400">
+                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                    Copied
+                </span>
+            )}
+        </>
     );
 }
 
@@ -1230,9 +1238,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.display({
             id: 'actions',
             header: () => <div className="flex items-center justify-center">Actions</div>,
-            size: 100,
+            size: 140,
             cell: info => (
-                <div className="flex items-center justify-center gap-3 h-full">
+                <div className="flex flex-wrap items-center justify-center gap-3 h-full">
                     <button
                         onClick={() => setEditingRow(info.row.original)}
                         className="text-blue-400 hover:text-blue-300 transition-colors"
@@ -1240,6 +1248,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     >
                         <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
                     </button>
+                    <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
                     <button
                         onClick={() => setRowToDelete(info.row.original)}
                         className="text-red-400 hover:text-red-300 transition-colors"
@@ -1247,7 +1256,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     >
                         <FontAwesomeIcon icon={faTrash} className="w-4 h-4" />
                     </button>
-                    <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
                 </div>
             ),
         }),
@@ -1275,7 +1283,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <FontAwesomeIcon icon={faXmark} className="w-3 h-3" />
                     Reject
                 </button>
-                    <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
+                <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
         ),
     }), [handleApproveAiRow, handleRejectAiRow, copiedRowKey, copyRowId]);
