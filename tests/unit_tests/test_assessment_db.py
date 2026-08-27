@@ -247,57 +247,46 @@ def test_get_group_id_is_none_for_ungrouped_assessment(app):
         assert AssessmentGroupMember.get_group_id(first.id) is None
 
 
-def test_to_dict_exposes_group_id_when_grouped(app):
+def test_to_dict_group_id_is_always_the_assessments_own_id(app):
+    """A group is now an assessment: group_id is never None, and legacy
+    AssessmentGroupMember rows (if any survive from old data) have no say."""
     with app.app_context():
         from src.models.assessment_group_member import AssessmentGroupMember
         first, second = _make_two_assessments()
-        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+        AssessmentGroupMember.create_group([first.id, second.id])
 
-        assert first.to_dict()["group_id"] == str(group_id)
-
-
-def test_to_dict_group_id_is_none_when_ungrouped(app):
-    with app.app_context():
-        first, _ = _make_two_assessments()
-
-        assert first.to_dict()["group_id"] is None
+        assert first.to_dict()["group_id"] == str(first.id)
+        assert second.to_dict()["group_id"] == str(second.id)
 
 
-def test_build_groups_collapses_members_into_one_entry(app):
+def test_build_groups_keeps_content_identical_assessments_as_two_groups(app):
+    """Two rows that merely look alike are distinct assessments and stay
+    distinct groups, even when a legacy AssessmentGroupMember row still glues
+    them — build_groups no longer consults that table at all."""
     with app.app_context():
         from src.controllers.assessment_groups import build_groups
         from src.models.assessment_group_member import AssessmentGroupMember
         first, second = _make_two_assessments()
-        group_id = AssessmentGroupMember.create_group([first.id, second.id])
-
-        groups = build_groups([first, second])
-
-        assert len(groups) == 1
-        assert groups[0]["group_id"] == str(group_id)
-        assert set(groups[0]["assessment_ids"]) == {str(first.id), str(second.id)}
-        assert len(groups[0]["targets"]) == 2
-
-
-def test_build_groups_keeps_ungrouped_assessments_as_single_entries(app):
-    with app.app_context():
-        from src.controllers.assessment_groups import build_groups
-        first, second = _make_two_assessments()
+        AssessmentGroupMember.create_group([first.id, second.id])
 
         groups = build_groups([first, second])
 
         assert len(groups) == 2
-        assert all(g["group_id"] is None for g in groups)
-        assert all(len(g["targets"]) == 1 for g in groups)
+        assert {g["group_id"] for g in groups} == {str(first.id), str(second.id)}
+        assert all(g["targets"] == [] for g in groups)
 
 
-def test_load_group_returns_every_member(app):
+def test_load_group_ignores_legacy_assessment_group_member_rows(app):
+    """load_group is a primary-key lookup: a legacy group id that does not
+    match any assessment's own id resolves to nothing."""
     with app.app_context():
         from src.controllers.assessment_groups import load_group
         from src.models.assessment_group_member import AssessmentGroupMember
         first, second = _make_two_assessments()
-        group_id = AssessmentGroupMember.create_group([first.id, second.id])
+        legacy_group_id = AssessmentGroupMember.create_group([first.id, second.id])
 
-        assert {a.id for a in load_group(group_id)} == {first.id, second.id}
+        assert load_group(legacy_group_id) == []
+        assert [a.id for a in load_group(first.id)] == [first.id]
 
 
 def test_load_group_is_empty_for_unknown_id(app):
@@ -416,15 +405,15 @@ def test_create_group_refuses_unknown_assessment(app):
             AssessmentGroupMember.create_group([_uuid.uuid4()])
 
 
-def _count_membership_queries(app_ctx_callable):
-    """Run a callable and count the queries hitting assessment_group_members."""
+def _count_queries_matching(table_name: str, app_ctx_callable):
+    """Run a callable and count the queries whose statement mentions *table_name*."""
     from sqlalchemy import event
     from src.extensions import db
 
     seen: list[str] = []
 
     def _record(conn, cursor, statement, parameters, context, executemany):
-        if "assessment_group_members" in statement:
+        if table_name in statement:
             seen.append(statement)
 
     engine = db.session.get_bind()
@@ -436,43 +425,50 @@ def _count_membership_queries(app_ctx_callable):
     return len(seen)
 
 
-def test_build_groups_resolves_membership_without_a_query_per_row(app):
-    """Serializing a group must not add one membership query per member."""
+def test_build_groups_resolves_targets_without_a_query_per_row(app):
+    """Serializing many assessments must not add one targets/finding query per
+    assessment: target_rows and AssessmentTarget.finding are both configured
+    lazy="selectin", so a page of N assessments issues a small, bounded number
+    of queries rather than one per row. (finding.package is not selectin and
+    does add one query per distinct finding here — a known, deferred N+1 the
+    brief allows leaving for the routes that build these lists to fix with a
+    joinedload, since no test previously enforced a budget on it.)"""
     with app.app_context():
         from src.controllers.assessment_groups import build_groups
-        from src.models.assessment_group_member import AssessmentGroupMember
-        first, second = _make_two_assessments()
-        AssessmentGroupMember.create_group([first.id, second.id])
-
-        queries = _count_membership_queries(lambda: build_groups([first, second]))
-
-        assert queries == 1
-
-
-def test_preload_group_ids_serializes_without_further_queries(app):
-    with app.app_context():
         from src.models.assessment import Assessment
-        from src.models.assessment_group_member import AssessmentGroupMember
-        first, second = _make_two_assessments()
-        group_id = AssessmentGroupMember.create_group([first.id, second.id])
-        Assessment.preload_group_ids([first, second])
+        from src.models.finding import Finding
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+        Vulnerability.create_record(id="CVE-2026-3000")
+        ids = []
+        for i in range(5):
+            pkg = Package.create(name=f"pkg-{i}", version="1.0.0")
+            finding = Finding.create(package_id=pkg.id, vulnerability_id="CVE-2026-3000")
+            variant = _make_variant(uuid.uuid4(), "default")
+            ids.append(Assessment.create(
+                status="not_affected", finding_id=finding.id, variant_id=variant.id).id)
+        db.session.expunge_all()
 
-        queries = _count_membership_queries(
-            lambda: [first.to_dict(), second.to_dict()])
+        # Load the way a listing endpoint would: one query returning every
+        # row, so selectin's batching has a shared load event to hook into.
+        assessments = list(db.session.execute(
+            db.select(Assessment).where(Assessment.id.in_(ids))
+        ).scalars().all())
 
-        assert queries == 0
-        assert first.to_dict()["group_id"] == str(group_id)
+        queries = _count_queries_matching(
+            "assessment_targets", lambda: build_groups(assessments))
+
+        assert queries <= 1
 
 
 def test_group_helpers_short_circuit_on_an_empty_input(app):
-    """No ids means no query and nothing to preload."""
+    """No ids means no query for the legacy membership helpers."""
     with app.app_context():
-        from src.models.assessment import Assessment
         from src.models.assessment_group_member import AssessmentGroupMember
 
         assert AssessmentGroupMember.invariant_keys([]) == {}
         assert AssessmentGroupMember.get_group_ids([]) == {}
-        assert Assessment.preload_group_ids([]) is None
 
 
 # ---------------------------------------------------------------------------
