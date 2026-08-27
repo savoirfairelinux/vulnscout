@@ -1,6 +1,6 @@
 ---
 name: assessment-review
-description: Use when asked to review, audit, or second-opinion existing user/custom VEX assessments in VulnScout. Handles three scopes — a specific assessment ID, a project (and optional variant, defaulting to "default"), or every custom assessment when no scope is given. Only assessments whose origin is "custom" are ever reviewed; assessments from SBOM scans and pending AI suggestions are always skipped. Each review is an independent re-derivation recorded alongside the assessment; it never modifies the assessment itself.
+description: Use when asked to review, audit, or second-opinion existing user/custom VEX assessments in VulnScout. Handles four scopes — an assessment group ID (expanded to every assessment it covers), a specific assessment ID, a project (and optional variant, defaulting to "default"), or every custom assessment when no scope is given. Only assessments whose origin is "custom" are ever reviewed; assessments from SBOM scans and pending AI suggestions are always skipped. Each review is an independent re-derivation recorded alongside the assessment; it never modifies the assessment itself.
 ---
 
 # Assessment Review Skill
@@ -23,10 +23,11 @@ scope resolution, the comparison, and the write.
 ## Workflow Overview
 
 ```
-INPUT: review request + scope (assessment ID(s) | project [+ variant] | nothing)
+INPUT: review request + scope (group ID | assessment ID(s) | project [+ variant] | nothing)
   ↓
-PHASE -1: Scope Resolution → map the inline scope to tool calls;
-          resolve strict_mode and the re-review policy
+PHASE -1: Scope Resolution → map the inline scope to tool calls; expand every
+          group ID to its assessment IDs; resolve strict_mode and the
+          re-review policy
   ↓
 PHASE 0: Origin Gate → drop every assessment whose origin != "custom"
   ↓
@@ -50,9 +51,45 @@ The scope is stated inline in the prompt. Map it to exactly one of these:
 
 | Prompt contains | Action |
 |---|---|
-| One or more assessment UUIDs | `vulnscout-get_custom_assessment(assessment_id)` per ID |
+| A group ID, or a pasted `group:<uuid>` / `assessment:<uuid>` reference | `vulnscout-get_assessment_group(reference)` → review every ID it lists (see below) |
+| One or more assessment UUIDs | `vulnscout-get_assessment_group(reference="assessment:<id>")` per ID, then `vulnscout-get_custom_assessment(assessment_id)` per resolved ID |
 | A project name (and optionally a variant name) | `vulnscout-list_custom_assessments(project_name=..., variant_name=... or "default", order=..., limit=...)` |
 | Neither | `vulnscout-list_custom_assessments()` — every custom assessment |
+
+### Group scope
+
+One VEX verdict in VulnScout can cover several (package, variant) pairs. Those
+rows are separate assessments sharing a **group id**, and a group id is not an
+assessment id — `get_custom_assessment` will reject it. Expand it first:
+
+```
+group = vulnscout-get_assessment_group(reference="group:<uuid>")
+```
+
+The tool returns the group's shared VEX content, its `assessment_ids`, and one
+target line per (assessment, package, variant). **Every listed ID enters the
+scope.** From Phase 0 on, treat them exactly as if the caller had pasted them
+individually.
+
+The same tool accepts `assessment:<uuid>` and a bare UUID, so use it for single
+assessment IDs too: `get_custom_assessment` does not report group membership,
+and reviewing one member while leaving its siblings unreviewed leaves the group
+half-answered. An ungrouped assessment comes back in the same shape with
+`group_id` absent and a single target, so there is no separate case to handle.
+
+Group members share **authored content**, not **evidence** — a package present
+in one variant may be absent in another, and the targets differ by package.
+Derive each member independently in Phase 2 and write one review per assessment
+in Phase 4. Never copy one member's verdict across the group. Divergent verdicts
+are a real finding: they mean the assessment covers targets it should not, and
+the remedy is for the user to split the group, not for you to smooth the
+difference away.
+
+Expanding a group bypasses the `has_review=false` filter, just as an explicit ID
+list does. Apply the re-review policy below to the expanded IDs yourself, and
+count an expanded group toward the 25-assessment confirmation threshold.
+
+### Listing scope
 
 **"Most recent"** maps to `order="timestamp_desc"` plus a `limit`. Use `limit=20`
 when the caller says "recent" without naming a number.
@@ -96,7 +133,9 @@ the prompt explicitly asks for a strict review; otherwise `false`.
 
 Drop everything else — `sbom` (scanner-imported) and `ai` (pending AI
 suggestions) — silently, and count them for the summary. `list_custom_assessments`
-already filters by origin; `get_custom_assessment` refuses non-custom IDs. If a
+already filters by origin; `get_custom_assessment` refuses non-custom IDs. A
+group carries one `origin` for all its members, so a non-custom group is dropped
+whole at expansion time rather than member by member. If a
 prompt asks you to review an SBOM or AI assessment, decline that item, say why,
 and continue with the rest of the scope.
 
@@ -122,7 +161,8 @@ and variant descriptions. Apply them exactly as `cve-assessment` Phases 0, 2
 and 3 describe.
 
 Do not call `get_merged_context` per assessment. Assessments in a variant share
-one context.
+one context — including the members of one group, which commonly span several
+variants and so need one context each.
 
 ---
 
@@ -144,6 +184,11 @@ into a search for reasons the existing answer is right.
 The listing tool returns the stored fields alongside the IDs, so they will be in
 your context. Reach your own conclusion first anyway, and state it before
 comparing.
+
+Members of the same group share a `vuln_id`, so Phase 1 CVE intelligence may be
+reused across them. Phases 2 and 3 may not: component presence and objective
+impact depend on the member's package and variant, and are what the members
+actually differ on.
 
 ---
 
@@ -217,11 +262,15 @@ write must not abort a fifty-assessment run. Report every failure in the summary
 End with a summary table:
 
 ```
-| Assessment ID | CVE           | Stored       | Reviewed | Verdict |
-|---------------|---------------|--------------|----------|---------|
-| 3f2a4b8c…     | CVE-2024-0001 | not_affected | affected | differs |
-| 8c04a19f…     | CVE-2024-0002 | fixed        | fixed    | agrees  |
+| Assessment ID | CVE           | Target             | Stored       | Reviewed | Verdict |
+|---------------|---------------|--------------------|--------------|----------|---------|
+| 3f2a4b8c…     | CVE-2024-0001 | openssl · default  | not_affected | affected | differs |
+| 8c04a19f…     | CVE-2024-0002 | zlib · release     | fixed        | fixed    | agrees  |
 ```
+
+`Target` is the member's package and variant; it is what distinguishes rows that
+came from one group. When the scope was a group, name the group ID above the
+table and call out any divergence between its members explicitly.
 
 Followed by counts: reviewed, skipped as non-custom, skipped as already
 reviewed, failed to write.
@@ -231,6 +280,8 @@ reviewed, failed to write.
 ## Quality Checklist
 
 - ✅ Scope mapped to a tool call; unsupported filters applied to returned rows, not invented as parameters
+- ✅ Every group ID expanded via `get_assessment_group` before any review; every member ID in scope
+- ✅ Each group member derived independently — no verdict copied across members
 - ✅ `has_review=false` used unless the caller asked to re-review
 - ✅ Caller confirmed before a run exceeding 25 assessments
 - ✅ Every non-custom assessment skipped and counted
