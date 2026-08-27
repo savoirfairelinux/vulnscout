@@ -1981,7 +1981,7 @@ describe('Review page AI review column', () => {
         render(<Review projectId="proj1" />);
 
         // Assert
-        expect(await screen.findByTitle(/ai review differs/i)).toBeInTheDocument();
+        expect(await screen.findByTitle('1 differ')).toBeInTheDocument();
     });
 
     test('renders a dash for assessments with no review', async () => {
