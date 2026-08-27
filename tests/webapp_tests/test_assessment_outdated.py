@@ -20,6 +20,7 @@ import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.models.assessment import Assessment
+from src.models.assessment_target import AssessmentTarget
 from src.models.finding import Finding
 from src.models.metrics import Metrics
 from src.models.observation import Observation
@@ -132,6 +133,11 @@ def _build_outdated_db(app, *, include_v2_finding: bool = True, include_v2_in_ac
             timestamp=datetime(2024, 1, 2, tzinfo=timezone.utc),
         )
         _db.session.add(assessment)
+        # Direct construction bypasses Assessment.create()'s dual write, so
+        # the target row that makes this assessment reachable through the
+        # listing routes must be added explicitly.
+        _db.session.add(AssessmentTarget(
+            assessment_id=assess_id, variant_id=VARIANT_ID, finding_id=finding_v1.id))
         _db.session.commit()
 
         if include_v2_in_active:

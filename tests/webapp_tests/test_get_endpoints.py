@@ -260,7 +260,24 @@ def test_get_vulnerability_by_id(client):
     assert response.status_code == 404
 
 
-def test_get_assessments_dict(client):
+def test_get_assessments_dict(app, client):
+    import uuid
+    from src.extensions import db
+    from src.models.assessment_target import AssessmentTarget
+
+    seed_id = "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    demo_variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        # The seed assessment has no scalar variant_id (it predates variant
+        # tracking); attach it to the demo variant here so it has a target
+        # row and is reachable through the listing routes, which now read
+        # targets exclusively from assessment_targets.
+        from src.models.assessment import Assessment
+        seed = Assessment.get_by_id(seed_id)
+        db.session.add(AssessmentTarget(
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=seed.finding_id))
+        db.session.commit()
+
     response = client.get("/api/assessments?format=dict")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -272,7 +289,21 @@ def test_get_assessments_dict(client):
     assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["impact_statement"] == "Yocto reported vulnerability as Patched"
 
 
-def test_get_assessments_compact(client):
+def test_get_assessments_compact(app, client):
+    import uuid
+    from src.extensions import db
+    from src.models.assessment_target import AssessmentTarget
+
+    demo_variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        # See test_get_assessments_dict: the seed assessment needs a target
+        # row to be reachable through the listing routes.
+        from src.models.assessment import Assessment
+        seed = Assessment.get_by_id("da4d18f0-d89e-4d54-819d-86fc884cc737")
+        db.session.add(AssessmentTarget(
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=seed.finding_id))
+        db.session.commit()
+
     response = client.get("/api/assessments?format=compact")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -281,10 +312,106 @@ def test_get_assessments_compact(client):
     assert assessment[0] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
     assert assessment[1] == "CVE-2020-35492"
     assert assessment[2] == "cairo@1.16.0"
-    assert assessment[3] is None
+    assert assessment[3] == demo_variant_id
     assert isinstance(assessment[4], str)
     assert assessment[5] == "fixed"
     assert len(assessment) == 6
+
+
+def test_compact_listing_returns_every_custom_assessment(app, client):
+    """Three custom assessments on distinct packages must all appear.
+
+    Regression test for impact finding 1.1: with NULL scalar
+    ``variant_id``/``finding_id`` columns, SQLite's ``PARTITION BY`` treats
+    NULLs as equal, collapsing every custom assessment into one partition so
+    only the top-ranked row survived. This passes today (the scalar columns
+    are still dual-written) and must keep passing once Task 11 drops them,
+    since the ranking now partitions on the joined ``assessment_targets``
+    columns, which are never NULL.
+    """
+    import uuid
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+
+    vuln_id = "CVE-2026-3000"
+    with app.app_context():
+        project = Project.create(f"CompactListingProj-{uuid.uuid4()}")
+        variant = Variant.create("default", project.id)
+        Vulnerability.create_record(id=vuln_id)
+        for name in ("openssl", "zlib", "curl"):
+            pkg = Package.create(name=name, version="1.0.0")
+            finding = Finding.create(package_id=pkg.id, vulnerability_id=vuln_id)
+            Assessment.create(
+                status="not_affected", origin="custom",
+                finding_id=finding.id, variant_id=variant.id,
+                commit=True,
+            )
+
+    response = client.get("/api/assessments?format=compact")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    packages = {row[2] for row in data if row[1] == vuln_id}
+    assert packages == {"openssl@1.0.0", "zlib@1.0.0", "curl@1.0.0"}
+
+
+def test_full_and_list_formats_show_one_row_per_multi_target_assessment(app, client):
+    """A multi-target (reconciled) assessment must appear exactly once in
+    both ``format=list`` and ``format=dict`` — never once per target and
+    never dropped from the ``dict`` keyed-by-id view.
+
+    Regression test for impact finding 2: the full/list branch joins
+    ``assessment_targets`` the same way the compact branch does, but its
+    consumers (``format=dict`` keys by assessment id, ``format=list`` is
+    consumed positionally) expect one row per assessment, unlike compact
+    which is intentionally one row per target.
+    """
+    import uuid
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+
+    vuln_id = "CVE-2026-4000"
+    with app.app_context():
+        project = Project.create(f"MultiTargetProj-{uuid.uuid4()}")
+        variant_a = Variant.create("a", project.id)
+        variant_b = Variant.create("b", project.id)
+        Vulnerability.create_record(id=vuln_id)
+        pkg = Package.create(name="openssl", version="1.0.0")
+        finding = Finding.create(package_id=pkg.id, vulnerability_id=vuln_id)
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, finding.id), (variant_b.id, finding.id)],
+            commit=True,
+        )
+        assessment_id = str(assessment.id)
+        variant_a_id, variant_b_id = str(variant_a.id), str(variant_b.id)
+
+    list_response = client.get("/api/assessments?format=list")
+    assert list_response.status_code == 200
+    list_data = json.loads(list_response.data)
+    matching = [a for a in list_data if a["id"] == assessment_id]
+    assert len(matching) == 1, "the assessment must not appear once per target"
+
+    dict_response = client.get("/api/assessments?format=dict")
+    assert dict_response.status_code == 200
+    dict_data = json.loads(dict_response.data)
+    assert assessment_id in dict_data, "the assessment must not be dropped from the dict view"
+    assert len([k for k in dict_data if k == assessment_id]) == 1
+
+    # The variant filter must still find the assessment through either target.
+    for vid in (variant_a_id, variant_b_id):
+        filtered = client.get(f"/api/assessments?format=list&variant_id={vid}")
+        assert filtered.status_code == 200
+        filtered_data = json.loads(filtered.data)
+        matches = [a for a in filtered_data if a["id"] == assessment_id]
+        assert len(matches) == 1, f"variant {vid} must select the assessment exactly once"
 
 
 def test_get_assessment_by_id(client):
@@ -1031,6 +1158,8 @@ def test_upload_asset_no_multipart(client):
 # ---------------------------------------------------------------------------
 
 def test_assessment_groups_by_vuln_returns_one_entry_per_group(client, demo_ids):
+    """A multi-package write still creates one row per package (unmigrated in
+    this phase); each row is now its own group with exactly its own target."""
     created = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -1040,16 +1169,16 @@ def test_assessment_groups_by_vuln_returns_one_entry_per_group(client, demo_ids)
             "variant_id": demo_ids["variant_id"],
         },
     ).get_json()
-    group_id = created["assessments"][0]["group_id"]
+    created_group_ids = {a["group_id"] for a in created["assessments"]}
 
     response = client.get(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups")
 
     assert response.status_code == 200
-    match = [g for g in response.get_json() if g["group_id"] == group_id]
-    assert len(match) == 1
-    assert len(match[0]["targets"]) == 2
-    assert match[0]["status"] == "not_affected"
+    match = [g for g in response.get_json() if g["group_id"] in created_group_ids]
+    assert len(match) == 2
+    assert all(len(g["targets"]) == 1 for g in match)
+    assert all(g["status"] == "not_affected" for g in match)
 
 
 def test_assessment_group_by_id_returns_the_group(client, demo_ids):
@@ -1076,22 +1205,25 @@ def test_unknown_assessment_group_is_404(client):
     assert client.get(f"/api/assessment-groups/{uuid.uuid4()}").status_code == 404
 
 
-def test_ungrouped_assessment_appears_with_null_group_id(client, demo_ids):
-    client.post(
+def test_ungrouped_assessment_appears_with_its_own_group_id(client, demo_ids):
+    """group_id is never None now: a single-target assessment is its own,
+    single-member group."""
+    created = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
             "status": "affected",
             "packages": [demo_ids["two_packages"][0]],
             "variant_id": demo_ids["variant_id"],
         },
-    )
+    ).get_json()
+    assessment_id = created["assessments"][0]["id"]
 
     groups = client.get(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups").get_json()
 
-    ungrouped = [g for g in groups if g["group_id"] is None]
-    assert ungrouped, "an ungrouped assessment must still be listed"
-    assert all(len(g["targets"]) == 1 for g in ungrouped)
+    match = [g for g in groups if g["group_id"] == assessment_id]
+    assert len(match) == 1
+    assert len(match[0]["targets"]) == 1
 
 
 def test_review_assessment_groups_filters(client, demo_ids):
@@ -1122,7 +1254,9 @@ def test_review_assessment_groups_filters(client, demo_ids):
 def test_assessment_groups_targets_carry_their_owning_assessment_id(client, demo_ids):
     """Each target dict must carry the id of the assessment record it came
     from, so the frontend can PUT/DELETE that exact row for legacy per-row
-    edits (Task 13)."""
+    edits (Task 13). A multi-package write still creates one row per package
+    (unmigrated in this phase); each row is its own group with one target
+    that points back at itself."""
     created = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -1133,16 +1267,16 @@ def test_assessment_groups_targets_carry_their_owning_assessment_id(client, demo
         },
     ).get_json()
     created_ids = {a["id"] for a in created["assessments"]}
-    group_id = created["assessments"][0]["group_id"]
 
     response = client.get(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups")
     assert response.status_code == 200
-    match = [g for g in response.get_json() if g["group_id"] == group_id][0]
-    assert len(match["targets"]) == 2
-    assert all(t["assessment_id"] in created_ids for t in match["targets"])
-    # Every created assessment record owns exactly one target.
-    assert {t["assessment_id"] for t in match["targets"]} == created_ids
+    matches = [g for g in response.get_json() if g["group_id"] in created_ids]
+    assert len(matches) == 2
+    for group in matches:
+        assert len(group["targets"]) == 1
+        assert group["targets"][0]["assessment_id"] == group["group_id"]
+    assert {g["group_id"] for g in matches} == created_ids
 
 
 def test_review_assessment_groups_include_vuln_id_and_texts(client, demo_ids, app):
