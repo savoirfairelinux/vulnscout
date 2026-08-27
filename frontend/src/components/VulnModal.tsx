@@ -303,6 +303,22 @@ type VariantScopedSnapshot = {
         [availableVariants]
     );
 
+    /** Names the (package, variant) pairs one assessment covers. Group members
+     *  share the assessment text but not their target context, so they are
+     *  reviewed independently and each review card has to say which target it
+     *  speaks for. */
+    const reviewTargetLabel = useCallback(
+        (group: AssessmentGroup, assessmentId: string) => group.targets
+            .filter(t => t.assessment_id === assessmentId)
+            .map(t => {
+                const { nameVersion } = splitPkgId(t.package);
+                const variantName = t.variant_id ? variantNameById.get(t.variant_id) : undefined;
+                return variantName ? `${nameVersion} · ${variantName}` : nameVersion;
+            })
+            .join(', '),
+        [variantNameById]
+    );
+
     // Build per-variant snapshots so the modal can show where custom CVSS and
     // effort differ across variants directly in all-variants mode.
     useEffect(() => {
@@ -2212,49 +2228,68 @@ type VariantScopedSnapshot = {
                                                 </div>
                                             </div>
                                             {(group.origin === "custom" ? group.assessment_ids : [])
+                                                .filter(assessmentId => reviews[assessmentId])
                                                 .map(assessmentId => {
                                                     const review = reviews[assessmentId];
                                                     const verdict = verdictOf(review);
+                                                    // Only a multi-member group is ambiguous about which
+                                                    // target a review covers; a single one already reads
+                                                    // off the target badges above.
+                                                    const targetLabel = group.assessment_ids.length > 1
+                                                        ? reviewTargetLabel(group, assessmentId)
+                                                        : "";
                                                     return (
                                                         <div key={`review-${assessmentId}`} className="mt-3">
-                                                            {review && (
-                                                                <div className="mt-2 ml-4 p-3 rounded-lg border border-sky-700 bg-sky-950/30">
-                                                                    <div className="flex items-center justify-between mb-2">
-                                                                        <span className="inline-flex items-center gap-2 text-sky-300 font-semibold text-sm">
-                                                                            <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
-                                                                            AI review
-                                                                            <span className={verdict === "agrees" ? "text-green-400" : "text-amber-400"}>
-                                                                                · {verdict === "agrees" ? "✓ agrees" : verdict === "stale" ? "⚠ stale" : "⚠ differs"}
-                                                                            </span>
+                                                            <div className="mt-2 ml-4 p-3 rounded-lg border border-sky-700 bg-sky-950/30">
+                                                                <div className="flex items-center justify-between mb-2">
+                                                                    <span className="inline-flex items-center gap-2 text-sky-300 font-semibold text-sm">
+                                                                        <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
+                                                                        AI review
+                                                                        <span className={verdict === "agrees" ? "text-green-400" : "text-amber-400"}>
+                                                                            · {verdict === "agrees" ? "✓ agrees" : verdict === "stale" ? "⚠ stale" : "⚠ differs"}
                                                                         </span>
-                                                                        {isEditing && (
-                                                                            <button
-                                                                                type="button"
-                                                                                onClick={() => setReviewToDiscard(assessmentId)}
-                                                                                className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
-                                                                            >
-                                                                                Discard review
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
-                                                                    <p className="text-sm text-gray-200 whitespace-pre-line">
-                                                                        <strong>{review.status}</strong>
-                                                                        {review.justification && <> · {review.justification}</>}<br/>
-                                                                        {review.impact_statement && <>{review.impact_statement}<br/></>}
-                                                                        {review.status_notes && <>{review.status_notes}<br/></>}
-                                                                        {review.workaround && <>{review.workaround}<br/></>}
-                                                                        <span className="text-gray-400">why: {review.rationale}</span>
-                                                                    </p>
-                                                                    {review.is_stale && (
-                                                                        <p className="mt-2 text-xs text-amber-400">
-                                                                            ⚠ Assessment was edited after this review was generated.
-                                                                        </p>
+                                                                    </span>
+                                                                    {isEditing && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => setReviewToDiscard(assessmentId)}
+                                                                            className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                                                                        >
+                                                                            Discard review
+                                                                        </button>
                                                                     )}
                                                                 </div>
-                                                            )}
+                                                                {targetLabel && (
+                                                                    <p className="mb-2 text-xs text-gray-400">
+                                                                        for {targetLabel}
+                                                                    </p>
+                                                                )}
+                                                                <p className="text-sm text-gray-200 whitespace-pre-line">
+                                                                    <strong>{review.status}</strong>
+                                                                    {review.justification && <> · {review.justification}</>}<br/>
+                                                                    {review.impact_statement && <>{review.impact_statement}<br/></>}
+                                                                    {review.status_notes && <>{review.status_notes}<br/></>}
+                                                                    {review.workaround && <>{review.workaround}<br/></>}
+                                                                    <span className="text-gray-400">why: {review.rationale}</span>
+                                                                </p>
+                                                                {review.is_stale && (
+                                                                    <p className="mt-2 text-xs text-amber-400">
+                                                                        ⚠ Assessment was edited after this review was generated.
+                                                                    </p>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     );
                                                 })}
+                                            {group.origin === "custom"
+                                                && group.assessment_ids.length > 1
+                                                && group.assessment_ids.some(id => reviews[id])
+                                                && group.assessment_ids.some(id => !reviews[id]) && (
+                                                <p className="mt-2 ml-4 text-xs text-gray-400">
+                                                    {group.assessment_ids.filter(id => !reviews[id]).length} of {group.assessment_ids.length} assessments
+                                                    in this group have no review yet.
+                                                </p>
+                                            )}
                                             {isBeingEdited && (
                                                 <div className="mt-3">
                                                     <EditAssessment

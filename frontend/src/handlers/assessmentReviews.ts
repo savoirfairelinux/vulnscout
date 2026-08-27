@@ -22,7 +22,18 @@ type AssessmentReview = {
 /** What the UI displays for an assessment's review state. */
 type ReviewVerdict = "agrees" | "differs" | "stale" | "none";
 
-export type { AssessmentReview, ReviewVerdict };
+/** How a group's assessments were reviewed, counted by verdict. */
+type ReviewSummary = {
+    /** Assessments in the group, reviewed or not. */
+    total: number;
+    /** Assessments carrying a review. */
+    reviewed: number;
+    agrees: number;
+    differs: number;
+    stale: number;
+};
+
+export type { AssessmentReview, ReviewVerdict, ReviewSummary };
 
 /**
  * Collapse a review into the single state the UI renders. A stale review shows
@@ -33,6 +44,42 @@ const verdictOf = (review: AssessmentReview | undefined): ReviewVerdict => {
     if (!review) return "none";
     if (review.is_stale) return "stale";
     return review.verdict;
+};
+
+/**
+ * Count the verdicts across a group's assessments.
+ *
+ * Group members share the same assessment text but target different variants
+ * and packages, so each is reviewed independently against its own context.
+ * That means one group can legitimately hold several different verdicts, or be
+ * reviewed only in part, and the summary has to report both rather than let a
+ * single member speak for the rest.
+ */
+const summarizeReviews = (
+    assessmentIds: string[],
+    reviews: Record<string, AssessmentReview>,
+): ReviewSummary => {
+    const verdicts = assessmentIds.map(id => verdictOf(reviews[id]));
+    const count = (v: ReviewVerdict) => verdicts.filter(x => x === v).length;
+    return {
+        total: verdicts.length,
+        reviewed: verdicts.filter(v => v !== "none").length,
+        agrees: count("agrees"),
+        differs: count("differs"),
+        stale: count("stale"),
+    };
+};
+
+/** Human-readable breakdown of a summary, for tooltips. */
+const describeReviewSummary = (summary: ReviewSummary): string => {
+    if (summary.reviewed === 0) return "Not reviewed";
+    const parts: string[] = [];
+    if (summary.agrees) parts.push(`${summary.agrees} agree`);
+    if (summary.differs) parts.push(`${summary.differs} differ`);
+    if (summary.stale) parts.push(`${summary.stale} stale`);
+    const pending = summary.total - summary.reviewed;
+    if (pending) parts.push(`${pending} not reviewed`);
+    return parts.join(" · ");
 };
 
 class AssessmentReviews {
@@ -77,4 +124,4 @@ class AssessmentReviews {
 }
 
 export default AssessmentReviews;
-export { verdictOf };
+export { verdictOf, summarizeReviews, describeReviewSummary };

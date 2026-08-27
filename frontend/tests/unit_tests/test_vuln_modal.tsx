@@ -4021,8 +4021,89 @@ describe("VulnModal AI review block", () => {
         expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument();
     });
 
-    test("discarding a review removes the block", async () => {
-        // Arrange
+    // Renders a two-member group straight from the server-shaped groups
+    // endpoint, so the members keep distinct targets and ids.
+    const renderModalWithGroup = async (reviewsPayload: Record<string, AssessmentReview>) => {
+        const members: Assessment[] = ['assess-1', 'assess-2'].map((id, i) => ({
+            id,
+            vuln_id: baseVulnerability.id,
+            packages: [i === 0 ? 'pkgA@1.0.0' : 'pkgB@2.0.0'],
+            status: 'affected',
+            simplified_status: 'active',
+            justification: '',
+            impact_statement: '',
+            status_notes: '',
+            workaround: '',
+            origin: 'custom',
+            timestamp: '2026-08-06T09:00:00Z',
+            responses: [],
+        }));
+        const group = {
+            group_id: 'g1',
+            vuln_id: baseVulnerability.id,
+            status: 'affected',
+            simplified_status: 'active',
+            justification: '',
+            impact_statement: '',
+            status_notes: '',
+            workaround: '',
+            responses: [],
+            origin: 'custom',
+            timestamp: '2026-08-06T09:00:00Z',
+            targets: [
+                { variant_id: null, package: 'pkgA@1.0.0', outdated: false, assessment_id: 'assess-1' },
+                { variant_id: null, package: 'pkgB@2.0.0', outdated: false, assessment_id: 'assess-2' },
+            ],
+            assessment_ids: ['assess-1', 'assess-2'],
+        };
+
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes('/api/assessment-reviews')) {
+                return Promise.resolve(JSON.stringify(reviewsPayload));
+            }
+            if (req.url.includes('/assessment-groups')) {
+                return Promise.resolve(JSON.stringify([group]));
+            }
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(baseVulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify(members));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{ ...baseVulnerability, assessments: members }}
+                isEditing={true}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        await screen.findByText(baseVulnerability.id);
+    };
+
+    test("names the target each review in a group belongs to", async () => {
+        // Group members are reviewed independently against their own
+        // variant/package context, so the cards must be told apart.
+        await renderModalWithGroup({
+            "assess-1": review,
+            "assess-2": { ...review, id: "r2", assessment_id: "assess-2", verdict: "agrees" as const },
+        });
+
+        expect(await screen.findByText(/for pkgA@1.0.0/)).toBeInTheDocument();
+        expect(screen.getByText(/for pkgB@2.0.0/)).toBeInTheDocument();
+    });
+
+    test("says how many members of a group are still unreviewed", async () => {
+        await renderModalWithGroup({ "assess-1": review });
+
+        expect(await screen.findByText(/1 of 2 assessments/)).toBeInTheDocument();
+    });
+
+    test("discarding a review removes the block", async () => {        // Arrange
         mockReviews({ "assess-1": review });
         const removeSpy = jest.spyOn(AssessmentReviews, "remove").mockResolvedValue(undefined);
 

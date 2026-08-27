@@ -1965,6 +1965,8 @@ describe('Review page AI review column', () => {
         is_stale: false,
     };
 
+    const agreesReview = { ...differsReview, id: 'r2', assessment_id: 'assess-2', verdict: 'agrees' as const };
+
     test('renders one row per server-side group', async () => {
         // Arrange
         mockNetwork(groupedAssessments);
@@ -1976,7 +1978,7 @@ describe('Review page AI review column', () => {
         expect(await screen.findAllByText('CVE-2024-0001')).toHaveLength(1);
     });
 
-    test('flags a group whose assessment carries a review', async () => {
+    test('a partly reviewed group does not claim a verdict for its unreviewed members', async () => {
         // Arrange
         mockNetwork(groupedAssessments, { reviews: { 'assess-1': differsReview } });
 
@@ -1984,7 +1986,22 @@ describe('Review page AI review column', () => {
         render(<Review projectId="proj1" />);
 
         // Assert
-        expect(await screen.findByTitle(/ai review differs/i)).toBeInTheDocument();
+        expect(await screen.findByTitle('1 differ · 1 not reviewed')).toBeInTheDocument();
+    });
+
+    test('a group whose members were reviewed differently reports both verdicts', async () => {
+        // Group members share the assessment text but target different
+        // variants/packages, so they are reviewed independently and may disagree.
+        // Arrange
+        mockNetwork(groupedAssessments, {
+            reviews: { 'assess-1': differsReview, 'assess-2': agreesReview },
+        });
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findByTitle('1 agree · 1 differ')).toBeInTheDocument();
     });
 
     test('renders a dash for assessments with no review', async () => {

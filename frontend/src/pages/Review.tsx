@@ -12,7 +12,7 @@ import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
-import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
+import AssessmentReviews, { verdictOf, summarizeReviews, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
@@ -118,8 +118,9 @@ const COPIED_FEEDBACK_MS = 2000;
 const rowCopyKey = (row: ReviewRow) =>
     row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
 
-/** The reviews attached to a row's assessments. A group's members share the
- *  same assessment text, so any member's review speaks for the whole row. */
+/** The reviews attached to a row's assessments. Members are reviewed
+ *  independently — they share the assessment text but not the variant/package
+ *  context — so a row can hold several, or none at all. */
 const rowReviews = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
     row.assessment_ids.map(id => reviews[id]).filter((r): r is AssessmentReview => Boolean(r));
 
@@ -1257,17 +1258,42 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             id: "ai_review",
             header: "AI review",
             cell: ({ row }) => {
-                const verdict = verdictOf(rowReviews(row.original, reviews)[0]);
-                if (verdict === "none") {
-                    return <span title="Not reviewed" className="text-gray-500">—</span>;
+                const summary = summarizeReviews(row.original.assessment_ids, reviews);
+                const title = describeReviewSummary(summary);
+                if (summary.reviewed === 0) {
+                    return <span title={title} className="text-gray-500">—</span>;
                 }
-                if (verdict === "agrees") {
-                    return <span title="AI review agrees" className="text-green-400">✓</span>;
+                // A single-target row has exactly one verdict, so keep the plain
+                // symbol. Groups get per-verdict counts, because their members
+                // were reviewed against different variant/package contexts and
+                // may legitimately disagree with each other.
+                if (summary.total === 1) {
+                    const verdict = verdictOf(reviews[row.original.assessment_ids[0]]);
+                    if (verdict === "agrees") {
+                        return <span title={title} className="text-green-400">✓</span>;
+                    }
+                    if (verdict === "stale") {
+                        return <span title={title} className="text-amber-400">⚠ stale</span>;
+                    }
+                    return <span title={title} className="text-amber-400">⚠</span>;
                 }
-                if (verdict === "stale") {
-                    return <span title="AI review is stale" className="text-amber-400">⚠ stale</span>;
-                }
-                return <span title="AI review differs" className="text-amber-400">⚠</span>;
+                const pending = summary.total - summary.reviewed;
+                return (
+                    <span title={title} className="inline-flex items-center gap-1.5 text-sm">
+                        {summary.agrees > 0 && (
+                            <span className="text-green-400">✓{summary.agrees}</span>
+                        )}
+                        {summary.differs > 0 && (
+                            <span className="text-amber-400">⚠{summary.differs}</span>
+                        )}
+                        {summary.stale > 0 && (
+                            <span className="text-amber-400">⚠{summary.stale} stale</span>
+                        )}
+                        {pending > 0 && (
+                            <span className="text-gray-500">—{pending}</span>
+                        )}
+                    </span>
+                );
             },
         }),
         columnHelper.display({
