@@ -482,7 +482,11 @@ def test_delete_assessment_not_found(client):
     assert data["error"] == "Assessment not found"
 
 
-def test_multi_package_assessment_creates_one_group(client, demo_ids):
+def test_multi_package_assessment_creates_a_group_per_package(client, demo_ids):
+    """Grouping is now storage, not inference: a multi-package write still
+    creates one row per package (unmigrated in this phase), and each row is
+    its own group — rows that merely arrived in the same request are no
+    longer fused at read time."""
     response = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -497,11 +501,11 @@ def test_multi_package_assessment_creates_one_group(client, demo_ids):
     body = response.get_json()
     assert len(body["assessments"]) == 2
     group_ids = {a["group_id"] for a in body["assessments"]}
-    assert len(group_ids) == 1
-    assert group_ids != {None}
+    assert None not in group_ids
+    assert group_ids == {a["id"] for a in body["assessments"]}
 
 
-def test_single_package_assessment_creates_no_group(client, demo_ids):
+def test_single_package_assessment_is_its_own_group(client, demo_ids):
     response = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -513,10 +517,15 @@ def test_single_package_assessment_creates_no_group(client, demo_ids):
     )
 
     assert response.status_code == 200
-    assert response.get_json()["assessments"][0]["group_id"] is None
+    row = response.get_json()["assessments"][0]
+    assert row["group_id"] == row["id"]
 
 
-def test_payload_group_id_joins_the_existing_group(client, demo_ids):
+def test_payload_group_id_no_longer_merges_writes_into_one_group(client, demo_ids):
+    """Joining an existing group at write time is out of scope for this
+    phase: a group only grows through reconcile, once it already holds real
+    targets. The legacy ``group_id`` payload still validates the referenced
+    group exists, but the new row remains its own, separate group."""
     first = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -540,10 +549,14 @@ def test_payload_group_id_joins_the_existing_group(client, demo_ids):
     )
 
     assert second.status_code == 200
-    assert second.get_json()["assessments"][0]["group_id"] == group_id
+    second_row = second.get_json()["assessments"][0]
+    assert second_row["group_id"] == second_row["id"]
+    assert second_row["group_id"] != group_id
 
 
-def test_batch_groups_per_vulnerability_not_per_request(client, demo_ids):
+def test_batch_creates_a_group_per_row_not_per_request(client, demo_ids):
+    """A batch is one user action but grouping is per stored row now: rows
+    that used to be fused by a shared invariant key are separate groups."""
     response = client.post("/api/assessments/batch", json={"assessments": [
         {
             "vuln_id": demo_ids["vuln_id"],
@@ -562,19 +575,16 @@ def test_batch_groups_per_vulnerability_not_per_request(client, demo_ids):
     ]})
 
     assert response.status_code == 200
-    by_vuln = {}
-    for row in response.get_json()["assessments"]:
-        by_vuln.setdefault(row["vuln_id"], set()).add(row["group_id"])
-
-    assert len(by_vuln) == 2
-    for vuln_id, group_ids in by_vuln.items():
-        assert len(group_ids) == 1, f"{vuln_id} must have exactly one group"
-        assert group_ids != {None}
-    assert len({next(iter(g)) for g in by_vuln.values()}) == 2, \
-        "different vulnerabilities must not share a group"
+    rows = response.get_json()["assessments"]
+    assert len(rows) == 4
+    group_ids = {row["group_id"] for row in rows}
+    assert None not in group_ids
+    assert group_ids == {row["id"] for row in rows}
 
 
-def test_batch_multi_variant_single_vuln_yields_one_group(client, demo_ids):
+def test_batch_multi_variant_single_vuln_yields_two_groups(client, demo_ids):
+    """Two rows created by one batch request, for the same vulnerability
+    across two variants, remain two independent groups."""
     response = client.post("/api/assessments/batch", json={"assessments": [
         {
             "vuln_id": demo_ids["vuln_id"],
@@ -591,12 +601,13 @@ def test_batch_multi_variant_single_vuln_yields_one_group(client, demo_ids):
     ]})
 
     assert response.status_code == 200
-    group_ids = {row["group_id"] for row in response.get_json()["assessments"]}
-    assert len(group_ids) == 1
-    assert group_ids != {None}
+    rows = response.get_json()["assessments"]
+    group_ids = {row["group_id"] for row in rows}
+    assert len(group_ids) == 2
+    assert group_ids == {row["id"] for row in rows}
 
 
-def test_batch_single_row_vulnerability_gets_no_group(client, demo_ids):
+def test_batch_single_row_vulnerability_is_its_own_group(client, demo_ids):
     response = client.post("/api/assessments/batch", json={"assessments": [{
         "vuln_id": demo_ids["vuln_id"],
         "status": "fixed",
@@ -605,4 +616,5 @@ def test_batch_single_row_vulnerability_gets_no_group(client, demo_ids):
     }]})
 
     assert response.status_code == 200
-    assert response.get_json()["assessments"][0]["group_id"] is None
+    row = response.get_json()["assessments"][0]
+    assert row["group_id"] == row["id"]

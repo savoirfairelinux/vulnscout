@@ -182,39 +182,39 @@ def parse_reconcile_payload(
 def validate_deletions(
     rows: "list[DBAssessment]", targets: "dict[tuple[str, UUID], Finding]"
 ) -> "dict[str, str] | None":
-    """Refuse the whole request when it would delete a pending AI row.
+    """Refuse the edit when it would drop a target from a pending AI assessment.
 
-    Mirrors ``delete_assessment``: AI rows are approved or rejected through
-    their own endpoints, never removed as a side effect of a group edit.
+    Mirrors ``delete_assessment``: AI assessments are approved or rejected
+    through their own endpoints, never edited piecemeal by removing one of
+    their targets.
     """
-    for key, group_rows in index_group_rows(rows).items():
-        if key in targets:
-            continue
-        if any(row.origin == "ai" for row in group_rows):
-            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}
+    if not rows or rows[0].origin != "ai":
+        return None
+    if set(index_group_rows(rows)) - set(targets):
+        return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}
     return None
 
 
-def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], list[DBAssessment]]":
-    """Index the group's rows by their (package, variant) key.
+def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], Any]":
+    """Index the group's current targets by their (package, variant) key.
 
-    A key can carry more than one row — the same combo may have been assessed
-    several times — so every row is kept. Indexing to a single row would let a
-    shadowed duplicate escape both the update and the delete pass and stay in
-    the group with stale content.
+    A group is now one assessment — ``rows`` holds zero or one of them — and
+    its targets live on ``target_rows`` rather than one row per package.
     """
-    indexed: dict[tuple[str, UUID], list[DBAssessment]] = {}
-    for row in rows:
-        finding = row.finding
-        if finding is None or finding.package is None or row.variant_id is None:
+    if not rows:
+        return {}
+    indexed: dict[tuple[str, UUID], Any] = {}
+    for target in rows[0].target_rows:
+        finding = target.finding
+        if finding is None or finding.package is None:
             continue
-        indexed.setdefault((finding.package.string_id, row.variant_id), []).append(row)
+        indexed[(finding.package.string_id, target.variant_id)] = target
     return indexed
 
 
 def resolve_targets(
     req: ReconcileRequest,
-    existing_by_key: "dict[tuple[str, UUID], list[DBAssessment]] | None" = None,
+    existing_by_key: "dict[tuple[str, UUID], Any] | None" = None,
 ) -> "tuple[dict[tuple[str, UUID], Finding], dict[str, str] | None]":
     """Resolve the (package, variant) combos this edit should end up covering.
 
@@ -252,17 +252,16 @@ def resolve_targets(
                 resolved[(package.string_id, variant_id)] = finding
                 covered.add(package.string_id)
 
-    # A row that already exists for a still-selected combo stays a target even
-    # if the finding lookup above missed it, otherwise the reconcile would read
-    # it as deselected and delete a row the user only meant to edit.
+    # A target that already exists for a still-selected combo stays a target
+    # even if the finding lookup above missed it, otherwise the reconcile
+    # would read it as deselected and drop a target the user only meant to edit.
     selected_packages = {package.string_id for package in packages}
     selected_variants = set(req.variant_ids)
-    for key, group_rows in (existing_by_key or {}).items():
+    for key, target_row in (existing_by_key or {}).items():
         if key in resolved or key[0] not in selected_packages or key[1] not in selected_variants:
             continue
-        finding = next((row.finding for row in group_rows if row.finding is not None), None)
-        if finding is not None:
-            resolved[key] = finding
+        if target_row.finding is not None:
+            resolved[key] = target_row.finding
             covered.add(key[0])
 
     unobserved = sorted(selected_packages - covered)
@@ -278,83 +277,71 @@ def apply_reconcile(
     rows: "list[DBAssessment]",
     targets: "dict[tuple[str, UUID], Finding]",
 ) -> "dict[str, Any]":
-    """Bring the group to the desired state inside a single transaction.
+    """Bring the group — one assessment — to the desired target set and content.
 
-    ``batch_session`` defers every per-row commit to one commit at the end and
-    rolls back on any exception, so a failure part-way leaves the group
-    untouched.
+    A group is now a single assessment, so there is nothing to loop over: its
+    target set is diffed against the request and applied as added or removed
+    ``AssessmentTarget`` rows, and its content fields are updated once.
+    Removing the last target leaves the assessment unreachable, so it is
+    deleted along with it rather than kept around empty.
     """
+    if not rows:
+        return {
+            "updated": [], "created": [], "deleted": [],
+            "became_custom": False, "deleted_non_custom": False,
+        }
+
+    assessment = rows[0]
     shared_ts = req.timestamp or datetime.now(timezone.utc)
-
     existing_by_key = index_group_rows(rows)
-
-    # New members must satisfy the same group invariant as the rows they join:
-    # a pending AI group stays AI (approving it later needs every member to be
-    # AI), and an edit that sends no responses leaves the group's responses
-    # untouched, so the new sibling inherits them instead of starting empty.
-    new_origin_for_created = "ai" if rows and all(
-        (row.origin or "") == "ai" for row in rows) else "custom"
-    inherited_responses = (
-        None if req.has_responses or not rows else list(rows[0].responses or [])
-    )
-
-    updated: list[dict[str, Any]] = []
-    created: list[dict[str, Any]] = []
-    deleted: list[str] = []
-    became_custom = False
     deleted_non_custom = False
 
     with batch_session():
-        for key, group_rows in existing_by_key.items():
-            for row in group_rows:
-                if key in targets:
-                    # Editing a pending AI row must not silently approve it.
-                    new_origin = "ai" if row.origin == "ai" else "custom"
-                    if (row.origin or "") != "custom" and new_origin == "custom":
-                        became_custom = True
-                    row.update(
-                        status=req.dto.status,
-                        origin=new_origin,
-                        simplified_status=STATUS_TO_SIMPLIFIED.get(
-                            req.dto.status or "", "Pending Assessment"
-                        ),
-                        status_notes=req.dto.status_notes or "",
-                        justification=req.dto.justification or "",
-                        impact_statement=req.dto.impact_statement or "",
-                        workaround=getattr(req.dto, "workaround", None) or "",
-                        # ``None`` means "leave as is": an edit that did not send
-                        # responses must not wipe imported VEX response data.
-                        responses=list(req.dto.responses or []) if req.has_responses else None,
-                        timestamp=shared_ts if req.update_timestamp else None,
-                        update_timestamp=req.update_timestamp,
-                    )
-                    updated.append(row.to_dict())
-                else:
-                    if (row.origin or "") != "custom":
-                        deleted_non_custom = True
-                    deleted.append(str(row.id))
-                    row.delete()
+        for key, target_row in existing_by_key.items():
+            if key in targets:
+                continue
+            if (assessment.origin or "") != "custom":
+                deleted_non_custom = True
+            assessment.target_rows.remove(target_row)
 
         for key, finding in targets.items():
             if key in existing_by_key:
                 continue
-            new_row = create_assessment_record(
-                req.dto,
-                finding.id,
-                key[1],
-                # A new row always needs a first-observation timestamp; callers
-                # keeping the group's timestamp pass it as ``req.timestamp`` so
-                # the new sibling joins the same group instead of splitting it.
-                timestamp=shared_ts,
-                origin=new_origin_for_created,
-                responses=inherited_responses,
-            )
-            created.append(new_row.to_dict())
+            assessment.add_target(key[1], finding.id)
+
+        if not assessment.target_rows:
+            deleted_id = str(assessment.id)
+            assessment.delete()
+            return {
+                "updated": [], "created": [], "deleted": [deleted_id],
+                "became_custom": False, "deleted_non_custom": deleted_non_custom,
+            }
+
+        # Editing a pending AI assessment must not silently approve it.
+        new_origin = "ai" if assessment.origin == "ai" else "custom"
+        became_custom = (assessment.origin or "") != "custom" and new_origin == "custom"
+        assessment.update(
+            status=req.dto.status,
+            origin=new_origin,
+            simplified_status=STATUS_TO_SIMPLIFIED.get(
+                req.dto.status or "", "Pending Assessment"
+            ),
+            status_notes=req.dto.status_notes or "",
+            justification=req.dto.justification or "",
+            impact_statement=req.dto.impact_statement or "",
+            workaround=getattr(req.dto, "workaround", None) or "",
+            # ``None`` means "leave as is": an edit that did not send responses
+            # must not wipe imported VEX response data.
+            responses=list(req.dto.responses or []) if req.has_responses else None,
+            timestamp=shared_ts if req.update_timestamp else None,
+            update_timestamp=req.update_timestamp,
+        )
 
     return {
-        "updated": updated,
-        "created": created,
-        "deleted": deleted,
+        "updated": [assessment.to_dict()],
+        "created": [],
+        "deleted": [],
         "became_custom": became_custom,
         "deleted_non_custom": deleted_non_custom,
     }
+
