@@ -1624,7 +1624,7 @@ describe('Review — copying assessment ids', () => {
         expect(writeText).toHaveBeenCalledWith('group:g1');
     });
 
-    test('confirms the copy next to the button, then reverts', async () => {
+    test('confirms the copy on the button itself, then reverts', async () => {
         jest.useFakeTimers();
         try {
             mockNetwork([makeAssessment('a1', 'v1')]);
@@ -1636,9 +1636,15 @@ describe('Review — copying assessment ids', () => {
             await user.click(await screen.findByTitle('Copy assessment id'));
 
             await screen.findByRole('status');
+            // The confirmation replaces the icon in place: nothing is added
+            // beside the button, so the neighbouring actions never reflow.
+            const button = screen.getByTitle('Copy assessment id');
+            expect(button.querySelector('[data-icon="check"]')).toBeInTheDocument();
+            expect(button.querySelector('[data-icon="copy"]')).not.toBeInTheDocument();
+
             await act(async () => { jest.advanceTimersByTime(2000); });
             await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
-            await screen.findByTitle('Copy assessment id');
+            expect(screen.getByTitle('Copy assessment id').querySelector('[data-icon="copy"]')).toBeInTheDocument();
         } finally {
             jest.useRealTimers();
         }
@@ -1653,7 +1659,7 @@ describe('Review — copying assessment ids', () => {
 
         await user.click(await screen.findByTitle('Copy assessment id'));
 
-        expect(screen.queryByText('Copied')).not.toBeInTheDocument();
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
     });
 
     test('copies ids from the AI assessments tab too', async () => {

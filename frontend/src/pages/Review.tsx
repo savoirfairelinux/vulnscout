@@ -124,9 +124,9 @@ const rowCopyKey = (row: ReviewRow) =>
 const rowReviews = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
     row.assessment_ids.map(id => reviews[id]).filter((r): r is AssessmentReview => Boolean(r));
 
-/** Copies a row's group/assessment id, confirming inline like VulnModal does.
- *  Same styles and confirmation as the copy button in the assessment history,
- *  so the two views stay recognisably the same control. */
+/** Copies a row's group/assessment id. The confirmation swaps the icon for a
+ *  checkmark in place rather than adding a label, so the button keeps its width
+ *  and never pushes the neighbouring actions onto a second row. */
 function CopyIdButton({ row, copiedKey, onCopy }: {
     row: ReviewRow;
     copiedKey: string | null;
@@ -139,17 +139,14 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
             <button
                 type="button"
                 onClick={() => onCopy(row)}
-                className="text-gray-400 hover:text-gray-200 transition-colors"
+                className={`transition-colors ${copied ? 'text-green-400' : 'text-gray-400 hover:text-gray-200'}`}
                 title={label}
                 aria-label={label}
             >
-                <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
+                <FontAwesomeIcon icon={copied ? faCheck : faCopy} className="w-4 h-4" />
             </button>
             {copied && (
-                <span role="status" className="inline-flex items-center gap-1 text-xs text-green-400">
-                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
-                    Copied
-                </span>
+                <span role="status" className="sr-only">Copied</span>
             )}
         </>
     );
