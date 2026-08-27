@@ -15,6 +15,7 @@ from .vulnerability import Vulnerability
 from .package import Package
 from .finding import Finding
 from .variant import Variant
+from .assessment_target import AssessmentTarget, validate_targets
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +281,15 @@ class Assessment(Base):
     # ==================================================================
     # Validation / mutation helpers
     # ==================================================================
+
+    def add_target(self, variant_id: uuid.UUID, finding_id: uuid.UUID) -> bool:
+        """Attach one ``(variant, finding)`` pair; False when already present."""
+        if (variant_id, finding_id) in set(self.targets):
+            return False
+        validate_targets(self.targets + [(variant_id, finding_id)])
+        self.target_rows.append(
+            AssessmentTarget(variant_id=variant_id, finding_id=finding_id))
+        return True
 
     def add_package(self, package: str | Package) -> bool:
         """Add a package to the transient package list.
@@ -576,6 +586,7 @@ class Assessment(Base):
         assessment_id: Optional[uuid.UUID] = None,
         finding_id: Optional[uuid.UUID | str] = None,
         variant_id: Optional[uuid.UUID | str] = None,
+        targets: Optional["list[tuple[uuid.UUID, uuid.UUID]]"] = None,
         source: Optional[str] = None,
         origin: Optional[str] = None,
         simplified_status: Optional[str] = None,
@@ -594,12 +605,20 @@ class Assessment(Base):
                 supplied (e.g. from an in-memory DTO), the DB row gets the
                 same UUID so that ``gets_by_vuln`` / ``gets_by_pkg`` can
                 deduplicate results from DB queries against in-memory ones.
+            targets: Explicit ``(variant_id, finding_id)`` pairs this
+                assessment applies to. Takes precedence over
+                ``finding_id``/``variant_id`` when given; when omitted and
+                both scalars are present, one target is derived from them.
             commit: If True (default), commit immediately. Set False for bulk operations.
         """
         if isinstance(finding_id, str):
             finding_id = uuid.UUID(finding_id)
         if isinstance(variant_id, str):
             variant_id = uuid.UUID(variant_id)
+        resolved_targets = list(targets or [])
+        if not resolved_targets and finding_id is not None and variant_id is not None:
+            resolved_targets = [(variant_id, finding_id)]
+        validate_targets(resolved_targets)
         assessment = Assessment(
             status=status,
             finding_id=finding_id,
@@ -619,6 +638,9 @@ class Assessment(Base):
             assessment.id = assessment_id
         assessment._init_transient()  # ensure transient attrs initialised on new objects
         db.session.add(assessment)
+        for target_variant_id, target_finding_id in resolved_targets:
+            assessment.target_rows.append(AssessmentTarget(
+                variant_id=target_variant_id, finding_id=target_finding_id))
         if commit:
             db.session.commit()
         else:
@@ -661,6 +683,8 @@ class Assessment(Base):
         if existing is not None:
             existing.finding_id = finding_id or existing.finding_id
             existing.variant_id = variant_id or existing.variant_id
+            if finding_id is not None and variant_id is not None:
+                existing.add_target(variant_id, finding_id)
             existing.status = assess.status or existing.status
             existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status or "", existing.simplified_status)
             existing.status_notes = assess.status_notes or existing.status_notes

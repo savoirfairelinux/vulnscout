@@ -7,6 +7,8 @@
 add_package edge cases that require a real ORM session (lines 163-165,
 178-179, 229, 240-241)."""
 
+import uuid
+
 import pytest
 
 
@@ -306,13 +308,19 @@ def test_load_group_is_empty_for_unknown_id(app):
         assert load_group(uuid.uuid4()) == []
 
 
-def _make_variant(project_name: str, variant_name: str):
-    """Create a variant under its own project, for group-invariant tests."""
+def _make_variant(project, variant_name: str):
+    """Create a variant under *project*.
+
+    *project* is either a project name (``str``) — a brand new
+    :class:`Project` is created for it, as the group-invariant tests below
+    expect — or an existing project id (``uuid.UUID``) to attach the variant
+    to directly, as the multi-target tests further down expect.
+    """
     from src.models.project import Project
     from src.models.variant import Variant
 
-    project = Project.create(name=project_name)
-    return Variant.create(name=variant_name, project_id=project.id)
+    project_id = project if isinstance(project, uuid.UUID) else Project.create(name=project).id
+    return Variant.create(name=variant_name, project_id=project_id)
 
 
 def test_create_group_refuses_assessments_from_two_projects(app):
@@ -465,3 +473,100 @@ def test_group_helpers_short_circuit_on_an_empty_input(app):
         assert AssessmentGroupMember.invariant_keys([]) == {}
         assert AssessmentGroupMember.get_group_ids([]) == {}
         assert Assessment.preload_group_ids([]) is None
+
+
+# ---------------------------------------------------------------------------
+# Write path: Assessment.create / add_target / from_vuln_assessment dual-write
+# ---------------------------------------------------------------------------
+
+def _make_finding(vuln_id: str, pkg_name: str):
+    """Create a finding for *pkg_name* against *vuln_id*, reusing the
+    vulnerability record if a prior call already created it (tests may target
+    the same vulnerability from two different packages)."""
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+
+    vuln = db.session.get(Vulnerability, vuln_id.upper()) or Vulnerability.create_record(id=vuln_id)
+    pkg = Package.create(name=pkg_name, version="1.0.0")
+    return Finding.create(package_id=pkg.id, vulnerability_id=vuln.id)
+
+
+def _make_finding_and_variant():
+    """Create one finding and one variant that may legally share an assessment."""
+    finding = _make_finding("CVE-2026-2000", "openssl")
+    variant = _make_variant(uuid.uuid4(), "default")
+    return finding, variant
+
+
+def test_create_derives_one_target_from_the_scalar_arguments(app):
+    with app.app_context():
+        from src.models.assessment import Assessment
+        finding, variant = _make_finding_and_variant()
+        assessment = Assessment.create(
+            status="affected", origin="custom",
+            finding_id=finding.id, variant_id=variant.id, commit=True,
+        )
+        assert assessment.targets == [(variant.id, finding.id)]
+
+
+def test_create_accepts_an_explicit_multi_target_list(app):
+    with app.app_context():
+        from src.models.assessment import Assessment
+        project = uuid.uuid4()
+        variant_a = _make_variant(project, "a")
+        variant_b = _make_variant(project, "b")
+        openssl = _make_finding("CVE-2026-1000", "openssl")
+        zlib = _make_finding("CVE-2026-1000", "zlib")
+
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, openssl.id), (variant_b.id, zlib.id)],
+            commit=True,
+        )
+        assert sorted(assessment.targets) == sorted([
+            (variant_a.id, openssl.id), (variant_b.id, zlib.id),
+        ])
+
+
+def test_create_rejects_targets_that_break_the_invariant(app):
+    with app.app_context():
+        from src.models.assessment import Assessment
+        from src.models.assessment_target import GroupInvariantError
+        variant_a = _make_variant(uuid.uuid4(), "a")
+        variant_b = _make_variant(uuid.uuid4(), "b")
+        finding = _make_finding("CVE-2026-1001", "openssl")
+
+        with pytest.raises(GroupInvariantError):
+            Assessment.create(
+                status="affected", origin="custom",
+                targets=[(variant_a.id, finding.id), (variant_b.id, finding.id)],
+                commit=True,
+            )
+
+
+def test_add_target_is_idempotent(app):
+    with app.app_context():
+        from src.models.assessment import Assessment
+        finding, variant = _make_finding_and_variant()
+        assessment = Assessment.create(
+            status="affected", origin="custom",
+            finding_id=finding.id, variant_id=variant.id, commit=True,
+        )
+        assert assessment.add_target(variant.id, finding.id) is False
+        assert len(assessment.targets) == 1
+
+
+def test_deleting_an_assessment_removes_its_target_rows(app):
+    with app.app_context():
+        from src.extensions import db
+        from src.models.assessment import Assessment
+        from src.models.assessment_target import AssessmentTarget
+        finding, variant = _make_finding_and_variant()
+        assessment = Assessment.create(
+            status="affected", origin="custom",
+            finding_id=finding.id, variant_id=variant.id, commit=True,
+        )
+        assessment.delete()
+        assert db.session.query(AssessmentTarget).count() == 0

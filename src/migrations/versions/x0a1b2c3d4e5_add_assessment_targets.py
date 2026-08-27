@@ -75,6 +75,13 @@ def backfill_targets(connection):
     in either.  A row missing one has no valid target and would migrate to zero
     targets, becoming invisible to every variant-filtered read, so the migration
     stops rather than creating it.
+
+    ``OR IGNORE`` keeps the backfill idempotent so it can be re-run against a
+    table that already holds some of these triples -- a retried or partially
+    applied upgrade, or a caller that seeded rows through the ORM before
+    invoking the backfill directly.  On a clean upgrade the target table is
+    created by this same revision, so every inserted triple is distinct and the
+    clause is a no-op.
     """
     orphans = connection.execute(sa.text(
         "SELECT COUNT(*) FROM assessments"
@@ -86,7 +93,7 @@ def backfill_targets(connection):
             " variant_id is NULL.  Resolve or delete them before upgrading."
         )
     connection.execute(sa.text(
-        "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
+        "INSERT OR IGNORE INTO assessment_targets (assessment_id, variant_id, finding_id)"
         " SELECT id, variant_id, finding_id FROM assessments"
     ))
 

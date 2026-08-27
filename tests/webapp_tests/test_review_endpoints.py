@@ -257,6 +257,11 @@ class TestReviewListTexts:
                     description="Same content for both",
                 ),
             ]
+            # Flushed here, as one coherent unit, before Assessment.create()
+            # below: it validates its target against the variants table, so
+            # variant_a/variant_b must already be visible to that query.
+            db.session.add_all(sbom_observations)
+            db.session.flush()
             finding = Finding.get_by_vulnerability(self.VULNERABILITY_ID)[0]
             assess_a = Assessment.create(status="x", variant_id=self.VARIANT_A, finding_id=finding.id, origin="custom")
             assess_b = Assessment.create(status="x", variant_id=self.VARIANT_B, finding_id=finding.id, origin="custom")
