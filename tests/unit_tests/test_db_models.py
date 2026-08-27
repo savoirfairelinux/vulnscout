@@ -762,75 +762,107 @@ def test_group_member_repr_names_both_ids(app):
 
 
 def test_backfill_groups_only_multi_row_tuples(app):
-    """Rows the frontend renders as one entry become one group; singles get none."""
+    """Rows the frontend renders as one entry fuse into one; singles stay alone."""
     with app.app_context():
         from datetime import datetime, timezone
+        from sqlalchemy import func, select
         from src.extensions import db
         from src.models.assessment import Assessment
-        from src.models.assessment_group_member import AssessmentGroupMember
+        from src.models.assessment_target import AssessmentTarget
         from src.models.finding import Finding
         from src.models.package import Package
+        from src.models.project import Project
+        from src.models.variant import Variant
         from src.models.vulnerability import Vulnerability
-        from src.migrations.versions.x0a1b2c3d4e5_add_assessment_group_members import (
-            backfill_groups,
+        from src.migrations.versions.x0a1b2c3d4e5_add_assessment_targets import (
+            backfill_targets, fuse_duplicates,
         )
 
         shared_ts = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
         Vulnerability.create_record(id="CVE-2026-1000")
+        project = Project.create("TestProject")
+        variant = Variant.create("TestVariant", project.id)
         pkg_a = Package.create(name="pkg-a", version="1.0.0")
         pkg_b = Package.create(name="pkg-b", version="1.0.0")
         finding_a = Finding.create(package_id=pkg_a.id, vulnerability_id="CVE-2026-1000")
         finding_b = Finding.create(package_id=pkg_b.id, vulnerability_id="CVE-2026-1000")
 
-        grouped_one = Assessment.create(
-            status="not_affected", finding_id=finding_a.id, timestamp=shared_ts,
-            justification="same text", origin="custom")
-        grouped_two = Assessment.create(
-            status="not_affected", finding_id=finding_b.id, timestamp=shared_ts,
-            justification="same text", origin="custom")
-        lone = Assessment.create(
-            status="affected", finding_id=finding_a.id, timestamp=shared_ts,
-            justification="different text", origin="custom")
+        grouped_one_id = Assessment.create(
+            status="not_affected", finding_id=finding_a.id, variant_id=variant.id,
+            timestamp=shared_ts, justification="same text", origin="custom").id
+        grouped_two_id = Assessment.create(
+            status="not_affected", finding_id=finding_b.id, variant_id=variant.id,
+            timestamp=shared_ts, justification="same text", origin="custom").id
+        lone_id = Assessment.create(
+            status="affected", finding_id=finding_a.id, variant_id=variant.id,
+            timestamp=shared_ts, justification="different text", origin="custom").id
 
-        backfill_groups(db.session.connection())
+        connection = db.session.connection()
+        backfill_targets(connection)
+        fuse_duplicates(connection)
         db.session.commit()
 
-        group_id = AssessmentGroupMember.get_group_id(grouped_one.id)
-        assert group_id is not None
-        assert set(AssessmentGroupMember.get_assessment_ids(group_id)) == {
-            grouped_one.id, grouped_two.id}
-        assert AssessmentGroupMember.get_group_id(lone.id) is None
+        def target_count(assessment_id) -> int:
+            return db.session.execute(
+                select(func.count()).select_from(AssessmentTarget)
+                .where(AssessmentTarget.assessment_id == assessment_id)
+            ).scalar_one()
+
+        surviving_ids = set(db.session.execute(select(Assessment.id)).scalars())
+        survivor = surviving_ids & {grouped_one_id, grouped_two_id}
+        assert len(survivor) == 1
+        assert target_count(next(iter(survivor))) == 2
+
+        assert lone_id in surviving_ids
+        assert target_count(lone_id) == 1
 
 
 def test_backfill_does_not_fuse_different_vulnerabilities(app):
     """Identical content and timestamp across two CVEs must stay separate."""
     with app.app_context():
         from datetime import datetime, timezone
+        from sqlalchemy import func, select
         from src.extensions import db
         from src.models.assessment import Assessment
-        from src.models.assessment_group_member import AssessmentGroupMember
+        from src.models.assessment_target import AssessmentTarget
         from src.models.finding import Finding
         from src.models.package import Package
+        from src.models.project import Project
+        from src.models.variant import Variant
         from src.models.vulnerability import Vulnerability
-        from src.migrations.versions.x0a1b2c3d4e5_add_assessment_group_members import (
-            backfill_groups,
+        from src.migrations.versions.x0a1b2c3d4e5_add_assessment_targets import (
+            backfill_targets, fuse_duplicates,
         )
 
         shared_ts = datetime(2026, 8, 2, 9, 0, 0, tzinfo=timezone.utc)
+        project = Project.create("TestProject")
+        variant = Variant.create("TestVariant", project.id)
         pkg_x = Package.create(name="pkg-x", version="3.0.0")
         pkg_y = Package.create(name="pkg-y", version="3.0.0")
-        ids = []
+        ids_by_vuln: dict[str, list] = {}
         for vuln_id in ("CVE-2026-2001", "CVE-2026-2002"):
             Vulnerability.create_record(id=vuln_id)
             for pkg in (pkg_x, pkg_y):
                 finding = Finding.create(package_id=pkg.id, vulnerability_id=vuln_id)
-                ids.append(Assessment.create(
-                    status="fixed", finding_id=finding.id, timestamp=shared_ts,
-                    justification="identical", origin="sbom").id)
+                ids_by_vuln.setdefault(vuln_id, []).append(Assessment.create(
+                    status="fixed", finding_id=finding.id, variant_id=variant.id,
+                    timestamp=shared_ts, justification="identical",
+                    origin="sbom").id)
 
-        backfill_groups(db.session.connection())
+        connection = db.session.connection()
+        backfill_targets(connection)
+        fuse_duplicates(connection)
         db.session.commit()
 
-        groups = {AssessmentGroupMember.get_group_id(a_id) for a_id in ids}
-        assert len(groups) == 2, "each CVE must get its own group"
-        assert None not in groups
+        def target_count(assessment_id) -> int:
+            return db.session.execute(
+                select(func.count()).select_from(AssessmentTarget)
+                .where(AssessmentTarget.assessment_id == assessment_id)
+            ).scalar_one()
+
+        surviving_ids = set(db.session.execute(select(Assessment.id)).scalars())
+        assert len(surviving_ids) == 2, "each CVE must keep exactly one survivor"
+        for vuln_id, pair in ids_by_vuln.items():
+            survivor = surviving_ids & set(pair)
+            assert len(survivor) == 1, f"{vuln_id} must fuse to one assessment"
+            assert target_count(next(iter(survivor))) == 2
