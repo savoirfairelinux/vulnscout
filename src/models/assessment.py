@@ -134,6 +134,11 @@ class Assessment(Base):
 
     finding: Mapped["Finding | None"] = relationship(back_populates="assessments")
     variant: Mapped["Variant | None"] = relationship(back_populates="assessments")
+    target_rows: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
+        back_populates="assessment",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     # ------------------------------------------------------------------
     # Transient attributes (initialised by _init_transient)
@@ -185,6 +190,11 @@ class Assessment(Base):
     @packages.setter
     def packages(self, value: list[str]) -> None:
         self._packages = list(value or [])
+
+    @property
+    def targets(self) -> "list[tuple[uuid.UUID, uuid.UUID]]":
+        """Every ``(variant_id, finding_id)`` pair this assessment applies to."""
+        return [(t.variant_id, t.finding_id) for t in self.target_rows]
 
     # ------------------------------------------------------------------
     # group_id — preloadable, so serializing a collection stays O(1) queries
