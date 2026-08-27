@@ -1984,6 +1984,15 @@ describe('Review page AI review column', () => {
         expect(await screen.findByTitle('1 differ')).toBeInTheDocument();
     });
 
+    test('centres the verdict flags in the cell', async () => {
+        mockNetwork([groupedAssessment], { reviews: { 'assess-1': differsReview } });
+
+        render(<Review projectId="proj1" />);
+
+        const flags = await screen.findByTitle('1 differ');
+        expect(flags.parentElement).toHaveClass('justify-center');
+    });
+
     test('renders a dash for assessments with no review', async () => {
         mockNetwork([groupedAssessment]);
 
