@@ -36,6 +36,9 @@ class Finding(Base):
         back_populates="finding", cascade="all, delete-orphan")
     assessments: Mapped[list["Assessment"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
+    assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
+        back_populates="finding",
+    )
     time_estimates: Mapped[list["TimeEstimate"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
 
