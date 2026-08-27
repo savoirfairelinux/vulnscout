@@ -5,10 +5,11 @@ import importlib
 import json
 import uuid
 
+import pytest
 import sqlalchemy as sa
 
 migration = importlib.import_module(
-    "src.migrations.versions.x0a1b2c3d4e5_add_assessment_group_members"
+    "src.migrations.versions.x0a1b2c3d4e5_add_assessment_targets"
 )
 
 SHARED_TIMESTAMP = "2026-01-01 00:00:00"
@@ -45,9 +46,11 @@ def _build_schema(connection):
     ))
     connection.execute(sa.text(
         """
-        CREATE TABLE assessment_group_members (
-            assessment_id TEXT PRIMARY KEY,
-            group_id TEXT NOT NULL
+        CREATE TABLE assessment_targets (
+            assessment_id TEXT NOT NULL,
+            variant_id TEXT NOT NULL,
+            finding_id TEXT NOT NULL,
+            PRIMARY KEY (assessment_id, variant_id, finding_id)
         )
         """
     ))
@@ -109,21 +112,34 @@ def _add_assessment(
     return assessment_id
 
 
-def _groups(connection) -> dict[str, str]:
+def _existing_assessments(connection) -> set[str]:
     return {
-        row["assessment_id"]: row["group_id"]
+        row["id"]
         for row in connection.execute(sa.text(
-            "SELECT assessment_id, group_id FROM assessment_group_members"
+            "SELECT id FROM assessments"
         )).mappings()
     }
 
 
-def test_backfill_never_groups_assessments_across_projects():
-    """Identical assessments in two projects must not share a group.
+def _target_counts(connection) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in connection.execute(sa.text(
+        "SELECT assessment_id FROM assessment_targets"
+    )).mappings():
+        counts[row["assessment_id"]] = counts.get(row["assessment_id"], 0) + 1
+    return counts
 
-    Reads are project-filtered but group mutations load every member by
-    ``group_id``, so a cross-project group would let one project delete or
-    reconcile the other project's assessments.
+
+def _run_backfill(connection):
+    migration.backfill_targets(connection)
+    migration.fuse_duplicates(connection)
+
+
+def test_backfill_never_groups_assessments_across_projects():
+    """Identical assessments in two projects must not fuse into one row.
+
+    Reads are project-filtered, so a fused row spanning two projects would let
+    one project delete or reconcile the other project's assessment.
     """
     engine = sa.create_engine("sqlite:///:memory:")
 
@@ -135,12 +151,14 @@ def test_backfill_never_groups_assessments_across_projects():
         first = _add_assessment(connection, finding_id, project_a_variant)
         second = _add_assessment(connection, finding_id, project_b_variant)
 
-        migration.backfill_groups(connection)
+        _run_backfill(connection)
 
-        groups = _groups(connection)
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
 
-    assert first not in groups
-    assert second not in groups
+    assert remaining == {first, second}
+    assert counts.get(first) == 1
+    assert counts.get(second) == 1
 
 
 def test_backfill_still_groups_assessments_within_one_project():
@@ -155,38 +173,34 @@ def test_backfill_still_groups_assessments_within_one_project():
         second = _add_assessment(
             connection, finding_id, _add_variant(connection, project_id))
 
-        migration.backfill_groups(connection)
+        _run_backfill(connection)
 
-        groups = _groups(connection)
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
 
-    assert set(groups) == {first, second}
-    assert groups[first] == groups[second]
+    assert len(remaining) == 1
+    survivor = next(iter(remaining))
+    assert survivor in {first, second}
+    assert counts.get(survivor) == 2
 
 
-def test_backfill_keeps_variantless_assessments_out_of_project_groups():
-    """Variant-less rows have no project, so they only group with each other."""
+def test_upgrade_aborts_on_an_assessment_with_no_variant():
+    """A target is a ``(variant, finding)`` pair; a variant-less row has none.
+
+    The old group backfill tolerated this by bucketing variant-less rows under
+    a ``NULL`` project key, since a group only recorded membership. A target
+    row cannot express "no variant", so this now has to abort instead of
+    silently producing a row with no valid target.
+    """
     engine = sa.create_engine("sqlite:///:memory:")
 
     with engine.begin() as connection:
         _build_schema(connection)
         finding_id = _add_finding(connection, "CVE-2026-0003")
-        project_id = _new_id()
-        scoped_first = _add_assessment(
-            connection, finding_id, _add_variant(connection, project_id))
-        scoped_second = _add_assessment(
-            connection, finding_id, _add_variant(connection, project_id))
-        orphan_first = _add_assessment(connection, finding_id, None)
-        orphan_second = _add_assessment(connection, finding_id, None)
+        _add_assessment(connection, finding_id, None)
 
-        migration.backfill_groups(connection)
-
-        groups = _groups(connection)
-
-    assert set(groups) == {
-        scoped_first, scoped_second, orphan_first, orphan_second}
-    assert groups[scoped_first] == groups[scoped_second]
-    assert groups[orphan_first] == groups[orphan_second]
-    assert groups[orphan_first] != groups[scoped_first]
+        with pytest.raises(RuntimeError, match="no valid target"):
+            migration.backfill_targets(connection)
 
 
 def test_backfill_stays_sparse_for_unique_assessments():
@@ -196,26 +210,28 @@ def test_backfill_stays_sparse_for_unique_assessments():
         _build_schema(connection)
         finding_id = _add_finding(connection, "CVE-2026-0004")
         project_id = _new_id()
-        _add_assessment(
+        first = _add_assessment(
             connection, finding_id, _add_variant(connection, project_id),
             status="affected")
-        _add_assessment(
+        second = _add_assessment(
             connection, finding_id, _add_variant(connection, project_id),
             status="not_affected")
 
-        migration.backfill_groups(connection)
+        _run_backfill(connection)
 
-        groups = _groups(connection)
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
 
-    assert groups == {}
+    assert remaining == {first, second}
+    assert counts.get(first) == 1
+    assert counts.get(second) == 1
 
 
 def test_backfill_never_groups_assessments_with_different_responses():
     """Otherwise-identical rows carrying different VEX responses stay apart.
 
-    The group serializer exposes only the head's ``responses`` and reconcile
-    applies one response set to every member, so fusing these rows would hide
-    one set and mutate both as a single action.
+    Fusing rows with different response sets would discard one set entirely,
+    so they must remain separate assessments.
     """
     engine = sa.create_engine("sqlite:///:memory:")
 
@@ -230,16 +246,18 @@ def test_backfill_never_groups_assessments_with_different_responses():
             connection, finding_id, _add_variant(connection, project_id),
             responses=["update"])
 
-        migration.backfill_groups(connection)
+        _run_backfill(connection)
 
-        groups = _groups(connection)
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
 
-    assert first not in groups
-    assert second not in groups
+    assert remaining == {first, second}
+    assert counts.get(first) == 1
+    assert counts.get(second) == 1
 
 
 def test_backfill_groups_rows_whose_responses_only_differ_in_order():
-    """Response order is not meaningful, so it must not split a real group."""
+    """Response order is not meaningful, so it must not split a real fusion."""
     engine = sa.create_engine("sqlite:///:memory:")
 
     with engine.begin() as connection:
@@ -253,12 +271,15 @@ def test_backfill_groups_rows_whose_responses_only_differ_in_order():
             connection, finding_id, _add_variant(connection, project_id),
             responses=["will_not_fix", "update"])
 
-        migration.backfill_groups(connection)
+        _run_backfill(connection)
 
-        groups = _groups(connection)
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
 
-    assert set(groups) == {first, second}
-    assert groups[first] == groups[second]
+    assert len(remaining) == 1
+    survivor = next(iter(remaining))
+    assert survivor in {first, second}
+    assert counts.get(survivor) == 2
 
 
 def test_backfill_treats_missing_and_empty_responses_as_equal():
@@ -276,12 +297,29 @@ def test_backfill_treats_missing_and_empty_responses_as_equal():
             connection, finding_id, _add_variant(connection, project_id),
             responses=[])
 
-        migration.backfill_groups(connection)
+        _run_backfill(connection)
 
-        groups = _groups(connection)
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
 
-    assert set(groups) == {first, second}
-    assert groups[first] == groups[second]
+    assert len(remaining) == 1
+    survivor = next(iter(remaining))
+    assert survivor in {first, second}
+    assert counts.get(survivor) == 2
+
+
+def test_upgrade_aborts_on_an_assessment_with_no_finding():
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as connection:
+        _build_schema(connection)
+        connection.execute(sa.text(
+            "INSERT INTO assessments (id, origin, status, timestamp,"
+            " finding_id, variant_id) VALUES (:id, 'custom', 'affected',"
+            " :ts, NULL, NULL)"
+        ), {"id": _new_id(), "ts": SHARED_TIMESTAMP})
+
+        with pytest.raises(RuntimeError, match="no valid target"):
+            migration.backfill_targets(connection)
 
 
 def test_responses_key_normalizes_equivalent_encodings():
