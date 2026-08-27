@@ -1989,6 +1989,15 @@ describe('Review page AI review column', () => {
         expect(await screen.findByTitle('1 differ · 1 not reviewed')).toBeInTheDocument();
     });
 
+    test('centres the verdict flags in the cell', async () => {
+        mockNetwork(groupedAssessments, { reviews: { 'assess-1': differsReview } });
+
+        render(<Review projectId="proj1" />);
+
+        const flags = await screen.findByTitle('1 differ · 1 not reviewed');
+        expect(flags.parentElement).toHaveClass('justify-center');
+    });
+
     test('a group whose members were reviewed differently reports both verdicts', async () => {
         // Group members share the assessment text but target different
         // variants/packages, so they are reviewed independently and may disagree.

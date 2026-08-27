@@ -1256,44 +1256,46 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.display({
             id: "ai_review",
-            header: "AI review",
+            header: () => <div className="flex items-center justify-center">AI review</div>,
             cell: ({ row }) => {
                 const summary = summarizeReviews(row.original.assessment_ids, reviews);
                 const title = describeReviewSummary(summary);
+                const pending = summary.total - summary.reviewed;
+                const singleVerdict = summary.total === 1
+                    ? verdictOf(reviews[row.original.assessment_ids[0]])
+                    : null;
+                let content;
                 if (summary.reviewed === 0) {
-                    return <span title={title} className="text-gray-500">—</span>;
-                }
+                    content = <span title={title} className="text-gray-500">—</span>;
                 // A single-target row has exactly one verdict, so keep the plain
                 // symbol. Groups get per-verdict counts, because their members
                 // were reviewed against different variant/package contexts and
                 // may legitimately disagree with each other.
-                if (summary.total === 1) {
-                    const verdict = verdictOf(reviews[row.original.assessment_ids[0]]);
-                    if (verdict === "agrees") {
-                        return <span title={title} className="text-green-400">✓</span>;
-                    }
-                    if (verdict === "stale") {
-                        return <span title={title} className="text-amber-400">⚠ stale</span>;
-                    }
-                    return <span title={title} className="text-amber-400">⚠</span>;
+                } else if (singleVerdict === "agrees") {
+                    content = <span title={title} className="text-green-400">✓</span>;
+                } else if (singleVerdict === "stale") {
+                    content = <span title={title} className="text-amber-400">⚠ stale</span>;
+                } else if (singleVerdict !== null) {
+                    content = <span title={title} className="text-amber-400">⚠</span>;
+                } else {
+                    content = (
+                        <span title={title} className="inline-flex items-center gap-1.5 text-sm">
+                            {summary.agrees > 0 && (
+                                <span className="text-green-400">✓{summary.agrees}</span>
+                            )}
+                            {summary.differs > 0 && (
+                                <span className="text-amber-400">⚠{summary.differs}</span>
+                            )}
+                            {summary.stale > 0 && (
+                                <span className="text-amber-400">⚠{summary.stale} stale</span>
+                            )}
+                            {pending > 0 && (
+                                <span className="text-gray-500">—{pending}</span>
+                            )}
+                        </span>
+                    );
                 }
-                const pending = summary.total - summary.reviewed;
-                return (
-                    <span title={title} className="inline-flex items-center gap-1.5 text-sm">
-                        {summary.agrees > 0 && (
-                            <span className="text-green-400">✓{summary.agrees}</span>
-                        )}
-                        {summary.differs > 0 && (
-                            <span className="text-amber-400">⚠{summary.differs}</span>
-                        )}
-                        {summary.stale > 0 && (
-                            <span className="text-amber-400">⚠{summary.stale} stale</span>
-                        )}
-                        {pending > 0 && (
-                            <span className="text-gray-500">—{pending}</span>
-                        )}
-                    </span>
-                );
+                return <div className="flex items-center justify-center h-full">{content}</div>;
             },
         }),
         columnHelper.display({
