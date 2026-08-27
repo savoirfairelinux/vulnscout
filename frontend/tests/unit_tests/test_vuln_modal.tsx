@@ -4157,8 +4157,7 @@ describe("VulnModal AI review block", () => {
         expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument();
     });
 
-    test("discarding a review removes the block", async () => {
-        // Arrange
+    test("discarding a review removes the block", async () => {        // Arrange
         mockReviews({ "assess-1": review });
         const removeSpy = jest.spyOn(AssessmentReviews, "remove").mockResolvedValue(undefined);
 
