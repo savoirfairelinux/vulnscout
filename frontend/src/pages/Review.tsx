@@ -13,7 +13,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import AssessmentReviews, { verdictOf, summarizeReviews, describeReviewSummary } from "../handlers/assessmentReviews";
-import type { AssessmentReview } from "../handlers/assessmentReviews";
+import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -118,11 +118,28 @@ const COPIED_FEEDBACK_MS = 2000;
 const rowCopyKey = (row: ReviewRow) =>
     row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
 
-/** The reviews attached to a row's assessments. Members are reviewed
- *  independently — they share the assessment text but not the variant/package
- *  context — so a row can hold several, or none at all. */
-const rowReviews = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
-    row.assessment_ids.map(id => reviews[id]).filter((r): r is AssessmentReview => Boolean(r));
+/** The AI review filter's options: one label per verdict an assessment can
+ *  carry. Group members are reviewed independently, so a single row can hold
+ *  several of these at once. */
+const AI_REVIEW_LABELS: Record<ReviewVerdict, string> = {
+    agrees: 'AI review agreed',
+    differs: 'AI review differed',
+    stale: 'AI review stale',
+    none: 'No AI review',
+};
+
+const aiReviewList = [
+    AI_REVIEW_LABELS.agrees,
+    AI_REVIEW_LABELS.differs,
+    AI_REVIEW_LABELS.stale,
+    AI_REVIEW_LABELS.none,
+];
+
+/** Every AI review label a row carries. An assessment without a review counts
+ *  as "No AI review", so a partly reviewed group matches both its verdicts and
+ *  the unreviewed option. */
+const rowAiReviewLabels = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
+    new Set(row.assessment_ids.map(id => AI_REVIEW_LABELS[verdictOf(reviews[id])]));
 
 /** Copies a row's group/assessment id. The confirmation swaps the icon for a
  *  checkmark in place rather than adding a label, so the button keeps its width
@@ -220,8 +237,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [selectedAiReviews, setSelectedAiReviews] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
-    const [showOnlyReviewed, setShowOnlyReviewed] = useState(false);
     const [reviews, setReviews] = useState<Record<string, AssessmentReview>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
@@ -481,7 +498,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
             return false;
         }
-        if (showOnlyReviewed && !rowReviews(a, reviews).length) return false;
+        if (selectedAiReviews.length) {
+            const labels = rowAiReviewLabels(a, reviews);
+            if (!selectedAiReviews.some(label => labels.has(label))) return false;
+        }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -493,7 +513,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated, showOnlyReviewed, reviews]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedAiReviews, showOnlyOutdated, reviews]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -516,6 +536,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
+        setSelectedAiReviews([]);
         setShowOnlyOutdated(false);
     };
 
@@ -1628,6 +1649,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             setSelected={setSelectedJustifications}
                         />
 
+                        {activeTab === 'assessments' && (
+                            <FilterOption
+                                label="AI review"
+                                options={aiReviewList}
+                                selected={selectedAiReviews}
+                                setSelected={setSelectedAiReviews}
+                            />
+                        )}
+
                         {hasSupplierInfo && (
                             <FilterOption
                                 label="Supplier"
@@ -1642,13 +1672,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             setEnabled={setShowOnlyOutdated}
                             label="Outdated"
                         />
-                        {activeTab === 'assessments' && (
-                            <ToggleSwitch
-                                enabled={showOnlyReviewed}
-                                setEnabled={setShowOnlyReviewed}
-                                label="Reviewed"
-                            />
-                        )}
                         <div className="flex items-center mx-3">
                             <div className="border-l h-8 dark:border-neutral-300"></div>
                         </div>
