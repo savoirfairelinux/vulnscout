@@ -597,6 +597,11 @@ class TestOutdatedFlag:
                 finding_id=finding.id,
                 variant_id=VARIANT_ID,
             ))
+            # Direct construction bypasses Assessment.create()'s dual write, so
+            # the target row that makes this assessment reachable through
+            # assessment_targets must be added explicitly.
+            _db.session.add(AssessmentTarget(
+                assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
             _db.session.commit()
 
         preview = self.client.get("/api/orphaned-vulnerabilities")
@@ -659,9 +664,11 @@ class TestOutdatedFlag:
             vulnerabilities = []
             findings = []
             assessments = []
+            assessment_targets = []
             for index in range(candidate_count):
                 vulnerability_id = f"CVE-2099-{index:05d}"
                 finding_id = uuid.UUID(int=index + 1000)
+                assessment_id = uuid.UUID(int=index + 2000)
                 vulnerabilities.append(Vulnerability(
                     id=vulnerability_id,
                     description="Batched orphan",
@@ -673,15 +680,22 @@ class TestOutdatedFlag:
                     vulnerability_id=vulnerability_id,
                 ))
                 assessments.append(Assessment(
-                    id=uuid.UUID(int=index + 2000),
+                    id=assessment_id,
                     origin="custom",
                     status="not_affected",
                     finding_id=finding_id,
                     variant_id=VARIANT_ID,
                 ))
+                # Direct construction bypasses Assessment.create()'s dual
+                # write, so the target row that makes each assessment
+                # reachable through assessment_targets must be added
+                # explicitly.
+                assessment_targets.append(AssessmentTarget(
+                    assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=finding_id))
             _db.session.add_all(vulnerabilities)
             _db.session.add_all(findings)
             _db.session.add_all(assessments)
+            _db.session.add_all(assessment_targets)
             _db.session.commit()
 
         preview = self.client.get("/api/orphaned-vulnerabilities")
@@ -824,6 +838,57 @@ class TestHelperEdgeCases:
         dicts = [self._base_dict(packages=[])]
         self._annotate(dicts)
         assert dicts[0]["outdated"] is False
+
+    def _make_target_only_dict(self, finding_pkg_name, finding_pkg_version):
+        """Persist a genuine multi-target assessment (no scalar variant_id/
+        finding_id — as Assessment.create(targets=[...]) alone leaves them)
+        and return the plain dict a scalar-less to_dict() would produce for it."""
+        from src.extensions import db as _db2
+        from src.models.assessment import Assessment
+        from src.models.assessment_target import AssessmentTarget
+        from src.models.package import Package
+
+        with self.app.app_context():
+            pkg = _db2.session.execute(
+                _db2.select(Package).where(
+                    Package.name == finding_pkg_name, Package.version == finding_pkg_version)
+            ).scalar_one()
+            finding = _db2.session.execute(
+                _db2.select(Finding).where(
+                    Finding.package_id == pkg.id, Finding.vulnerability_id == CVE_ID)
+            ).scalar_one()
+            assessment_id = uuid.uuid4()
+            _db2.session.add(Assessment(
+                id=assessment_id, status="not_affected", origin="custom", source="analyst",
+                status_notes="", justification="", impact_statement="", responses=[], workaround="",
+            ))
+            _db2.session.add(AssessmentTarget(
+                assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
+            _db2.session.commit()
+        return {
+            "id": str(assessment_id),
+            "origin": "custom",
+            "vuln_id": CVE_ID,
+            "packages": [],
+            "variant_id": None,
+        }
+
+    def test_multi_target_assessment_with_no_scalar_variant_is_still_checked(self):
+        """A genuine multi-target assessment (no scalar variant_id/packages)
+        resolves its variant and package from AssessmentTarget rows instead
+        of being skipped outright."""
+        d = self._make_target_only_dict("firefox", "1.0")
+        self._annotate([d])
+        assert d["outdated"] is True
+        assert d["superseded_by"] == ["firefox@2.0"]
+        assert d["stale_packages"] == ["firefox@1.0"]
+
+    def test_multi_target_assessment_with_no_scalar_variant_stays_current(self):
+        """Same fallback path, but the targeted package is still active."""
+        d = self._make_target_only_dict("firefox", "2.0")
+        self._annotate([d])
+        assert d["outdated"] is False
+        assert d["superseded_by"] == []
 
     def test_mixed_current_and_stale_packages_is_current(self):
         """A name referenced at several versions stays current while any is active."""
