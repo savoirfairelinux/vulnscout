@@ -35,6 +35,7 @@ from ._assessment_group import (
     index_group_rows,
     parse_reconcile_payload,
     resolve_package,
+    resolve_target_set,
     resolve_targets,
     validate_assessment_findings,
     validate_deletions,
@@ -1255,7 +1256,8 @@ def init_app(app: Flask) -> None:
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:
-        """Create one or more custom assessments for a vulnerability.
+        """Create one custom assessment for a vulnerability, across every
+        selected (package, variant) combo.
 
         OpenAPI:
         body JsonObject optional Assessment creation payload.
@@ -1280,25 +1282,34 @@ def init_app(app: Flask) -> None:
         if not isinstance(assessment, DBAssessment):
             return {"error": "Internal error"}, 500
 
-        # Resolve variant_id once — same for all packages in this request
-        variant_id_raw = payload_data.get('variant_id') or None
-        if not variant_id_raw:
+        # Resolve the effective variant id list: variant_ids (plural) takes
+        # priority when present; otherwise fall back to the legacy singular
+        # variant_id wrapped in a one-element list.
+        raw_variant_ids = payload_data.get("variant_ids")
+        if not (isinstance(raw_variant_ids, list) and raw_variant_ids):
+            single = payload_data.get("variant_id") or None
+            raw_variant_ids = [single] if single else []
+        if not raw_variant_ids:
             return {"error": "variant_id is required"}, 400
-        variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-        if err:
-            return err
-        if variant_id is None:
-            return {"error": "Invalid variant_id"}, 400
+
+        variant_ids: list[UUID] = []
+        for raw in raw_variant_ids:
+            parsed, err = parse_uuid_or_400(raw, "variant_id")
+            if err:
+                return err
+            if parsed is None:
+                return {"error": "Invalid variant_id"}, 400
+            variant_ids.append(parsed)
 
         ai_generated = bool(payload_data.get("ai_generated"))
         target_origin = "ai" if ai_generated else "custom"
-        if ai_generated and _has_pending_ai(vuln_id, variant_id):
+        if ai_generated and any(_has_pending_ai(vuln_id, vid) for vid in variant_ids):
             return {"error": "A pending AI assessment already exists for this variant"}, 409
 
-        # Persist to DB — one Assessment record per package
-        # Use a single timestamp so grouped rows share the exact same value.
-        # Prefer the timestamp from the payload (allows frontend to synchronise
-        # across multiple requests); fall back to server time.
+        # Use a single timestamp so the created row's own targets (and any
+        # sibling row a caller correlates by timestamp) share the exact same
+        # value. Prefer the timestamp from the payload (allows frontend to
+        # synchronise across multiple requests); fall back to server time.
         from datetime import datetime as _dt, timezone as _tz
         shared_timestamp = getattr(assessment, 'timestamp', None) or _dt.now(_tz.utc)
 
@@ -1318,13 +1329,11 @@ def init_app(app: Flask) -> None:
                 + ". Assessments can only be written for existing packages."
             }, 400
 
-        valid_findings, invalid_findings = validate_assessment_findings(
-            resolved_packages, vuln_id, variant_id
-        )
-        if invalid_findings:
+        resolved, unobserved = resolve_target_set(resolved_packages, vuln_id, variant_ids)
+        if unobserved:
             return {
                 "error": "Invalid package version for vulnerability and variant: "
-                + ", ".join(invalid_findings)
+                + ", ".join(unobserved)
             }, 400
 
         requested_group_id: UUID | None = None
@@ -1340,30 +1349,21 @@ def init_app(app: Flask) -> None:
                 if (existing_group_rows[0].vuln_id or "").upper() != vuln_id.upper():
                     return {"error": "vuln_id does not match this group's vulnerability"}, 400
 
-        created_rows: list[DBAssessment] = []
+        targets = [(variant_id, finding.id) for (_pkg, variant_id), finding in resolved.items()]
+
         try:
             with batch_session():
-                for db_pkg in resolved_packages:
-                    finding = valid_findings[db_pkg.id]
-                    # Always create a new record — never merge with an existing one.
-                    # from_vuln_assessment does a find-or-update which would overwrite
-                    # previous user assessments on the same (finding, variant).
-                    db_a = create_assessment_record(
-                        assessment, [(variant_id, finding.id)], timestamp=shared_timestamp,
-                        origin=target_origin)
-                    created_rows.append(db_a)
+                # Always create a new record — never merge with an existing
+                # one. from_vuln_assessment does a find-or-update which would
+                # overwrite previous user assessments on the same target set.
+                db_a = create_assessment_record(
+                    assessment, targets, timestamp=shared_timestamp, origin=target_origin)
         except GroupInvariantError as e:
             return {"error": str(e)}, 400
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
 
-        # group_id is the row's own id, so no preload step is needed to
-        # serialize it.
-        created = [row.to_dict() for row in created_rows]
-
-        if not created:
-            return {"error": "No valid package found"}, 400
-
+        created = [db_a.to_dict()]
         response_body = {"status": "success", "assessments": created, "assessment": created[0]}
         return response_body, 200
 

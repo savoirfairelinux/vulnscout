@@ -533,11 +533,9 @@ def test_delete_assessment_not_found(client):
     assert data["error"] == "Assessment not found"
 
 
-def test_multi_package_assessment_creates_a_group_per_package(client, demo_ids):
-    """Grouping is now storage, not inference: a multi-package write still
-    creates one row per package (unmigrated in this phase), and each row is
-    its own group — rows that merely arrived in the same request are no
-    longer fused at read time."""
+def test_multi_package_assessment_is_one_row_with_two_targets(client, demo_ids):
+    """A multi-package write for one variant creates ONE Assessment row,
+    with one AssessmentTarget per package — never one row per package."""
     response = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -550,10 +548,59 @@ def test_multi_package_assessment_creates_a_group_per_package(client, demo_ids):
 
     assert response.status_code == 200
     body = response.get_json()
-    assert len(body["assessments"]) == 2
-    group_ids = {a["group_id"] for a in body["assessments"]}
-    assert None not in group_ids
-    assert group_ids == {a["id"] for a in body["assessments"]}
+    assert len(body["assessments"]) == 1
+    row = body["assessments"][0]
+    assert row["group_id"] == row["id"]
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+    assert row["variant_ids"] == [demo_ids["variant_id"]]
+
+
+def test_multi_variant_assessment_is_one_row_covering_every_variant(client, demo_ids):
+    """Selecting multiple variants for one CVE in one create action still
+    creates exactly ONE Assessment row, with one target per (package,
+    variant) combo an observation actually recorded."""
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["assessments"]) == 1
+    row = body["assessments"][0]
+    assert row["group_id"] == row["id"]
+    # Spans more than one variant -> the collapsed singular field is null,
+    # but the full set is exposed via variant_ids.
+    assert row["variant_id"] is None
+    assert sorted(row["variant_ids"]) == sorted([demo_ids["variant_id"], demo_ids["other_variant_id"]])
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+
+
+def test_multi_variant_assessment_rejects_a_package_unobserved_everywhere(client, demo_ids):
+    from src.models.package import Package
+    from src.extensions import db
+
+    with client.application.app_context():
+        stray = Package.find_or_create("does-not-exist", "9.9.9")
+        db.session.commit()
+
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [demo_ids["two_packages"][0], "does-not-exist@9.9.9"],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "does-not-exist@9.9.9" in response.get_data(as_text=True)
 
 
 def test_single_package_assessment_is_its_own_group(client, demo_ids):
