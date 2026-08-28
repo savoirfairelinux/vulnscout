@@ -132,10 +132,12 @@ const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJs
  * `build_groups()`): assessments sharing an explicit `group_id` collapse into
  * one group; everything else becomes its own singleton group (bucketed by
  * array index, not `id`, since a couple of fixtures below intentionally reuse
- * the same literal id for two unrelated rows). `vuln_texts` is looked up from
- * whichever fixture (across both the custom and AI lists) carries it for that
- * vuln_id, mirroring how the real route enriches groups from the Vulnerability
- * model rather than from any one assessment row.
+ * the same literal id for two unrelated rows), and its `group_id` in the
+ * response is the singleton member's own assessment id, matching how the
+ * real endpoint always sets `group_id` to `assessment.id`. `vuln_texts` is
+ * looked up from whichever fixture (across both the custom and AI lists)
+ * carries it for that vuln_id, mirroring how the real route enriches groups
+ * from the Vulnerability model rather than from any one assessment row.
  */
 function toAssessmentGroups(list: any[], vulnTextsMap: Record<string, unknown[]>): any[] {
     const buckets = new Map<string, any[]>();
@@ -155,7 +157,7 @@ function toAssessmentGroups(list: any[], vulnTextsMap: Record<string, unknown[]>
             assessment_id: m.id,
         })));
         groups.push({
-            group_id: key.startsWith('g:') ? head.group_id : null,
+            group_id: key.startsWith('g:') ? head.group_id : head.id,
             vuln_id: head.vuln_id,
             status: head.status,
             simplified_status: STATUS_VEX_TO_GRAPH[head.status] ?? `[invalid status] ${head.status}`,
@@ -687,7 +689,7 @@ describe('Review — AI Assessments tab', () => {
         await screen.findByText('No AI-generated assessments found');
     });
 
-    test('approving an ungrouped pending AI row promotes it to a group, then approves that group', async () => {
+    test('approving a pending AI row calls the group approve endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -697,15 +699,15 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Approve AI suggestion'));
 
         await screen.findByText('AI assessment approved!');
-        // The deleted per-assessment approve route no longer exists; the
-        // frontend must mint a real group id first (lazy promotion) and
-        // then call the group-scoped approve endpoint with it.
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/approve'))).toBe(true);
+        // group_id is always the assessment's own id, so approving never
+        // needs the lazy-promotion route — it can call the group-scoped
+        // endpoint directly.
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(false);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/ai1/approve'))).toBe(true);
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(false);
     });
 
-    test('rejecting an ungrouped pending AI row promotes it to a group, then rejects that group', async () => {
+    test('rejecting a pending AI row calls the group reject endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -715,8 +717,8 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Reject AI suggestion'));
 
         await screen.findByText('AI assessment rejected.');
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/reject'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(false);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/ai1/reject'))).toBe(true);
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(false);
     });
 
@@ -1475,7 +1477,7 @@ describe('Review — deleting an assessment', () => {
 
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessments/a1'),
+                expect.stringContaining('/api/assessment-groups/a1'),
                 expect.objectContaining({ method: 'DELETE' }),
             );
         });
@@ -1489,18 +1491,19 @@ describe('Review — deleting an assessment', () => {
         await user.click(await screen.findByText('AI Assessments'));
         await selectFirstTableRow(user);
 
+        // group_id is always the assessment's own id, so bulk rejection never
+        // needs the lazy-promotion route — it can call the group-scoped
+        // endpoint directly.
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessments/ai-1/group'),
+                expect.stringContaining('/api/assessment-groups/ai-1/reject'),
                 expect.objectContaining({ method: 'POST' }),
             );
         });
-        await waitFor(() => {
-            expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessment-groups/promoted-group-id/reject'),
-                expect.objectContaining({ method: 'POST' }),
-            );
-        });
+        expect(fetchMock).not.toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/ai-1/group'),
+            expect.anything(),
+        );
     });
 
     test('bulk deletion removes selected time estimates', async () => {
@@ -1546,7 +1549,7 @@ describe('Review — deleting an assessment', () => {
 
         await screen.findByText('Assessment deleted successfully!');
         expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
+            expect.stringContaining('/api/assessment-groups/a1'),
             expect.objectContaining({ method: 'DELETE' })
         );
         expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ type: 'delete', vulnId: 'CVE-2020-1111' }));
