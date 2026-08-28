@@ -42,6 +42,25 @@ type Assessment = {
 
 export type { Assessment };
 
+/** Every variant this assessment applies to.
+ *
+ *  ``variant_ids`` carries the full target set.  ``variant_id`` is only a
+ *  convenience shorthand the API fills in when every target shares one
+ *  variant, so it is ``null`` for a genuine cross-variant assessment and must
+ *  never be used on its own to decide which variants an assessment covers.
+ *  Falls back to ``variant_id`` for payloads that predate ``variant_ids``.
+ */
+const assessmentVariantIds = (assessment: Assessment): string[] => {
+    if (assessment.variant_ids && assessment.variant_ids.length > 0) return assessment.variant_ids;
+    return assessment.variant_id ? [assessment.variant_id] : [];
+};
+
+/** True when *assessment* targets *variantId*. */
+const appliesToVariant = (assessment: Assessment, variantId: string): boolean =>
+    assessmentVariantIds(assessment).includes(variantId);
+
+export { assessmentVariantIds, appliesToVariant };
+
 type AssessmentTarget = {
     variant_id: string | null;
     package: string;
@@ -204,7 +223,8 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
             assessment.workaround || ''
         ].join('|');
 
-        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}::${assessment.variant_id ?? ''}`;
+        const variantsKey = assessmentVariantIds(assessment).slice().sort().join(',');
+        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}::${variantsKey}`;
 
         if (!seen.has(duplicateKey)) {
             seen.add(duplicateKey);

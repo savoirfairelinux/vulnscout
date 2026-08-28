@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment, AssessmentGroup, AssessmentTarget } from "../handlers/assessments";
-import Assessments, { asAssessment, isMultiTargetGroup } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTargetGroup, appliesToVariant } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -234,7 +234,7 @@ type VariantScopedSnapshot = {
             if (Array.isArray(data)) {
                 const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
                 const scopedAssessments = variantId
-                    ? fullAssessments.filter(a => a.variant_id === variantId)
+                    ? fullAssessments.filter(a => appliesToVariant(a, variantId))
                     : fullAssessments;
                 vuln.assessments = scopedAssessments;
                 setAllVulnAssessments(fullAssessments);
@@ -1123,7 +1123,7 @@ type VariantScopedSnapshot = {
         : buildFallbackGroups(effectiveAssessments.filter(assessment => assessment.origin !== 'ai'));
 
     const pendingAiAssessments = allVulnAssessments.filter(a =>
-        a.origin === "ai" && (!variantId || a.variant_id === variantId));
+        a.origin === "ai" && (!variantId || appliesToVariant(a, variantId)));
     const aiRealGroups = assessmentGroups.filter(g =>
         g.origin === 'ai' && (!variantId || g.targets.some(t => t.variant_id === variantId)));
     const aiGroups = aiRealGroups.length > 0
@@ -1132,7 +1132,7 @@ type VariantScopedSnapshot = {
 
     const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
         allVulnAssessments
-            .filter(a => a.origin !== "ai" && a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
+            .filter(a => a.origin !== "ai" && appliesToVariant(a, variantIdValue) && (pkg === null || a.packages.includes(pkg)))
             .reduce<Assessment | null>((best, a) => {
                 if (!best) return a;
                 return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
@@ -1149,7 +1149,7 @@ type VariantScopedSnapshot = {
         // now-deprecated versions that are no longer in the active SBOM.
         const assessmentPkgs = [...new Set(
             allVulnAssessments
-                .filter(a => a.origin !== "ai" && a.variant_id === variant.id)
+                .filter(a => a.origin !== "ai" && appliesToVariant(a, variant.id))
                 .flatMap(a => a.packages)
         )];
         const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];

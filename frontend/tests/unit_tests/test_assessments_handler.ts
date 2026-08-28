@@ -2,7 +2,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments, isMultiTargetGroup } from '../../src/handlers/assessments';
+import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments, isMultiTargetGroup, assessmentVariantIds, appliesToVariant } from '../../src/handlers/assessments';
 import type { AssessmentTarget } from '../../src/handlers/assessments';
 
 describe('asStringArray', () => {
@@ -197,6 +197,14 @@ describe('removeDuplicateAssessments', () => {
   test('key includes variant_id', () => {
     const a1 = makeAssessment({ variant_id: 'v1' });
     const a2 = makeAssessment({ variant_id: 'v2' });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(2);
+  });
+
+  test('key distinguishes assessments covering different variant sets', () => {
+    // Both have variant_id === null (no single shared variant), so keying on
+    // variant_id alone would fuse two genuinely different assessments.
+    const a1 = makeAssessment({ variant_ids: ['v1', 'v2'] });
+    const a2 = makeAssessment({ variant_ids: ['v1', 'v3'] });
     expect(removeDuplicateAssessments([a1, a2])).toHaveLength(2);
   });
 
@@ -422,5 +430,40 @@ describe('asAssessment outdated flag', () => {
     };
     const result = asAssessment(data as any) as any;
     expect(result.superseded_map).toEqual({ 'firefox@1.0': ['firefox@2.0'] });
+  });
+});
+
+describe('assessmentVariantIds / appliesToVariant', () => {
+  const make = (overrides: any = {}) => ({
+    id: 'a1',
+    vuln_id: 'CVE-2024-1',
+    packages: [],
+    origin: 'custom',
+    status: 'fixed',
+    simplified_status: 'Fixed',
+    timestamp: '2024-01-01T00:00:00',
+    responses: [],
+    ...overrides,
+  });
+
+  test('prefers variant_ids over the variant_id shorthand', () => {
+    const a = make({ variant_id: undefined, variant_ids: ['v1', 'v2'] });
+    expect(assessmentVariantIds(a)).toEqual(['v1', 'v2']);
+    expect(appliesToVariant(a, 'v1')).toBe(true);
+    expect(appliesToVariant(a, 'v2')).toBe(true);
+    expect(appliesToVariant(a, 'v3')).toBe(false);
+  });
+
+  test('falls back to variant_id when variant_ids is absent', () => {
+    const a = make({ variant_id: 'v1' });
+    expect(assessmentVariantIds(a)).toEqual(['v1']);
+    expect(appliesToVariant(a, 'v1')).toBe(true);
+    expect(appliesToVariant(a, 'v2')).toBe(false);
+  });
+
+  test('an assessment with no variant at all matches nothing', () => {
+    const a = make({ variant_id: undefined, variant_ids: [] });
+    expect(assessmentVariantIds(a)).toEqual([]);
+    expect(appliesToVariant(a, 'v1')).toBe(false);
   });
 });
