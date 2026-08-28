@@ -33,12 +33,25 @@ current while any of those versions is still active.
 Non-custom assessments (scanner / SBOM origin) are left unchanged — they are
 regenerated from scratch on every scan.
 
+Multi-target assessments
+-------------------------
+Most callers still populate a scalar ``variant_id``/``packages`` pair per
+dict (``Assessment.to_dict()`` dual-writes them alongside the real targets),
+and that pair is used directly.  A genuine multi-target assessment (created
+via ``Assessment.create(targets=[...])`` with no scalar finding/variant) has
+no such pair to read, so its variants and packages are instead resolved from
+its ``AssessmentTarget`` rows — one group per variant it actually targets, so
+staleness is evaluated, and ``stale_packages``/``superseded_by`` accumulate,
+per target rather than being skipped outright.
+
 Performance
 -----------
-The annotation always executes exactly **three** SQL queries regardless of
-how many variants appear in the input list.  Earlier versions ran 3 queries
-per variant, which was noticeable when a single vulnerability had assessments
-across many variants (e.g. opening VulnModal on a widely-shared CVE).
+The annotation executes exactly **three** SQL queries regardless of how many
+variants appear in the input list, plus **one more** the first time any
+candidate has no scalar ``variant_id`` (to resolve its targets).  Earlier
+versions ran 3 queries per variant, which was noticeable when a single
+vulnerability had assessments across many variants (e.g. opening VulnModal on
+a widely-shared CVE).
 
 Usage
 -----
@@ -56,6 +69,7 @@ import uuid
 from collections import defaultdict
 
 from ..extensions import db
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.observation import Observation
 from ..models.package import Package
@@ -89,10 +103,11 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
       sorted ``"name@version"`` list that supersedes it (empty when not
       outdated).
 
-    The function is a no-op (sets defaults) when there are no custom assessments
-    with a ``variant_id``, so it is safe to call unconditionally.
+    The function is a no-op (sets defaults) when there are no custom
+    assessments, so it is safe to call unconditionally.
 
-    Exactly three SQL queries are issued regardless of the number of variants.
+    Three SQL queries are issued regardless of the number of variants, plus
+    one more the first time a candidate has no scalar ``variant_id``.
     """
     # Always initialise so every dict has predictable keys.
     for d in assessment_dicts:
@@ -101,24 +116,33 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
         d["stale_packages"] = []
         d["superseded_map"] = {}
 
-    # Only custom assessments with a variant scope can be outdated.
-    candidates = [
-        d for d in assessment_dicts
-        if d.get("origin") == "custom" and d.get("variant_id")
-    ]
+    # Only custom assessments can be outdated.
+    candidates = [d for d in assessment_dicts if d.get("origin") == "custom"]
     if not candidates:
         return
 
     # ------------------------------------------------------------------
-    # Validate variant UUIDs and group assessments by variant.
+    # Group assessments by variant.  Each group entry pairs the owning dict
+    # with the package refs to check *for that variant* — almost always the
+    # dict's whole ``packages`` list (an assessment scoped to one variant),
+    # but for a genuine multi-target assessment with no scalar variant this
+    # is the subset of refs belonging to one of its several variants.
     # ------------------------------------------------------------------
-    valid_variants: dict[uuid.UUID, list[dict]] = {}
+    valid_variants: dict[uuid.UUID, list[tuple[dict, list[str]]]] = {}
+    target_only: list[dict] = []
     for d in candidates:
+        variant_id_val = d.get("variant_id")
+        if not variant_id_val:
+            target_only.append(d)
+            continue
         try:
-            vid = uuid.UUID(d["variant_id"])
+            vid = uuid.UUID(variant_id_val)
         except (ValueError, AttributeError, TypeError):
             continue
-        valid_variants.setdefault(vid, []).append(d)
+        valid_variants.setdefault(vid, []).append((d, d.get("packages", [])))
+
+    if target_only:
+        _group_by_resolved_targets(target_only, valid_variants)
 
     if not valid_variants:
         return
@@ -128,11 +152,11 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
     all_referenced_names: set[str] = set()
     all_vuln_ids: set[str] = set()
     for group in valid_variants.values():
-        for d in group:
+        for d, refs in group:
             vuln_id_val = d.get("vuln_id", "")
             if vuln_id_val:
                 all_vuln_ids.add(vuln_id_val)
-            for p in d.get("packages", []):
+            for p in refs:
                 name, _ = _parse_pkg_name_version(p)
                 all_referenced_names.add(name)
 
@@ -248,7 +272,10 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
                     observed_pairs_by_variant[var_id].add((pkg_id, vuln_id))
 
     # ------------------------------------------------------------------
-    # Annotate each assessment using the per-variant indexes.
+    # Annotate each assessment using the per-variant indexes.  A dict may
+    # appear in several groups (one per variant it targets); _annotate_one
+    # accumulates into it rather than overwriting, so results from every
+    # group survive.
     # ------------------------------------------------------------------
     for variant_uuid, group in valid_variants.items():
         if variant_uuid not in sbom_scan_by_variant:
@@ -258,19 +285,81 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
         v_active_pkg_ids = active_pkg_ids_by_nv[variant_uuid]
         v_observed = observed_pairs_by_variant[variant_uuid]
 
-        for d in group:
-            _annotate_one(d, v_active_versions, v_active_pkg_ids, v_observed)
+        for d, refs in group:
+            _annotate_one(d, refs, v_active_versions, v_active_pkg_ids, v_observed)
+
+    # Normalise ordering once, now that every group has contributed.
+    for d in candidates:
+        d["superseded_by"] = sorted(d["superseded_by"])
+        d["stale_packages"] = sorted(d["stale_packages"])
+        for ref, labels in d["superseded_map"].items():
+            d["superseded_map"][ref] = sorted(labels)
+
+
+def _group_by_resolved_targets(
+    dicts: list[dict],
+    valid_variants: dict[uuid.UUID, list[tuple[dict, list[str]]]],
+) -> None:
+    """Resolve variant(s)/package refs for assessments with no scalar ``variant_id``.
+
+    A genuine multi-target assessment (created via ``Assessment.create(targets=
+    [...])`` with no scalar finding/variant kwarg) leaves ``to_dict()``'s
+    ``variant_id``/``packages`` unset, so its reachable packages must be read
+    back from its ``AssessmentTarget`` rows instead.  One query resolves every
+    such assessment at once; refs are grouped per (assessment, variant) so
+    staleness is still evaluated once per variant, matching the scalar path.
+    """
+    dicts_by_id: dict[str, dict] = {}
+    for d in dicts:
+        id_val = d.get("id")
+        if id_val:
+            dicts_by_id[str(id_val)] = d
+    if not dicts_by_id:
+        return
+
+    candidate_ids: list[uuid.UUID] = []
+    for id_str in dicts_by_id:
+        try:
+            candidate_ids.append(uuid.UUID(id_str))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    if not candidate_ids:
+        return
+
+    refs_by_dict_variant: dict[tuple[str, uuid.UUID], list[str]] = defaultdict(list)
+    for assessment_id, variant_id, name, version, supplier in db.session.execute(
+        db.select(
+            AssessmentTarget.assessment_id, AssessmentTarget.variant_id,
+            Package.name, Package.version, Package.supplier,
+        )
+        .join(Finding, Finding.id == AssessmentTarget.finding_id)
+        .join(Package, Package.id == Finding.package_id)
+        .where(AssessmentTarget.assessment_id.in_(candidate_ids))
+    ):
+        ref = f"{name}@{version}"
+        if supplier:
+            ref += f"::{supplier}"
+        refs_by_dict_variant[(str(assessment_id), variant_id)].append(ref)
+
+    for (assessment_id_str, variant_id), refs in refs_by_dict_variant.items():
+        target_dict = dicts_by_id.get(assessment_id_str)
+        if target_dict is None:
+            continue
+        valid_variants.setdefault(variant_id, []).append((target_dict, refs))
 
 
 def _annotate_one(
     d: dict,
+    orig_refs: list[str],
     v_active_versions: dict[str, set[str]],
     v_active_pkg_ids: dict[tuple[str, str], set[uuid.UUID]],
     v_observed: set[tuple[uuid.UUID, str]],
 ) -> None:
-    """Annotate a single assessment dict *d* in-place with staleness info.
+    """Annotate a single assessment dict *d* in-place with staleness info for *orig_refs*.
 
-    Staleness is decided *per package name*.  A name is still current — and
+    Accumulates into *d* (appends, never overwrites) so an assessment checked
+    across several variant groups keeps every group's findings.  Staleness is
+    decided *per package name*.  A name is still current — and
     therefore cannot be superseded — when either a version-less reference
     matches any active version, or one of its assessed versions is still in the
     active SBOM.  A name that is NOT current is superseded when the active SBOM
@@ -279,7 +368,6 @@ def _annotate_one(
     its other packages remain current.
     """
     vuln_id = d.get("vuln_id", "")
-    orig_refs = d.get("packages", [])
     if not orig_refs:
         return
 
@@ -298,9 +386,6 @@ def _annotate_one(
         else:
             versionless_names.add(name)
 
-    superseded_by: list[str] = []
-    stale_packages: list[str] = []
-    superseded_map: dict[str, list[str]] = {}
     for name in set(assessed_versions_by_name) | versionless_names:
         name_superseded_by = _superseding_versions_for_name(
             name,
@@ -313,20 +398,18 @@ def _annotate_one(
         )
         if not name_superseded_by:
             continue
+        d["outdated"] = True
         for label in name_superseded_by:
-            if label not in superseded_by:
-                superseded_by.append(label)
+            if label not in d["superseded_by"]:
+                d["superseded_by"].append(label)
         # Every original reference for this name is now stale.
         for ref in orig_refs_by_name[name]:
-            if ref not in stale_packages:
-                stale_packages.append(ref)
-            superseded_map[ref] = sorted(name_superseded_by)
-
-    if superseded_by:
-        d["outdated"] = True
-        d["superseded_by"] = sorted(superseded_by)
-        d["stale_packages"] = sorted(stale_packages)
-        d["superseded_map"] = superseded_map
+            if ref not in d["stale_packages"]:
+                d["stale_packages"].append(ref)
+            existing = d["superseded_map"].setdefault(ref, [])
+            for label in name_superseded_by:
+                if label not in existing:
+                    existing.append(label)
 
 
 def _superseding_versions_for_name(
