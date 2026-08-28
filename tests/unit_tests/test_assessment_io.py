@@ -998,6 +998,32 @@ class TestCustomDataVersion2:
         assert len(rows) == 1
         assert len(rows[0].targets) == 1
 
+    def test_v2_entry_without_targets_is_reported_not_silently_dropped(self, app, variant_and_project):
+        """A version-2 entry states what it applies to through ``targets``.
+
+        Without them there is nothing to attach the assessment to, so the
+        entry is reported instead of being imported target-less or skipped
+        without a trace.
+        """
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        _make_finding("CVE-2099-NOTGT", "openssl", "")
+        data = {
+            "version": 2,
+            "assessments": [
+                {"vuln_id": "CVE-2099-NOTGT", "status": "affected", "targets": []},
+                {"vuln_id": "CVE-2099-NOTGT", "status": "affected", "targets": "openssl"},
+            ],
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+
+            assert result["assessments_imported"] == 0
+            assert [e["error"] for e in result["errors"]] == [
+                "No targets found", "No targets found"]
+            assert Assessment.get_by_vulnerability("CVE-2099-NOTGT") == []
+
     def test_v2_entry_spanning_two_projects_is_reported_not_silently_created(self, app):
         """A version-2 entry whose targets span two different projects
         violates the one-assessment-one-project invariant: it is reported as

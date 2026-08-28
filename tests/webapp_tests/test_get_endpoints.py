@@ -1411,3 +1411,73 @@ def test_review_assessment_groups_include_vuln_id_and_texts(client, demo_ids, ap
         t["content"] == "a description used for the review tooltip"
         for t in groups[0]["vuln_texts"]
     )
+
+
+def test_assessment_groups_by_vuln_filters_by_project(client, demo_ids):
+    """?project_id keeps only groups with a target in that project.
+
+    A group reaches a project through its targets' variants, so a project that
+    owns none of them must not see it.
+    """
+    import uuid
+
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    owning_project = "11111111-1111-1111-1111-111111111111"
+    kept = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}"
+        f"/assessment-groups?project_id={owning_project}")
+    assert kept.status_code == 200
+    assert any(g["group_id"] == group_id for g in kept.get_json())
+
+    dropped = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}"
+        f"/assessment-groups?project_id={uuid.uuid4()}")
+    assert dropped.status_code == 200
+    assert all(g["group_id"] != group_id for g in dropped.get_json())
+
+
+def test_assessment_groups_by_vuln_rejects_a_non_uuid_project_id(client, demo_ids):
+    response = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}"
+        "/assessment-groups?project_id=not-a-uuid")
+
+    assert response.status_code == 400
+
+
+def test_review_assessment_groups_filter_by_project(client, demo_ids):
+    import uuid
+
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    owning_project = "11111111-1111-1111-1111-111111111111"
+    kept = client.get(
+        f"/api/reviews/assessment-groups?project_id={owning_project}")
+    assert kept.status_code == 200
+    assert any(g["group_id"] == group_id for g in kept.get_json())
+
+    dropped = client.get(f"/api/reviews/assessment-groups?project_id={uuid.uuid4()}")
+    assert dropped.status_code == 200
+    assert all(g["group_id"] != group_id for g in dropped.get_json())
+
+
+def test_review_assessment_groups_reject_a_non_uuid_project_id(client):
+    assert client.get(
+        "/api/reviews/assessment-groups?project_id=not-a-uuid").status_code == 400
