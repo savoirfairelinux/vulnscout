@@ -12,6 +12,7 @@ unreferenced everywhere.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from typing import Any, TypeVar, cast
 import uuid
@@ -442,6 +443,76 @@ def _delete_orphaned_packages(package_pairs: set[StalePackagePair]) -> int:
     return len(ids)
 
 
+def _split_outdated_by_target(
+    outdated_assessments: list[dict],
+) -> tuple[list[uuid.UUID], list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]]:
+    """Split outdated assessments into whole-record and per-target deletions.
+
+    ``annotate_assessments_outdated`` flags an assessment as soon as *one* of
+    its package names is superseded, but an assessment now covers many
+    ``(variant, finding)`` targets.  Deleting the whole record would throw away
+    the analyst's verdict for the targets that are still current, so the stale
+    targets are identified individually here.
+
+    Returns ``(fully_stale_assessment_ids, stale_targets)`` where the first
+    list holds assessments whose every target is superseded (safe to delete
+    outright, which also keeps the behaviour of the single-target era) and the
+    second holds the ``(assessment_id, variant_id, finding_id)`` triples to
+    strip from assessments that survive.
+    """
+    ids = [assessment["uuid"] for assessment in outdated_assessments]
+    if not ids:
+        return [], []
+
+    stale_pairs: dict[uuid.UUID, set[tuple[uuid.UUID, str]]] = {}
+    for assessment in outdated_assessments:
+        pairs: set[tuple[uuid.UUID, str]] = set()
+        for target in assessment.get("stale_targets") or []:
+            try:
+                pairs.add((uuid.UUID(target["variant_id"]), target["package_name"]))
+            except (ValueError, AttributeError, TypeError, KeyError):
+                continue
+        stale_pairs[assessment["uuid"]] = pairs
+
+    # Every target of every outdated assessment, with the package name the
+    # staleness verdict was keyed on.
+    all_targets: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, str]]] = defaultdict(list)
+    for id_chunk in _chunked(ids):
+        for assessment_id, variant_id, finding_id, name in db.session.execute(
+            db.select(
+                AssessmentTarget.assessment_id, AssessmentTarget.variant_id,
+                AssessmentTarget.finding_id, Package.name,
+            )
+            .join(Finding, Finding.id == AssessmentTarget.finding_id)
+            .join(Package, Package.id == Finding.package_id)
+            .where(AssessmentTarget.assessment_id.in_(id_chunk))
+        ):
+            all_targets[assessment_id].append((variant_id, finding_id, name))
+
+    fully_stale: list[uuid.UUID] = []
+    partial: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
+    for assessment_id in ids:
+        targets = all_targets.get(assessment_id, [])
+        pairs = stale_pairs.get(assessment_id, set())
+        # No resolvable targets, or no per-target detail to act on: fall back
+        # to deleting the record, matching the pre-multi-target behaviour.
+        if not targets or not pairs:
+            fully_stale.append(assessment_id)
+            continue
+        stale = [
+            (variant_id, finding_id)
+            for variant_id, finding_id, name in targets
+            if (variant_id, name) in pairs
+        ]
+        if len(stale) >= len(targets):
+            fully_stale.append(assessment_id)
+            continue
+        partial.extend(
+            (assessment_id, variant_id, finding_id) for variant_id, finding_id in stale
+        )
+    return fully_stale, partial
+
+
 def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict[str, int]:
     """Delete every package observation and custom assessment marked outdated.
 
@@ -473,12 +544,20 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
             for assessment in outdated_assessments
             for finding_id in assessment["finding_ids"]
         }
+        fully_stale_ids, partially_stale = _split_outdated_by_target(outdated_assessments)
+        # An assessment whose targets are only partly superseded keeps its
+        # verdict for the targets that are still current: drop the stale
+        # targets one by one and leave the record itself alone.
+        targets_removed = 0
+        for assessment_id, variant_id, finding_id in partially_stale:
+            if remove_target(assessment_id, variant_id, finding_id):
+                targets_removed += 1
         # Bulk DELETE bypasses the ORM's cascade="all, delete-orphan" on
         # Assessment.target_rows (sqlite foreign_keys stay off), so the
         # target rows for these assessments are cleared explicitly first —
         # otherwise they'd be left dangling, pointing at a deleted assessment.
-        _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, outdated_assessment_ids)
-        _delete_in_chunks(Assessment, Assessment.id, outdated_assessment_ids)
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, fully_stale_ids)
+        _delete_in_chunks(Assessment, Assessment.id, fully_stale_ids)
         _delete_in_chunks(Observation, Observation.id, stale_observation_ids)
         sbom_packages_deleted, sbom_observations_deleted = _delete_stale_sbom_records(stale_package_pairs)
         sbom_observations_deleted += _delete_superseded_packageless_sbom_observations()
@@ -493,7 +572,8 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
     invalidate_scan_list_cache()
 
     return {
-        "assessments_deleted": len(outdated_assessment_ids),
+        "assessments_deleted": len(fully_stale_ids),
+        "assessment_targets_removed": targets_removed,
         "observations_deleted": len(stale_observation_ids),
         "sbom_packages_deleted": sbom_packages_deleted,
         "sbom_observations_deleted": sbom_observations_deleted,

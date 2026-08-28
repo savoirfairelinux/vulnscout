@@ -102,6 +102,10 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
     - ``"superseded_map"``: mapping of each stale package reference to the
       sorted ``"name@version"`` list that supersedes it (empty when not
       outdated).
+    - ``"stale_targets"``: the ``{"variant_id", "package_name"}`` pairs that
+      actually went stale (empty when not outdated).  An assessment can target
+      several variants and only some of them go stale, so cleanup uses this to
+      drop just the superseded targets instead of the whole record.
 
     The function is a no-op (sets defaults) when there are no custom
     assessments, so it is safe to call unconditionally.
@@ -115,6 +119,7 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
         d["superseded_by"] = []
         d["stale_packages"] = []
         d["superseded_map"] = {}
+        d["stale_targets"] = []
 
     # Only custom assessments can be outdated.
     candidates = [d for d in assessment_dicts if d.get("origin") == "custom"]
@@ -286,7 +291,10 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
         v_observed = observed_pairs_by_variant[variant_uuid]
 
         for d, refs in group:
-            _annotate_one(d, refs, v_active_versions, v_active_pkg_ids, v_observed)
+            _annotate_one(
+                d, refs, v_active_versions, v_active_pkg_ids, v_observed,
+                variant_uuid,
+            )
 
     # Normalise ordering once, now that every group has contributed.
     for d in candidates:
@@ -294,6 +302,10 @@ def annotate_assessments_outdated(assessment_dicts: list[dict]) -> None:
         d["stale_packages"] = sorted(d["stale_packages"])
         for ref, labels in d["superseded_map"].items():
             d["superseded_map"][ref] = sorted(labels)
+        d["stale_targets"] = sorted(
+            d["stale_targets"],
+            key=lambda t: (t["variant_id"], t["package_name"]),
+        )
 
 
 def _group_by_resolved_targets(
@@ -354,6 +366,7 @@ def _annotate_one(
     v_active_versions: dict[str, set[str]],
     v_active_pkg_ids: dict[tuple[str, str], set[uuid.UUID]],
     v_observed: set[tuple[uuid.UUID, str]],
+    variant_uuid: uuid.UUID | None = None,
 ) -> None:
     """Annotate a single assessment dict *d* in-place with staleness info for *orig_refs*.
 
@@ -399,6 +412,14 @@ def _annotate_one(
         if not name_superseded_by:
             continue
         d["outdated"] = True
+        if variant_uuid is not None:
+            # Which (variant, package name) pairs went stale, so cleanup can
+            # drop just those targets instead of the whole assessment.
+            # Keyed by name, not by the full reference, because staleness is
+            # decided per package name.
+            entry = {"variant_id": str(variant_uuid), "package_name": name}
+            if entry not in d["stale_targets"]:
+                d["stale_targets"].append(entry)
         for label in name_superseded_by:
             if label not in d["superseded_by"]:
                 d["superseded_by"].append(label)

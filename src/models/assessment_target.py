@@ -10,14 +10,17 @@ A/zlib — so two independent collections would wrongly imply the cross-product.
 """
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import ForeignKey, select
+from sqlalchemy import ForeignKey, Table, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db, Base
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.sql.elements import ColumnElement
+
     from .assessment import Assessment
     from .finding import Finding
     from .variant import Variant
@@ -111,3 +114,47 @@ def validate_targets(pairs: "list[tuple[uuid.UUID, uuid.UUID]]") -> None:
         raise GroupInvariantError(
             "Targets cannot share an assessment: they address different vulnerabilities"
         )
+
+
+def reap_targets(connection: "Connection", criterion: "ColumnElement[bool]") -> None:
+    """Delete the target rows matching *criterion*, and any assessment left empty.
+
+    Neither ``assessment_targets.variant_id`` nor ``.finding_id`` carries an
+    ``ondelete`` clause, and this application keeps sqlite's ``foreign_keys``
+    pragma off, so nothing removes these rows on its own.  Worse, both are part
+    of the primary key, so the ORM's default "blank out the foreign key" for a
+    deleted parent raises instead of cleaning up.  Mapper events on the parents
+    call this before the parent row goes.
+
+    An assessment left with no targets at all goes with them: it is reachable
+    only through its targets (``Assessment.create`` refuses an empty target
+    set), so it would be an invisible orphan.  An assessment that another
+    target still reaches keeps it and survives.
+    """
+    # Core statements against the mapped tables, not raw SQL: the listener gets
+    # a Connection rather than a Session, and only the mapped columns know how
+    # to bind a UUID for the active driver.
+    from .assessment import Assessment
+
+    # ``__table__`` is typed as FromClause; these are real Tables, and only
+    # Table carries .delete().
+    targets = cast(Table, AssessmentTarget.__table__)
+    assessments = cast(Table, Assessment.__table__)
+
+    affected = {
+        row[0] for row in connection.execute(
+            select(targets.c.assessment_id).where(criterion)
+        )
+    }
+    connection.execute(targets.delete().where(criterion))
+    if not affected:
+        return
+
+    still_reachable = {
+        row[0] for row in connection.execute(
+            select(targets.c.assessment_id).where(targets.c.assessment_id.in_(affected))
+        )
+    }
+    orphans = affected - still_reachable
+    if orphans:
+        connection.execute(assessments.delete().where(assessments.c.id.in_(orphans)))
