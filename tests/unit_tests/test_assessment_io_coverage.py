@@ -165,7 +165,9 @@ class TestBuildCustomDataExport:
             "packages": ["ai-pkg@1.0.0"],
             "variant_id": str(var.id),
             "variant": "io-cov-var",
-            "targets": [{"variant_id": str(var.id), "package": "ai-pkg@1.0.0"}],
+            "targets": [
+                {"variant_id": str(var.id), "variant": "io-cov-var", "package": "ai-pkg@1.0.0"},
+            ],
         }]
 
 

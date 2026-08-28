@@ -924,7 +924,7 @@ class TestCustomDataVersion2:
         assert payload["version"] == 2
         assert len(payload["assessments"]) == 1
         assert payload["assessments"][0]["targets"] == [
-            {"variant_id": str(var.id), "package": "exp-pkg@1.0"},
+            {"variant_id": str(var.id), "variant": var.name, "package": "exp-pkg@1.0"},
         ]
 
     def test_version_2_export_round_trips_a_cross_variant_assessment(self, app):
@@ -969,6 +969,94 @@ class TestCustomDataVersion2:
             assert set(restored[0].targets) == {
                 (variant_a.id, openssl.id), (variant_b.id, zlib.id),
             }
+
+    def test_v2_import_falls_back_to_the_variant_name_on_another_instance(self, app, variant_and_project):
+        """A backup restores on an instance whose variant UUIDs differ.
+
+        Each VulnScout instance generates its own variant UUIDs, so the
+        ``variant_id`` in an export never matches on a different install. The
+        exported variant *name* is what makes the restore work, exactly as it
+        does for a version-1 export.
+        """
+        import uuid as _uuid_mod
+
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        _make_finding("CVE-2099-FOREIGNVAR", "openssl", "1.0")
+        foreign_variant_id = str(_uuid_mod.uuid4())
+        data = {
+            "version": 2,
+            "assessments": [{
+                "vuln_id": "CVE-2099-FOREIGNVAR",
+                "status": "affected",
+                "targets": [{
+                    "variant_id": foreign_variant_id,
+                    "variant": var.name,
+                    "package": "openssl@1.0",
+                }],
+            }],
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+
+        assert result["errors"] == []
+        assert result["assessments_imported"] == 1
+        rows = Assessment.get_by_vulnerability("CVE-2099-FOREIGNVAR")
+        assert len(rows) == 1
+        assert [variant_id for variant_id, _ in rows[0].targets] == [var.id]
+
+    def test_v2_import_honours_the_variant_id_override(self, app, variant_and_project):
+        """``import_custom_data(variant_id=...)`` attaches every target to it."""
+        import uuid as _uuid_mod
+
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        _make_finding("CVE-2099-OVERRIDEVAR", "openssl", "1.0")
+        data = {
+            "version": 2,
+            "assessments": [{
+                "vuln_id": "CVE-2099-OVERRIDEVAR",
+                "status": "affected",
+                "targets": [{
+                    "variant_id": str(_uuid_mod.uuid4()),
+                    "variant": "some-other-name",
+                    "package": "openssl@1.0",
+                }],
+            }],
+        }
+        with app.app_context():
+            result = import_custom_data(data, {}, variant_id=var.id)
+
+        assert result["errors"] == []
+        rows = Assessment.get_by_vulnerability("CVE-2099-OVERRIDEVAR")
+        assert len(rows) == 1
+        assert [variant_id for variant_id, _ in rows[0].targets] == [var.id]
+
+    def test_v2_import_reports_a_variant_that_resolves_nowhere(self, app, variant_and_project):
+        """An unknown id *and* unknown name is still an error, not a guess."""
+        import uuid as _uuid_mod
+
+        _, var = variant_and_project
+        _make_finding("CVE-2099-NOVAR", "openssl", "1.0")
+        data = {
+            "version": 2,
+            "assessments": [{
+                "vuln_id": "CVE-2099-NOVAR",
+                "status": "affected",
+                "targets": [{
+                    "variant_id": str(_uuid_mod.uuid4()),
+                    "variant": "not-a-local-variant",
+                    "package": "openssl@1.0",
+                }],
+            }],
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+
+        assert result["assessments_imported"] == 0
+        assert len(result["errors"]) >= 1
 
     def test_a_package_that_fails_to_resolve_is_reported_not_silently_dropped(self, app, variant_and_project):
         """A version-2 target naming an unknown package is reported as an
