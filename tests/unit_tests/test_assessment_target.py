@@ -176,3 +176,75 @@ def test_an_empty_target_set_is_accepted(app):
     from src.models.assessment_target import validate_targets
 
     validate_targets([])
+
+
+def test_deleting_a_variant_reaps_its_targets_and_orphaned_assessments(app):
+    """Nothing else clears these rows: the FK has no ondelete and sqlite's
+    foreign_keys pragma stays off, so orphans would keep surfacing in
+    unfiltered reads while pointing at a variant that no longer exists."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.project import Project
+
+    project = Project.create("reap-proj")
+    variant = _variant(project.id, "a")
+    finding = _finding("CVE-2026-0010", "openssl")
+    assessment = Assessment.create(
+        status="affected", origin="custom",
+        targets=[(variant.id, finding.id)], commit=True,
+    )
+    assessment_id = assessment.id
+
+    variant.delete()
+
+    assert db.session.query(AssessmentTarget).count() == 0
+    assert db.session.get(Assessment, assessment_id) is None
+
+
+def test_deleting_a_variant_keeps_an_assessment_that_targets_another(app):
+    """A cross-variant assessment survives losing one of its variants."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.project import Project
+
+    project = Project.create("reap-keep-proj")
+    variant_a = _variant(project.id, "a")
+    variant_b = _variant(project.id, "b")
+    finding = _finding("CVE-2026-0011", "openssl")
+    assessment = Assessment.create(
+        status="affected", origin="custom",
+        targets=[(variant_a.id, finding.id), (variant_b.id, finding.id)],
+        commit=True,
+    )
+    assessment_id = assessment.id
+
+    variant_a.delete()
+
+    survivor = db.session.get(Assessment, assessment_id)
+    assert survivor is not None
+    assert survivor.targets == [(variant_b.id, finding.id)]
+    assert db.session.query(AssessmentTarget).count() == 1
+
+
+def test_deleting_a_project_reaps_its_variants_assessments(app):
+    """The reaper is a mapper event, so the project's ORM cascade triggers it."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.project import Project
+
+    project = Project.create("reap-cascade-proj")
+    variant = _variant(project.id, "a")
+    finding = _finding("CVE-2026-0012", "openssl")
+    assessment = Assessment.create(
+        status="affected", origin="custom",
+        targets=[(variant.id, finding.id)], commit=True,
+    )
+    assessment_id = assessment.id
+
+    project.delete()
+
+    assert db.session.query(AssessmentTarget).count() == 0
+    assert db.session.get(Assessment, assessment_id) is None
