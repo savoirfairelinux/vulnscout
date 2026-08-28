@@ -5,7 +5,7 @@ import typing
 import uuid
 
 from ..models import Assessment, Package, Finding
-from ..helpers.verbose import verbose
+from ..helpers.verbose import verbose, warn
 from ..extensions import db
 
 if typing.TYPE_CHECKING:
@@ -34,6 +34,17 @@ def _persist_assessment_to_db(
         pkg_id_cache = {}
     if finding_cache is None:
         finding_cache = {}
+    if variant_id is None:
+        # An assessment is reachable only through its (variant, finding)
+        # targets, so with no variant there is nothing to attach it to and
+        # Assessment.create would reject it. Say so: this drops the parsed
+        # assessment, and a caller that reached here without a variant (an
+        # ingestion run with no scan, for instance) has a real problem.
+        warn(
+            f"[_persist_assessment_to_db {assessment.vuln_id!r}] no variant in context:"
+            " the assessment cannot be stored and was dropped"
+        )
+        return
     try:
         ctx = db.session.begin_nested() if use_savepoint else db.session.no_autoflush
         with ctx:
@@ -58,7 +69,9 @@ def _persist_assessment_to_db(
 
                 Assessment.from_vuln_assessment(assessment, finding_id=finding.id, variant_id=variant_id)
     except Exception as e:
-        verbose(f"[_persist_assessment_to_db {assessment.vuln_id!r}] {e}")
+        # Losing an assessment is not a detail: report it on stderr rather
+        # than only under VERBOSE_MODE, where it left no trace at all.
+        warn(f"[_persist_assessment_to_db {assessment.vuln_id!r}] not stored: {e}")
 
 
 class AssessmentsController:

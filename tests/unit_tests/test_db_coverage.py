@@ -1524,6 +1524,26 @@ class TestAssessmentsControllerGetsByVulnPkgVariantFilter:
         # The cross-variant assessment should be excluded (continue branch)
         assert all(str(r.id) != str(a.id) for r in result)
 
+    def test_persist_without_a_variant_reports_the_dropped_assessment(self, app, capsys):
+        """An assessment with no variant cannot be stored, and says so.
+
+        Targets are the only way an assessment is reachable, so without a
+        variant ``Assessment.create`` rejects it. That used to be logged at
+        verbose level, i.e. silently for anyone who had not opted in.
+        """
+        from src.controllers.assessments import _persist_assessment_to_db
+        from src.models.assessment import Assessment as DBAssessment
+
+        dto = DBAssessment.new_dto("CVE-2099-NOVARIANT", ["some-pkg@1.0"])
+        dto.status = "affected"
+
+        _persist_assessment_to_db(dto, variant_id=None)
+
+        captured = capsys.readouterr()
+        assert "CVE-2099-NOVARIANT" in captured.err
+        assert "no variant" in captured.err
+        assert DBAssessment.get_by_vulnerability("CVE-2099-NOVARIANT") == []
+
     def test_multi_variant_assessment_does_not_match_unrelated_variant(self, app):
         """A cross-variant assessment must not be reused for a third variant.
 

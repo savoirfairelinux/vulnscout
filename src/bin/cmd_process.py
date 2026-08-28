@@ -19,7 +19,7 @@ from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
-from ..helpers.verbose import verbose
+from ..helpers.verbose import verbose, warn
 from ..helpers.env_vars import get_bool_env
 from ..extensions import batch_session, db as _db
 import click
@@ -480,6 +480,15 @@ def _run_main(
     if latest_scan:
         assessCtrl.current_variant_id = latest_scan.variant_id
         vulnCtrl.current_variant_id = latest_scan.variant_id
+    else:
+        # Assessments are stored against (variant, finding) targets, and the
+        # variant comes from the scan being ingested. Without one, every
+        # parsed assessment is dropped -- warn once here rather than leaving
+        # the user to infer it from the per-assessment messages.
+        warn(
+            "merger_ci: no scan found, so there is no variant to attach"
+            " assessments to -- parsed assessments will not be stored"
+        )
 
     # Wrap all ingestion + post-treatment inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a
