@@ -97,8 +97,6 @@ def setup_db_with_project_variant(app):
             impact_statement="Fixed in version 1.17.4",
             responses=[],
             workaround="",
-            finding_id=finding_cairo.id,
-            variant_id=variant_a.id,
         )
         db.session.add(assessment_a)
         # Direct construction bypasses Assessment.create()'s dual write, so

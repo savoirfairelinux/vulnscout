@@ -114,9 +114,9 @@ def test_cmd_vuln_scan_existence_check_finds_a_multi_target_assessment(app):
 
 
 def test_existing_assessment_identities_keys_by_target_finding_id(app):
-    """A multi-target assessment's scalar finding_id is None; the identity
-    lookup must key off each target's own finding_id instead, or every
-    multi-target assessment collapses onto the same (None, ...) identity."""
+    """A multi-target assessment has no single finding_id of its own; the
+    identity lookup must key off each target's own finding_id instead, or
+    every multi-target assessment collapses onto the same identity."""
     with app.app_context():
         from src.models.assessment import Assessment
         from src.routes.scans import _existing_assessment_identities
@@ -131,9 +131,8 @@ def test_existing_assessment_identities_keys_by_target_finding_id(app):
             targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
             commit=True,
         )
-        # The dual-write scalar columns are never set for a targets=[...]-only
-        # creation — confirms this assessment exercises the gap being tested.
-        assert assessment.finding_id is None
+        # Confirms this assessment exercises the multi-target gap being tested.
+        assert len(assessment.target_rows) == 2
 
         identities = _existing_assessment_identities(
             variant.id, [openssl.id, zlib.id],

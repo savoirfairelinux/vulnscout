@@ -508,8 +508,7 @@ def _create_custom_assessment(app):
         db_a = Assessment.create(
             status="affected",
             simplified_status="Active",
-            finding_id=finding.id,
-            variant_id=variant.id,
+            targets=[(variant.id, finding.id)],
             origin="custom",
             status_notes="test notes",
             justification="",

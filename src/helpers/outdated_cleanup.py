@@ -136,43 +136,31 @@ def _stale_sbom_package_pairs(
 
 def _outdated_assessments() -> list[dict]:
     """Return custom assessment data matching the public staleness predicate."""
-    rows = db.session.execute(
-        db.select(
-            Assessment.id,
-            Assessment.origin,
-            Assessment.variant_id,
-            Assessment.finding_id,
-            Finding.vulnerability_id,
-            Package.name,
-            Package.version,
-            Package.supplier,
-        )
-        .outerjoin(Finding, Finding.id == Assessment.finding_id)
-        .outerjoin(Package, Package.id == Finding.package_id)
-        # Every assessment now has at least one target row (Assessment.create
-        # refuses an empty target set), so "has a variant" is checked through
-        # that instead of the scalar column, which a genuine multi-target
-        # assessment leaves unset.  ``.any()`` is an EXISTS subquery, not a
-        # join, so it can't multiply rows here.
+    db_assessments = db.session.execute(
+        db.select(Assessment)
+        # Every assessment has at least one target row (Assessment.create
+        # refuses an empty target set), so "has a variant" is checked
+        # through that.  ``.any()`` is an EXISTS subquery, not a join, so it
+        # can't multiply rows here.
         .where(Assessment.origin == "custom", Assessment.target_rows.any())
-    )
+    ).scalars().all()
     assessments: list[dict] = []
     ids_by_string: dict[str, uuid.UUID] = {}
-    for assessment_id, origin, variant_id, finding_id, vulnerability_id, name, version, supplier in rows:
-        package_id = f"{name}@{version}" if name is not None else ""
-        if package_id and supplier:
-            package_id += f"::{supplier}"
+    for assessment in db_assessments:
         assessments.append({
-            "id": str(assessment_id),
-            "origin": origin,
-            # None for a genuine multi-target assessment, which has no single
-            # scalar variant.  Consumers must tolerate it.
-            "variant_id": str(variant_id) if variant_id is not None else None,
-            "finding_id": finding_id,
-            "vuln_id": vulnerability_id or "",
-            "packages": [package_id] if package_id else [],
+            "id": str(assessment.id),
+            "origin": assessment.origin,
+            # ``single_variant_id`` is the one variant every target shares,
+            # or None for a genuine cross-variant assessment — in which case
+            # annotate_assessments_outdated resolves variant(s) and packages
+            # from the AssessmentTarget rows instead.  Consumers must
+            # tolerate a None variant_id.
+            "variant_id": str(assessment.single_variant_id) if assessment.single_variant_id else None,
+            "finding_ids": [t.finding_id for t in assessment.target_rows],
+            "vuln_id": assessment.vuln_id,
+            "packages": list(assessment.packages),
         })
-        ids_by_string[str(assessment_id)] = assessment_id
+        ids_by_string[str(assessment.id)] = assessment.id
     annotate_assessments_outdated(assessments)
     return [
         {**assessment, "uuid": ids_by_string[assessment["id"]]}
@@ -481,9 +469,9 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
         if candidate_ids is not None and candidate_ids != current_candidates:
             raise ValueError(_STALE_PREVIEW_MESSAGE)
         outdated_finding_ids = {
-            assessment["finding_id"]
+            finding_id
             for assessment in outdated_assessments
-            if assessment["finding_id"] is not None
+            for finding_id in assessment["finding_ids"]
         }
         # Bulk DELETE bypasses the ORM's cascade="all, delete-orphan" on
         # Assessment.target_rows (sqlite foreign_keys stay off), so the
@@ -614,13 +602,12 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
     """Delete CVEs absent from every project/variant and their assessments.
 
     Bulk ``DELETE`` statements replace the ORM cascade for findings, time
-    estimates, observations, and per-CVE metrics/refresh metadata.  Assessments
-    are reachable only through their target rows now, so they are reaped one
-    target at a time via ``remove_target`` instead of a bulk ``DELETE`` keyed
-    on the scalar ``Assessment.finding_id`` column — that column misses
-    assessments reached only through a multi-target row, and even a matching
-    bulk ``DELETE`` would leave their target rows behind uncascaded (sqlite
-    ``foreign_keys`` stay off).
+    estimates, observations, and per-CVE metrics/refresh metadata.  An
+    assessment can have several targets pointing at different findings, so no
+    single column identifies "this assessment's finding" to key a bulk
+    ``DELETE`` on; assessments are reaped one target at a time via
+    ``remove_target`` instead, which also avoids leaving target rows behind
+    uncascaded (sqlite ``foreign_keys`` stay off).
     """
     with write_lock():
         vulnerability_ids = [str(item["id"]) for item in orphaned_vulnerabilities_preview()]

@@ -128,8 +128,6 @@ def _build_outdated_db(app, *, include_v2_finding: bool = True, include_v2_in_ac
             impact_statement="",
             responses=[],
             workaround="",
-            finding_id=finding_v1.id,
-            variant_id=VARIANT_ID,
             timestamp=datetime(2024, 1, 2, tzinfo=timezone.utc),
         )
         _db.session.add(assessment)
@@ -291,11 +289,12 @@ class TestOutdatedFlag:
                 impact_statement="",
                 responses=[],
                 workaround="",
-                finding_id=finding.id,
-                variant_id=other_variant_id,
                 timestamp=datetime(2024, 1, 3, tzinfo=timezone.utc),
             )
             _db.session.add_all([other_project, other_variant, other_assessment])
+            # Direct construction bypasses Assessment.create()'s dual write.
+            _db.session.add(AssessmentTarget(
+                assessment_id=other_assessment_id, variant_id=other_variant_id, finding_id=finding.id))
             _db.session.commit()
 
         resp = self.client.get(f"/api/vulnerabilities/{CVE_ID}/assessments?project_id={PROJECT_ID}")
@@ -594,8 +593,6 @@ class TestOutdatedFlag:
                 id=orphaned_assessment_id,
                 origin="custom",
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=VARIANT_ID,
             ))
             # Direct construction bypasses Assessment.create()'s dual write, so
             # the target row that makes this assessment reachable through
@@ -683,8 +680,6 @@ class TestOutdatedFlag:
                     id=assessment_id,
                     origin="custom",
                     status="not_affected",
-                    finding_id=finding_id,
-                    variant_id=VARIANT_ID,
                 ))
                 # Direct construction bypasses Assessment.create()'s dual
                 # write, so the target row that makes each assessment

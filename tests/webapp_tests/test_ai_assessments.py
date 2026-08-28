@@ -569,10 +569,7 @@ def test_legacy_approve_returns_404_for_unknown_assessment(client):
     assert client.post(f"/api/assessments/{unknown}/reject").status_code == 404
 
 
-# NOTE: the old `test_legacy_approve_refuses_a_group_with_a_non_ai_member`
-# manufactured a "heterogeneous group" by inserting an AssessmentGroupMember
-# row directly, bypassing write-time validation, to simulate pre-migration
-# data. A group is now an assessment: _resolve_pending_ai_rows resolves only
-# the addressed row (never AssessmentGroupMember), so a group can no longer
-# span more than one origin. That scenario is categorically impossible under
-# the new model and the test was deleted rather than rewritten.
+# NOTE: there is deliberately no test for "approve refuses a group with a
+# non-AI member". A group is an assessment, and an assessment carries a
+# single `origin`, so a group spanning two origins is unrepresentable
+# rather than merely rejected.

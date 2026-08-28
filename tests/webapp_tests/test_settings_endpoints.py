@@ -296,8 +296,7 @@ class TestCopyCustomAssessments:
             Assessment.create(
                 status="affected",
                 origin="custom",
-                finding_id=source_finding.id,
-                variant_id=source.id,
+                targets=[(source.id, source_finding.id)],
                 source="manual",
             )
             db.session.commit()
@@ -418,8 +417,7 @@ class TestCopyCustomAssessments:
             Assessment.create(
                 status="affected",
                 origin="custom",
-                finding_id=source_finding.id,
-                variant_id=variant.id,
+                targets=[(variant.id, source_finding.id)],
                 source="manual",
             )
             db.session.commit()
@@ -1589,8 +1587,8 @@ class TestCopyAssessmentsEdgeCases:
             db.session.commit()
             finding = Finding.get_or_create(pkg.id, vuln.id)
             Assessment.create(
-                status="affected", origin="custom", finding_id=finding.id,
-                variant_id=source.id, source="manual",
+                status="affected", origin="custom", targets=[(source.id, finding.id)],
+                source="manual",
             )
 
             # Give target an active scan so we pass the early variants-exist check
@@ -1625,8 +1623,8 @@ class TestCopyAssessmentsEdgeCases:
             db.session.commit()
             finding_a = Finding.get_or_create(pkg_a.id, cve_a.id)
             Assessment.create(
-                status="affected", origin="custom", finding_id=finding_a.id,
-                variant_id=source.id, source="manual",
+                status="affected", origin="custom", targets=[(source.id, finding_a.id)],
+                source="manual",
             )
             src_scan = Scan.create("", source.id, scan_type="sbom")
             src_doc = SBOMDocument.create("/tmp/src_nm.spdx.json", "spdx", src_scan.id)
@@ -1688,12 +1686,12 @@ class TestCopyAssessmentsEdgeCases:
             Observation.create(finding_sx.id, tgt_scan.id)
 
             Assessment.create(
-                status="affected", origin="custom", finding_id=finding_sx.id,
-                variant_id=source.id, source="manual",
+                status="affected", origin="custom", targets=[(source.id, finding_sx.id)],
+                source="manual",
             )
             Assessment.create(
-                status="affected", origin="custom", finding_id=finding_oy.id,
-                variant_id=source.id, source="manual",
+                status="affected", origin="custom", targets=[(source.id, finding_oy.id)],
+                source="manual",
             )
             db.session.commit()
 
@@ -1845,8 +1843,7 @@ class TestCopyAssessmentsMatchModes:
                 status="not_affected",
                 simplified_status="Not affected",
                 origin="custom",
-                finding_id=src_finding.id,
-                variant_id=source.id,
+                targets=[(source.id, src_finding.id)],
                 source="manual",
                 justification="component_not_present",
             )
@@ -2152,8 +2149,10 @@ class TestCopyAssessmentsMatchModes:
                 status="affected",
                 simplified_status="Exploitable",
                 origin="custom",
-                finding_id=ids["finding_minor_ok"],
-                variant_id=ids["target_variant_id"],
+                targets=[(
+                    uuid.UUID(ids["target_variant_id"]),
+                    uuid.UUID(ids["finding_minor_ok"]),
+                )],
                 source="manual",
             )
             db.session.commit()
@@ -2213,8 +2212,7 @@ class TestCopyAssessmentsMatchModes:
             assessment = Assessment.create(
                 status="not_affected",
                 origin="custom",
-                finding_id=finding_a.id,
-                variant_id=source.id,
+                targets=[(source.id, finding_a.id)],
                 source="manual",
             )
             db.session.commit()
@@ -2284,8 +2282,7 @@ class TestCopyAssessmentsMatchModes:
                 status="affected",
                 simplified_status="Exploitable",
                 origin="custom",
-                finding_id=finding.id,
-                variant_id=source.id,
+                targets=[(source.id, finding.id)],
                 source="manual",
                 status_notes="Confirmed reachable.",
                 impact_statement="RCE possible.",

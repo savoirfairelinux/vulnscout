@@ -922,8 +922,7 @@ def _persist_import_assessments(
             seen.add(identity)
             Assessment.create(
                 status=entry.values["status"],
-                finding_id=target.id,
-                variant_id=item.variant.id,
+                targets=[(item.variant.id, target.id)],
                 source=_IMPORT_SOURCE_LABEL,
                 origin=origin or "sbom",
                 simplified_status=entry.values["simplified_status"],
@@ -1164,9 +1163,11 @@ def init_app(app: Flask) -> None:
     def delete_scan(scan_id: str) -> ResponseReturnValue:
         """Delete a scan and its observations.
 
-        Findings that are no longer referenced by any observation are
-        also removed (cascade cleaned).  The response includes the
-        number of orphaned findings that were deleted.
+        Findings that are no longer referenced by any observation are also
+        removed, along with any assessment targets that pointed at them
+        (deleting an assessment outright when it was their last target).
+        The response includes the number of orphaned findings that were
+        deleted.
 
         OpenAPI:
         response 200 JsonObject Deletion summary.
@@ -1193,6 +1194,7 @@ def init_app(app: Flask) -> None:
         orphaned_count = 0
         if finding_ids:
             from sqlalchemy import exists as sa_exists
+            from ..helpers.outdated_cleanup import remove_target
             for fid in finding_ids:
                 has_obs = db.session.query(
                     sa_exists().where(Observation.finding_id == fid)
@@ -1200,6 +1202,16 @@ def init_app(app: Flask) -> None:
                 if not has_obs:
                     finding = db.session.get(Finding, fid)
                     if finding:
+                        # ``assessment_targets.finding_id`` is a non-nullable
+                        # primary-key column, so the ORM can't cascade-null
+                        # it the way it would a plain foreign key: detach
+                        # each assessment from this finding first (removing
+                        # the assessment too when it was its last target).
+                        stale_targets = db.session.execute(
+                            db.select(AssessmentTarget).where(AssessmentTarget.finding_id == fid)
+                        ).scalars().all()
+                        for target in stale_targets:
+                            remove_target(target.assessment_id, target.variant_id, fid)
                         db.session.delete(finding)
                         orphaned_count += 1
             if orphaned_count:

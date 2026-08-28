@@ -175,8 +175,7 @@ class TestAssessmentsExportCustomData:
             finding = Finding.get_or_create(pkg.id, "CVE-2099-XP01")
             Assessment.create(
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
+                targets=[(_uuid.UUID("22222222-2222-2222-2222-222222222222"), finding.id)],
                 origin="custom",
             )
             _db.session.commit()
@@ -200,8 +199,7 @@ class TestAssessmentsExportCustomData:
             finding = Finding.get_or_create(pkg.id, "CVE-2099-YP01")
             Assessment.create(
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
+                targets=[(_uuid.UUID("22222222-2222-2222-2222-222222222222"), finding.id)],
                 origin="custom",
             )
             _db.session.commit()

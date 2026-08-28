@@ -64,7 +64,7 @@ def validate_assessment_findings(
 def create_assessment_record(
     assessment: "DBAssessment",
     finding_id: UUID,
-    variant_id: UUID | None,
+    variant_id: UUID,
     timestamp: datetime | None = None,
     origin: str = "custom",
     responses: "list[str] | None" = None,
@@ -78,8 +78,7 @@ def create_assessment_record(
     return DBAssessment.create(
         status=assessment.status or "",
         simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status or "", "Pending Assessment"),
-        finding_id=finding_id,
-        variant_id=variant_id,
+        targets=[(variant_id, finding_id)],
         origin=origin,
         status_notes=assessment.status_notes,
         justification=assessment.justification,
@@ -198,8 +197,8 @@ def validate_deletions(
 def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], Any]":
     """Index the group's current targets by their (package, variant) key.
 
-    A group is now one assessment — ``rows`` holds zero or one of them — and
-    its targets live on ``target_rows`` rather than one row per package.
+    A group is one assessment — ``rows`` holds zero or one of them — whose
+    targets live on ``target_rows``.
     """
     if not rows:
         return {}
@@ -279,11 +278,10 @@ def apply_reconcile(
 ) -> "dict[str, Any]":
     """Bring the group — one assessment — to the desired target set and content.
 
-    A group is now a single assessment, so there is nothing to loop over: its
-    target set is diffed against the request and applied as added or removed
-    ``AssessmentTarget`` rows, and its content fields are updated once.
-    Removing the last target leaves the assessment unreachable, so it is
-    deleted along with it rather than kept around empty.
+    Its target set is diffed against the request and applied as added or
+    removed ``AssessmentTarget`` rows, and its content fields are updated
+    once. Removing the last target leaves the assessment unreachable, so it
+    is deleted along with it rather than kept around empty.
     """
     if not rows:
         return {

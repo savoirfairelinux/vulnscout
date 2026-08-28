@@ -12,7 +12,7 @@ from ..helpers.verbose import verbose
 from .package import Package
 
 if TYPE_CHECKING:
-    from ..models import TimeEstimate, Vulnerability, Observation, Assessment
+    from ..models import TimeEstimate, Vulnerability, Observation
 
 
 class Finding(Base):
@@ -34,11 +34,13 @@ class Finding(Base):
     vulnerability: Mapped["Vulnerability"] = relationship(back_populates="findings")
     observations: Mapped[list["Observation"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
-    assessments: Mapped[list["Assessment"]] = relationship(
-        back_populates="finding", cascade="all, delete-orphan")
     assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
         back_populates="finding",
     )
+    # No delete-orphan cascade: finding_id is part of AssessmentTarget's
+    # primary key, so the ORM can't cascade-null it on delete. Callers that
+    # delete a Finding must detach its assessment_targets first (see
+    # outdated_cleanup.remove_target and routes.scans.delete_scan).
     time_estimates: Mapped[list["TimeEstimate"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
 

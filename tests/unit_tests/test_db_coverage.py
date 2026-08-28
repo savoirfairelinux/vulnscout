@@ -347,43 +347,43 @@ class TestVulnerabilityPersistFromTransient:
 # ===========================================================================
 
 class TestAssessmentFromVulnAssessment:
-    def test_from_vuln_assessment_create(self, app, finding):
+    def test_from_vuln_assessment_create(self, app, finding, variant):
         """from_vuln_assessment with no existing record should create a new one."""
         from src.models.assessment import Assessment
         va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va.set_status("under_investigation")
         va.set_status_notes("first run", False)
-        a = Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        a = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
         assert a is not None
         assert a.status == "under_investigation"
 
-    def test_from_vuln_assessment_update(self, app, finding):
+    def test_from_vuln_assessment_update(self, app, finding, variant):
         """from_vuln_assessment with the same DTO UUID should update it."""
         from src.models.assessment import Assessment
         # create first
         va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va.set_status("under_investigation")
-        Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
         # update same DTO (same UUID)
         va.set_status("not_affected")
         va.set_justification("vulnerable_code_not_present")
         va.responses = ["no action needed"]
-        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
         assert a2.status == "not_affected"
         assert a2.justification == "vulnerable_code_not_present"
         assert a2.responses == ["no action needed"]
 
-    def test_from_vuln_assessment_new_scan_creates_new_record(self, app, finding):
+    def test_from_vuln_assessment_new_scan_creates_new_record(self, app, finding, variant):
         """A new DTO (different UUID) for the same finding creates a separate record."""
         from src.models.assessment import Assessment
         va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va1.set_status("fixed")
         va1.set_not_affected_reason("Yocto reported vulnerability as Patched")
-        a1 = Assessment.from_vuln_assessment(va1, finding_id=finding.id)
+        a1 = Assessment.from_vuln_assessment(va1, finding_id=finding.id, variant_id=variant.id)
 
         va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va2.set_status("under_investigation")
-        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id)
+        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id, variant_id=variant.id)
 
         assert a1.id != a2.id
         assert a1.status == "fixed"
@@ -392,7 +392,7 @@ class TestAssessmentFromVulnAssessment:
     def test_assessment_full_update(self, app, finding, variant):
         """update() should handle every optional kwarg."""
         from src.models.assessment import Assessment
-        a = Assessment.create("under_investigation", finding_id=finding.id, variant_id=variant.id)
+        a = Assessment.create("under_investigation", targets=[(variant.id, finding.id)])
         a.update(
             source="grype",
             simplified_status="not_affected",
@@ -405,23 +405,23 @@ class TestAssessmentFromVulnAssessment:
         assert a.source == "grype"
         assert a.workaround == "upgrade to 2.0"
 
-    def test_from_vuln_assessment_create_sets_simplified_status(self, app, finding):
+    def test_from_vuln_assessment_create_sets_simplified_status(self, app, finding, variant):
         """from_vuln_assessment create path should populate simplified_status via STATUS_TO_SIMPLIFIED."""
         from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
         va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va.set_status("exploitable")
-        a = Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        a = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
         assert a.simplified_status == STATUS_TO_SIMPLIFIED["exploitable"]
 
-    def test_from_vuln_assessment_update_sets_simplified_status(self, app, finding):
+    def test_from_vuln_assessment_update_sets_simplified_status(self, app, finding, variant):
         """from_vuln_assessment update path should refresh simplified_status when status changes."""
         from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
         va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va.set_status("under_investigation")
-        Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
 
         va.set_status("fixed")
-        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
         assert a2.simplified_status == STATUS_TO_SIMPLIFIED["fixed"]
 
     def test_from_vuln_assessment_create_with_variant_id(self, app, finding, variant):
@@ -430,18 +430,7 @@ class TestAssessmentFromVulnAssessment:
         va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va.set_status("in_triage")
         a = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
-        assert a.variant_id == variant.id
-
-    def test_from_vuln_assessment_update_sets_variant_id_if_none(self, app, finding, variant):
-        """from_vuln_assessment update path should set variant_id when the existing record has none."""
-        from src.models.assessment import Assessment
-        va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
-        va.set_status("under_investigation")
-        Assessment.from_vuln_assessment(va, finding_id=finding.id)  # no variant_id
-
-        va.set_status("fixed")
-        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
-        assert a2.variant_id == variant.id
+        assert a.single_variant_id == variant.id
 
     def test_from_vuln_assessment_separate_record_per_variant(self, app, finding, variant, project):
         """Each variant must get its own assessment row for the same finding."""
@@ -456,8 +445,8 @@ class TestAssessmentFromVulnAssessment:
         va2.set_status("fixed")
         a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id, variant_id=other_variant.id)
         # Each variant should have its own assessment with its own variant_id
-        assert a1.variant_id == variant.id
-        assert a2.variant_id == other_variant.id
+        assert a1.single_variant_id == variant.id
+        assert a2.single_variant_id == other_variant.id
         assert a1.id != a2.id
 
 
@@ -976,7 +965,7 @@ class TestAssessmentsController:
         result = ctrl.gets_by_pkg("pkg@1.0")
         assert isinstance(result, list)
 
-    def test_gets_by_vuln_pkg_with_db_finding(self, app):
+    def test_gets_by_vuln_pkg_with_db_finding(self, app, variant):
         """gets_by_vuln_pkg hits the DB finding+assessment path (lines 157-160)."""
         from src.models.vulnerability import Vulnerability
         from src.models.package import Package
@@ -989,13 +978,13 @@ class TestAssessmentsController:
         p = Package.create("vpair-lib", "1.0")
         f = Finding.create(p.id, v.id)
         # Create a persisted assessment linked to the finding
-        DBAssessment.create(status="affected", finding_id=f.id)
+        DBAssessment.create(status="affected", targets=[(variant.id, f.id)])
 
         ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_vuln_pkg(v.id, p.string_id)
         assert len(result) >= 1
 
-    def test_gets_by_pkg_db_hit_adds_to_results(self, app):
+    def test_gets_by_pkg_db_hit_adds_to_results(self, app, variant):
         """gets_by_pkg() DB path adds assessments to results (line 129 in assessments controller)."""
         from src.models.vulnerability import Vulnerability
         from src.models.package import Package
@@ -1007,7 +996,7 @@ class TestAssessmentsController:
         v = Vulnerability.create_record("CVE-2099-PKG2")
         p = Package.create("pkgctl2-test", "1.0")
         f = Finding.create(p.id, v.id)
-        DBAssessment.create(status="affected", finding_id=f.id)
+        DBAssessment.create(status="affected", targets=[(variant.id, f.id)])
 
         ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_pkg(p.string_id)
@@ -1039,7 +1028,7 @@ class TestAssessmentsController:
         items = list(ctrl)
         assert len(items) == 2
 
-    def test_to_dict_db_fallback(self, app):
+    def test_to_dict_db_fallback(self, app, variant):
         """to_dict() falls back to DB when in-memory dict is empty."""
         from src.models.vulnerability import Vulnerability
         from src.models.package import Package
@@ -1051,7 +1040,7 @@ class TestAssessmentsController:
         v = Vulnerability.create_record("CVE-2099-TODICT2")
         p = Package.create("todictpkg", "1.0")
         f = Finding.create(p.id, v.id)
-        DBAssessment.create(status="not_affected", finding_id=f.id)
+        DBAssessment.create(status="not_affected", targets=[(variant.id, f.id)])
 
         ctrl = AssessmentsController(PackagesController())
         # ctrl.assessments is empty (not pre-loaded from DB), so to_dict queries DB
@@ -1509,6 +1498,8 @@ class TestAssessmentsControllerGetsByVulnPkgVariantFilter:
     def test_cross_variant_assessment_is_skipped(self, app):
         """Line 192: assessment for a different variant is skipped by continue."""
         import uuid
+        from src.models.project import Project
+        from src.models.variant import Variant
         from src.models.vulnerability import Vulnerability
         from src.models.package import Package
         from src.models.finding import Finding
@@ -1519,12 +1510,11 @@ class TestAssessmentsControllerGetsByVulnPkgVariantFilter:
         v = Vulnerability.create_record("CVE-2099-XVAR")
         p = Package.create("xvar-lib", "1.0")
         f = Finding.create(p.id, v.id)
-        other_variant_id = uuid.uuid4()
-        a = DBAssessment.create(status="affected", finding_id=f.id)
-        # Assign the assessment to a different variant
-        a.variant_id = other_variant_id
-        from src.extensions import db
-        db.session.commit()
+        project = Project.create("XVarProject")
+        other_variant = Variant.create("OtherVariant", project.id)
+        # Target the assessment at a variant different from the one the
+        # controller is restricted to below.
+        a = DBAssessment.create(status="affected", targets=[(other_variant.id, f.id)])
 
         ctrl = AssessmentsController(PackagesController())
         # Restrict ingestion to yet another variant

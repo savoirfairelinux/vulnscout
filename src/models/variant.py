@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
-    from ..models import Project, Scan, Assessment, TimeEstimate, Metrics
+    from ..models import Project, Scan, TimeEstimate, Metrics
     from .variant_context import VariantContext
 
 
@@ -31,10 +31,6 @@ class Variant(Base):
         back_populates="variants"
     )
     scans: Mapped[list["Scan"]] = relationship(
-        back_populates="variant",
-        cascade="all, delete-orphan"
-    )
-    assessments: Mapped[list["Assessment"]] = relationship(
         back_populates="variant",
         cascade="all, delete-orphan"
     )

@@ -183,7 +183,10 @@ class AssessmentsController:
         """
         if self.current_variant_id is None:
             return True
-        return assessment.variant_id is None or assessment.variant_id == self.current_variant_id
+        return (
+            assessment.single_variant_id is None
+            or assessment.single_variant_id == self.current_variant_id
+        )
 
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
         """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
@@ -252,7 +255,8 @@ class AssessmentsController:
             if pkg_id in self._db_queried_pkgs:
                 continue
             for a in Assessment.get_by_package(pkg_id):
-                if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
+                if (_current_vid is None or a.single_variant_id is None
+                        or a.single_variant_id == _current_vid):
                     self._index_existing(a)
             self._db_queried_pkgs.add(pkg_id)
 

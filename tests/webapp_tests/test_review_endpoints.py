@@ -263,8 +263,8 @@ class TestReviewListTexts:
             db.session.add_all(sbom_observations)
             db.session.flush()
             finding = Finding.get_by_vulnerability(self.VULNERABILITY_ID)[0]
-            assess_a = Assessment.create(status="x", variant_id=self.VARIANT_A, finding_id=finding.id, origin="custom")
-            assess_b = Assessment.create(status="x", variant_id=self.VARIANT_B, finding_id=finding.id, origin="custom")
+            assess_a = Assessment.create(status="x", targets=[(self.VARIANT_A, finding.id)], origin="custom")
+            assess_b = Assessment.create(status="x", targets=[(self.VARIANT_B, finding.id)], origin="custom")
             db.session.add_all(sbom_observations + [assess_a, assess_b])
             db.session.commit()
 
@@ -1523,7 +1523,14 @@ def test_import_custom_data_original_timestamp_normalised_to_utc(client):
 
 
 def test_import_custom_data_assessments_without_variant_field(client):
-    """Import remains backward compatible when variant fields are missing."""
+    """An assessment with no resolvable variant is rejected, not silently
+    stored with a null variant.
+
+    A target's ``variant_id`` is part of its primary key in the
+    ``AssessmentTarget`` table and can never be ``NULL``, so an item with no
+    ``variant_id``/``variant`` field is unrepresentable — the import reports
+    it as an error instead of silently succeeding.
+    """
     payload = _custom_data_payload(assessments=[{
         "vuln_id": "CVE-2020-35492",
         "status": "affected",
@@ -1534,10 +1541,14 @@ def test_import_custom_data_assessments_without_variant_field(client):
         json=payload,
         content_type="application/json",
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 400
     result = json.loads(resp.data)
-    assert result["status"] == "success"
-    assert result["assessments_imported"] >= 1
+    assert result["status"] == "error"
+    assert result["assessments_imported"] == 0
+    assert any(
+        e.get("vuln_id") == "CVE-2020-35492" and e.get("error") == "No variant specified"
+        for e in result["errors"]
+    )
 
 
 def test_import_custom_data_assessments_with_variant_name(client):
@@ -1731,8 +1742,7 @@ def _seed_assessment(app, *, vuln_id, pkg_name, pkg_version, status, origin):
         finding = Finding.get_or_create(pkg.id, vuln_id)
         Assessment.create(
             status=status,
-            finding_id=finding.id,
-            variant_id=VARIANT_UUID,
+            targets=[(VARIANT_UUID, finding.id)],
             origin=origin,
         )
 
@@ -1759,8 +1769,7 @@ def test_import_custom_data_duplicate_multiple_existing_rows(app, client):
         for _ in range(2):
             Assessment.create(
                 status="affected",
-                finding_id=finding.id,
-                variant_id=VARIANT_UUID,
+                targets=[(VARIANT_UUID, finding.id)],
                 origin="custom",
             )
 
@@ -1804,8 +1813,7 @@ def test_import_statements_duplicate_multiple_existing_rows(app):
         for _ in range(2):
             Assessment.create(
                 status="fixed",
-                finding_id=finding.id,
-                variant_id=VARIANT_UUID,
+                targets=[(VARIANT_UUID, finding.id)],
                 origin="custom",
             )
 
@@ -1843,8 +1851,7 @@ def test_import_statements_not_skipped_when_only_scanner_assessment_exists(app):
         finding = Finding.get_or_create(pkg.id, "CVE-2099-00003")
         Assessment.create(
             status="fixed",
-            finding_id=finding.id,
-            variant_id=VARIANT_UUID,
+            targets=[(VARIANT_UUID, finding.id)],
             origin="Imported SBOM",
         )
 
@@ -2423,14 +2430,13 @@ class TestFetchVulnerabilitiesTexts:
 #
 # Ported from Feature#23169-dedup-assessment-table-entries's
 # tests/webapp_tests/test_assessment_group_reconcile.py, rekeyed to address
-# groups by ``group_id`` (looked up through ``AssessmentGroupMember`` via
-# ``load_group``) instead of an explicit ``existing_ids`` list, and using the
-# ``demo_ids`` fixture instead of that branch's bespoke fixtures. Tests that
-# only existed to exercise ``load_group_rows``'s id-list validation (rejecting
-# an id from another vulnerability/project, or a row with no variant) are not
-# ported: that function was intentionally not carried over, since a group is
-# now identified by the URL's ``group_id`` and loaded via membership rather
-# than by trusting a client-supplied id list.
+# groups by ``group_id`` instead of an explicit ``existing_ids`` list, and
+# using the ``demo_ids`` fixture instead of that branch's bespoke fixtures.
+# Tests that only existed to exercise ``load_group_rows``'s id-list
+# validation (rejecting an id from another vulnerability/project, or a row
+# with no variant) are not ported: that function was intentionally not
+# carried over, since a group is identified by the URL's ``group_id`` and
+# loaded directly, rather than by trusting a client-supplied id list.
 
 def _create_group(client, demo_ids, packages=None, variant_id=None, status="affected", **extra):
     """Create one multi-target assessment and return (group_id, [group_id]).
@@ -2575,10 +2581,9 @@ def test_reconcile_cross_project_variant_is_400_not_500(client, demo_ids):
     to the generic 500 handler.
 
     ``add_target`` (called from ``apply_reconcile``) raises
-    ``src.models.assessment_target.GroupInvariantError``, a distinct class
-    from ``src.models.assessment_group_member.GroupInvariantError`` that this
-    route imports and catches. Before the fix, the mismatched except clause
-    let the target-invariant class fall through to ``except Exception``.
+    ``src.models.assessment_target.GroupInvariantError``, which this route
+    must catch specifically rather than let fall through to a generic
+    ``except Exception``.
     """
     from src.extensions import db
     from src.models.project import Project
@@ -2952,6 +2957,77 @@ def test_promoting_an_already_grouped_assessment_returns_its_group(client, demo_
 
     assert response.status_code == 200
     assert response.get_json()["group_id"] == existing_group
+
+
+def test_add_assessment_with_group_id_validates_but_does_not_join(client, demo_ids):
+    """A create request naming an existing ``group_id`` is still validated
+    against it (must exist, must match the vulnerability) but always lands
+    as its own independent row: write-time group-joining is out of scope for
+    this phase (a group only grows through reconcile), matching
+    ``test_group_id_payload_no_longer_merges_writes_across_variants`` in
+    test_ai_assessments.py.
+    """
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][1]],
+            "variant_id": demo_ids["other_variant_id"],
+            "group_id": group_id,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    new_group_id = body["assessments"][0]["group_id"]
+    assert new_group_id != group_id, "lands as its own independent row, not merged in"
+
+
+def test_add_assessment_with_unknown_group_id_is_rejected(client, demo_ids):
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+            "group_id": str(uuid.uuid4()),
+        },
+    )
+    assert response.status_code == 404
+
+
+def test_add_assessment_with_group_id_rejects_mismatched_vuln_id(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = created["assessments"][0]["group_id"]
+
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['other_vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][1]],
+            "variant_id": demo_ids["other_variant_id"],
+            "group_id": group_id,
+        },
+    )
+    assert response.status_code == 400
+    assert "vuln_id" in response.get_json()["error"]
 
 
 def test_group_endpoints_reject_a_malformed_group_id(client):

@@ -96,10 +96,10 @@ def test_two_content_identical_assessments_stay_two_groups(app):
 
         finding, variant = _make_finding_and_variant()
         one = Assessment.create(status="affected", origin="custom",
-                                finding_id=finding.id, variant_id=variant.id,
+                                targets=[(variant.id, finding.id)],
                                 commit=True)
         two = Assessment.create(status="affected", origin="custom",
-                                finding_id=finding.id, variant_id=variant.id,
+                                targets=[(variant.id, finding.id)],
                                 commit=True)
 
         groups = build_groups([one, two])
@@ -114,7 +114,7 @@ def test_load_group_returns_the_assessment_itself(app):
 
         finding, variant = _make_finding_and_variant()
         assessment = Assessment.create(status="affected", origin="custom",
-                                       finding_id=finding.id, variant_id=variant.id,
+                                       targets=[(variant.id, finding.id)],
                                        commit=True)
 
         assert [a.id for a in load_group(assessment.id)] == [assessment.id]

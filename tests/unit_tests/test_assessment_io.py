@@ -764,7 +764,7 @@ class TestImportCustomDataMultiTarget:
     def test_v1_multi_package_entry_still_creates_two_assessments(self, app, variant_and_project):
         """GIVEN a version-1 entry covering 2 packages WHEN imported THEN two
         independent single-target assessments are created (no fusing, no
-        shared group -- the old AssessmentGroupMember linkage is gone)."""
+        shared group)."""
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
@@ -865,8 +865,7 @@ class TestImportCustomDataMultiTarget:
 
 class TestCustomDataVersion2:
     """Version-2 export/import: one assessment, many ``{variant_id, package}``
-    targets, replacing the fan-out that ``AssessmentGroupMember`` used to
-    paper over."""
+    targets."""
 
     def test_export_emits_version_2_with_targets(self, app, variant_and_project):
         """A single-target custom assessment exports its target explicitly."""
@@ -877,7 +876,7 @@ class TestCustomDataVersion2:
         with app.app_context():
             Assessment.create(
                 status="not_affected", origin="custom",
-                finding_id=finding.id, variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 justification="component_not_present",
                 commit=True,
             )
