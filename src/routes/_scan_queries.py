@@ -230,16 +230,22 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
     scan export in particular — need the package to round-trip it faithfully.
     They are appended last so existing positional access stays valid.
 
+    Custom (manually-created) and pending-AI assessments are excluded at the
+    SQL level, matching the equivalent guard in ``_scan_diff.py``.
+
     The query logic:
       - Start FROM observation
       - JOIN finding ON finding.id = observation.finding_id
-      - JOIN assessment ON assessment.finding_id = finding.id
+      - JOIN assessment_targets ON assessment_targets.finding_id = finding.id
+      - JOIN assessment ON assessment.id = assessment_targets.assessment_id
       - JOIN scan ON scan.id = observation.scan_id
       - JOIN package ON package.id = finding.package_id
       - WHERE observation.scan_id IN (scan_ids)
-            AND assessment.variant_id = scan.variant_id
+            AND assessment_targets.variant_id = scan.variant_id
+            AND (assessment.origin IS NULL OR assessment.origin NOT IN ('custom', 'ai'))
     """
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     if not scan_ids:
         return []
@@ -262,12 +268,14 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
         )
         .select_from(Observation)
         .join(Finding, Finding.id == Observation.finding_id)
-        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+        .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
         .join(Scan, Scan.id == Observation.scan_id)
         .join(Package, Package.id == Finding.package_id)
         .where(
             Observation.scan_id.in_(scan_ids),
-            Assessment.variant_id == Scan.variant_id,
+            AssessmentTarget.variant_id == Scan.variant_id,
+            db.or_(Assessment.origin.is_(None), Assessment.origin.notin_(("custom", "ai"))),
         )
     ).all()
 

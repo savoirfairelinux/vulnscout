@@ -841,3 +841,28 @@ class TestGlobalAssessmentRowsByScan:
             assert uuid.UUID(ids["pkg_new_id"]) in pkg_ids
             # …the custom-origin assessment (on the removed package) does not.
             assert uuid.UUID(ids["pkg_removed_id"]) not in pkg_ids
+
+    def test_excludes_ai_origin(self, app, ids):
+        """A pending AI-suggestion assessment must not leak into scan diffs.
+
+        Regression test: this call used to guard with ``origin != "custom"``,
+        which lets an "ai"-origin assessment straight through — unlike the
+        sibling functions in this module, which already excluded both
+        "custom" and "ai".
+        """
+        from src.routes._scan_diff import _global_assessment_rows_by_scan
+        from src.models.assessment import Assessment
+        with app.app_context():
+            tool = uuid.UUID(ids["tool_scan_id"])
+            # Retarget the existing custom-origin assessment (on the removed
+            # package) to origin="ai" to isolate the ai-leak from the
+            # already-covered custom-origin exclusion above.
+            assess = _db.session.execute(
+                _db.select(Assessment).where(Assessment.origin == "custom")
+            ).scalar_one()
+            assess.origin = "ai"
+            _db.session.commit()
+
+            rows = _global_assessment_rows_by_scan([tool])
+            pkg_ids = {pkg for (_aid, pkg) in rows.get(tool, [])}
+            assert uuid.UUID(ids["pkg_removed_id"]) not in pkg_ids
