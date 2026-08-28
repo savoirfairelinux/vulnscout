@@ -128,6 +128,26 @@ describe('asAssessment optional fields', () => {
     const assessed = asAssessment(data as any) as any;
     expect(assessed.vuln_texts).toBeUndefined();
   });
+
+  test('parses variant_ids when present', () => {
+    const data = {
+      id: 'a1', vuln_id: 'CVE-2020-1', status: 'fixed',
+      timestamp: '2021-01-02T00:00:00Z',
+      packages: ['pkgA@1.0', 'pkgB@1.0'],
+      variant_ids: ['v1', 'v2'],
+    };
+    const parsed = asAssessment(data as any) as any;
+    expect(parsed.variant_ids).toEqual(['v1', 'v2']);
+  });
+
+  test('defaults variant_ids to an empty array when absent', () => {
+    const data = {
+      id: 'a1', vuln_id: 'CVE-2020-1', status: 'fixed',
+      timestamp: '2021-01-02T00:00:00Z', packages: [],
+    };
+    const parsed = asAssessment(data as any) as any;
+    expect(parsed.variant_ids).toEqual([]);
+  });
 });
 
 describe('removeDuplicateAssessments', () => {

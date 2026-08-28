@@ -20,6 +20,7 @@ type Assessment = {
     vuln_id: string;
     packages: string[];
     variant_id?: string;
+    variant_ids?: string[];
     origin: string;
     status: string;
     simplified_status: string;
@@ -135,6 +136,7 @@ const asAssessment = (data: any): Assessment | [] => {
             vuln_id,
             packages: packageId ? [packageId] : [],
             variant_id,
+            variant_ids: variant_id ? [variant_id] : [],
             timestamp,
             status,
             details_loaded: false,
@@ -150,6 +152,7 @@ const asAssessment = (data: any): Assessment | [] => {
         vuln_id: data.vuln_id,
         packages: asStringArray(data?.packages),
         variant_id: undefined,
+        variant_ids: [],
         origin: typeof data?.origin === "string" ? data.origin : "sbom",
         status: data.status,
         simplified_status: `[invalid status] ${data.status}`,
@@ -165,6 +168,7 @@ const asAssessment = (data: any): Assessment | [] => {
     if (typeof STATUS_VEX_TO_GRAPH?.[data.status] === "string")
         item.simplified_status = STATUS_VEX_TO_GRAPH[data.status];
     if (typeof data?.variant_id === "string") item.variant_id = data.variant_id;
+    if (Array.isArray(data?.variant_ids)) item.variant_ids = asStringArray(data.variant_ids);
     if (typeof data?.status_notes === "string") item.status_notes = data.status_notes;
     if (typeof data?.justification === "string") item.justification = data.justification;
     if (typeof data?.impact_statement === "string") item.impact_statement = data.impact_statement;
