@@ -958,12 +958,16 @@ def init_app(app: Flask) -> None:
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         rows = []
+        seen_ids: set[UUID] = set()
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
+                if a.id in seen_ids:
+                    continue
                 if project_variant_ids is not None and not any(
                     t.variant_id in project_variant_ids for t in a.target_rows
                 ):
                     continue
+                seen_ids.add(a.id)
                 rows.append(a)
         assessments = [a.to_dict() for a in rows]
         annotate_assessments_outdated(assessments)
@@ -993,12 +997,16 @@ def init_app(app: Flask) -> None:
             ).scalars())
 
         rows = []
+        seen_ids: set[UUID] = set()
         for finding in Finding.get_by_vulnerability(vuln_id):
             for a in DBAssessment.get_by_finding(finding.id):
+                if a.id in seen_ids:
+                    continue
                 if project_variant_ids is not None and not any(
                     t.variant_id in project_variant_ids for t in a.target_rows
                 ):
                     continue
+                seen_ids.add(a.id)
                 rows.append(a)
         return build_groups(rows), 200
 
@@ -1467,10 +1475,9 @@ def init_app(app: Flask) -> None:
         try:
             with batch_session():
                 # A batch is one user action but may span several CVEs,
-                # several projects and several distinct contents. Each
-                # created row is its own group — batching writes never
-                # fuses rows together (per-package/per-row fusion at write
-                # time is out of scope for this phase).
+                # several projects and several distinct contents. Each item
+                # creates exactly one row covering every package in that
+                # item; batching never fuses separate items together.
                 created_rows: list[DBAssessment] = []
                 for assessment, variant_id, item_packages, valid_findings in prepared:
                     item_targets = [

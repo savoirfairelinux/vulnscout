@@ -160,16 +160,20 @@ def test_approve_promotes_group_to_custom(client):
     assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
 
 
-def test_approve_promotes_only_the_addressed_row(client):
-    """A multi-package AI write still creates one row per package (write-path
-    migration to a shared multi-target assessment is out of scope for this
-    read-path task); each row is now its own group, so approving one no
-    longer promotes its siblings."""
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    rows = body["assessments"]
-    assert len(rows) == 2
-    first, second = rows
+def test_approve_promotes_only_the_addressed_row(client, app):
+    """Two separate AI writes (different variants) are two separate user
+    actions and stay two separate rows; approving one's group must not
+    promote the other."""
+    other_variant = "22222222-2222-2222-2222-222222222224"
+    _add_variant(app, other_variant)
+
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
     assert first["group_id"] == first["id"]
+    assert second["group_id"] == second["id"]
+    assert first["id"] != second["id"]
 
     resp = client.post(f"/api/assessment-groups/{first['group_id']}/approve")
 
@@ -268,13 +272,16 @@ def test_joining_a_pending_ai_group_with_a_custom_row_no_longer_conflicts(client
     assert client.post(f"/api/assessment-groups/{group_id}/approve").status_code == 200
 
 
-def test_reject_deletes_only_the_addressed_row(client):
-    """A multi-package AI write still creates one row per package; rejecting
-    one row's group no longer deletes its siblings."""
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    rows = body["assessments"]
-    assert len(rows) == 2
-    first, second = rows
+def test_reject_deletes_only_the_addressed_row(client, app):
+    """Two separate AI writes (different variants) stay two separate rows;
+    rejecting one's group must not delete the other."""
+    other_variant = "22222222-2222-2222-2222-222222222225"
+    _add_variant(app, other_variant)
+
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
 
     resp = client.post(f"/api/assessment-groups/{first['group_id']}/reject")
 
@@ -502,15 +509,17 @@ def test_pending_ai_excluded_from_report_templates(client):
 
 # ── legacy per-assessment approve/reject (compatibility wrappers) ─────────
 
-def test_legacy_approve_promotes_only_the_addressed_row(client):
-    """Pre-group clients address one id. A multi-package write still creates
-    one row per package (write-path migration is out of scope for this
-    read-path task); each row is now its own group, so the legacy wrapper
-    only ever promotes the addressed row."""
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    rows = body["assessments"]
-    assert len(rows) == 2
-    first, second = rows
+def test_legacy_approve_promotes_only_the_addressed_row(client, app):
+    """Pre-group clients address one id. Two separate AI writes (different
+    variants) stay two separate rows, so the legacy wrapper only ever
+    promotes the addressed row."""
+    other_variant = "22222222-2222-2222-2222-222222222226"
+    _add_variant(app, other_variant)
+
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
 
     resp = client.post(f"/api/assessments/{first['id']}/approve")
 
@@ -533,11 +542,14 @@ def test_legacy_approve_works_on_an_ungrouped_assessment(client):
     assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
 
 
-def test_legacy_reject_deletes_only_the_addressed_row(client):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    rows = body["assessments"]
-    assert len(rows) == 2
-    first, second = rows
+def test_legacy_reject_deletes_only_the_addressed_row(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222227"
+    _add_variant(app, other_variant)
+
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
 
     resp = client.post(f"/api/assessments/{first['id']}/reject")
 

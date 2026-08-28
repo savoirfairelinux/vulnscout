@@ -2877,19 +2877,29 @@ def test_reconcile_rejects_mismatched_vuln_id(client, demo_ids):
 
 
 def test_delete_group_removes_only_the_addressed_row(client, demo_ids):
-    """A multi-package write still creates one independent group per package."""
-    created = client.post(
+    """Two independent single-package writes stay two independent groups;
+    deleting one must not touch the other."""
+    pkg_a, pkg_b = demo_ids["two_packages"]
+    row_a = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
             "status": "not_affected",
             "justification": "component_not_present",
-            "packages": demo_ids["two_packages"],
+            "packages": [pkg_a],
             "variant_id": demo_ids["variant_id"],
         },
-    ).get_json()
-    rows = created["assessments"]
-    assert len({row["group_id"] for row in rows}) == 2, "each package is its own group"
-    group_id = rows[0]["group_id"]
+    ).get_json()["assessment"]
+    row_b = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [pkg_b],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()["assessment"]
+    assert row_a["group_id"] != row_b["group_id"], "each write is its own group"
+    group_id = row_a["group_id"]
 
     response = client.delete(f"/api/assessment-groups/{group_id}")
 
@@ -2897,26 +2907,35 @@ def test_delete_group_removes_only_the_addressed_row(client, demo_ids):
     assert response.get_json()["deleted_ids"] == [group_id]
     assert client.get(f"/api/assessment-groups/{group_id}").status_code == 404
     # The sibling package's independent group is untouched.
-    assert client.get(f"/api/assessment-groups/{rows[1]['group_id']}").status_code == 200
+    assert client.get(f"/api/assessment-groups/{row_b['group_id']}").status_code == 200
 
 
 def test_deleting_one_assessment_does_not_touch_the_sibling_packages_group(client, demo_ids):
-    created = client.post(
+    pkg_a, pkg_b = demo_ids["two_packages"]
+    row_a = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
             "status": "not_affected",
             "justification": "component_not_present",
-            "packages": demo_ids["two_packages"],
+            "packages": [pkg_a],
             "variant_id": demo_ids["variant_id"],
         },
-    ).get_json()
-    rows = created["assessments"]
+    ).get_json()["assessment"]
+    row_b = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [pkg_b],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()["assessment"]
 
-    client.delete(f"/api/assessments/{rows[0]['id']}")
+    client.delete(f"/api/assessments/{row_a['id']}")
 
-    assert client.get(f"/api/assessment-groups/{rows[0]['group_id']}").status_code == 404
-    sibling_group = client.get(f"/api/assessment-groups/{rows[1]['group_id']}").get_json()
-    assert sibling_group["assessment_ids"] == [rows[1]["id"]]
+    assert client.get(f"/api/assessment-groups/{row_a['group_id']}").status_code == 404
+    sibling_group = client.get(f"/api/assessment-groups/{row_b['group_id']}").get_json()
+    assert sibling_group["assessment_ids"] == [row_b["id"]]
 
 
 def test_promote_returns_the_assessments_own_group_id(client, demo_ids):
