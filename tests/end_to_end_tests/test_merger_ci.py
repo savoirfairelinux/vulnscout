@@ -570,7 +570,7 @@ def test_export_custom_vulnscout_data_success_variant(app, tmp_path):
     out_file = tmp_path / f"custom_vulnscout_data_{_VARIANT_NAME}.json"
     assert out_file.exists()
     document = json.loads(out_file.read_text())
-    assert document["version"] == 1
+    assert document["version"] == 2
     assert "openvex" not in document.get("@context", "")
 
 

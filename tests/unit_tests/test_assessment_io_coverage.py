@@ -127,7 +127,7 @@ class TestBuildCustomDataExport:
 
             result = build_custom_data_export(variant_ids=[var.id])
 
-        assert result["version"] == 1
+        assert result["version"] == 2
         assert len(result["assessments"]) == 1
         # variant name should be resolved on the exported assessment
         assert result["assessments"][0]["variant"] == "io-cov-var"
@@ -167,6 +167,7 @@ class TestBuildCustomDataExport:
             "packages": ["ai-pkg@1.0.0"],
             "variant_id": str(var.id),
             "variant": "io-cov-var",
+            "targets": [{"variant_id": str(var.id), "package": "ai-pkg@1.0.0"}],
         }]
 
 

@@ -1054,7 +1054,7 @@ def test_export_custom_data_basic(client):
     resp = client.get("/api/assessments/review/export-custom-data")
     assert resp.status_code == 200
     data = json.loads(resp.data)
-    assert data["version"] == 1
+    assert data["version"] == 2
     assert "exported_at" in data
     assert isinstance(data["assessments"], list)
     assert len(data["assessments"]) >= 1
@@ -2137,7 +2137,7 @@ def test_export_import_custom_data_round_trip(client):
     export_resp = client.get("/api/assessments/review/export-custom-data")
     assert export_resp.status_code == 200
     exported = json.loads(export_resp.data)
-    assert exported["version"] == 1
+    assert exported["version"] == 2
     assert len(exported["assessments"]) >= 1
     exported["project_id"] = str(PROJECT_UUID)
 

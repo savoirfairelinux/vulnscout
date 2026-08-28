@@ -203,7 +203,7 @@ def detect_review_export_format(doc: object) -> str:
         return "openvex"
     if not isinstance(doc, dict):
         raise ValueError("Export file must contain a JSON object")
-    if doc.get("version") == 1 and isinstance(doc.get("assessments"), list):
+    if doc.get("version") in (1, 2) and isinstance(doc.get("assessments"), list):
         for section in _CUSTOM_EXPORT_SECTIONS:
             value = doc.get(section, [])
             if not isinstance(value, list):
@@ -444,6 +444,76 @@ def duplicate_assessment_query(
     return query
 
 
+def duplicate_multitarget_assessment_exists(
+    resolved_targets: "list[tuple[_uuid.UUID, _uuid.UUID]]",
+    status: str,
+    origin: str,
+    timestamp: "_dt | None" = None,
+) -> bool:
+    """Return True when an assessment with exactly this target set already exists.
+
+    ``duplicate_assessment_query`` filters on the scalar ``finding_id``/
+    ``variant_id`` columns, which are ``NULL`` on a genuine multi-target
+    assessment (2+ targets created via ``targets=``). Re-importing such a row
+    would therefore never match there and would create a duplicate on every
+    import. This checks the *set* of ``(variant_id, finding_id)`` pairs
+    instead — set **equality**, not overlap, since an assessment covering a
+    superset or subset of targets is a different assessment, not a repeat of
+    this one.
+
+    Runs exactly two queries regardless of how many targets are in
+    *resolved_targets*: one to find candidate assessment ids that match on
+    status/origin/timestamp and overlap this exact target set, one to load
+    the full target rows of those (typically few) candidates for the
+    equality check in Python. Called once per imported statement/entry, so
+    this adds a constant, not quadratic, amount of work to an import.
+    """
+    from sqlalchemy import func, or_
+    from ..extensions import db
+    from ..models.assessment import Assessment as DBAssessment
+    from ..models.assessment_target import AssessmentTarget
+
+    wanted = set(resolved_targets)
+    if not wanted:
+        return False
+
+    pair_filters = [
+        (AssessmentTarget.variant_id == v) & (AssessmentTarget.finding_id == f)
+        for v, f in wanted
+    ]
+    candidates_query = (
+        db.select(AssessmentTarget.assessment_id)
+        .join(DBAssessment, DBAssessment.id == AssessmentTarget.assessment_id)
+        .where(
+            DBAssessment.status == status,
+            DBAssessment.origin == origin,
+            or_(*pair_filters),
+        )
+    )
+    if timestamp is not None:
+        candidates_query = candidates_query.where(DBAssessment.timestamp == timestamp)
+    candidates_query = candidates_query.group_by(AssessmentTarget.assessment_id).having(
+        func.count(AssessmentTarget.assessment_id) == len(wanted)
+    )
+    candidate_ids = db.session.execute(candidates_query).scalars().all()
+    if not candidate_ids:
+        return False
+
+    rows = db.session.execute(
+        db.select(
+            AssessmentTarget.assessment_id,
+            AssessmentTarget.variant_id,
+            AssessmentTarget.finding_id,
+        ).where(AssessmentTarget.assessment_id.in_(candidate_ids))
+    ).all()
+
+    by_assessment: "dict[_uuid.UUID, set[tuple[_uuid.UUID, _uuid.UUID]]]" = {}
+    for assessment_id, v, f in rows:
+        by_assessment.setdefault(assessment_id, set()).add((v, f))
+
+    return any(pairs == wanted for pairs in by_assessment.values())
+
+
 def import_statements(
     statements: list[dict[str, Any]],
     variant_id: "_uuid.UUID",
@@ -471,7 +541,6 @@ def import_statements(
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
-    from ..models.assessment_group_member import AssessmentGroupMember
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
     from ..models.finding import Finding
@@ -526,8 +595,13 @@ def import_statements(
             stmt.get("timestamp"), use_original_timestamps
         )
 
-        statement_created_ids: list[_uuid.UUID] = []
-
+        # Resolve every product to a (variant, finding) target first: one
+        # statement becomes one multi-target assessment, so every product it
+        # names shares one judgement. Products already covered by an
+        # identical existing assessment are skipped, and a duplicate product
+        # within the same statement collapses to a single target.
+        resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
+        seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
         for pkg_string_id in pkg_ids:
             try:
                 if "@" in pkg_string_id:
@@ -551,24 +625,11 @@ def import_statements(
                     skipped += 1
                     continue
 
-                db_a = DBAssessment.create(
-                    status=status,
-                    simplified_status=STATUS_TO_SIMPLIFIED.get(
-                        status, "Pending Assessment"
-                    ),
-                    finding_id=finding.id,
-                    variant_id=variant_id,
-                    origin="custom",
-                    status_notes=status_notes,
-                    justification=justification,
-                    impact_statement=impact_statement,
-                    workaround=workaround,
-                    responses=[],
-                    timestamp=imported_ts,
-                    commit=True,
-                )
-                created.append(db_a.to_dict())
-                statement_created_ids.append(db_a.id)
+                pair = (variant_id, finding.id)
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                resolved_targets.append(pair)
             except Exception as e:
                 errors.append({
                     "vuln_id": vuln_name,
@@ -576,8 +637,49 @@ def import_statements(
                     "error": str(e),
                 })
 
-        if len(statement_created_ids) > 1:
-            AssessmentGroupMember.create_group(statement_created_ids, commit=True)
+        if not resolved_targets:
+            continue
+
+        # The per-product check above only matches single-target assessments
+        # (their scalar finding_id/variant_id are set). A genuine multi-target
+        # assessment's scalars are NULL, so it is invisible there; check the
+        # full resolved target set for an exact match before creating one.
+        if len(resolved_targets) > 1 and duplicate_multitarget_assessment_exists(
+            resolved_targets, status=status, origin="custom", timestamp=imported_ts,
+        ):
+            skipped += 1
+            continue
+
+        try:
+            create_kwargs: dict[str, Any] = dict(
+                status=status,
+                simplified_status=STATUS_TO_SIMPLIFIED.get(
+                    status, "Pending Assessment"
+                ),
+                origin="custom",
+                status_notes=status_notes,
+                justification=justification,
+                impact_statement=impact_statement,
+                workaround=workaround,
+                responses=[],
+                timestamp=imported_ts,
+                commit=True,
+            )
+            if len(resolved_targets) == 1:
+                only_variant_id, only_finding_id = resolved_targets[0]
+                db_a = DBAssessment.create(
+                    finding_id=only_finding_id,
+                    variant_id=only_variant_id,
+                    **create_kwargs,
+                )
+            else:
+                db_a = DBAssessment.create(targets=resolved_targets, **create_kwargs)
+            created.append(db_a.to_dict())
+        except Exception as e:
+            # A single catch-all: GroupInvariantError (targets can't share
+            # an assessment) and any other creation failure are reported the
+            # same way, so there is no behavioural reason to distinguish them.
+            errors.append({"vuln_id": vuln_name, "error": str(e)})
 
     return created, errors, skipped
 
@@ -657,6 +759,13 @@ def build_custom_data_export(
                 "timestamp": assessment_dict["timestamp"],
                 "packages": assessment_dict["packages"],
                 "variant_id": assessment_dict.get("variant_id"),
+                "targets": [
+                    {
+                        "variant_id": str(row.variant_id),
+                        "package": row.finding.package.string_id,
+                    }
+                    for row in assessment.target_rows
+                ],
             })
         return exported
 
@@ -763,7 +872,7 @@ def build_custom_data_export(
         item["variant"] = variant_name_by_id.get(vid) if vid else None
 
     return {
-        "version": 1,
+        "version": 2,
         "exported_at": _dt.now(_tz.utc).isoformat(),
         "assessments": exported_assessments,
         "ai_assessments": exported_ai_assessments,
@@ -807,17 +916,19 @@ def import_custom_data(
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
-    from ..models.assessment_group_member import AssessmentGroupMember
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
     from ..models.finding import Finding
     from ..models.scan import Scan
     from ..models.observation import Observation
+    from ..models.variant import Variant as DBVariant
     from .vuln_helpers import (
         validate_effort,
         validate_and_apply_cvss,
         apply_effort,
     )
+
+    is_v2 = data.get("version") == 2
 
     result: dict[str, Any] = {
         "status": "success",
@@ -874,6 +985,60 @@ def import_custom_data(
             return None
         return mapped_variant.id
 
+    def _resolve_v2_target(
+        raw_target: Any, vuln_name: str,
+    ) -> "tuple[_uuid.UUID | None, _uuid.UUID | None, str | None]":
+        """Resolve one version-2 ``{"variant_id", "package"}`` target.
+
+        Returns ``(variant_id, finding_id, None)`` on success or
+        ``(None, None, error_message)`` when the pair does not resolve. Unlike
+        the version-1 path, packages are looked up rather than auto-created:
+        a version-2 export always refers to packages/findings this database
+        already knows, so a name that does not resolve is reported instead of
+        silently fabricating a new package/finding.
+        """
+        if not isinstance(raw_target, dict):
+            return None, None, "Invalid target entry"
+        variant_token = raw_target.get("variant_id")
+        pkg_string = raw_target.get("package")
+        if not variant_token or not pkg_string:
+            return None, None, "Target missing variant_id or package"
+        try:
+            resolved_variant_id = _uuid.UUID(str(variant_token))
+        except (ValueError, TypeError):
+            return None, None, f"Invalid variant_id: {variant_token!r}"
+        if DBVariant.get_by_id(resolved_variant_id) is None:
+            return None, None, f"Variant '{variant_token}' not found"
+
+        if "::" in pkg_string:
+            base, supplier = pkg_string.split("::", 1)
+        else:
+            base, supplier = pkg_string, ""
+        if "@" in base:
+            name, version = base.rsplit("@", 1)
+        else:
+            name, version = base, ""
+        pkg = db.session.execute(
+            db.select(Package).where(
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == supplier,
+            )
+        ).scalar_one_or_none()
+        if pkg is None:
+            return None, None, f"Package '{pkg_string}' not found"
+        finding = db.session.execute(
+            db.select(Finding).where(
+                Finding.package_id == pkg.id,
+                Finding.vulnerability_id == vuln_name.upper(),
+            )
+        ).scalar_one_or_none()
+        if finding is None:
+            return None, None, (
+                f"No finding for package '{pkg_string}' and vulnerability '{vuln_name}'"
+            )
+        return resolved_variant_id, finding.id, None
+
     def _import_assessments(
         key: str,
         origin: str,
@@ -894,6 +1059,109 @@ def import_custom_data(
                     "error": "Missing vuln_id or status",
                 })
                 continue
+
+            justification = a.get("justification", "")
+            impact_statement = a.get("impact_statement", "")
+            status_notes = a.get("status_notes", "")
+            workaround = a.get("workaround", "")
+            imported_ts = parse_imported_timestamp(
+                a.get("timestamp"), use_original_timestamps
+            )
+
+            if is_v2:
+                raw_targets = a.get("targets", [])
+                if not isinstance(raw_targets, list) or not raw_targets:
+                    result["errors"].append({
+                        "vuln_id": vuln_name,
+                        "error": "No targets found",
+                    })
+                    continue
+
+                resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
+                seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
+                for raw_target in raw_targets:
+                    pkg_string = (
+                        raw_target.get("package")
+                        if isinstance(raw_target, dict) else None
+                    )
+                    v_id, f_id, error = _resolve_v2_target(raw_target, vuln_name)
+                    if error is not None:
+                        result["errors"].append({
+                            "vuln_id": vuln_name,
+                            "package": pkg_string,
+                            "error": error,
+                        })
+                        continue
+                    assert v_id is not None and f_id is not None
+
+                    existing = db.session.execute(
+                        duplicate_assessment_query(
+                            finding_id=f_id,
+                            variant_id=v_id,
+                            status=status,
+                            origin=origin,
+                            timestamp=imported_ts,
+                        )
+                    ).scalars().first()
+                    if existing is not None:
+                        result[skipped_key] += 1
+                        continue
+
+                    pair = (v_id, f_id)
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+                    resolved_targets.append(pair)
+
+                if not resolved_targets:
+                    continue
+
+                # The per-target check above only matches single-target
+                # assessments (their scalar finding_id/variant_id are set). A
+                # genuine multi-target assessment's scalars are NULL, so it
+                # is invisible there; check the full resolved target set for
+                # an exact match before creating one.
+                if len(resolved_targets) > 1 and duplicate_multitarget_assessment_exists(
+                    resolved_targets, status=status, origin=origin, timestamp=imported_ts,
+                ):
+                    result[skipped_key] += 1
+                    continue
+
+                try:
+                    create_kwargs: dict[str, Any] = dict(
+                        status=status,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(
+                            status, "Pending Assessment"
+                        ),
+                        origin=origin,
+                        status_notes=status_notes,
+                        justification=justification,
+                        impact_statement=impact_statement,
+                        workaround=workaround,
+                        responses=[],
+                        timestamp=imported_ts,
+                        commit=True,
+                    )
+                    if len(resolved_targets) == 1:
+                        only_variant_id, only_finding_id = resolved_targets[0]
+                        DBAssessment.create(
+                            finding_id=only_finding_id,
+                            variant_id=only_variant_id,
+                            **create_kwargs,
+                        )
+                    else:
+                        DBAssessment.create(targets=resolved_targets, **create_kwargs)
+                    result[imported_key] += 1
+                except Exception as e:
+                    # A single catch-all: GroupInvariantError (targets can't
+                    # share an assessment, e.g. they span two projects) and
+                    # any other creation failure are reported the same way,
+                    # so there is no behavioural reason to distinguish them.
+                    result["errors"].append({"vuln_id": vuln_name, "error": str(e)})
+                continue
+
+            # Version 1: one statement/entry fans out to one assessment per
+            # package (the legacy shape kept importable for existing backups).
             pkg_ids = a.get("packages", [])
             if not pkg_ids:
                 result["errors"].append({
@@ -914,16 +1182,6 @@ def import_custom_data(
                     "error": f"Variant '{variant_token}' not found",
                 })
                 continue
-
-            justification = a.get("justification", "")
-            impact_statement = a.get("impact_statement", "")
-            status_notes = a.get("status_notes", "")
-            workaround = a.get("workaround", "")
-            imported_ts = parse_imported_timestamp(
-                a.get("timestamp"), use_original_timestamps
-            )
-
-            entry_created_ids: list[_uuid.UUID] = []
 
             for pkg_string_id in pkg_ids:
                 try:
@@ -952,7 +1210,7 @@ def import_custom_data(
                         result[skipped_key] += 1
                         continue
 
-                    db_a = DBAssessment.create(
+                    DBAssessment.create(
                         status=status,
                         simplified_status=STATUS_TO_SIMPLIFIED.get(
                             status, "Pending Assessment"
@@ -969,16 +1227,12 @@ def import_custom_data(
                         commit=True,
                     )
                     result[imported_key] += 1
-                    entry_created_ids.append(db_a.id)
                 except Exception as e:
                     result["errors"].append({
                         "vuln_id": vuln_name,
                         "package": pkg_string_id,
                         "error": str(e),
                     })
-
-            if len(entry_created_ids) > 1:
-                AssessmentGroupMember.create_group(entry_created_ids, commit=True)
 
     # Import pending AI assessments separately so the Review page continues to
     # surface them in its AI Assessments tab for approval or rejection.
