@@ -129,7 +129,7 @@ class OpenVex:
                     stmt["scanners"] = list(filter(lambda x: x != "openvex", vuln.found_by))
 
             pkg_list = []
-            for pkg_id in assess.packages:
+            for pkg_id in self._in_scope_packages(assess):
                 pkg = self.packagesCtrl.get(pkg_id)
 
                 if pkg is not None:
@@ -155,3 +155,36 @@ class OpenVex:
 
             statements.append(stmt)
         return output
+
+    def _in_scope_packages(self, assess: Assessment) -> list:
+        """Return *assess*'s package ids, restricted to the export scope.
+
+        ``Assessment.packages`` has no scope context — it returns every
+        target's package. ``_apply_scope`` (in ``AssessmentsController``)
+        admits an assessment as soon as any one of its targets is in scope,
+        so a multi-target assessment spanning an in-scope and an
+        out-of-scope variant must have its out-of-scope target's package
+        filtered out here, or it would be disclosed in a scoped export.
+
+        With 0 or 1 target there is only ever one variant involved, so
+        there is nothing to leak — use ``assess.packages`` directly. This
+        also keeps transient/DTO assessments (e.g. from ``load_from_dict``,
+        which never populate ``target_rows``) working unchanged.
+        """
+        targets = list(assess.target_rows)
+        if len(targets) <= 1:
+            return assess.packages
+        scope = self.assessmentsCtrl.scope
+        if scope is None:
+            return assess.packages
+        allowed = scope.variant_ids
+        result: list = []
+        targets = sorted(targets, key=lambda t: (str(t.variant_id or ""), str(t.finding_id or "")))
+        for target in targets:
+            if target.variant_id not in allowed:
+                continue
+            if target.finding is not None and target.finding.package is not None:
+                pkg_id = target.finding.package.string_id
+                if pkg_id not in result:
+                    result.append(pkg_id)
+        return result
