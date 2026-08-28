@@ -182,11 +182,7 @@ class Assessment(Base):
         # (e.g. by intersecting with their own allowed variants).
         result: list[str] = []
         try:
-            targets = sorted(
-                self.target_rows,
-                key=lambda t: (str(t.variant_id or ""), str(t.finding_id or "")),
-            )
-            for target in targets:
+            for target in self._sorted_target_rows():
                 if target.finding is not None and target.finding.package is not None:
                     pkg_id = target.finding.package.string_id
                     if pkg_id not in result:
@@ -203,6 +199,38 @@ class Assessment(Base):
     def targets(self) -> "list[tuple[uuid.UUID, uuid.UUID]]":
         """Every ``(variant_id, finding_id)`` pair this assessment applies to."""
         return [(t.variant_id, t.finding_id) for t in self.target_rows]
+
+    @property
+    def target_pairs(self) -> "list[dict[str, str]]":
+        """Every target as a serialisable ``(variant_id, package)`` pair.
+
+        ``packages`` and ``variant_ids`` are two independent flattened sets, so
+        together they describe the cross-product rather than the targets: a
+        consumer reading them cannot tell an assessment covering
+        ``(A, openssl)`` and ``(B, zlib)`` apart from one that also covers
+        ``(A, zlib)``.  Anything answering a per-(variant, package) question
+        must read this instead.  Ordered like :attr:`packages`, and empty for a
+        DTO, which has no stored targets.
+        """
+        pairs: list[dict[str, str]] = []
+        try:
+            for target in self._sorted_target_rows():
+                if target.finding is None or target.finding.package is None:
+                    continue
+                pairs.append({
+                    "variant_id": str(target.variant_id),
+                    "package": target.finding.package.string_id,
+                })
+        except Exception as e:
+            verbose(f"[Assessment.target_pairs {self.id!r}] {e}")
+        return pairs
+
+    def _sorted_target_rows(self) -> "list[AssessmentTarget]":
+        """Target rows in a stable order; ``target_rows`` has none of its own."""
+        return sorted(
+            self.target_rows,
+            key=lambda t: (str(t.variant_id or ""), str(t.finding_id or "")),
+        )
 
     @property
     def single_variant_id(self) -> "uuid.UUID | None":
@@ -423,6 +451,9 @@ class Assessment(Base):
             "packages": list(self.packages),
             "variant_id": str(self.single_variant_id) if self.single_variant_id else None,
             "variant_ids": variant_ids,
+            # packages x variant_ids is the cross-product, which a sparse
+            # target set is not; consumers pairing the two must read this.
+            "targets": self.target_pairs,
             "group_id": str(group_id) if group_id else None,
             "timestamp": ts,
             "last_update": ts or "",
