@@ -337,3 +337,50 @@ def test_pending_ai_guard_blocks_a_variant_already_covered(client, app):
         },
     )
     assert response_b.status_code == 409
+
+
+# ── R5: the wire shape must keep the (variant, package) pairs ─────────────
+
+def test_to_dict_carries_the_exact_target_pairs(app):
+    """packages x variant_ids is a cross-product, and a sparse assessment is
+    not: without the pairs a consumer cannot tell (A, cairo)+(B, abc) apart
+    from an assessment that also covers (A, abc) and (B, cairo)."""
+    with app.app_context():
+        assessment = _make_cross_variant_assessment()
+
+        serialized = assessment.to_dict()
+
+    assert serialized["targets"] == [
+        {"variant_id": str(VARIANT_A), "package": PKG_A},
+        {"variant_id": str(VARIANT_B), "package": PKG_B},
+    ]
+
+
+def test_vulnerability_assessments_endpoint_carries_target_pairs(app, client):
+    """This endpoint feeds the vuln modal's per-variant status matrix."""
+    with app.app_context():
+        _make_cross_variant_assessment()
+
+    response = client.get(f"/api/vulnerabilities/{VULN_ID}/assessments")
+
+    assert response.status_code == 200
+    record = next(a for a in response.json if a["origin"] == "custom")
+    assert {(t["variant_id"], t["package"]) for t in record["targets"]} == {
+        (str(VARIANT_A), PKG_A),
+        (str(VARIANT_B), PKG_B),
+    }
+
+
+def test_assessments_index_carries_target_pairs(app, client):
+    """/api/assessments builds its dicts by hand rather than via to_dict."""
+    with app.app_context():
+        _make_cross_variant_assessment()
+
+    response = client.get("/api/assessments")
+
+    assert response.status_code == 200
+    record = next(a for a in response.json if a["origin"] == "custom")
+    assert {(t["variant_id"], t["package"]) for t in record["targets"]} == {
+        (str(VARIANT_A), PKG_A),
+        (str(VARIANT_B), PKG_B),
+    }
