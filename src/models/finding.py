@@ -13,6 +13,7 @@ from .package import Package
 
 if TYPE_CHECKING:
     from ..models import TimeEstimate, Vulnerability, Observation
+    from .assessment_target import AssessmentTarget
 
 
 class Finding(Base):
@@ -34,7 +35,7 @@ class Finding(Base):
     vulnerability: Mapped["Vulnerability"] = relationship(back_populates="findings")
     observations: Mapped[list["Observation"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
-    assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
+    assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(
         back_populates="finding",
     )
     # No delete-orphan cascade: finding_id is part of AssessmentTarget's

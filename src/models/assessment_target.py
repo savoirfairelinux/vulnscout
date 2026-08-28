@@ -10,11 +10,17 @@ A/zlib — so two independent collections would wrongly imply the cross-product.
 """
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db, Base
+
+if TYPE_CHECKING:
+    from .assessment import Assessment
+    from .finding import Finding
+    from .variant import Variant
 
 
 class GroupInvariantError(ValueError):
@@ -43,11 +49,11 @@ class AssessmentTarget(Base):
         ForeignKey("findings.id"), primary_key=True, index=True
     )
 
-    assessment: Mapped["Assessment"] = relationship(back_populates="target_rows")  # noqa: F821
-    finding: Mapped["Finding"] = relationship(  # noqa: F821
+    assessment: Mapped["Assessment"] = relationship(back_populates="target_rows")
+    finding: Mapped["Finding"] = relationship(
         back_populates="assessment_targets", lazy="selectin",
     )
-    variant: Mapped["Variant"] = relationship()  # noqa: F821
+    variant: Mapped["Variant"] = relationship()
 
     def __repr__(self) -> str:
         return (
@@ -73,12 +79,18 @@ def validate_targets(pairs: "list[tuple[uuid.UUID, uuid.UUID]]") -> None:
     variant_ids = {variant_id for variant_id, _ in pairs}
     finding_ids = {finding_id for _, finding_id in pairs}
 
-    projects = dict(db.session.execute(
-        select(Variant.id, Variant.project_id).where(Variant.id.in_(variant_ids))
-    ).all())
-    vulns = dict(db.session.execute(
-        select(Finding.id, Finding.vulnerability_id).where(Finding.id.in_(finding_ids))
-    ).all())
+    projects: dict[uuid.UUID, uuid.UUID] = {
+        row[0]: row[1]
+        for row in db.session.execute(
+            select(Variant.id, Variant.project_id).where(Variant.id.in_(variant_ids))
+        ).all()
+    }
+    vulns: dict[uuid.UUID, str] = {
+        row[0]: row[1]
+        for row in db.session.execute(
+            select(Finding.id, Finding.vulnerability_id).where(Finding.id.in_(finding_ids))
+        ).all()
+    }
 
     missing = [
         f"({variant_id}, {finding_id})"

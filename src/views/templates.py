@@ -247,8 +247,8 @@ class Templates:
         # instead of issuing one SELECT per vulnerability (the previous
         # gets_by_vuln() call), which made large reports extremely slow.
         assessments_by_vuln: dict[str, list] = {}
-        for assessment in kwargs["unfiltered_assessments"].values():
-            assessments_by_vuln.setdefault(assessment["vuln_id"], []).append(assessment)
+        for entry in kwargs["unfiltered_assessments"].values():
+            assessments_by_vuln.setdefault(entry["vuln_id"], []).append(entry)
 
         for vuln_obj in kwargs["unfiltered_vulnerabilities"].values():
             vuln_assessments = list(assessments_by_vuln.get(vuln_obj['id'], []))
@@ -258,10 +258,10 @@ class Templates:
                 vuln_obj['unfiltered_assessments'] = vuln_assessments
                 vuln_obj['assessments'] = []
                 if filter_date is not None:
-                    for assessment in vuln_assessments:
-                        assess_date = datetime.fromisoformat(assessment["timestamp"]).astimezone(timezone.utc)
+                    for entry in vuln_assessments:
+                        assess_date = datetime.fromisoformat(entry["timestamp"]).astimezone(timezone.utc)
                         if assess_date >= filter_date:
-                            vuln_obj['assessments'].append(assessment)
+                            vuln_obj['assessments'].append(entry)
                 else:
                     vuln_obj['assessments'] = vuln_assessments
 
@@ -277,14 +277,14 @@ class Templates:
                     pass
 
         if filter_date is not None:
-            for key, assessment in kwargs["unfiltered_assessments"].items():
-                assess_date = datetime.fromisoformat(assessment["timestamp"]).astimezone(timezone.utc)
+            for key, entry in kwargs["unfiltered_assessments"].items():
+                assess_date = datetime.fromisoformat(entry["timestamp"]).astimezone(timezone.utc)
                 if assess_date >= filter_date:
                     # Key by the same (possibly composite) key as
                     # unfiltered_assessments, not assessment["id"]: every
                     # target of a multi-target assessment shares one "id",
                     # so keying by it would collapse them back together.
-                    kwargs['assessments'][key] = assessment
+                    kwargs['assessments'][key] = entry
         else:
             kwargs["assessments"] = kwargs["unfiltered_assessments"]
 
@@ -318,10 +318,10 @@ class Templates:
 
         for vuln in kwargs["vulnerabilities"].values():
             by_variant: dict = {}
-            for assessment in vuln.get("assessments", []):
-                vid = assessment.get("variant_id")
+            for entry in vuln.get("assessments", []):
+                vid = entry.get("variant_id")
                 if vid:
-                    by_variant.setdefault(vid, []).append(assessment)
+                    by_variant.setdefault(vid, []).append(entry)
             vuln["assessments_by_variant"] = by_variant
             vuln["variant_ids"] = list(by_variant.keys())
 
