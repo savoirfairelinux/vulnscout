@@ -190,6 +190,7 @@ def create_observation_and_assessment(
     Both sets are mutated in-place.  Does **not** commit.
     """
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     pair = (finding.id, scan.id)
     if pair not in observation_pairs:
@@ -200,9 +201,11 @@ def create_observation_and_assessment(
     if fv_key not in assessed_findings:
         assessed_findings.add(fv_key)
         has_assess = db.session.execute(
-            db.select(Assessment.id).where(
-                Assessment.finding_id == finding.id,
-                Assessment.variant_id == variant_uuid,
+            db.select(Assessment.id)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .where(
+                AssessmentTarget.finding_id == finding.id,
+                AssessmentTarget.variant_id == variant_uuid,
             ).limit(1)
         ).scalar_one_or_none()
         if has_assess is None:
