@@ -63,22 +63,24 @@ def validate_assessment_findings(
 
 def create_assessment_record(
     assessment: "DBAssessment",
-    finding_id: UUID,
-    variant_id: UUID,
+    targets: "list[tuple[UUID, UUID]]",
     timestamp: datetime | None = None,
     origin: str = "custom",
     responses: "list[str] | None" = None,
 ) -> "DBAssessment":
-    """Create a single DBAssessment row from a validated DTO.
+    """Create a single DBAssessment row from a validated DTO and target set.
 
-    Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
-    ``responses`` overrides the DTO's own responses; group reconcile uses it so
-    a new member inherits the responses the rest of the group already carries.
+    ``targets`` is every ``(variant_id, finding_id)`` pair this write action
+    resolved. Shared between ``add_assessment`` and ``add_assessments_batch``
+    — every package x variant combo resolved for one user action becomes
+    targets on ONE row, never one row per combo. ``responses`` overrides the
+    DTO's own responses; group reconcile uses it so a new member inherits
+    the responses the rest of the group already carries.
     """
     return DBAssessment.create(
         status=assessment.status or "",
         simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status or "", "Pending Assessment"),
-        targets=[(variant_id, finding_id)],
+        targets=targets,
         origin=origin,
         status_notes=assessment.status_notes,
         justification=assessment.justification,

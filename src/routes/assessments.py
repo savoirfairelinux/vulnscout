@@ -1349,7 +1349,7 @@ def init_app(app: Flask) -> None:
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
                     db_a = create_assessment_record(
-                        assessment, finding.id, variant_id, timestamp=shared_timestamp,
+                        assessment, [(variant_id, finding.id)], timestamp=shared_timestamp,
                         origin=target_origin)
                     created_rows.append(db_a)
         except GroupInvariantError as e:
@@ -1475,7 +1475,7 @@ def init_app(app: Flask) -> None:
                 for assessment, variant_id, item_packages, valid_findings in prepared:
                     for db_pkg in item_packages:
                         created_rows.append(create_assessment_record(
-                            assessment, valid_findings[db_pkg.id].id, variant_id,
+                            assessment, [(variant_id, valid_findings[db_pkg.id].id)],
                             timestamp=getattr(assessment, "timestamp", None),
                         ))
 
