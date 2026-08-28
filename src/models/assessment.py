@@ -393,6 +393,7 @@ class Assessment(Base):
     def to_dict(self) -> dict:
         ts = ensure_utc_iso(self.timestamp)
         group_id = self.group_id
+        variant_ids = sorted({str(t.variant_id) for t in self.target_rows})
         return {
             "id": str(self.id),
             "source": self.source or "",
@@ -400,6 +401,7 @@ class Assessment(Base):
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
             "variant_id": str(self.single_variant_id) if self.single_variant_id else None,
+            "variant_ids": variant_ids,
             "group_id": str(group_id) if group_id else None,
             "timestamp": ts,
             "last_update": ts or "",
