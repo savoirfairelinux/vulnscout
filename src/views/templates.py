@@ -162,10 +162,56 @@ class Templates:
         kwargs["vulnerabilities"] = {}
         # Exclude pending AI-generated assessments from reports — they are not
         # yet reviewed/approved. Their origin becomes "custom" once approved.
-        kwargs["unfiltered_assessments"] = {
-            aid: a for aid, a in self.assessmentsCtrl.to_dict().items()
-            if a.get("origin") != "ai"
-        }
+        #
+        # An assessment can target many (variant, package) pairs at once (see
+        # Assessment.target_rows), so it is expanded into one dict entry per
+        # target here instead of using the legacy scalar variant_id/packages
+        # columns — those are only ever populated for a single-target
+        # assessment and are NULL/empty for a genuine multi-target one.
+        # A target outside the controller's export scope (if any) is
+        # dropped so a multi-target assessment spanning an in-scope and an
+        # out-of-scope variant never leaks the out-of-scope target into this
+        # report/export.
+        scope = self.assessmentsCtrl.scope
+        scope_variant_ids = scope.variant_ids if scope is not None else None
+        kwargs["unfiltered_assessments"] = {}
+        for assessment in self.assessmentsCtrl.get_all_for_report():
+            if assessment.origin == "ai":
+                continue
+            base = assessment.to_dict()
+            # target_rows is lazy="selectin" (Task 1), so this does not add
+            # a per-assessment query; target.finding.package is plain-lazy,
+            # a known N+1 (see Finding.package).
+            targets = sorted(
+                assessment.target_rows,
+                key=lambda t: (str(t.variant_id or ""), str(t.finding_id or "")),
+            )
+            in_scope_targets = [
+                t for t in targets
+                if scope_variant_ids is None or t.variant_id in scope_variant_ids
+            ]
+            if not in_scope_targets:
+                # Either a legacy assessment with no target_rows (defensive
+                # fallback) or every target was scoped out. Only keep the
+                # base entry when there were no targets to begin with, so a
+                # multi-target assessment scoped entirely out of view is
+                # correctly dropped rather than leaking its unscoped form.
+                if not targets:
+                    kwargs["unfiltered_assessments"][str(assessment.id)] = base
+                continue
+            # Preserve the plain assessment-id key for the common single-
+            # target case so existing consumers keyed on `assessment.id`
+            # (e.g. `unfiltered_assessments[aid]`) keep working unchanged.
+            single = len(in_scope_targets) == 1
+            for target in in_scope_targets:
+                pkg_id = None
+                if target.finding is not None and target.finding.package is not None:
+                    pkg_id = target.finding.package.string_id
+                entry = dict(base)
+                entry["variant_id"] = str(target.variant_id) if target.variant_id else None
+                entry["packages"] = [pkg_id] if pkg_id else []
+                key = str(assessment.id) if single else f"{assessment.id}:{target.variant_id}:{target.finding_id}"
+                kwargs["unfiltered_assessments"][key] = entry
         kwargs["assessments"] = {}
 
         if self.projectsCtrl is not None:
@@ -231,10 +277,14 @@ class Templates:
                     pass
 
         if filter_date is not None:
-            for assessment in kwargs["unfiltered_assessments"].values():
+            for key, assessment in kwargs["unfiltered_assessments"].items():
                 assess_date = datetime.fromisoformat(assessment["timestamp"]).astimezone(timezone.utc)
                 if assess_date >= filter_date:
-                    kwargs['assessments'][assessment["id"]] = assessment
+                    # Key by the same (possibly composite) key as
+                    # unfiltered_assessments, not assessment["id"]: every
+                    # target of a multi-target assessment shares one "id",
+                    # so keying by it would collapse them back together.
+                    kwargs['assessments'][key] = assessment
         else:
             kwargs["assessments"] = kwargs["unfiltered_assessments"]
 
