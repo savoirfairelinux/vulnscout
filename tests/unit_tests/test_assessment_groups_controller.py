@@ -125,3 +125,26 @@ def test_load_group_of_an_unknown_id_is_empty(app):
         from src.controllers.assessment_groups import load_group
 
         assert load_group(uuid.uuid4()) == []
+
+
+def test_to_dict_exposes_every_touched_variant(app):
+    with app.app_context():
+        from src.models.assessment import Assessment
+
+        project = uuid.uuid4()
+        variant_a = _make_variant(project, "a")
+        variant_b = _make_variant(project, "b")
+        openssl = _make_finding("CVE-2026-2001", "openssl")
+        zlib = _make_finding("CVE-2026-2001", "zlib")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, openssl.id), (variant_b.id, zlib.id)],
+            commit=True,
+        )
+
+        data = assessment.to_dict()
+
+        assert sorted(data["variant_ids"]) == sorted([str(variant_a.id), str(variant_b.id)])
+        # The legacy singular field still collapses to None for a genuine
+        # cross-variant assessment — unchanged behavior.
+        assert data["variant_id"] is None
