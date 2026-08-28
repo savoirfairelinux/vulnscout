@@ -2,7 +2,8 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments } from '../../src/handlers/assessments';
+import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments, isMultiTargetGroup } from '../../src/handlers/assessments';
+import type { AssessmentTarget } from '../../src/handlers/assessments';
 
 describe('asStringArray', () => {
   test('non array returns empty array', () => {
@@ -187,6 +188,28 @@ describe('removeDuplicateAssessments', () => {
 
   test('empty array returns empty array', () => {
     expect(removeDuplicateAssessments([])).toEqual([]);
+  });
+});
+
+describe('isMultiTargetGroup', () => {
+  const makeTarget = (overrides: Partial<AssessmentTarget> = {}): AssessmentTarget => ({
+    variant_id: 'v1',
+    package: 'pkg@1.0',
+    outdated: false,
+    assessment_id: 'a1',
+    ...overrides,
+  });
+
+  test('single target is not a group', () => {
+    expect(isMultiTargetGroup([makeTarget()])).toBe(false);
+  });
+
+  test('two or more targets is a group', () => {
+    expect(isMultiTargetGroup([makeTarget({ assessment_id: 'a1' }), makeTarget({ assessment_id: 'a2' })])).toBe(true);
+  });
+
+  test('empty targets is not a group', () => {
+    expect(isMultiTargetGroup([])).toBe(false);
   });
 });
 

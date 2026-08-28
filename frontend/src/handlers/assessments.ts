@@ -211,6 +211,10 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
     return uniqueAssessments;
 }
 
+/** A group is user-facing shorthand for "more than one (variant, package)
+ *  target under one assessment id" — a single target is just an assessment. */
+const isMultiTargetGroup = (targets: AssessmentTarget[]): boolean => targets.length > 1;
+
 class Assessments {
     /**
      * Fetch server API to list all packages
@@ -413,4 +417,4 @@ class Assessments {
 }
 
 export default Assessments;
-export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment, removeDuplicateAssessments };
+export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment, removeDuplicateAssessments, isMultiTargetGroup };
