@@ -2569,6 +2569,56 @@ def test_reconcile_adds_targets_for_a_newly_selected_variant(client, demo_ids):
     assert group["assessment_ids"] == [group_id]
 
 
+def test_reconcile_cross_project_variant_is_400_not_500(client, demo_ids):
+    """A reconcile that would target variants from two different projects
+    must surface as HTTP 400 with the invariant's message, not fall through
+    to the generic 500 handler.
+
+    ``add_target`` (called from ``apply_reconcile``) raises
+    ``src.models.assessment_target.GroupInvariantError``, a distinct class
+    from ``src.models.assessment_group_member.GroupInvariantError`` that this
+    route imports and catches. Before the fix, the mismatched except clause
+    let the target-invariant class fall through to ``except Exception``.
+    """
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+
+    pkg_string_id = demo_ids["two_packages"][0]
+    group_id, _ = _create_group(
+        client, demo_ids, packages=[pkg_string_id],
+        variant_id=demo_ids["variant_id"], status="affected",
+    )
+
+    with client.application.app_context():
+        other_project = Project(id=uuid.uuid4(), name="other-project")
+        db.session.add(other_project)
+        other_project_variant = Variant(id=uuid.uuid4(), name="b", project_id=other_project.id)
+        db.session.add(other_project_variant)
+        db.session.commit()
+        scan = Scan(id=uuid.uuid4(), variant_id=other_project_variant.id)
+        db.session.add(scan)
+        package = Package.get_by_string_id(pkg_string_id)
+        finding = Finding.get_or_create(package.id, demo_ids["vuln_id"])
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+        cross_project_variant_id = str(other_project_variant.id)
+
+    resp = _reconcile(
+        client, group_id, demo_ids,
+        packages=[pkg_string_id],
+        variant_ids=[demo_ids["variant_id"], cross_project_variant_id],
+        status="fixed",
+    )
+
+    assert resp.status_code == 400, resp.get_json()
+    assert "different projects" in resp.get_json()["error"]
+
+
 def test_reconcile_rejects_unknown_package(client, demo_ids):
     group_id, _ = _create_group(client, demo_ids)
 

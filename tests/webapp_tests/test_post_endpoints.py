@@ -130,7 +130,10 @@ def test_post_minimal_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    # The demo seed assessment has no target row (it predates variant
+    # tracking), so it is unreachable through this listing; only the
+    # newly-posted assessment appears.
+    assert len(data) == 1
     assert "CVE-1999-12345" in data_str
     assert "Disable option X in configuration" in data_str
 
@@ -155,7 +158,9 @@ def test_post_detailled_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    # See test_post_minimal_assessment: the seed assessment has no target
+    # row, so only the newly-posted assessment is reachable here.
+    assert len(data) == 1
     assert "CVE-1999-12345" in data_str
     assert "Demonstration assessment" in data_str
 

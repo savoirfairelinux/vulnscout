@@ -10,6 +10,7 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment_group_member import AssessmentGroupMember, GroupInvariantError
+from ..models.assessment_target import AssessmentTarget, GroupInvariantError as TargetInvariantError
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -157,7 +158,7 @@ def init_app(app: Flask) -> None:
             ranked = (
                 db.select(
                     DBAssessment.id.label("id"),
-                    DBAssessment.variant_id.label("variant_id"),
+                    AssessmentTarget.variant_id.label("variant_id"),
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     Finding.vulnerability_id.label("vulnerability_id"),
@@ -167,20 +168,21 @@ def init_app(app: Flask) -> None:
                     func.row_number().over(
                         partition_by=(
                             Finding.vulnerability_id,
-                            DBAssessment.variant_id,
+                            AssessmentTarget.variant_id,
                             Finding.package_id,
                         ),
                         order_by=(DBAssessment.timestamp.desc(), DBAssessment.id.desc()),
                     ).label("assessment_rank"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                .join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .join(Finding, AssessmentTarget.finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                ranked = ranked.where(DBAssessment.variant_id.in_(variant_ids))
+                ranked = ranked.where(AssessmentTarget.variant_id.in_(variant_ids))
             ranked = ranked.subquery()
             query = (
                 db.select(
@@ -197,33 +199,64 @@ def init_app(app: Flask) -> None:
                 .order_by(ranked.c.timestamp)
             )
         else:
-            query = (
+            ranked = (
                 db.select(
-                    DBAssessment.id,
-                    DBAssessment.source,
-                    DBAssessment.origin,
-                    DBAssessment.variant_id,
-                    DBAssessment.timestamp,
-                    DBAssessment.status,
-                    DBAssessment.status_notes,
-                    DBAssessment.justification,
-                    DBAssessment.impact_statement,
-                    DBAssessment.responses,
-                    DBAssessment.workaround,
-                    Finding.vulnerability_id,
-                    Package.name,
-                    Package.version,
-                    Package.supplier,
+                    DBAssessment.id.label("id"),
+                    DBAssessment.source.label("source"),
+                    DBAssessment.origin.label("origin"),
+                    AssessmentTarget.variant_id.label("variant_id"),
+                    DBAssessment.timestamp.label("timestamp"),
+                    DBAssessment.status.label("status"),
+                    DBAssessment.status_notes.label("status_notes"),
+                    DBAssessment.justification.label("justification"),
+                    DBAssessment.impact_statement.label("impact_statement"),
+                    DBAssessment.responses.label("responses"),
+                    DBAssessment.workaround.label("workaround"),
+                    Finding.vulnerability_id.label("vulnerability_id"),
+                    Package.name.label("name"),
+                    Package.version.label("version"),
+                    Package.supplier.label("supplier"),
+                    # A multi-target assessment fans out to one row per target
+                    # here; unlike compact (one entry per target by design),
+                    # this branch's consumers key by assessment id and expect
+                    # exactly one row per assessment, so rank the joined
+                    # targets and keep only one representative per assessment.
+                    func.row_number().over(
+                        partition_by=DBAssessment.id,
+                        order_by=(AssessmentTarget.variant_id, AssessmentTarget.finding_id),
+                    ).label("target_rank"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                .join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .join(Finding, AssessmentTarget.finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
-                .order_by(DBAssessment.timestamp)
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                query = query.where(DBAssessment.variant_id.in_(variant_ids))
+                ranked = ranked.where(AssessmentTarget.variant_id.in_(variant_ids))
+            ranked = ranked.subquery()
+            query = (
+                db.select(
+                    ranked.c.id,
+                    ranked.c.source,
+                    ranked.c.origin,
+                    ranked.c.variant_id,
+                    ranked.c.timestamp,
+                    ranked.c.status,
+                    ranked.c.status_notes,
+                    ranked.c.justification,
+                    ranked.c.impact_statement,
+                    ranked.c.responses,
+                    ranked.c.workaround,
+                    ranked.c.vulnerability_id,
+                    ranked.c.name,
+                    ranked.c.version,
+                    ranked.c.supplier,
+                )
+                .where(ranked.c.target_rank == 1)
+                .order_by(ranked.c.timestamp)
+            )
 
         full_result: list[AssessmentDict] = []
         compact_result: list[CompactAssessment] = []
@@ -1023,14 +1056,7 @@ def init_app(app: Flask) -> None:
         try:
             with batch_session():
                 result = apply_reconcile(req, rows, targets)
-                created_ids = [UUID(a["id"]) for a in result["created"]]
-                if created_ids:
-                    # Every new row joins the group being edited; the group
-                    # id never changes and is never dissolved, even if the
-                    # edit leaves only one member.
-                    AssessmentGroupMember.create_group(
-                        created_ids, group_id=group_uuid, commit=False)
-        except GroupInvariantError as e:
+        except (GroupInvariantError, TargetInvariantError) as e:
             return {"error": str(e)}, 400
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
@@ -1057,13 +1083,21 @@ def init_app(app: Flask) -> None:
         response 200 JsonArray Assessment groups for review.
         """
         query = select(DBAssessment)
+        # The variant/project filters below match against the joined target
+        # rather than the assessment; joining once and adding .distinct()
+        # keeps the one-row-per-assessment shape build_groups() expects even
+        # though the join fans out to one row per matching target.
+        joined_targets = False
         variant_ids: list[UUID] | None = None
         variant_id = request.args.get('variant_id')
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            query = query.where(DBAssessment.variant_id == variant_uuid)
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id == variant_uuid)
             variant_ids = [variant_uuid] if variant_uuid else None
 
         project_id = request.args.get('project_id')
@@ -1072,12 +1106,18 @@ def init_app(app: Flask) -> None:
             if err:
                 return err
             project_variant_ids = [v.id for v in DBVariant.get_by_project(project_uuid)] if project_uuid else []
-            query = query.where(DBAssessment.variant_id.in_(project_variant_ids))
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id.in_(project_variant_ids))
             variant_ids = project_variant_ids
 
         origin = request.args.get('origin')
         if origin:
             query = query.where(DBAssessment.origin == origin)
+
+        if joined_targets:
+            query = query.distinct()
 
         assessments = list(db.session.execute(query).scalars())
         groups = build_groups(assessments)
@@ -1317,7 +1357,7 @@ def init_app(app: Flask) -> None:
                         group_id=requested_group_id,
                         commit=False,
                     )
-        except GroupInvariantError as e:
+        except (GroupInvariantError, TargetInvariantError) as e:
             return {"error": str(e)}, 400
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500

@@ -342,6 +342,15 @@ def test_assessment_to_dict_includes_variant_id_field(client):
 
 def test_assessment_list_includes_variant_id_field(client):
     """All entries returned by GET /api/assessments have a variant_id key."""
+    # The demo seed assessment has no target row and is therefore unreachable
+    # through this listing; post one so the listing has something to check.
+    post_resp = client.post("/api/vulnerabilities/CVE-2020-35492/assessments", json={
+        'packages': ['cairo@1.16.0'],
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
+    })
+    assert post_resp.status_code == 200
+
     response = client.get("/api/assessments")
     assert response.status_code == 200
     data = json.loads(response.data)
