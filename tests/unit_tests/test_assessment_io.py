@@ -18,6 +18,7 @@ from src.helpers.assessment_io import (
     _get_vuln_info,
     build_variant_by_name_map,
     build_openvex_doc,
+    build_custom_data_export,
     import_statements,
     import_custom_data,
 )
@@ -577,7 +578,7 @@ class TestImportStatementsUnit:
 
 
 # ---------------------------------------------------------------------------
-# Re-import grouping — imported rows from one action share a group
+# Import → multi-target assessments — one statement/entry, many targets
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
@@ -605,38 +606,51 @@ def variant_and_project(app):
     return proj, var
 
 
-class TestImportStatementsGrouping:
-    """Rows created by one OpenVEX statement (one vuln_id, multiple packages)
-    must share a group_id; a statement with a single package must not."""
+def _make_variant(project_id, name):
+    """Create a Variant under an existing project's *project_id*."""
+    from src.models.variant import Variant
+    return Variant.create(f"io-multitarget-var-{name}", project_id)
 
-    def test_multi_package_statement_shares_group(self, app, variant_and_project):
-        """GIVEN one statement covering 2 packages WHEN imported THEN both rows
-        share a non-None group_id."""
-        import uuid as _uuid
-        from src.models.assessment_group_member import AssessmentGroupMember
+
+def _make_finding(vuln_id, pkg_name, pkg_version=""):
+    """Create (or reuse) a Package/Vulnerability/Finding triple for *vuln_id*."""
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    pkg = Package.find_or_create(pkg_name, pkg_version)
+    Vulnerability.get_or_create(vuln_id)
+    return Finding.get_or_create(pkg.id, vuln_id)
+
+
+class TestImportStatementsMultiTarget:
+    """One OpenVEX statement (one vuln_id, multiple products) now produces one
+    multi-target assessment instead of one assessment per product."""
+
+    def test_openvex_import_creates_one_assessment_for_three_products(self, app, variant_and_project):
+        """GIVEN one statement covering 3 products WHEN imported THEN one
+        assessment is created with 3 targets."""
+        from src.models.assessment import Assessment
 
         _, var = variant_and_project
         stmt = {
             "vulnerability": {"name": "CVE-2099-GRP01"},
             "status": "affected",
-            "products": [{"@id": "pkg-a@1.0"}, {"@id": "pkg-b@1.0"}],
+            "products": [
+                {"@id": "pkg:generic/openssl@1.0"},
+                {"@id": "pkg:generic/zlib@1.0"},
+                {"@id": "pkg:generic/curl@1.0"},
+            ],
         }
         with app.app_context():
             created, errors, skipped = import_statements([stmt], var.id)
             assert errors == []
-            assert len(created) == 2
-            group_ids = {
-                AssessmentGroupMember.get_group_id(_uuid.UUID(row["id"]))
-                for row in created
-            }
-        assert len(group_ids) == 1
-        assert None not in group_ids
+            assert len(created) == 1
+            assert len(Assessment.get_by_id(created[0]["id"]).targets) == 3
 
-    def test_single_package_statement_has_no_group(self, app, variant_and_project):
-        """GIVEN one statement covering only 1 package WHEN imported THEN the
-        created row has no group_id."""
-        import uuid as _uuid
-        from src.models.assessment_group_member import AssessmentGroupMember
+    def test_single_package_statement_creates_single_target_assessment(self, app, variant_and_project):
+        """GIVEN one statement covering only 1 package WHEN imported THEN one
+        assessment is created with exactly 1 target, trivially its own group."""
+        from src.models.assessment import Assessment
 
         _, var = variant_and_project
         stmt = {
@@ -648,22 +662,114 @@ class TestImportStatementsGrouping:
             created, errors, skipped = import_statements([stmt], var.id)
             assert errors == []
             assert len(created) == 1
-            group_id = AssessmentGroupMember.get_group_id(_uuid.UUID(created[0]["id"]))
-        assert group_id is None
+            row = Assessment.get_by_id(created[0]["id"])
+            assert len(row.targets) == 1
+            assert row.group_id == row.id
 
-
-class TestImportCustomDataGrouping:
-    """Rows created by one custom-JSON entry (one vuln_id, multiple packages)
-    must share a group_id; an entry with a single package must not."""
-
-    def test_multi_package_entry_shares_group(self, app, variant_and_project):
-        """GIVEN one 'assessments' entry covering 2 packages WHEN imported
-        THEN both created rows share a non-None group_id."""
+    def test_duplicate_product_in_one_statement_is_deduplicated(self, app, variant_and_project):
+        """GIVEN a statement listing the same product twice WHEN imported THEN
+        only one target is stored (the primary key would otherwise collide)."""
         from src.models.assessment import Assessment
-        from src.models.assessment_group_member import AssessmentGroupMember
+
+        _, var = variant_and_project
+        stmt = {
+            "vulnerability": {"name": "CVE-2099-GRP06"},
+            "status": "affected",
+            "products": [{"@id": "dup-pkg@1.0"}, {"@id": "dup-pkg@1.0"}],
+        }
+        with app.app_context():
+            created, errors, skipped = import_statements([stmt], var.id)
+            assert errors == []
+            assert len(created) == 1
+            assert len(Assessment.get_by_id(created[0]["id"]).targets) == 1
+
+    def test_reimporting_the_same_multi_product_statement_is_idempotent(self, app, variant_and_project):
+        """GIVEN a multi-target assessment already exists for this exact set
+        of products WHEN the same statement is imported again THEN no second
+        assessment is created and the duplicate is reported skipped, not
+        imported.  The multi-target row's scalar finding_id/variant_id are
+        None, so this only works if duplicate detection also matches on the
+        assessment_targets set, not just the scalar columns."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        stmt = {
+            "vulnerability": {"name": "CVE-2099-REIMPORT"},
+            "status": "affected",
+            "products": [
+                {"@id": "reimport-pkg-a@1.0"},
+                {"@id": "reimport-pkg-b@1.0"},
+                {"@id": "reimport-pkg-c@1.0"},
+            ],
+        }
+        with app.app_context():
+            created1, errors1, skipped1 = import_statements([stmt], var.id)
+            assert errors1 == []
+            assert len(created1) == 1
+
+            created2, errors2, skipped2 = import_statements([stmt], var.id)
+            assert errors2 == []
+            assert created2 == []
+            assert skipped2 == 1
+
+            rows = [a for a in Assessment.get_all() if a.vuln_id == "CVE-2099-REIMPORT"]
+            assert len(rows) == 1
+            assert len(rows[0].targets) == 3
+
+    def test_overlapping_but_distinct_multi_product_statement_is_not_a_duplicate(self, app, variant_and_project):
+        """GIVEN a multi-target assessment already exists WHEN a statement
+        naming a target *superset* of it is imported THEN the second
+        statement is imported as a distinct assessment -- an overlapping
+        target set is not the same assessment, only an equal one is."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        first_stmt = {
+            "vulnerability": {"name": "CVE-2099-OVERLAP"},
+            "status": "affected",
+            "products": [
+                {"@id": "overlap-pkg-a@1.0"},
+                {"@id": "overlap-pkg-b@1.0"},
+            ],
+        }
+        superset_stmt = {
+            "vulnerability": {"name": "CVE-2099-OVERLAP"},
+            "status": "affected",
+            "products": [
+                {"@id": "overlap-pkg-a@1.0"},
+                {"@id": "overlap-pkg-b@1.0"},
+                {"@id": "overlap-pkg-c@1.0"},
+            ],
+        }
+        with app.app_context():
+            created1, errors1, skipped1 = import_statements([first_stmt], var.id)
+            assert errors1 == []
+            assert len(created1) == 1
+
+            created2, errors2, skipped2 = import_statements([superset_stmt], var.id)
+            assert errors2 == []
+            assert skipped2 == 0
+            assert len(created2) == 1
+
+            rows = [a for a in Assessment.get_all() if a.vuln_id == "CVE-2099-OVERLAP"]
+            assert len(rows) == 2
+            assert {len(row.targets) for row in rows} == {2, 3}
+
+
+class TestImportCustomDataMultiTarget:
+    """Version-1 'assessments'/'ai_assessments' entries keep fanning out to one
+    assessment per package (legacy shape); version-2 entries create one
+    assessment with many targets instead."""
+
+    def test_v1_multi_package_entry_still_creates_two_assessments(self, app, variant_and_project):
+        """GIVEN a version-1 entry covering 2 packages WHEN imported THEN two
+        independent single-target assessments are created (no fusing, no
+        shared group -- the old AssessmentGroupMember linkage is gone)."""
+        from src.models.assessment import Assessment
 
         _, var = variant_and_project
         data = {
+            "version": 1,
             "assessments": [{
                 "vuln_id": "CVE-2099-GRP03",
                 "status": "not_affected",
@@ -676,20 +782,18 @@ class TestImportCustomDataGrouping:
             assert result["assessments_imported"] == 2
             rows = Assessment.get_by_origin([var.id], origin="custom")
             assert len(rows) == 2
-            group_ids = {
-                AssessmentGroupMember.get_group_id(row.id) for row in rows
-            }
-        assert len(group_ids) == 1
-        assert None not in group_ids
+            assert {len(row.targets) for row in rows} == {1}
+            # Each row is trivially its own group; none are fused together.
+            assert len({row.id for row in rows}) == 2
 
-    def test_single_package_entry_has_no_group(self, app, variant_and_project):
-        """GIVEN one 'assessments' entry covering only 1 package WHEN imported
-        THEN the created row has no group_id."""
+    def test_v1_single_package_entry_creates_one_assessment(self, app, variant_and_project):
+        """GIVEN a version-1 entry covering only 1 package WHEN imported THEN
+        one single-target assessment is created."""
         from src.models.assessment import Assessment
-        from src.models.assessment_group_member import AssessmentGroupMember
 
         _, var = variant_and_project
         data = {
+            "version": 1,
             "assessments": [{
                 "vuln_id": "CVE-2099-GRP04",
                 "status": "not_affected",
@@ -702,20 +806,18 @@ class TestImportCustomDataGrouping:
             assert result["assessments_imported"] == 1
             rows = Assessment.get_by_origin([var.id], origin="custom")
             assert len(rows) == 1
-            group_id = AssessmentGroupMember.get_group_id(rows[0].id)
-        assert group_id is None
+            assert len(rows[0].targets) == 1
 
-    def test_custom_and_ai_entries_never_share_a_group(self, app, variant_and_project):
+    def test_v1_custom_and_ai_entries_create_independent_assessments(self, app, variant_and_project):
         """GIVEN the same vuln_id/packages appear in both 'assessments' and
-        'ai_assessments' WHEN imported THEN no group links a custom-origin row
-        to an ai-origin row (each _import_assessments call groups only within
-        its own call)."""
+        'ai_assessments' WHEN imported THEN the custom-origin and ai-origin
+        rows are entirely independent (no group ever links them)."""
         from src.models.assessment import Assessment
-        from src.models.assessment_group_member import AssessmentGroupMember
 
         _, var = variant_and_project
         packages = ["dual-pkg-a@1.0", "dual-pkg-b@1.0"]
         data = {
+            "version": 1,
             "assessments": [{
                 "vuln_id": "CVE-2099-GRP05",
                 "status": "not_affected",
@@ -738,17 +840,253 @@ class TestImportCustomDataGrouping:
             ai_rows = Assessment.get_by_origin([var.id], origin="ai")
             assert len(custom_rows) == 2
             assert len(ai_rows) == 2
+            assert {row.id for row in custom_rows}.isdisjoint({row.id for row in ai_rows})
 
-            custom_group_ids = {
-                AssessmentGroupMember.get_group_id(row.id) for row in custom_rows
-            }
-            ai_group_ids = {
-                AssessmentGroupMember.get_group_id(row.id) for row in ai_rows
+    def test_version_1_import_still_works(self, app, variant_and_project):
+        """Existing backup archives (no 'targets' key) must stay importable,
+        fanning out one assessment per package exactly as they did before."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        data = {
+            "version": 1,
+            "assessments": [{
+                "vuln_id": "CVE-2099-V1IMP",
+                "status": "affected",
+                "packages": ["v1-pkg-a@1.0", "v1-pkg-b@1.0"],
+                "variant_id": str(var.id),
+            }],
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+            assert result["errors"] == []
+            assert len(Assessment.get_by_vulnerability("CVE-2099-V1IMP")) == 2
+
+
+class TestCustomDataVersion2:
+    """Version-2 export/import: one assessment, many ``{variant_id, package}``
+    targets, replacing the fan-out that ``AssessmentGroupMember`` used to
+    paper over."""
+
+    def test_export_emits_version_2_with_targets(self, app, variant_and_project):
+        """A single-target custom assessment exports its target explicitly."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        finding = _make_finding("CVE-2099-EXP01", "exp-pkg", "1.0")
+        with app.app_context():
+            Assessment.create(
+                status="not_affected", origin="custom",
+                finding_id=finding.id, variant_id=var.id,
+                justification="component_not_present",
+                commit=True,
+            )
+            payload = build_custom_data_export([var.id])
+
+        assert payload["version"] == 2
+        assert len(payload["assessments"]) == 1
+        assert payload["assessments"][0]["targets"] == [
+            {"variant_id": str(var.id), "package": "exp-pkg@1.0"},
+        ]
+
+    def test_version_2_export_round_trips_a_cross_variant_assessment(self, app):
+        """A genuine multi-target (cross-variant) assessment created via
+        Assessment.create(targets=...) round-trips through export/import."""
+        from src.models.project import Project
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("io-v2-roundtrip-proj")
+            variant_a = _make_variant(project.id, "a")
+            variant_b = _make_variant(project.id, "b")
+            openssl = _make_finding("CVE-2099-XV01", "openssl", "1.0")
+            zlib = _make_finding("CVE-2099-XV01", "zlib", "1.0")
+
+            original = Assessment.create(
+                status="not_affected", origin="custom",
+                justification="component_not_present",
+                targets=[(variant_a.id, openssl.id), (variant_b.id, zlib.id)],
+                commit=True,
+            )
+
+            payload = build_custom_data_export()
+            assert payload["version"] == 2
+
+            original.delete()
+
+            # Scalar-column queries can't see a genuine multi-target row (its
+            # scalar finding_id/variant_id are None), so match via the
+            # transient vuln_id property, which does fall back to target_rows.
+            def _by_vuln(vuln_id):
+                return [a for a in Assessment.get_all() if a.vuln_id == vuln_id]
+
+            assert _by_vuln("CVE-2099-XV01") == []
+
+            variant_by_name = {variant_a.name: variant_a, variant_b.name: variant_b}
+            result = import_custom_data(payload, variant_by_name)
+            assert result["errors"] == []
+
+            restored = _by_vuln("CVE-2099-XV01")
+            assert len(restored) == 1
+            assert set(restored[0].targets) == {
+                (variant_a.id, openssl.id), (variant_b.id, zlib.id),
             }
 
-        assert len(custom_group_ids) == 1
-        assert len(ai_group_ids) == 1
-        assert None not in custom_group_ids
-        assert None not in ai_group_ids
-        # The two origins must never be fused into the same group.
-        assert custom_group_ids.isdisjoint(ai_group_ids)
+    def test_a_package_that_fails_to_resolve_is_reported_not_silently_dropped(self, app, variant_and_project):
+        """A version-2 target naming an unknown package is reported as an
+        error while the resolvable targets on the same entry still import."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        _make_finding("CVE-2099-BADPKG", "openssl", "")
+        data = {
+            "version": 2,
+            "assessments": [{
+                "vuln_id": "CVE-2099-BADPKG",
+                "status": "affected",
+                "targets": [
+                    {"variant_id": str(var.id), "package": "openssl"},
+                    {"variant_id": str(var.id), "package": "does-not-exist"},
+                ],
+            }],
+        }
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+
+        assert result["assessments_imported"] == 1
+        assert len(result["errors"]) == 1
+        assert "does-not-exist" in result["errors"][0].get("package", "")
+        rows = Assessment.get_by_vulnerability("CVE-2099-BADPKG")
+        assert len(rows) == 1
+        assert len(rows[0].targets) == 1
+
+    def test_v2_entry_spanning_two_projects_is_reported_not_silently_created(self, app):
+        """A version-2 entry whose targets span two different projects
+        violates the one-assessment-one-project invariant: it is reported as
+        an error and no assessment is created for it, while a separate,
+        well-formed entry in the same payload still imports."""
+        from src.models.project import Project
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project_a = Project.create("io-v2-cross-proj-a")
+            project_b = Project.create("io-v2-cross-proj-b")
+            variant_a = _make_variant(project_a.id, "cp-a")
+            variant_b = _make_variant(project_b.id, "cp-b")
+            _make_finding("CVE-2099-XPROJ", "cross-pkg-a", "1.0")
+            _make_finding("CVE-2099-XPROJ", "cross-pkg-b", "1.0")
+            single_finding = _make_finding("CVE-2099-OK", "ok-pkg", "1.0")
+
+            data = {
+                "version": 2,
+                "assessments": [
+                    {
+                        "vuln_id": "CVE-2099-XPROJ",
+                        "status": "affected",
+                        "targets": [
+                            {"variant_id": str(variant_a.id), "package": "cross-pkg-a@1.0"},
+                            {"variant_id": str(variant_b.id), "package": "cross-pkg-b@1.0"},
+                        ],
+                    },
+                    {
+                        "vuln_id": "CVE-2099-OK",
+                        "status": "affected",
+                        "targets": [
+                            {"variant_id": str(variant_a.id), "package": "ok-pkg@1.0"},
+                        ],
+                    },
+                ],
+            }
+            variant_by_name = {variant_a.name: variant_a, variant_b.name: variant_b}
+            result = import_custom_data(data, variant_by_name)
+
+            assert result["assessments_imported"] == 1
+            assert len(result["errors"]) == 1
+            assert Assessment.get_by_vulnerability("CVE-2099-XPROJ") == []
+            ok_rows = Assessment.get_by_vulnerability("CVE-2099-OK")
+            assert len(ok_rows) == 1
+            assert ok_rows[0].targets == [(variant_a.id, single_finding.id)]
+
+    def test_reimporting_the_same_v2_multi_target_payload_is_idempotent(self, app, variant_and_project):
+        """GIVEN a genuine multi-target assessment (2+ targets, scalar
+        finding_id/variant_id both None) already exists WHEN its version-2
+        export is imported a second time WITHOUT deleting the original THEN
+        no second assessment is created: the import is reported skipped, not
+        imported.  Reproduces the reviewer's critical finding directly (no
+        `.delete()` between export and re-import, unlike the round-trip test
+        above, which would otherwise mask this exact bug)."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        finding_a = _make_finding("CVE-2099-DUPFIX", "dupfix-pkg-a", "1.0")
+        finding_b = _make_finding("CVE-2099-DUPFIX", "dupfix-pkg-b", "1.0")
+        with app.app_context():
+            Assessment.create(
+                status="not_affected", origin="custom",
+                justification="component_not_present",
+                targets=[(var.id, finding_a.id), (var.id, finding_b.id)],
+                commit=True,
+            )
+            payload = build_custom_data_export()
+            assert payload["version"] == 2
+
+            def rows_for(vuln_id):
+                return [a for a in Assessment.get_all() if a.vuln_id == vuln_id]
+
+            assert len(rows_for("CVE-2099-DUPFIX")) == 1
+
+            variant_by_name = {var.name: var}
+            result_1 = import_custom_data(payload, variant_by_name)
+            assert result_1["errors"] == []
+            assert result_1["assessments_imported"] == 0
+            assert result_1["assessments_skipped"] == 1
+            assert len(rows_for("CVE-2099-DUPFIX")) == 1
+
+            result_2 = import_custom_data(payload, variant_by_name)
+            assert result_2["errors"] == []
+            assert result_2["assessments_imported"] == 0
+            assert result_2["assessments_skipped"] == 1
+            assert len(rows_for("CVE-2099-DUPFIX")) == 1
+
+    def test_v2_payload_with_overlapping_but_distinct_targets_is_not_a_duplicate(self, app, variant_and_project):
+        """GIVEN a multi-target assessment exists for {a, b} WHEN a version-2
+        payload naming a *different* target set {a, c} (overlapping on `a`
+        only) is imported THEN it is treated as a distinct assessment and
+        imported, not skipped as a duplicate -- set overlap is not set
+        equality."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        finding_a = _make_finding("CVE-2099-OVERLAP2", "overlap2-pkg-a", "1.0")
+        finding_b = _make_finding("CVE-2099-OVERLAP2", "overlap2-pkg-b", "1.0")
+        finding_c = _make_finding("CVE-2099-OVERLAP2", "overlap2-pkg-c", "1.0")
+        with app.app_context():
+            Assessment.create(
+                status="not_affected", origin="custom",
+                justification="component_not_present",
+                targets=[(var.id, finding_a.id), (var.id, finding_b.id)],
+                commit=True,
+            )
+            data = {
+                "version": 2,
+                "assessments": [{
+                    "vuln_id": "CVE-2099-OVERLAP2",
+                    "status": "not_affected",
+                    "justification": "component_not_present",
+                    "targets": [
+                        {"variant_id": str(var.id), "package": "overlap2-pkg-a@1.0"},
+                        {"variant_id": str(var.id), "package": "overlap2-pkg-c@1.0"},
+                    ],
+                }],
+            }
+            result = import_custom_data(data, {var.name: var})
+            assert result["errors"] == []
+            assert result["assessments_imported"] == 1
+            assert result["assessments_skipped"] == 0
+
+            rows = [a for a in Assessment.get_all() if a.vuln_id == "CVE-2099-OVERLAP2"]
+            assert len(rows) == 2
+            assert {frozenset(row.targets) for row in rows} == {
+                frozenset({(var.id, finding_a.id), (var.id, finding_b.id)}),
+                frozenset({(var.id, finding_a.id), (var.id, finding_c.id)}),
+            }
