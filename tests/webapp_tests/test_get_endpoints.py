@@ -1259,8 +1259,8 @@ def test_upload_asset_no_multipart(client):
 # ---------------------------------------------------------------------------
 
 def test_assessment_groups_by_vuln_returns_one_entry_per_group(client, demo_ids):
-    """A multi-package write still creates one row per package (unmigrated in
-    this phase); each row is now its own group with exactly its own target."""
+    """A multi-package write fuses into ONE row/group, whose targets list
+    covers every package."""
     created = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -1277,8 +1277,8 @@ def test_assessment_groups_by_vuln_returns_one_entry_per_group(client, demo_ids)
 
     assert response.status_code == 200
     match = [g for g in response.get_json() if g["group_id"] in created_group_ids]
-    assert len(match) == 2
-    assert all(len(g["targets"]) == 1 for g in match)
+    assert len(match) == 1
+    assert len(match[0]["targets"]) == 2
     assert all(g["status"] == "not_affected" for g in match)
 
 
@@ -1355,9 +1355,8 @@ def test_review_assessment_groups_filters(client, demo_ids):
 def test_assessment_groups_targets_carry_their_owning_assessment_id(client, demo_ids):
     """Each target dict must carry the id of the assessment record it came
     from, so the frontend can PUT/DELETE that exact row for legacy per-row
-    edits (Task 13). A multi-package write still creates one row per package
-    (unmigrated in this phase); each row is its own group with one target
-    that points back at itself."""
+    edits (Task 13). A multi-package write fuses into ONE row/group whose
+    targets all point back at that same row."""
     created = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -1373,10 +1372,10 @@ def test_assessment_groups_targets_carry_their_owning_assessment_id(client, demo
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups")
     assert response.status_code == 200
     matches = [g for g in response.get_json() if g["group_id"] in created_ids]
-    assert len(matches) == 2
-    for group in matches:
-        assert len(group["targets"]) == 1
-        assert group["targets"][0]["assessment_id"] == group["group_id"]
+    assert len(matches) == 1
+    group = matches[0]
+    assert len(group["targets"]) == 2
+    assert all(t["assessment_id"] == group["group_id"] for t in group["targets"])
     assert {g["group_id"] for g in matches} == created_ids
 
 
