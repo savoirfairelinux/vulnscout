@@ -7,6 +7,7 @@
 
 import json
 import os
+import uuid as _uuid
 from pathlib import Path
 from unittest import mock
 
@@ -439,6 +440,44 @@ class TestBuildOpenvexDoc:
         with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
             doc = build_openvex_doc([assess], "author")
         assert "action_statement_timestamp" in doc["statements"][0]
+
+    def _make_multi_variant_assessment(self, variant_a, variant_b):
+        """An assessment targeting the same CVE in two variants, with different packages."""
+        def target(variant_id, pkg_id):
+            row = mock.MagicMock()
+            row.variant_id = variant_id
+            row.finding.package.string_id = pkg_id
+            return row
+
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = {"status": "affected"}
+        assess.vuln_id = "CVE-2021-9999"
+        assess.packages = ["openssl@1.0", "openssl@3.0"]
+        assess.source = "s"
+        assess.origin = "custom"
+        assess.target_rows = [target(variant_a, "openssl@1.0"), target(variant_b, "openssl@3.0")]
+        return assess
+
+    def test_scoped_export_omits_other_variants_packages(self):
+        """GIVEN an assessment spanning two variants WHEN exporting for one THEN only its package ships.
+
+        An assessment is admitted into a scoped export as soon as one of its
+        targets is in scope, so without filtering the other variant's package
+        would be disclosed in a document published for this one.
+        """
+        variant_a, variant_b = _uuid.uuid4(), _uuid.uuid4()
+        assess = self._make_multi_variant_assessment(variant_a, variant_b)
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([assess], "author", variant_ids=[variant_a])
+        assert [p["@id"] for p in doc["statements"][0]["products"]] == ["openssl@1.0"]
+
+    def test_unscoped_export_keeps_every_variants_package(self):
+        """GIVEN no variant scope WHEN exporting THEN every target's package ships."""
+        variant_a, variant_b = _uuid.uuid4(), _uuid.uuid4()
+        assess = self._make_multi_variant_assessment(variant_a, variant_b)
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([assess], "author")
+        assert [p["@id"] for p in doc["statements"][0]["products"]] == ["openssl@1.0", "openssl@3.0"]
 
     def _make_assessment(self, vuln_id, pkg, ts):
         assess = mock.MagicMock()
