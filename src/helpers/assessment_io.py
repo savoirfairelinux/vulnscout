@@ -61,11 +61,46 @@ def sanitize_variant_name(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_")
 
 
+def scoped_packages(
+    assess: "_Assessment",
+    variant_ids: "list[_uuid.UUID] | set[_uuid.UUID] | None",
+) -> list:
+    """Return *assess*'s package ids, restricted to *variant_ids*.
+
+    ``Assessment.packages`` carries no scope context — it returns the package
+    of every target, across every variant. An assessment is admitted into a
+    scoped export as soon as *one* of its targets is in scope, so a
+    multi-target assessment spanning an in-scope and an out-of-scope variant
+    would otherwise disclose the out-of-scope package in a document published
+    for the in-scope one.
+
+    With 0 or 1 target only one variant is involved and there is nothing to
+    leak, so ``assess.packages`` is returned directly. That also keeps
+    transient DTO assessments working, since they never populate
+    ``target_rows``. Passing ``variant_ids=None`` means "no scope" and is
+    likewise unfiltered.
+    """
+    targets = list(assess.target_rows)
+    if len(targets) <= 1 or variant_ids is None:
+        return assess.packages
+    allowed = set(variant_ids)
+    result: list = []
+    for target in sorted(targets, key=lambda t: (str(t.variant_id or ""), str(t.finding_id or ""))):
+        if target.variant_id not in allowed:
+            continue
+        if target.finding is not None and target.finding.package is not None:
+            pkg_id = target.finding.package.string_id
+            if pkg_id not in result:
+                result.append(pkg_id)
+    return result
+
+
 def build_openvex_doc(
     assessments: "list[_Assessment]",
     author: str,
     now_iso: str | None = None,
     vuln_cache: "dict[str, _Vulnerability | None] | None" = None,
+    variant_ids: "list[_uuid.UUID] | None" = None,
 ) -> dict[str, Any]:
     """Build a single OpenVEX document dict from a list of assessments.
 
@@ -80,6 +115,10 @@ def build_openvex_doc(
     vuln_cache:
         Optional mutable cache ``{vuln_id: VulnModel | None}`` to avoid
         repeated DB lookups across multiple calls.
+    variant_ids:
+        Variants this document is published for.  Products are restricted to
+        targets in this scope so a multi-variant assessment cannot disclose
+        an out-of-scope package.  ``None`` disables the restriction.
 
     Returns
     -------
@@ -105,7 +144,7 @@ def build_openvex_doc(
         }
 
         products = []
-        for pkg_str in assess.packages:
+        for pkg_str in scoped_packages(assess, variant_ids):
             if "@" in pkg_str:
                 name, version = pkg_str.rsplit("@", 1)
             else:
@@ -717,6 +756,12 @@ def build_custom_data_export(
                 "timestamp": assessment_dict["timestamp"],
                 "packages": assessment_dict["packages"],
                 "variant_id": assessment_dict.get("variant_id"),
+                # Every target is exported even when the export is scoped to a
+                # subset of variants. Unlike a published VEX document, this
+                # format is a self-describing backup: each target carries its
+                # own variant_id and is re-imported verbatim. Truncating the
+                # list to the scope would make a round-trip lossy, silently
+                # dropping targets from the assessments it restores.
                 "targets": [
                     {
                         "variant_id": str(row.variant_id),
