@@ -196,10 +196,10 @@ const PROJECTS = [{ id: 'proj1', name: 'Project One' }];
 const RICH_PKG = 'pkgA@1.0.0::Organization: ACME Corp (info@acme.com)';
 
 /** One custom assessment on a single package/variant. Pass `groupId` to make
- *  two calls collapse into a single server-built group (mirroring a real
- *  `AssessmentGroupMember` link), the same way `RICH_ASSESSMENT`-style
- *  multi-variant rows are produced by the real `/reviews/assessment-groups`
- *  endpoint. */
+ *  two calls share the same assessment id, mirroring a server-built group of
+ *  ``AssessmentTarget`` rows on one assessment, the same way
+ *  `RICH_ASSESSMENT`-style multi-variant rows are produced by the real
+ *  `/reviews/assessment-groups` endpoint. */
 const makeAssessment = (id: string, variantId: string, groupId?: string) => ({
     id,
     group_id: groupId ?? null,

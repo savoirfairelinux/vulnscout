@@ -119,8 +119,7 @@ class TestBuildCustomDataExport:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="custom",
             )
             db.session.commit()
@@ -147,8 +146,7 @@ class TestBuildCustomDataExport:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="ai",
             )
 

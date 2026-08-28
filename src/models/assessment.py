@@ -5,8 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
-from sqlalchemy.orm import Mapped, relationship, joinedload, mapped_column
+from sqlalchemy import orm, Text, DateTime, JSON
+from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
@@ -14,8 +14,7 @@ from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
 from .package import Package
 from .finding import Finding
-from .variant import Variant
-from .assessment_target import AssessmentTarget, validate_targets
+from .assessment_target import AssessmentTarget, GroupInvariantError, validate_targets
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +124,7 @@ class Assessment(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     responses: Mapped[list[str] | None] = mapped_column(JSON)
-    finding_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("findings.id"), index=True)
-    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True)
 
-    finding: Mapped["Finding | None"] = relationship(back_populates="assessments")
-    variant: Mapped["Variant | None"] = relationship(back_populates="assessments")
     target_rows: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
         back_populates="assessment",
         cascade="all, delete-orphan",
@@ -161,15 +156,8 @@ class Assessment(Base):
         val = self._vuln_id
         if val:
             return val
-        try:
-            if self.finding:
-                return self.finding.vulnerability_id or ""
-        except Exception as e:
-            verbose(f"[Assessment.vuln_id {self.id!r}] {e}")
-        # A genuine multi-target assessment (created via ``targets=`` alone,
-        # with no scalar finding_id dual-written) has no scalar ``finding`` to
-        # fall back to. ``validate_targets`` guarantees every target shares
-        # one vulnerability, so any one of them resolves it just as well.
+        # ``validate_targets`` guarantees every target shares one
+        # vulnerability, so any one of them resolves it.
         try:
             for target in self.target_rows:
                 if target.finding is not None:
@@ -186,18 +174,11 @@ class Assessment(Base):
     def packages(self) -> list[str]:
         if hasattr(self, "_packages") and self._packages:
             return self._packages
-        try:
-            if self.finding and self.finding.package:
-                return [self.finding.package.string_id]
-        except Exception as e:
-            verbose(f"[Assessment.packages {self.id!r}] {e}")
-        # A genuine multi-target assessment (created via ``targets=`` alone,
-        # with no scalar finding_id dual-written) has no scalar ``finding``
-        # to fall back to. Collect every target's package instead, sorted
-        # deterministically and de-duplicated (mirrors ``Assessment.vuln_id``'s
-        # fallback to ``target_rows``). This property has no scope context —
-        # callers that need a scope-restricted subset must filter it
-        # themselves (e.g. by intersecting with their own allowed variants).
+        # Collect every target's package, sorted deterministically and
+        # de-duplicated (mirrors ``Assessment.vuln_id``'s fallback to
+        # ``target_rows``). This property has no scope context — callers
+        # that need a scope-restricted subset must filter it themselves
+        # (e.g. by intersecting with their own allowed variants).
         result: list[str] = []
         try:
             targets = sorted(
@@ -222,6 +203,17 @@ class Assessment(Base):
         """Every ``(variant_id, finding_id)`` pair this assessment applies to."""
         return [(t.variant_id, t.finding_id) for t in self.target_rows]
 
+    @property
+    def single_variant_id(self) -> "uuid.UUID | None":
+        """The one variant every target shares, or ``None`` when they differ.
+
+        Populated for a single-target assessment or a multi-target one
+        confined to one variant; ``None`` for a genuine cross-variant
+        assessment, which consumers must tolerate.
+        """
+        variant_ids = {t.variant_id for t in self.target_rows}
+        return next(iter(variant_ids)) if len(variant_ids) == 1 else None
+
     # ------------------------------------------------------------------
     # group_id -- an assessment is its own group
     # ------------------------------------------------------------------
@@ -232,10 +224,7 @@ class Assessment(Base):
         return self.id
 
     def __repr__(self) -> str:
-        return (
-            f"<Assessment id={self.id} status={self.status!r}"
-            f" finding_id={self.finding_id} variant_id={self.variant_id}>"
-        )
+        return f"<Assessment id={self.id} status={self.status!r}>"
 
     # ==================================================================
     # Factory: create an in-memory DTO (not yet persisted)
@@ -410,7 +399,7 @@ class Assessment(Base):
             "origin": self.origin or "sbom",
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
-            "variant_id": str(self.variant_id) if self.variant_id else None,
+            "variant_id": str(self.single_variant_id) if self.single_variant_id else None,
             "group_id": str(group_id) if group_id else None,
             "timestamp": ts,
             "last_update": ts or "",
@@ -570,8 +559,6 @@ class Assessment(Base):
     def create(
         status: str,
         assessment_id: Optional[uuid.UUID] = None,
-        finding_id: Optional[uuid.UUID | str] = None,
-        variant_id: Optional[uuid.UUID | str] = None,
         targets: Optional["list[tuple[uuid.UUID, uuid.UUID]]"] = None,
         source: Optional[str] = None,
         origin: Optional[str] = None,
@@ -591,24 +578,21 @@ class Assessment(Base):
                 supplied (e.g. from an in-memory DTO), the DB row gets the
                 same UUID so that ``gets_by_vuln`` / ``gets_by_pkg`` can
                 deduplicate results from DB queries against in-memory ones.
-            targets: Explicit ``(variant_id, finding_id)`` pairs this
-                assessment applies to. Takes precedence over
-                ``finding_id``/``variant_id`` when given; when omitted and
-                both scalars are present, one target is derived from them.
+            targets: The ``(variant_id, finding_id)`` pairs this assessment
+                applies to. ``targets`` is the only way to say what an
+                assessment applies to; at least one pair is required.
             commit: If True (default), commit immediately. Set False for bulk operations.
+
+        Raises:
+            GroupInvariantError: when ``targets`` is empty, or when its pairs
+                may not share one assessment (different projects/vulnerabilities).
         """
-        if isinstance(finding_id, str):
-            finding_id = uuid.UUID(finding_id)
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
         resolved_targets = list(targets or [])
-        if not resolved_targets and finding_id is not None and variant_id is not None:
-            resolved_targets = [(variant_id, finding_id)]
+        if not resolved_targets:
+            raise GroupInvariantError("An assessment must have at least one target")
         validate_targets(resolved_targets)
         assessment = Assessment(
             status=status,
-            finding_id=finding_id,
-            variant_id=variant_id,
             source=source,
             origin=origin,
             simplified_status=simplified_status,
@@ -639,7 +623,7 @@ class Assessment(Base):
         return list(db.session.execute(
             db.select(Assessment)
             .options(
-                joinedload(Assessment.finding).joinedload(Finding.package)
+                selectinload(Assessment.target_rows).selectinload(AssessmentTarget.finding).joinedload(Finding.package)
             )
             .order_by(Assessment.timestamp)
         ).scalars().unique().all())
@@ -667,8 +651,6 @@ class Assessment(Base):
             existing = db.session.get(Assessment, assess_id)
 
         if existing is not None:
-            existing.finding_id = finding_id or existing.finding_id
-            existing.variant_id = variant_id or existing.variant_id
             if finding_id is not None and variant_id is not None:
                 existing.add_target(variant_id, finding_id)
             existing.status = assess.status or existing.status
@@ -684,12 +666,12 @@ class Assessment(Base):
             return existing
 
         new_status = assess.status or "under_investigation"
+        targets = [(variant_id, finding_id)] if finding_id is not None and variant_id is not None else None
         record = Assessment.create(
             assessment_id=assess_id,
             status=new_status,
             simplified_status=STATUS_TO_SIMPLIFIED.get(new_status, "Pending Assessment"),
-            variant_id=variant_id,
-            finding_id=finding_id,
+            targets=targets,
             origin="sbom",
             status_notes=assess.status_notes,
             justification=assess.justification,
@@ -716,28 +698,17 @@ class Assessment(Base):
 
     @staticmethod
     def get_by_finding(finding_id: uuid.UUID | str) -> list["Assessment"]:
-        """Return all assessments for the given finding."""
+        """Return all assessments targeting the given finding."""
         if isinstance(finding_id, str):
             finding_id = uuid.UUID(finding_id)
         return list(db.session.execute(
             db.select(Assessment)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .where(AssessmentTarget.finding_id == finding_id)
             .options(
-                joinedload(Assessment.finding).joinedload(Finding.package)
+                selectinload(Assessment.target_rows).selectinload(AssessmentTarget.finding).joinedload(Finding.package)
             )
-            .where(Assessment.finding_id == finding_id)
-        ).scalars().unique().all())
-
-    @staticmethod
-    def get_by_variant(variant_id: uuid.UUID | str) -> list["Assessment"]:
-        """Return all assessments for the given variant."""
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
-        return list(db.session.execute(
-            db.select(Assessment)
-            .options(
-                joinedload(Assessment.finding).joinedload(Finding.package)
-            )
-            .where(Assessment.variant_id == variant_id)
+            .order_by(Assessment.timestamp)
         ).scalars().unique().all())
 
     @staticmethod
@@ -745,27 +716,29 @@ class Assessment(Base):
         finding_id: uuid.UUID | str,
         variant_id: uuid.UUID | str,
     ) -> list["Assessment"]:
-        """Return assessments matching both *finding_id* and *variant_id*."""
+        """Return all assessments targeting this exact (variant, finding) pair."""
         if isinstance(finding_id, str):
             finding_id = uuid.UUID(finding_id)
         if isinstance(variant_id, str):
             variant_id = uuid.UUID(variant_id)
         return list(db.session.execute(
-            db.select(Assessment).where(
-                Assessment.finding_id == finding_id,
-                Assessment.variant_id == variant_id,
-            )
-        ).scalars().all())
+            db.select(Assessment)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .where(AssessmentTarget.finding_id == finding_id)
+            .where(AssessmentTarget.variant_id == variant_id)
+            .order_by(Assessment.timestamp)
+        ).scalars().unique().all())
 
     @staticmethod
     def get_by_vulnerability(vulnerability_id: str) -> list["Assessment"]:
         """Return all assessments whose finding links to *vulnerability_id*."""
         return list(db.session.execute(
             db.select(Assessment)
-            .join(Finding, Assessment.finding_id == Finding.id)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .join(Finding, AssessmentTarget.finding_id == Finding.id)
             .where(Finding.vulnerability_id == vulnerability_id.upper())
             .order_by(Assessment.timestamp)
-        ).scalars().all())
+        ).scalars().unique().all())
 
     @staticmethod
     def get_by_package(package_id: "uuid.UUID | str") -> list["Assessment"]:
@@ -784,11 +757,14 @@ class Assessment(Base):
                 package_id = pkg.id
         return list(db.session.execute(
             db.select(Assessment)
-            .join(Finding, Assessment.finding_id == Finding.id)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .join(Finding, AssessmentTarget.finding_id == Finding.id)
             .where(Finding.package_id == package_id)
-            .options(joinedload(Assessment.finding).joinedload(Finding.package))
+            .options(
+                selectinload(Assessment.target_rows).selectinload(AssessmentTarget.finding).joinedload(Finding.package)
+            )
             .order_by(Assessment.timestamp)
-        ).scalars().all())
+        ).scalars().unique().all())
 
     @staticmethod
     def get_by_origin(variant_ids: list[uuid.UUID] | None = None, origin: str = "custom") -> list["Assessment"]:
@@ -799,11 +775,17 @@ class Assessment(Base):
         query = (
             db.select(Assessment)
             .where(Assessment.origin == origin)
-            .options(joinedload(Assessment.finding).joinedload(Finding.package))
+            .options(
+                selectinload(Assessment.target_rows).selectinload(AssessmentTarget.finding).joinedload(Finding.package)
+            )
             .order_by(Assessment.timestamp.desc())
         )
         if variant_ids:
-            query = query.where(Assessment.variant_id.in_(variant_ids))
+            query = (
+                query
+                .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+                .where(AssessmentTarget.variant_id.in_(variant_ids))
+            )
         return list(db.session.execute(query).scalars().unique().all())
 
     def update(

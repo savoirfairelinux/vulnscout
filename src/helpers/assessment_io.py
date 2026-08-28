@@ -415,35 +415,6 @@ def parse_imported_timestamp(raw_ts: object, use_original_timestamps: bool) -> "
     return parsed.astimezone(_tz.utc)
 
 
-def duplicate_assessment_query(
-    finding_id: "_uuid.UUID",
-    variant_id: "_uuid.UUID | None",
-    status: str,
-    origin: str,
-    timestamp: "_dt | None" = None,
-) -> Any:
-    """Build the SELECT used to detect an already-imported assessment.
-
-    When *timestamp* is given (i.e. the caller preserves the timestamps stored
-    in the file) it is part of the identity: an assessment recorded at another
-    date is a distinct entry in the vulnerability's history and must be
-    imported instead of being silently dropped as a duplicate.  Without it,
-    re-importing the same file stays idempotent.
-    """
-    from ..extensions import db
-    from ..models.assessment import Assessment as DBAssessment
-
-    query = db.select(DBAssessment).where(
-        DBAssessment.finding_id == finding_id,
-        DBAssessment.variant_id == variant_id,
-        DBAssessment.status == status,
-        DBAssessment.origin == origin,
-    )
-    if timestamp is not None:
-        query = query.where(DBAssessment.timestamp == timestamp)
-    return query
-
-
 def duplicate_multitarget_assessment_exists(
     resolved_targets: "list[tuple[_uuid.UUID, _uuid.UUID]]",
     status: str,
@@ -452,14 +423,12 @@ def duplicate_multitarget_assessment_exists(
 ) -> bool:
     """Return True when an assessment with exactly this target set already exists.
 
-    ``duplicate_assessment_query`` filters on the scalar ``finding_id``/
-    ``variant_id`` columns, which are ``NULL`` on a genuine multi-target
-    assessment (2+ targets created via ``targets=``). Re-importing such a row
-    would therefore never match there and would create a duplicate on every
-    import. This checks the *set* of ``(variant_id, finding_id)`` pairs
-    instead — set **equality**, not overlap, since an assessment covering a
-    superset or subset of targets is a different assessment, not a repeat of
-    this one.
+    Checks the *set* of ``(variant_id, finding_id)`` pairs for exact
+    **equality**, not overlap, since an assessment covering a superset or
+    subset of targets is a different assessment, not a repeat of this one.
+    Works identically for a single-pair set (a single-target import) or a
+    multi-pair set (a multi-target import) — there is no separate scalar
+    column to check against anymore.
 
     Runs exactly two queries regardless of how many targets are in
     *resolved_targets*: one to find candidate assessment ids that match on
@@ -539,7 +508,6 @@ def import_statements(
         *errors*  — list of error dicts ``{"vuln_id": ..., "error": ...}``.
         *skipped* — count of duplicate assessments that were not re-inserted.
     """
-    from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
@@ -612,16 +580,13 @@ def import_statements(
                 DBVuln.get_or_create(vuln_name)
                 finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
-                existing = db.session.execute(
-                    duplicate_assessment_query(
-                        finding_id=finding.id,
-                        variant_id=variant_id,
-                        status=status,
-                        origin="custom",
-                        timestamp=imported_ts,
-                    )
-                ).scalars().first()
-                if existing is not None:
+                existing = duplicate_multitarget_assessment_exists(
+                    [(variant_id, finding.id)],
+                    status=status,
+                    origin="custom",
+                    timestamp=imported_ts,
+                )
+                if existing:
                     skipped += 1
                     continue
 
@@ -640,10 +605,12 @@ def import_statements(
         if not resolved_targets:
             continue
 
-        # The per-product check above only matches single-target assessments
-        # (their scalar finding_id/variant_id are set). A genuine multi-target
-        # assessment's scalars are NULL, so it is invisible there; check the
-        # full resolved target set for an exact match before creating one.
+        # The per-product check above matches each individual (variant,
+        # finding) pair, which is exactly this statement's target set when
+        # it names one product. A statement naming several products checks
+        # each pair individually but never the *whole* set together, so
+        # confirm no existing assessment already covers this exact
+        # multi-target combination before creating a new one.
         if len(resolved_targets) > 1 and duplicate_multitarget_assessment_exists(
             resolved_targets, status=status, origin="custom", timestamp=imported_ts,
         ):
@@ -665,15 +632,7 @@ def import_statements(
                 timestamp=imported_ts,
                 commit=True,
             )
-            if len(resolved_targets) == 1:
-                only_variant_id, only_finding_id = resolved_targets[0]
-                db_a = DBAssessment.create(
-                    finding_id=only_finding_id,
-                    variant_id=only_variant_id,
-                    **create_kwargs,
-                )
-            else:
-                db_a = DBAssessment.create(targets=resolved_targets, **create_kwargs)
+            db_a = DBAssessment.create(targets=resolved_targets, **create_kwargs)
             created.append(db_a.to_dict())
         except Exception as e:
             # A single catch-all: GroupInvariantError (targets can't share
@@ -738,8 +697,7 @@ def build_custom_data_export(
 
     variant_name_by_id: dict[str, str] = {}
     variant_uuid_set: set[_uuid.UUID] = {
-        a.variant_id for a in [*handmade, *pending_ai]
-        if a.variant_id is not None
+        row.variant_id for a in [*handmade, *pending_ai] for row in a.target_rows
     }
 
     def _export_assessments(
@@ -1094,16 +1052,13 @@ def import_custom_data(
                         continue
                     assert v_id is not None and f_id is not None
 
-                    existing = db.session.execute(
-                        duplicate_assessment_query(
-                            finding_id=f_id,
-                            variant_id=v_id,
-                            status=status,
-                            origin=origin,
-                            timestamp=imported_ts,
-                        )
-                    ).scalars().first()
-                    if existing is not None:
+                    existing = duplicate_multitarget_assessment_exists(
+                        [(v_id, f_id)],
+                        status=status,
+                        origin=origin,
+                        timestamp=imported_ts,
+                    )
+                    if existing:
                         result[skipped_key] += 1
                         continue
 
@@ -1116,11 +1071,10 @@ def import_custom_data(
                 if not resolved_targets:
                     continue
 
-                # The per-target check above only matches single-target
-                # assessments (their scalar finding_id/variant_id are set). A
-                # genuine multi-target assessment's scalars are NULL, so it
-                # is invisible there; check the full resolved target set for
-                # an exact match before creating one.
+                # The per-target check above matches each individual pair;
+                # a target list naming several products needs the *whole*
+                # set checked together too, so confirm no existing
+                # assessment already covers this exact combination.
                 if len(resolved_targets) > 1 and duplicate_multitarget_assessment_exists(
                     resolved_targets, status=status, origin=origin, timestamp=imported_ts,
                 ):
@@ -1142,15 +1096,7 @@ def import_custom_data(
                         timestamp=imported_ts,
                         commit=True,
                     )
-                    if len(resolved_targets) == 1:
-                        only_variant_id, only_finding_id = resolved_targets[0]
-                        DBAssessment.create(
-                            finding_id=only_finding_id,
-                            variant_id=only_variant_id,
-                            **create_kwargs,
-                        )
-                    else:
-                        DBAssessment.create(targets=resolved_targets, **create_kwargs)
+                    DBAssessment.create(targets=resolved_targets, **create_kwargs)
                     result[imported_key] += 1
                 except Exception as e:
                     # A single catch-all: GroupInvariantError (targets can't
@@ -1176,10 +1122,17 @@ def import_custom_data(
             variant_token = a.get("variant_id")
             if variant_token in (None, ""):
                 variant_token = a.get("variant")
-            if target_variant_id is None and variant_token not in (None, ""):
+            if target_variant_id is None:
+                # A target's variant_id is part of its primary key and can
+                # never be NULL, so an assessment with no resolvable variant
+                # is unrepresentable — report it instead of silently dropping
+                # the variant.
                 result["errors"].append({
                     "vuln_id": vuln_name,
-                    "error": f"Variant '{variant_token}' not found",
+                    "error": (
+                        f"Variant '{variant_token}' not found" if variant_token not in (None, "")
+                        else "No variant specified"
+                    ),
                 })
                 continue
 
@@ -1197,16 +1150,13 @@ def import_custom_data(
                     DBVuln.get_or_create(vuln_name)
                     finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
-                    existing = db.session.execute(
-                        duplicate_assessment_query(
-                            finding_id=finding.id,
-                            variant_id=target_variant_id,
-                            status=status,
-                            origin=origin,
-                            timestamp=imported_ts,
-                        )
-                    ).scalars().first()
-                    if existing is not None:
+                    existing = duplicate_multitarget_assessment_exists(
+                        [(target_variant_id, finding.id)],
+                        status=status,
+                        origin=origin,
+                        timestamp=imported_ts,
+                    )
+                    if existing:
                         result[skipped_key] += 1
                         continue
 
@@ -1215,8 +1165,7 @@ def import_custom_data(
                         simplified_status=STATUS_TO_SIMPLIFIED.get(
                             status, "Pending Assessment"
                         ),
-                        finding_id=finding.id,
-                        variant_id=target_variant_id,
+                        targets=[(target_variant_id, finding.id)],
                         origin=origin,
                         status_notes=status_notes,
                         justification=justification,

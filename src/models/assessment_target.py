@@ -20,9 +20,9 @@ from ..extensions import db, Base
 class GroupInvariantError(ValueError):
     """Raised when a set of targets may not share one assessment.
 
-    An assessment stays inside one project and addresses one vulnerability.
-    Content invariants that used to live here are gone: members cannot disagree
-    about text that now exists in exactly one place.
+    An assessment stays inside one project and addresses one vulnerability;
+    members cannot disagree about text, since assessment content lives in
+    exactly one place — the assessment row itself.
     """
 
 
