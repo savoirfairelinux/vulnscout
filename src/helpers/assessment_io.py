@@ -232,6 +232,47 @@ _CUSTOM_EXPORT_SECTIONS = (
 )
 
 
+def _is_valid_v2_target(target: object) -> bool:
+    """True when *target* carries enough scope for ``_resolve_v2_target``.
+
+    A target must name a package and identify its variant by id or by name --
+    the name is what lets a backup restore on an instance whose variant UUIDs
+    all differ.
+    """
+    if not isinstance(target, dict):
+        return False
+    if not isinstance(target.get("package"), str):
+        return False
+    return isinstance(target.get("variant_id"), str) or isinstance(target.get("variant"), str)
+
+
+def _is_valid_custom_record(section: str, record: object, version: object) -> bool:
+    """Validate one record of a VulnScout custom-data export."""
+    if not isinstance(record, dict):
+        return False
+    if not isinstance(record.get("vuln_id"), str):
+        return False
+
+    is_assessment = section in {"assessments", "ai_assessments"}
+    if is_assessment:
+        packages = record.get("packages")
+        if not isinstance(packages, list):
+            return False
+        if not all(isinstance(package, str) for package in packages):
+            return False
+
+    # A version-2 assessment carries its scope in ``targets``, so its
+    # top-level ``variant_id`` is null whenever the record spans several
+    # variants -- that is exactly what ``build_custom_data_export`` writes.
+    # Requiring a string here would make VulnScout reject its own export.
+    if version == 2 and is_assessment:
+        targets = record.get("targets")
+        if isinstance(targets, list) and targets:
+            return all(_is_valid_v2_target(target) for target in targets)
+
+    return isinstance(record.get("variant_id"), str)
+
+
 def detect_review_export_format(doc: object) -> str:
     """Return the supported Review export format represented by *doc*.
 
@@ -243,19 +284,13 @@ def detect_review_export_format(doc: object) -> str:
     if not isinstance(doc, dict):
         raise ValueError("Export file must contain a JSON object")
     if doc.get("version") in (1, 2) and isinstance(doc.get("assessments"), list):
+        version = doc.get("version")
         for section in _CUSTOM_EXPORT_SECTIONS:
             value = doc.get(section, [])
             if not isinstance(value, list):
                 raise ValueError(f"Invalid VulnScout JSON: '{section}' must be an array")
             if not all(
-                isinstance(record, dict)
-                and isinstance(record.get("variant_id"), str)
-                and isinstance(record.get("vuln_id"), str)
-                and (
-                    section not in {"assessments", "ai_assessments"}
-                    or isinstance(record.get("packages"), list)
-                    and all(isinstance(package, str) for package in record["packages"])
-                )
+                _is_valid_custom_record(section, record, version)
                 for record in value
             ):
                 raise ValueError(f"Invalid VulnScout JSON: '{section}' contains an invalid record")
@@ -735,8 +770,28 @@ def build_custom_data_export(
     pending_ai = DBAssessment.get_by_origin(variant_ids, origin="ai")
 
     variant_name_by_id: dict[str, str] = {}
+    scope: "set[_uuid.UUID] | None" = set(variant_ids) if variant_ids is not None else None
+
+    def _scoped_target_rows(assessment: "DBAssessment") -> list:
+        """Return the target rows of *assessment* that fall inside the export scope.
+
+        ``get_by_origin`` admits an assessment as soon as *one* of its targets
+        matches the requested variants, so a cross-variant assessment arrives
+        here carrying targets the caller did not ask for.  Exporting those
+        would disclose another variant's packages and, on re-import, restore
+        them -- while ``export-update`` promises the opposite, that variants
+        outside the current selection are removed.  An unscoped export
+        (``variant_ids is None``) still emits every target, so a full backup
+        stays lossless.
+        """
+        if scope is None:
+            return list(assessment.target_rows)
+        return [row for row in assessment.target_rows if row.variant_id in scope]
+
     variant_uuid_set: set[_uuid.UUID] = {
-        row.variant_id for a in [*handmade, *pending_ai] for row in a.target_rows
+        row.variant_id
+        for a in [*handmade, *pending_ai]
+        for row in _scoped_target_rows(a)
     }
 
     def _export_assessments(
@@ -745,6 +800,17 @@ def build_custom_data_export(
         exported = []
         for assessment in assessments:
             assessment_dict = assessment.to_dict()
+            target_rows = _scoped_target_rows(assessment)
+            if not target_rows:
+                continue
+            # ``packages`` and the top-level ``variant_id`` describe the same
+            # subset as ``targets``; taking them from ``to_dict()`` would span
+            # every target and leak the out-of-scope ones back in.
+            packages = scoped_packages(assessment, variant_ids)
+            scoped_variant_ids = {row.variant_id for row in target_rows}
+            single_variant_id = (
+                str(next(iter(scoped_variant_ids))) if len(scoped_variant_ids) == 1 else None
+            )
             exported.append({
                 "vuln_id": assessment_dict["vuln_id"],
                 "status": assessment_dict["status"],
@@ -754,20 +820,18 @@ def build_custom_data_export(
                 "status_notes": assessment_dict.get("status_notes") or None,
                 "workaround": assessment_dict.get("workaround") or None,
                 "timestamp": assessment_dict["timestamp"],
-                "packages": assessment_dict["packages"],
-                "variant_id": assessment_dict.get("variant_id"),
-                # Every target is exported even when the export is scoped to a
-                # subset of variants. Unlike a published VEX document, this
-                # format is a self-describing backup: each target carries its
-                # own variant_id and is re-imported verbatim. Truncating the
-                # list to the scope would make a round-trip lossy, silently
-                # dropping targets from the assessments it restores.
+                "packages": packages,
+                "variant_id": single_variant_id,
+                # ``variant`` (the human-readable name) travels with the id
+                # because a variant_id generated by another VulnScout instance
+                # never matches a local one -- see ``_resolve_v2_target``.
                 "targets": [
                     {
                         "variant_id": str(row.variant_id),
+                        "variant": row.variant.name if row.variant is not None else None,
                         "package": row.finding.package.string_id,
                     }
-                    for row in assessment.target_rows
+                    for row in target_rows
                 ],
             })
         return exported
@@ -924,7 +988,6 @@ def import_custom_data(
     from ..models.finding import Finding
     from ..models.scan import Scan
     from ..models.observation import Observation
-    from ..models.variant import Variant as DBVariant
     from .vuln_helpers import (
         validate_effort,
         validate_and_apply_cvss,
@@ -999,19 +1062,26 @@ def import_custom_data(
         a version-2 export always refers to packages/findings this database
         already knows, so a name that does not resolve is reported instead of
         silently fabricating a new package/finding.
+
+        The variant is resolved with the same precedence as the version-1
+        path: an explicit ``variant_id`` argument to ``import_custom_data``
+        wins, then a target ``variant_id`` that exists locally, then the
+        target's variant *name*. The name fallback is what makes a backup
+        restorable on a different VulnScout instance, where every locally
+        generated variant UUID differs from the exported one.
         """
         if not isinstance(raw_target, dict):
             return None, None, "Invalid target entry"
         variant_token = raw_target.get("variant_id")
         pkg_string = raw_target.get("package")
-        if not variant_token or not pkg_string:
+        if not pkg_string:
+            return None, None, "Target missing package"
+        if variant_id is None and not variant_token and not raw_target.get("variant"):
             return None, None, "Target missing variant_id or package"
-        try:
-            resolved_variant_id = _uuid.UUID(str(variant_token))
-        except (ValueError, TypeError):
-            return None, None, f"Invalid variant_id: {variant_token!r}"
-        if DBVariant.get_by_id(resolved_variant_id) is None:
-            return None, None, f"Variant '{variant_token}' not found"
+        resolved_variant_id = _resolve_variant(raw_target)
+        if resolved_variant_id is None:
+            label = raw_target.get("variant") or variant_token
+            return None, None, f"Variant '{label}' not found"
 
         if "::" in pkg_string:
             base, supplier = pkg_string.split("::", 1)
