@@ -21,6 +21,7 @@ from sqlalchemy.engine import CursorResult
 
 from ..extensions import db, write_lock
 from ..models.assessment import Assessment
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.metrics import Metrics
 from ..models.observation import Observation
@@ -148,7 +149,12 @@ def _outdated_assessments() -> list[dict]:
         )
         .outerjoin(Finding, Finding.id == Assessment.finding_id)
         .outerjoin(Package, Package.id == Finding.package_id)
-        .where(Assessment.origin == "custom", Assessment.variant_id.is_not(None))
+        # Every assessment now has at least one target row (Assessment.create
+        # refuses an empty target set), so "has a variant" is checked through
+        # that instead of the scalar column, which a genuine multi-target
+        # assessment leaves unset.  ``.any()`` is an EXISTS subquery, not a
+        # join, so it can't multiply rows here.
+        .where(Assessment.origin == "custom", Assessment.target_rows.any())
     )
     assessments: list[dict] = []
     ids_by_string: dict[str, uuid.UUID] = {}
@@ -159,7 +165,9 @@ def _outdated_assessments() -> list[dict]:
         assessments.append({
             "id": str(assessment_id),
             "origin": origin,
-            "variant_id": str(variant_id),
+            # None for a genuine multi-target assessment, which has no single
+            # scalar variant.  Consumers must tolerate it.
+            "variant_id": str(variant_id) if variant_id is not None else None,
             "finding_id": finding_id,
             "vuln_id": vulnerability_id or "",
             "packages": [package_id] if package_id else [],
@@ -213,7 +221,11 @@ def outdated_data_preview() -> dict[str, object]:
     assessments = _outdated_assessments()
     package_ids = {package_id for package_id, _ in package_pairs}
     variant_ids = {variant_id for _, variant_id in package_pairs}
-    variant_ids.update(uuid.UUID(assessment["variant_id"]) for assessment in assessments)
+    variant_ids.update(
+        uuid.UUID(assessment["variant_id"])
+        for assessment in assessments
+        if assessment["variant_id"] is not None
+    )
     package_labels: dict[uuid.UUID, str] = {}
     for package_id_chunk in _chunked(package_ids):
         package_labels.update({
@@ -354,7 +366,9 @@ def _delete_orphaned_findings(finding_ids: set[uuid.UUID]) -> tuple[int, set[str
                 db.select(Finding.id, Finding.vulnerability_id)
                 .where(Finding.id.in_(finding_id_chunk))
                 .where(~Finding.observations.any())
-                .where(~Finding.assessments.any())
+                # A finding held only by a multi-target assessment is still
+                # referenced, so reachability runs through assessment_targets.
+                .where(~Finding.assessment_targets.any())
                 .where(~Finding.time_estimates.any())
             ).all()
         )
@@ -362,6 +376,41 @@ def _delete_orphaned_findings(finding_ids: set[uuid.UUID]) -> tuple[int, set[str
     vulnerability_ids = {row[1] for row in rows}
     _delete_in_chunks(Finding, Finding.id, ids)
     return len(ids), vulnerability_ids
+
+
+def remove_target(assessment_id: uuid.UUID, variant_id: uuid.UUID, finding_id: uuid.UUID) -> bool:
+    """Remove one ``(variant, finding)`` target from an assessment.
+
+    The assessment itself is deleted when this was its last remaining target:
+    with no targets left it is unreachable by design (``Assessment.create``
+    refuses to create one with an empty target set), so leaving it behind
+    would be a leak.  Goes through the ORM ``target_rows`` collection rather
+    than a bulk statement so the ``cascade="all, delete-orphan"`` on
+    ``Assessment.target_rows`` fires normally — raw SQL wouldn't cascade,
+    since sqlite ``foreign_keys`` stay off in this application.
+
+    Returns False when the assessment or the target is not found.
+    """
+    assessment = db.session.get(Assessment, assessment_id)
+    if assessment is None:
+        return False
+    target_row = next(
+        (
+            t for t in assessment.target_rows
+            if t.variant_id == variant_id and t.finding_id == finding_id
+        ),
+        None,
+    )
+    if target_row is None:
+        return False
+    assessment.target_rows.remove(target_row)
+    if not assessment.target_rows:
+        db.session.delete(assessment)
+    # Flush so a caller checking db.session.get(Assessment, assessment_id)
+    # right after this call sees the deletion immediately, rather than only
+    # once the enclosing transaction commits.
+    db.session.flush()
+    return True
 
 
 def _delete_orphaned_vulnerabilities(vulnerability_ids: set[str]) -> int:
@@ -436,6 +485,11 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
             for assessment in outdated_assessments
             if assessment["finding_id"] is not None
         }
+        # Bulk DELETE bypasses the ORM's cascade="all, delete-orphan" on
+        # Assessment.target_rows (sqlite foreign_keys stay off), so the
+        # target rows for these assessments are cleared explicitly first —
+        # otherwise they'd be left dangling, pointing at a deleted assessment.
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, outdated_assessment_ids)
         _delete_in_chunks(Assessment, Assessment.id, outdated_assessment_ids)
         _delete_in_chunks(Observation, Observation.id, stale_observation_ids)
         sbom_packages_deleted, sbom_observations_deleted = _delete_stale_sbom_records(stale_package_pairs)
@@ -539,8 +593,13 @@ def orphaned_vulnerabilities_preview() -> list[dict[str, str | int]]:
         assessment_counts.update({
             vulnerability_id: count
             for vulnerability_id, count in db.session.execute(
-                db.select(Finding.vulnerability_id, db.func.count(Assessment.id))
-                .join(Assessment, Assessment.finding_id == Finding.id)
+                # Reachability runs through assessment_targets.  One target row
+                # per (assessment, finding) pair multiplies rows per
+                # assessment, so count func.distinct(Assessment.id).
+                db.select(Finding.vulnerability_id, db.func.count(db.func.distinct(Assessment.id)))
+                .select_from(Finding)
+                .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+                .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
                 .where(Finding.vulnerability_id.in_(orphan_id_chunk))
                 .group_by(Finding.vulnerability_id)
             ).all()
@@ -554,9 +613,14 @@ def orphaned_vulnerabilities_preview() -> list[dict[str, str | int]]:
 def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> dict[str, int]:
     """Delete CVEs absent from every project/variant and their assessments.
 
-    Bulk ``DELETE`` statements replace the ORM cascade: child rows (findings and
-    their assessments / time-estimates / observations, plus per-CVE metrics and
-    refresh metadata) are cleared explicitly in foreign-key order.
+    Bulk ``DELETE`` statements replace the ORM cascade for findings, time
+    estimates, observations, and per-CVE metrics/refresh metadata.  Assessments
+    are reachable only through their target rows now, so they are reaped one
+    target at a time via ``remove_target`` instead of a bulk ``DELETE`` keyed
+    on the scalar ``Assessment.finding_id`` column — that column misses
+    assessments reached only through a multi-target row, and even a matching
+    bulk ``DELETE`` would leave their target rows behind uncascaded (sqlite
+    ``foreign_keys`` stay off).
     """
     with write_lock():
         vulnerability_ids = [str(item["id"]) for item in orphaned_vulnerabilities_preview()]
@@ -570,12 +634,25 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
             finding_ids.extend(db.session.execute(
                 db.select(Finding.id).where(Finding.vulnerability_id.in_(vulnerability_id_chunk))
             ).scalars())
-        assessments_deleted = 0
+
+        target_triples: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = set()
         for finding_id_chunk in _chunked(finding_ids):
-            assessments_deleted += db.session.execute(
-                db.select(db.func.count(Assessment.id)).where(Assessment.finding_id.in_(finding_id_chunk))
-            ).scalar_one()
-        _delete_in_chunks(Assessment, Assessment.finding_id, finding_ids)
+            target_triples.update(db.session.execute(
+                db.select(
+                    AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+                )
+                .where(AssessmentTarget.finding_id.in_(finding_id_chunk))
+            ).tuples().all())
+        candidate_assessment_ids = {assessment_id for assessment_id, _, _ in target_triples}
+        for assessment_id, variant_id, finding_id in target_triples:
+            remove_target(assessment_id, variant_id, finding_id)
+        # An assessment is deleted only once every one of its targets has been
+        # reaped (remove_target keeps siblings alive), so count what's gone.
+        assessments_deleted = sum(
+            1 for assessment_id in candidate_assessment_ids
+            if db.session.get(Assessment, assessment_id) is None
+        )
+
         _delete_in_chunks(TimeEstimate, TimeEstimate.finding_id, finding_ids)
         _delete_in_chunks(Observation, Observation.finding_id, finding_ids)
         _delete_in_chunks(Finding, Finding.id, finding_ids)
