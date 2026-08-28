@@ -7,6 +7,8 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
+from alembic.operations import Operations
+from alembic.runtime.migration import MigrationContext
 
 migration = importlib.import_module(
     "src.migrations.versions.x0a1b2c3d4e5_add_assessment_targets"
@@ -335,3 +337,133 @@ def test_responses_key_falls_back_to_the_raw_text_when_unparsable():
 
 def test_responses_key_handles_a_non_list_json_value():
     assert migration.responses_key('{"b": 1, "a": 2}') == '{"a": 2, "b": 1}'
+
+
+def _build_pre_upgrade_schema(connection):
+    """Create the schema as it stands just before this revision runs.
+
+    ``_build_schema`` above pre-creates ``assessment_targets`` so the backfill
+    helpers can be called on their own; ``upgrade()`` creates that table
+    itself, and drops indexes the helper never creates, so it needs the real
+    pre-revision shape.
+    """
+    connection.execute(sa.text(
+        "CREATE TABLE variants (id TEXT PRIMARY KEY, project_id TEXT)"
+    ))
+    connection.execute(sa.text(
+        "CREATE TABLE findings (id TEXT PRIMARY KEY, vulnerability_id VARCHAR(50))"
+    ))
+    connection.execute(sa.text(
+        """
+        CREATE TABLE assessments (
+            id TEXT PRIMARY KEY,
+            source VARCHAR,
+            origin VARCHAR,
+            status VARCHAR,
+            simplified_status VARCHAR,
+            status_notes TEXT,
+            justification TEXT,
+            impact_statement TEXT,
+            workaround TEXT,
+            timestamp TEXT,
+            finding_id TEXT REFERENCES findings (id),
+            variant_id TEXT REFERENCES variants (id),
+            responses TEXT
+        )
+        """
+    ))
+    connection.execute(sa.text(
+        "CREATE INDEX ix_assessments_finding_id ON assessments (finding_id)"
+    ))
+    connection.execute(sa.text(
+        "CREATE INDEX ix_assessments_variant_id ON assessments (variant_id)"
+    ))
+
+
+def _bind_alembic_op(connection):
+    migration.op = Operations(MigrationContext.configure(connection))
+
+
+def _assessment_columns(connection) -> set[str]:
+    return {
+        row[1]
+        for row in connection.execute(sa.text("PRAGMA table_info(assessments)"))
+    }
+
+
+def _targets(connection) -> set[tuple]:
+    return {
+        (row["assessment_id"], row["variant_id"], row["finding_id"])
+        for row in connection.execute(sa.text(
+            "SELECT assessment_id, variant_id, finding_id FROM assessment_targets"
+        )).mappings()
+    }
+
+
+def test_upgrade_moves_targets_off_the_scalar_columns_and_fuses_duplicates():
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_pre_upgrade_schema(connection)
+        project_id = _new_id()
+        finding_id = _add_finding(connection, "CVE-2026-0100")
+        variant_a = _add_variant(connection, project_id)
+        variant_b = _add_variant(connection, project_id)
+        first = _add_assessment(connection, finding_id, variant_a)
+        second = _add_assessment(connection, finding_id, variant_b)
+        other_finding = _add_finding(connection, "CVE-2026-0101")
+        lone = _add_assessment(connection, other_finding, variant_a)
+
+        _bind_alembic_op(connection)
+        migration.upgrade()
+
+        columns = _assessment_columns(connection)
+        remaining = _existing_assessments(connection)
+        targets = _targets(connection)
+
+    assert "variant_id" not in columns
+    assert "finding_id" not in columns
+    survivor = min(first, second, key=str)
+    assert remaining == {survivor, lone}
+    assert targets == {
+        (survivor, variant_a, finding_id),
+        (survivor, variant_b, finding_id),
+        (lone, variant_a, other_finding),
+    }
+
+
+def test_downgrade_gives_every_target_its_own_assessment_row_again():
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_pre_upgrade_schema(connection)
+        project_id = _new_id()
+        finding_id = _add_finding(connection, "CVE-2026-0200")
+        variant_a = _add_variant(connection, project_id)
+        variant_b = _add_variant(connection, project_id)
+        _add_assessment(connection, finding_id, variant_a)
+        _add_assessment(connection, finding_id, variant_b)
+
+        _bind_alembic_op(connection)
+        migration.upgrade()
+        assert len(_existing_assessments(connection)) == 1
+
+        migration.downgrade()
+
+        columns = _assessment_columns(connection)
+        rows = [
+            (row["variant_id"], row["finding_id"], row["status"])
+            for row in connection.execute(sa.text(
+                "SELECT variant_id, finding_id, status FROM assessments"
+            )).mappings()
+        ]
+        target_table = connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE name = 'assessment_targets'"
+        )).scalar()
+
+    assert "variant_id" in columns and "finding_id" in columns
+    assert target_table is None
+    assert sorted(rows) == sorted([
+        (variant_a, finding_id, "not_affected"),
+        (variant_b, finding_id, "not_affected"),
+    ])

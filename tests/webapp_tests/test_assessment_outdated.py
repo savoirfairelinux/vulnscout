@@ -822,6 +822,41 @@ class TestHelperEdgeCases:
         assert dicts[0]["outdated"] is False
         assert dicts[0]["superseded_by"] == []
 
+    def test_assessment_without_packages_is_left_current(self):
+        """An empty package list has nothing that could be superseded.
+
+        It is checked alongside a real reference so the annotation actually
+        reaches the per-assessment step instead of short-circuiting.
+        """
+        empty = self._base_dict(id="empty", packages=[])
+        stale = self._base_dict(id="stale", packages=["firefox@1.0"])
+        self._annotate([empty, stale])
+        assert empty["outdated"] is False
+        assert empty["superseded_by"] == []
+        assert stale["outdated"] is True
+
+    def test_variant_without_an_active_sbom_scan_is_skipped(self):
+        """A variant with no active SBOM has no active versions to compare against."""
+        unknown_variant = self._base_dict(
+            id="unknown-variant", variant_id=str(uuid.uuid4()))
+        self._annotate([unknown_variant])
+        assert unknown_variant["outdated"] is False
+
+    def test_target_only_assessment_without_an_id_is_skipped(self):
+        """Targets are resolved by assessment id; a dict without one has none."""
+        no_id = self._base_dict(packages=["firefox@1.0"])
+        no_id.pop("id")
+        no_id.pop("variant_id")
+        self._annotate([no_id])
+        assert no_id["outdated"] is False
+
+    def test_target_only_assessment_with_a_non_uuid_id_is_skipped(self):
+        """A malformed id cannot address any target row and must not raise."""
+        bad_id = self._base_dict(id="not-a-uuid")
+        bad_id.pop("variant_id")
+        self._annotate([bad_id])
+        assert bad_id["outdated"] is False
+
     def test_invalid_variant_id_is_skipped(self):
         """A malformed variant_id doesn't raise and leaves defaults."""
         dicts = [self._base_dict(variant_id="not-a-uuid")]
