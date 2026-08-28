@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment, AssessmentGroup, AssessmentTarget } from "../handlers/assessments";
-import Assessments, { asAssessment } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTargetGroup } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -608,7 +608,7 @@ type VariantScopedSnapshot = {
     }, [vuln, patchVuln]);
 
     const groupCopyKey = (group: AssessmentGroup) =>
-        group.group_id ? `group:${group.group_id}` : `assessment:${group.assessment_ids[0]}`;
+        `${isMultiTargetGroup(group.targets) ? 'group' : 'assessment'}:${group.group_id ?? group.assessment_ids[0]}`;
 
     const copyGroupId = async (group: AssessmentGroup) => {
         const text = groupCopyKey(group);
@@ -1985,8 +1985,8 @@ type VariantScopedSnapshot = {
                                                     <button
                                                         type="button"
                                                         onClick={() => copyGroupId(group)}
-                                                        aria-label={group.group_id ? "Copy group id" : "Copy assessment id"}
-                                                        title={group.group_id ? "Copy group id" : "Copy assessment id"}
+                                                        aria-label={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
+                                                        title={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
                                                         className="text-amber-300 hover:text-amber-100 transition-colors"
                                                     >
                                                         <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
@@ -2118,8 +2118,8 @@ type VariantScopedSnapshot = {
                                                             <button
                                                                 type="button"
                                                                 onClick={() => copyGroupId(group)}
-                                                                aria-label={group.group_id ? "Copy group id" : "Copy assessment id"}
-                                                                title={group.group_id ? "Copy group id" : "Copy assessment id"}
+                                                                aria-label={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
+                                                                title={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
                                                                 className="text-gray-400 hover:text-gray-200 transition-colors"
                                                             >
                                                                 <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />

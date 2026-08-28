@@ -3,7 +3,7 @@ import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { AssessmentGroup, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
-import { asAssessment } from "../handlers/assessments";
+import { asAssessment, isMultiTargetGroup } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
@@ -114,10 +114,12 @@ function toReviewRow(
 // How long the copy button shows its "copied" confirmation before reverting.
 const COPIED_FEEDBACK_MS = 2000;
 
-/** The clipboard payload for a row: its group id when grouped, otherwise the
- *  id of its single assessment. Mirrors VulnModal's copy buttons. */
+/** The clipboard payload for a row: prefixed by whether the row spans more
+ *  than one (variant, package) target, since that's the user-facing
+ *  distinction between "a group" and "a single assessment". Mirrors
+ *  VulnModal's copy buttons. */
 const rowCopyKey = (row: ReviewRow) =>
-    row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
+    `${isMultiTargetGroup(row.targets) ? 'group' : 'assessment'}:${row.group_id ?? row.assessment_ids[0]}`;
 
 /** Copies a row's group/assessment id, confirming inline like VulnModal does.
  *  Same styles and confirmation as the copy button in the assessment history,
@@ -128,7 +130,7 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
     onCopy: (row: ReviewRow) => void;
 }) {
     const copied = copiedKey === rowCopyKey(row);
-    const label = row.group_id ? 'Copy group id' : 'Copy assessment id';
+    const label = isMultiTargetGroup(row.targets) ? 'Copy group id' : 'Copy assessment id';
     return (
         <>
             <button

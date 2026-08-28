@@ -1648,9 +1648,10 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        // Wait for the real assessment-groups response (group-99) to replace
-        // the initial client-side fallback before deleting.
-        await screen.findByLabelText('Copy group id');
+        // Wait for the real assessment-groups response (group-99, rendered
+        // status "Exploitable") to replace the initial client-side fallback
+        // (rendered status "active") before deleting.
+        await screen.findByText(/Exploitable/);
         const deleteBtn = screen.getByTitle(/delete assessment/i);
         await user.click(deleteBtn);
         await user.click(screen.getByText(/yes, delete/i));
@@ -1723,9 +1724,10 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithVariantAssessment} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        // Wait for the real assessment-groups response (group-77) to replace
-        // the initial client-side fallback before editing.
-        await screen.findByLabelText('Copy group id');
+        // Wait for the real assessment-groups response (group-77, rendered
+        // status "Exploitable") to replace the initial client-side fallback
+        // (rendered status "active") before editing.
+        await screen.findByText(/Exploitable/);
         const editBtn = screen.getByTitle(/edit assessment/i);
         await user.click(editBtn);
 
@@ -2856,7 +2858,7 @@ describe('Vulnerability Modal', () => {
         writeText.mockRestore();
     });
 
-    test('copy group id button copies "group:<id>" when the assessment-groups endpoint returns a real group', async () => {
+    test('copy group id button copies "group:<id>" when the assessment-groups endpoint returns a multi-target group', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
@@ -2871,8 +2873,13 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
-            assessment_ids: ['assessment-1'],
+            // Two targets makes this a group in the user-facing sense; a
+            // single target is just an assessment, whatever its group_id.
+            targets: [
+                { variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' },
+                { variant_id: null, package: 'dddeeefff@2.0.0', outdated: false, assessment_id: 'assessment-2' },
+            ],
+            assessment_ids: ['assessment-1', 'assessment-2'],
         }])); // assessment groups mount fetch
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
