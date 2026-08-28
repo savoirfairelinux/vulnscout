@@ -4,7 +4,7 @@
 import uuid
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import ForeignKey, String, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, relationship, mapped_column
 
 from ..extensions import db, Base
@@ -12,6 +12,9 @@ from ..helpers.verbose import verbose
 from .package import Package
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.orm import Mapper
+
     from ..models import TimeEstimate, Vulnerability, Observation
     from .assessment_target import AssessmentTarget
 
@@ -37,11 +40,13 @@ class Finding(Base):
         back_populates="finding", cascade="all, delete-orphan")
     assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(
         back_populates="finding",
+        # finding_id is part of AssessmentTarget's primary key, so the ORM's
+        # default "blank out the child's foreign key" raises rather than
+        # cleaning up, and delete-orphan can't cascade-null it either.
+        # ``passive_deletes="all"`` hands the job to the ``before_delete``
+        # reaper below, which clears the rows on every deletion path.
+        passive_deletes="all",
     )
-    # No delete-orphan cascade: finding_id is part of AssessmentTarget's
-    # primary key, so the ORM can't cascade-null it on delete. Callers that
-    # delete a Finding must detach its assessment_targets first (see
-    # outdated_cleanup.remove_target and routes.scans.delete_scan).
     time_estimates: Mapped[list["TimeEstimate"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
 
@@ -151,3 +156,18 @@ class Finding(Base):
         """Delete this finding from the database."""
         db.session.delete(self)
         db.session.commit()
+
+
+@event.listens_for(Finding, "before_delete")
+def _reap_assessment_targets(
+    mapper: "Mapper[Finding]", connection: "Connection", finding: "Finding",
+) -> None:
+    """Drop the assessment targets pointing at a finding being deleted.
+
+    Registered as a mapper event rather than written into :meth:`delete` so it
+    also fires when a finding is removed through the ORM cascade from its
+    package or its vulnerability -- those parents reach the same hazard.
+    """
+    from .assessment_target import AssessmentTarget, reap_targets
+
+    reap_targets(connection, AssessmentTarget.finding_id == finding.id)
