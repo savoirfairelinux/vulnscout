@@ -1524,6 +1524,77 @@ class TestAssessmentsControllerGetsByVulnPkgVariantFilter:
         # The cross-variant assessment should be excluded (continue branch)
         assert all(str(r.id) != str(a.id) for r in result)
 
+    def test_multi_variant_assessment_does_not_match_unrelated_variant(self, app):
+        """A cross-variant assessment must not be reused for a third variant.
+
+        ``single_variant_id`` is None both for an unscoped record and for one
+        targeting several variants, so matching on it would let an assessment
+        for variants A and B dedupe against an ingestion for variant C and
+        suppress C's own record.
+        """
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment as DBAssessment
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+
+        v = Vulnerability.create_record("CVE-2099-MULTIVAR")
+        p = Package.create("multivar-lib", "1.0")
+        f = Finding.create(p.id, v.id)
+        project = Project.create("MultiVarProject")
+        variant_a = Variant.create("MultiVarA", project.id)
+        variant_b = Variant.create("MultiVarB", project.id)
+        variant_c = Variant.create("MultiVarC", project.id)
+        a = DBAssessment.create(
+            status="affected", targets=[(variant_a.id, f.id), (variant_b.id, f.id)],
+        )
+        assert a.single_variant_id is None
+
+        ctrl = AssessmentsController(PackagesController())
+
+        ctrl.current_variant_id = variant_c.id
+        assert ctrl._matches_current_variant(a) is False
+        assert all(str(r.id) != str(a.id) for r in ctrl.gets_by_vuln_pkg(v.id, p.string_id))
+
+        # ...but it still matches each variant it actually targets.
+        ctrl.current_variant_id = variant_b.id
+        assert ctrl._matches_current_variant(a) is True
+
+    def test_warm_packages_skips_unrelated_variant(self, app):
+        """warm_packages uses the same predicate as gets_by_vuln_pkg."""
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment as DBAssessment
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+
+        v = Vulnerability.create_record("CVE-2099-WARMVAR")
+        p = Package.create("warmvar-lib", "1.0")
+        f = Finding.create(p.id, v.id)
+        project = Project.create("WarmVarProject")
+        variant_a = Variant.create("WarmVarA", project.id)
+        variant_b = Variant.create("WarmVarB", project.id)
+        variant_c = Variant.create("WarmVarC", project.id)
+        a = DBAssessment.create(
+            status="affected", targets=[(variant_a.id, f.id), (variant_b.id, f.id)],
+        )
+
+        ctrl = AssessmentsController(PackagesController())
+        ctrl.current_variant_id = variant_c.id
+        ctrl.warm_packages([p.id])
+        assert str(a.id) not in ctrl.assessments
+
+        ctrl_b = AssessmentsController(PackagesController())
+        ctrl_b.current_variant_id = variant_b.id
+        ctrl_b.warm_packages([p.id])
+        assert str(a.id) in ctrl_b.assessments
+
     def test_gets_by_vuln_pkg_exception_is_caught(self, app):
         """Lines 197-198: exception in gets_by_vuln_pkg is caught silently."""
         from src.controllers.packages import PackagesController

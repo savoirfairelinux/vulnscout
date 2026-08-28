@@ -175,18 +175,24 @@ class AssessmentsController:
         """Return True if *assessment* is compatible with the current ingestion variant.
 
         When ``current_variant_id`` is set (i.e. during a ``process`` run) we
-        only want assessments that belong to that specific variant or that
-        have no variant at all (legacy / API-created records).  This prevents
+        only want assessments that target that specific variant or that have
+        no target at all (legacy / API-created records).  This prevents
         deduplication logic in parsers (yocto, grype, …) from mistakenly
         treating another variant's assessment as an existing one and skipping
         creation of the correct variant-scoped record.
+
+        The check walks ``target_rows`` rather than ``single_variant_id``: that
+        shorthand collapses to ``None`` both for a genuinely unscoped record
+        *and* for a cross-variant one, so using it would make an assessment
+        targeting variants A and B match an ingestion for unrelated variant C.
         """
         if self.current_variant_id is None:
             return True
-        return (
-            assessment.single_variant_id is None
-            or assessment.single_variant_id == self.current_variant_id
-        )
+        target_variant_ids = {t.variant_id for t in assessment.target_rows}
+        if not target_variant_ids:
+            # No targets at all: legacy / API-created record, applies anywhere.
+            return True
+        return self.current_variant_id in target_variant_ids
 
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
         """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
@@ -250,13 +256,11 @@ class AssessmentsController:
         :meth:`_index_existing`.  After this call, :meth:`gets_by_vuln_pkg`
         will serve results from the in-memory index without hitting the DB.
         """
-        _current_vid = self.current_variant_id
         for pkg_id in package_ids:
             if pkg_id in self._db_queried_pkgs:
                 continue
             for a in Assessment.get_by_package(pkg_id):
-                if (_current_vid is None or a.single_variant_id is None
-                        or a.single_variant_id == _current_vid):
+                if self._matches_current_variant(a):
                     self._index_existing(a)
             self._db_queried_pkgs.add(pkg_id)
 
