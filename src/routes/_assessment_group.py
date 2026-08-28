@@ -211,6 +211,36 @@ def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], Any]
     return indexed
 
 
+def resolve_target_set(
+    packages: list[Package], vuln_id: str, variant_ids: list[UUID],
+) -> "tuple[dict[tuple[str, UUID], Finding], list[str]]":
+    """Cross *packages* with *variant_ids*, keeping only observed combos.
+
+    Returns ``(resolved, unobserved)``: ``resolved`` maps
+    ``(package.string_id, variant_id) -> Finding`` for every combo a scan
+    actually recorded; ``unobserved`` lists the packages that had zero valid
+    combo across *every* selected variant — the caller's cue to reject the
+    whole request, since the selection itself is wrong in that case.
+
+    A selected package not being observed in every selected variant is not
+    itself an error: the selection is a cross-product, but scan data is
+    sparse, so a missing cell simply produces no target.
+    """
+    resolved: dict[tuple[str, UUID], Finding] = {}
+    covered: set[str] = set()
+    for variant_id in variant_ids:
+        findings, _absent = validate_assessment_findings(packages, vuln_id, variant_id)
+        for package in packages:
+            finding = findings.get(package.id)
+            if finding is not None:
+                resolved[(package.string_id, variant_id)] = finding
+                covered.add(package.string_id)
+
+    selected_packages = {package.string_id for package in packages}
+    unobserved = sorted(selected_packages - covered)
+    return resolved, unobserved
+
+
 def resolve_targets(
     req: ReconcileRequest,
     existing_by_key: "dict[tuple[str, UUID], Any] | None" = None,
@@ -241,20 +271,13 @@ def resolve_targets(
             + ". Assessments can only be written for existing packages."
         }
 
-    resolved: dict[tuple[str, UUID], Finding] = {}
-    covered: set[str] = set()
-    for variant_id in req.variant_ids:
-        findings, _absent = validate_assessment_findings(packages, req.vuln_id, variant_id)
-        for package in packages:
-            finding = findings.get(package.id)
-            if finding is not None:
-                resolved[(package.string_id, variant_id)] = finding
-                covered.add(package.string_id)
+    resolved, unobserved_initial = resolve_target_set(packages, req.vuln_id, req.variant_ids)
+    selected_packages = {package.string_id for package in packages}
+    covered = selected_packages - set(unobserved_initial)
 
     # A target that already exists for a still-selected combo stays a target
     # even if the finding lookup above missed it, otherwise the reconcile
     # would read it as deselected and drop a target the user only meant to edit.
-    selected_packages = {package.string_id for package in packages}
     selected_variants = set(req.variant_ids)
     for key, target_row in (existing_by_key or {}).items():
         if key in resolved or key[0] not in selected_packages or key[1] not in selected_variants:

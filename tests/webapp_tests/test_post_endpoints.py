@@ -335,6 +335,52 @@ def test_batch_missing_package_cancels_whole_batch(client):
         assert len(Assessment.get_by_vulnerability("CVE-1999-12345")) == before
 
 
+def test_resolve_target_set_covers_the_full_cross_product(client, demo_ids):
+    """Two packages x two variants -> up to 4 (pkg, variant) targets, keyed
+    by (package.string_id, variant_id), only for combos an observation
+    actually recorded."""
+    from src.routes._assessment_group import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        packages = [Package.get_by_string_id(p) for p in demo_ids["two_packages"]]
+        variant_ids = [
+            uuid_module.UUID(demo_ids["variant_id"]),
+            uuid_module.UUID(demo_ids["other_variant_id"]),
+        ]
+
+        resolved, unobserved = resolve_target_set(packages, demo_ids["vuln_id"], variant_ids)
+
+        assert unobserved == []
+        assert len(resolved) == 4
+        keys = set(resolved.keys())
+        assert keys == {
+            (demo_ids["two_packages"][0], variant_ids[0]),
+            (demo_ids["two_packages"][0], variant_ids[1]),
+            (demo_ids["two_packages"][1], variant_ids[0]),
+            (demo_ids["two_packages"][1], variant_ids[1]),
+        }
+
+
+def test_resolve_target_set_flags_a_package_unobserved_in_every_variant(client, demo_ids):
+    from src.routes._assessment_group import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        stray = Package.find_or_create("does-not-exist", "9.9.9")
+        from src.extensions import db
+        db.session.commit()
+        packages = [Package.get_by_string_id(demo_ids["two_packages"][0]), stray]
+        variant_ids = [uuid_module.UUID(demo_ids["variant_id"])]
+
+        resolved, unobserved = resolve_target_set(packages, demo_ids["vuln_id"], variant_ids)
+
+        assert unobserved == [stray.string_id]
+        assert all(pkg_id != stray.string_id for pkg_id, _ in resolved.keys())
+
+
 def test_patch_vulnerability_empty(client):
     response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={})
     assert response.status_code == 200
