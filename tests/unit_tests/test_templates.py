@@ -503,7 +503,7 @@ class TestRenderMultiTargetAssessments:
         openssl = self._make_finding("CVE-2026-6002", "openssl")
         DBAssessment.create(
             status="not_affected", origin="custom",
-            finding_id=openssl.id, variant_id=variant.id,
+            targets=[(variant.id, openssl.id)],
             commit=True,
         )
 

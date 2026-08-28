@@ -264,18 +264,22 @@ def test_get_assessments_dict(app, client):
     import uuid
     from src.extensions import db
     from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
 
     seed_id = "da4d18f0-d89e-4d54-819d-86fc884cc737"
     demo_variant_id = "22222222-2222-2222-2222-222222222222"
     with app.app_context():
-        # The seed assessment has no scalar variant_id (it predates variant
-        # tracking); attach it to the demo variant here so it has a target
-        # row and is reachable through the listing routes, which now read
-        # targets exclusively from assessment_targets.
+        # The seed assessment has no target row (it predates variant
+        # tracking); attach it to the demo variant here so it has one and is
+        # reachable through the listing routes, which now read targets
+        # exclusively from assessment_targets.
         from src.models.assessment import Assessment
         seed = Assessment.get_by_id(seed_id)
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
         db.session.add(AssessmentTarget(
-            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=seed.finding_id))
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=finding.id))
         db.session.commit()
 
     response = client.get("/api/assessments?format=dict")
@@ -293,6 +297,7 @@ def test_get_assessments_compact(app, client):
     import uuid
     from src.extensions import db
     from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
 
     demo_variant_id = "22222222-2222-2222-2222-222222222222"
     with app.app_context():
@@ -300,8 +305,11 @@ def test_get_assessments_compact(app, client):
         # row to be reachable through the listing routes.
         from src.models.assessment import Assessment
         seed = Assessment.get_by_id("da4d18f0-d89e-4d54-819d-86fc884cc737")
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
         db.session.add(AssessmentTarget(
-            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=seed.finding_id))
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=finding.id))
         db.session.commit()
 
     response = client.get("/api/assessments?format=compact")
@@ -321,13 +329,11 @@ def test_get_assessments_compact(app, client):
 def test_compact_listing_returns_every_custom_assessment(app, client):
     """Three custom assessments on distinct packages must all appear.
 
-    Regression test for impact finding 1.1: with NULL scalar
-    ``variant_id``/``finding_id`` columns, SQLite's ``PARTITION BY`` treats
-    NULLs as equal, collapsing every custom assessment into one partition so
-    only the top-ranked row survived. This passes today (the scalar columns
-    are still dual-written) and must keep passing once Task 11 drops them,
-    since the ranking now partitions on the joined ``assessment_targets``
-    columns, which are never NULL.
+    The ranking partitions on the joined ``assessment_targets`` columns.
+    Those are primary-key columns and therefore never NULL, which matters
+    because SQLite's ``PARTITION BY`` treats NULLs as equal: a nullable
+    partition key would collapse every custom assessment into a single
+    partition and surface only the top-ranked row.
     """
     import uuid
     from src.models.assessment import Assessment
@@ -347,7 +353,7 @@ def test_compact_listing_returns_every_custom_assessment(app, client):
             finding = Finding.create(package_id=pkg.id, vulnerability_id=vuln_id)
             Assessment.create(
                 status="not_affected", origin="custom",
-                finding_id=finding.id, variant_id=variant.id,
+                targets=[(variant.id, finding.id)],
                 commit=True,
             )
 
@@ -414,7 +420,26 @@ def test_full_and_list_formats_show_one_row_per_multi_target_assessment(app, cli
         assert len(matches) == 1, f"variant {vid} must select the assessment exactly once"
 
 
-def test_get_assessment_by_id(client):
+def test_get_assessment_by_id(client, app):
+    import uuid
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+
+    seed_id = "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    demo_variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        # See test_get_assessments_dict: the seed assessment needs a target
+        # row to be reachable through the listing routes.
+        seed = Assessment.get_by_id(seed_id)
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
+        db.session.add(AssessmentTarget(
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=finding.id))
+        db.session.commit()
+
     response = client.get("/api/assessments/da4d18f0-d89e-4d54-819d-86fc884cc737")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -426,7 +451,26 @@ def test_get_assessment_by_id(client):
     assert response.status_code == 404
 
 
-def test_get_assessments_by_vuln(client):
+def test_get_assessments_by_vuln(client, app):
+    import uuid
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+
+    seed_id = "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    demo_variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        # See test_get_assessments_dict: the seed assessment needs a target
+        # row to be reachable through the listing routes.
+        seed = Assessment.get_by_id(seed_id)
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
+        db.session.add(AssessmentTarget(
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=finding.id))
+        db.session.commit()
+
     response = client.get("/api/vulnerabilities/CVE-2020-35492/assessments")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -457,7 +501,26 @@ def test_get_documents_list(client):
     assert "built-in" in summary_item["category"]
 
 
-def test_render_document_adoc(client):
+def test_render_document_adoc(client, app):
+    import uuid
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+
+    seed_id = "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    demo_variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        # See test_get_assessments_dict: the seed assessment needs a target
+        # row to be reachable through the listing routes / report counts.
+        seed = Assessment.get_by_id(seed_id)
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
+        db.session.add(AssessmentTarget(
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=finding.id))
+        db.session.commit()
+
     response = client.get("/api/documents/summary.adoc")
     assert response.status_code == 200
     content = response.data.decode("utf-8")
@@ -690,7 +753,26 @@ def test_export_documents_archive_multiple_sboms(client):
         ]
 
 
-def test_render_document_with_options(client):
+def test_render_document_with_options(client, app):
+    import uuid
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+
+    seed_id = "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    demo_variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        # See test_get_assessments_dict: the seed assessment needs a target
+        # row to be reachable through the listing routes / document rendering.
+        seed = Assessment.get_by_id(seed_id)
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
+        db.session.add(AssessmentTarget(
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=finding.id))
+        db.session.commit()
+
     response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
         "author=AUTHOR_NAME",
         "client_name=CLIENT_NAME",
@@ -704,7 +786,26 @@ def test_render_document_with_options(client):
     assert "CVE-2020-35492" in content
 
 
-def test_render_document_with_filter(client):
+def test_render_document_with_filter(client, app):
+    import uuid
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+
+    seed_id = "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    demo_variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        # See test_get_assessments_dict: the seed assessment needs a target
+        # row to be reachable through the listing routes / document rendering.
+        seed = Assessment.get_by_id(seed_id)
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
+        db.session.add(AssessmentTarget(
+            assessment_id=seed.id, variant_id=uuid.UUID(demo_variant_id), finding_id=finding.id))
+        db.session.commit()
+
     response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
         "ignore_before=2000-01-01T00:00",
         "only_epss_greater=45.67"

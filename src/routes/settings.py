@@ -238,6 +238,16 @@ def _process_sbom_background(
                     pass
 
 
+def _finding_for_variant(assessment: "DBAssessment", variant_id: "uuid.UUID"):  # noqa: F821
+    """Return the finding *assessment* targets within *variant_id*, or ``None``.
+
+    Assessments used by the copy-between-variants flow always target exactly
+    one (variant, finding) pair, so this looks that target up directly.
+    """
+    target = next((t for t in assessment.target_rows if t.variant_id == variant_id), None)
+    return target.finding if target is not None else None
+
+
 def init_app(app: Flask) -> None:
 
     def _validate_name_from_request(entity_label: str) -> tuple[str, None] | tuple[None, ErrorResponse]:
@@ -450,8 +460,7 @@ def init_app(app: Flask) -> None:
         from ..models.assessment import Assessment as DBAssessment
         DBAssessment.create(
             status=src.status or "under_investigation",
-            finding_id=finding_id,
-            variant_id=variant_id,
+            targets=[(variant_id, finding_id)],
             source=src.source,
             origin="custom",
             simplified_status=src.simplified_status,
@@ -582,7 +591,7 @@ def init_app(app: Flask) -> None:
             processed_target_finding_ids: set = set()
 
             for assessment in source_assessments:
-                source_finding = assessment.finding
+                source_finding = _finding_for_variant(assessment, source_uuid)
                 if source_finding is None:
                     continue
                 if source_finding.package_id not in common_pkg_ids:
@@ -616,9 +625,10 @@ def init_app(app: Flask) -> None:
 
         # ---- alternative modes: build grouped candidates ----
         source_vuln_ids: set[str] = {
-            a.finding.vulnerability_id
+            finding.vulnerability_id
             for a in source_assessments
-            if a.finding is not None and a.finding.package_id in source_pkg_ids
+            for finding in [_finding_for_variant(a, source_uuid)]
+            if finding is not None and finding.package_id in source_pkg_ids
         }
 
         if source_vuln_ids:
@@ -654,14 +664,15 @@ def init_app(app: Flask) -> None:
         target_custom_assessments = DBAssessment.get_by_origin([target_uuid])
         target_customs_by_finding: dict = {}
         for a in target_custom_assessments:
-            if a.finding_id is not None:
-                target_customs_by_finding.setdefault(a.finding_id, []).append(a)
+            for t in a.target_rows:
+                if t.variant_id == target_uuid:
+                    target_customs_by_finding.setdefault(t.finding_id, []).append(a)
 
         groups = []
         skipped_count = 0
 
         for assessment in source_assessments:
-            source_finding = assessment.finding
+            source_finding = _finding_for_variant(assessment, source_uuid)
             if source_finding is None:
                 continue
             if source_finding.package_id not in source_pkg_ids:
@@ -953,7 +964,7 @@ def init_app(app: Flask) -> None:
 
                     # Reject mismatched vulnerability ids — a fabricated selection
                     # must not copy a verdict for CVE-A onto a finding for CVE-B.
-                    src_finding = assessment.finding
+                    src_finding = _finding_for_variant(assessment, source_uuid)
                     if (
                         src_finding is None
                         or (source_uuid == target_uuid and tgt_finding.id == src_finding.id)

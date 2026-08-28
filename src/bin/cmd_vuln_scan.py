@@ -92,8 +92,7 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
             Assessment.create(
                 status="under_investigation",
                 simplified_status="Pending Assessment",
-                finding_id=finding.id,
-                variant_id=variant_uuid,
+                targets=[(variant_uuid, finding.id)],
                 origin=origin,
                 commit=False,
             )
