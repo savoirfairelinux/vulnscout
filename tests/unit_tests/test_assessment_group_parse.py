@@ -7,7 +7,11 @@
 
 import uuid
 
-from src.routes._assessment_group import parse_reconcile_payload
+from src.routes._assessment_group import (
+    apply_reconcile,
+    index_group_rows,
+    parse_reconcile_payload,
+)
 
 VARIANT = "22222222-2222-2222-2222-222222222222"
 
@@ -128,3 +132,58 @@ def test_unknown_justification_is_still_rejected():
     req, err = parse_reconcile_payload(_payload(status="fixed", justification="made_up"))
     assert req is None
     assert err == {"error": "Invalid justification"}
+
+
+class _FakePackage:
+    def __init__(self, string_id: str | None):
+        self.string_id = string_id
+
+
+class _FakeFinding:
+    def __init__(self, package):
+        self.package = package
+
+
+class _FakeTarget:
+    def __init__(self, finding, variant_id):
+        self.finding = finding
+        self.variant_id = variant_id
+
+
+class _FakeAssessment:
+    def __init__(self, target_rows):
+        self.target_rows = target_rows
+
+
+def test_index_group_rows_is_empty_without_a_row():
+    """An empty group has no targets to index — and must not touch rows[0]."""
+    assert index_group_rows([]) == {}
+
+
+def test_index_group_rows_skips_a_target_it_cannot_name():
+    """A key needs a package string id; a target lacking one is unindexable.
+
+    Such a target is left out rather than keyed on ``None``, which would
+    collide with any other package-less target of the same variant.
+    """
+    variant = uuid.UUID(VARIANT)
+    named = _FakeTarget(_FakeFinding(_FakePackage("cairo@1.16.0")), variant)
+    no_package = _FakeTarget(_FakeFinding(None), variant)
+    no_finding = _FakeTarget(None, variant)
+
+    indexed = index_group_rows([_FakeAssessment([named, no_package, no_finding])])
+
+    assert list(indexed) == [("cairo@1.16.0", variant)]
+
+
+def test_apply_reconcile_on_an_empty_group_changes_nothing():
+    """No assessment means nothing to update, create or delete."""
+    req, err = parse_reconcile_payload(_payload())
+    assert err is None
+
+    result = apply_reconcile(req, [], {})
+
+    assert result == {
+        "updated": [], "created": [], "deleted": [],
+        "became_custom": False, "deleted_non_custom": False,
+    }

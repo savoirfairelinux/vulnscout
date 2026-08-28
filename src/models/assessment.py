@@ -100,6 +100,7 @@ RESPONSES_CDX_VEX = [
 # Assessment model
 # ---------------------------------------------------------------------------
 
+
 class Assessment(Base):
     """Stores a triage assessment for a :class:`Finding` scoped to a :class:`Variant`.
 
