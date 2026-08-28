@@ -302,7 +302,7 @@ describe('Vulnerability Modal', () => {
         await user.type(inputWorkaround, 'upgrade layer version');
         await user.click(btn);
 
-        // ASSERT: 3 mount fetches + the batch POST + the groups refresh that
+        // ASSERT: 3 mount fetches + the create POST + the groups refresh that
         // makes the new assessment appear in history immediately.
         expect(thisFetch).toHaveBeenCalledTimes(5);
         expect(updateCb).toHaveBeenCalledTimes(1);
@@ -335,8 +335,12 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
-                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v2', packages: ['pkgB@1.0'] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_id: null, variant_ids: ['v1', 'v2'],
+                    packages: ['pkgA@1.0', 'pkgB@1.0'],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 2 packages across 2 variants.')).toBeInTheDocument();
@@ -348,23 +352,25 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_id: 'v1', variant_ids: ['v1'],
+                    packages: ['pkgA@1.0'],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 1 package across 1 variant.')).toBeInTheDocument();
         alertSpy.mockRestore();
     })
 
-    test('an invalid batch adds nothing and displays only the API error', async () => {
+    test('an invalid create adds nothing and displays only the API error', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
-            status: 'error',
-            assessments: [],
-            count: 0,
-            errors: [{error: 'Invalid package version for vulnerability and variant: pkgB@1.0'}],
+            error: 'Invalid package version for vulnerability and variant: pkgB@1.0',
         }), {status: 400});
 
         const appendAssessment = jest.fn();
@@ -387,7 +393,11 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: ['pkgA@1.0', 'pkgB@1.0'] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_ids: [], packages: ['pkgA@1.0', 'pkgB@1.0'],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 2 packages.')).toBeInTheDocument();
@@ -399,7 +409,11 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: [] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_id: 'v1', variant_ids: ['v1'], packages: [],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 1 variant.')).toBeInTheDocument();
@@ -411,11 +425,10 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
-                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_ids: [], packages: [] },
             ],
         });
-        expect(await screen.findByText('Successfully added 2 assessments.')).toBeInTheDocument();
+        expect(await screen.findByText('Successfully added assessment.')).toBeInTheDocument();
         alertSpy.mockRestore();
     })
 
@@ -845,7 +858,7 @@ describe('Vulnerability Modal', () => {
             if (req.url.includes('/assessment-groups')) {
                 return JSON.stringify(posted ? [newGroup, existingGroup] : [existingGroup]);
             }
-            if (req.method === 'POST' && req.url.includes('/api/assessments/batch')) {
+            if (req.method === 'POST' && req.url.includes('/assessments') && !req.url.includes('/batch')) {
                 posted = true;
                 return JSON.stringify({
                     status: 'success',
@@ -2908,12 +2921,12 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
         fetchMock.mockResponseOnce(JSON.stringify([])); // variant-active-packages (single request for variantPackageMap)
-        // Single batch POST returns one record per (package, variant) pair
+        // Single fused POST returns one row covering both variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessments: [
                 {
-                    id: 'new-assess-v1',
+                    id: 'new-assess-fused',
                     vuln_id: 'CVE-2010-1234',
                     packages: ['aaabbbccc@1.0.0'],
                     status: 'affected',
@@ -2925,24 +2938,26 @@ describe('Vulnerability Modal', () => {
                     timestamp: '2026-01-01T00:00:00Z',
                     origin: 'custom',
                     responses: [],
-                    variant_id: 'v1'
-                },
-                {
-                    id: 'new-assess-v2',
-                    vuln_id: 'CVE-2010-1234',
-                    packages: ['aaabbbccc@1.0.0'],
-                    status: 'affected',
-                    simplified_status: 'Exploitable',
-                    justification: '',
-                    impact_statement: '',
-                    status_notes: 'multi test',
-                    workaround: '',
-                    timestamp: '2026-01-01T00:00:00Z',
-                    origin: 'custom',
-                    responses: [],
-                    variant_id: 'v2'
+                    variant_id: null,
+                    variant_ids: ['v1', 'v2'],
                 }
-            ]
+            ],
+            assessment: {
+                id: 'new-assess-fused',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: '',
+                impact_statement: '',
+                status_notes: 'multi test',
+                workaround: '',
+                timestamp: '2026-01-01T00:00:00Z',
+                origin: 'custom',
+                responses: [],
+                variant_id: null,
+                variant_ids: ['v1', 'v2'],
+            }
         }));
 
         const appendCb = jest.fn();
@@ -2971,7 +2986,7 @@ describe('Vulnerability Modal', () => {
         // Should show multi-variant success message
         const successMsg = await screen.findByText(/successfully added assessment to 1 package across 2 variants/i);
         expect(successMsg).toBeInTheDocument();
-        expect(appendCb).toHaveBeenCalledTimes(2);
+        expect(appendCb).toHaveBeenCalledTimes(1);
         expect(patchCb).toHaveBeenCalledTimes(1);
     });
 

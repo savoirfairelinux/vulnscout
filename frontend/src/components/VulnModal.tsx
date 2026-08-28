@@ -1267,114 +1267,92 @@ type VariantScopedSnapshot = {
         // Determine which variants to post to.
         // Prefer explicit selections from the form; fall back to the current
         // variantId context so the assessment is never stored without a variant.
-        const variantIds: Array<string | undefined> =
+        const variantIds: string[] =
             content.variant_ids && content.variant_ids.length > 0
                 ? content.variant_ids
                 : variantId
                 ? [variantId]
-                : [undefined];
+                : [];
 
         const { variant_ids: _, ...baseContent } = content;
-
-        // Share a single timestamp across all variant requests so grouped
-        // assessment rows get the exact same value in the database.
         const sharedTimestamp = new Date().toISOString();
-
-        let successCount = 0;
-        let lastCasted: Assessment | null = null;
-        const touchedVariantIds = new Set<string>();
-        const touchedPackages = new Set<string>();
 
         setSubmittingMessage('Adding assessment...');
         try {
-        // Post every variant in a single batch request
-        const items = variantIds.map(vid =>
-            vid
-                ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp }
-                : { ...baseContent, timestamp: sharedTimestamp }
-        );
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/batch`, {
-            method: 'POST',
-            mode: 'cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ assessments: items })
-        });
-        const data = await response.json();
-        if (response.ok !== false && data?.status === 'success') {
-            // Backend returns one record per (package, variant) pair.
-            const rawList: unknown[] = Array.isArray(data?.assessments) ? data.assessments : [];
-            for (const raw of rawList) {
-                const casted = asAssessment(raw);
+            // One user action -> one request -> one fused Assessment row,
+            // whose target_rows cover every selected (package, variant) combo.
+            const response = await fetch(
+                import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`,
+                {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ...baseContent,
+                        variant_ids: variantIds,
+                        timestamp: sharedTimestamp,
+                    }),
+                }
+            );
+            const data = await response.json();
+            const row = data?.assessment ?? (Array.isArray(data?.assessments) ? data.assessments[0] : undefined);
+            if (response.ok !== false && data?.status === 'success' && row) {
+                const casted = asAssessment(row);
                 if (!Array.isArray(casted) && typeof casted === 'object') {
-                    successCount++;
-                    lastCasted = casted;
-                    if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
-                    for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
-
-                    // Highlight the very first created assessment
-                    if (successCount === 1) {
-                        setNewAssessmentIds(prev => new Set(prev).add(casted.id));
-                        setTimeout(() => {
-                            setNewAssessmentIds(prev => {
-                                const newSet = new Set(prev);
-                                newSet.delete(casted.id);
-                                return newSet;
-                            });
-                        }, 5500);
-                    }
+                    setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                    setTimeout(() => {
+                        setNewAssessmentIds(prev => {
+                            const newSet = new Set(prev);
+                            newSet.delete(casted.id);
+                            return newSet;
+                        });
+                    }, 5500);
 
                     appendAssessment(casted);
                     vuln.assessments.push(casted);
                     // Keep allVulnAssessments in sync so variant tags appear immediately
                     setAllVulnAssessments(prev => [...prev, casted]);
                     vuln.simplified_status = casted.simplified_status;
+
+                    // History renders from the server-built groups, so
+                    // refresh them or the assessment just created stays
+                    // invisible until the modal is reopened.
+                    await refreshAssessmentGroups();
+
+                    const updatedAssessments = [...vuln.assessments];
+                    const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                    patchVuln(vuln.id, {
+                        ...vuln,
+                        assessments: updatedAssessments,
+                        simplified_status: statusSummary.dominant_status,
+                        status_summary: statusSummary,
+                    });
+
+                    const variantCount = casted.variant_ids?.length ?? 0;
+                    const packageCount = casted.packages.length;
+                    const variantPart = variantCount > 0
+                        ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
+                        : '';
+                    const packagePart = packageCount > 0
+                        ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
+                        : '';
+
+                    let msg = 'Successfully added assessment.';
+                    if (packagePart && variantPart) {
+                        msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
+                    } else if (packagePart) {
+                        msg = `Successfully added assessment to ${packagePart}.`;
+                    } else if (variantPart) {
+                        msg = `Successfully added assessment to ${variantPart}.`;
+                    }
+                    showMessage(msg, 'success');
+                    setClearAssessmentFields(true);
+                    setTimeout(() => setClearAssessmentFields(false), 100);
                 }
+            } else {
+                const detail = String(data?.error ?? 'The selected package versions are not valid for every selected variant.');
+                showMessage(`Assessment not added: ${escape(detail)}`, 'error');
             }
-            // History renders from the server-built groups, so refresh them or
-            // the assessment just created stays invisible until the modal is
-            // reopened.
-            if (successCount > 0) await refreshAssessmentGroups();
-        } else {
-            const errors = Array.isArray(data?.errors)
-                ? data.errors.map((entry: {error?: unknown}) => String(entry?.error ?? '')).filter(Boolean).join('; ')
-                : '';
-            const detail = errors || String(data?.error ?? 'The selected package versions are not valid for every selected variant.');
-            showMessage(`Assessment not added: ${escape(detail)}`, 'error');
-        }
-
-        if (lastCasted) {
-            const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
-            patchVuln(vuln.id, {
-                ...vuln,
-                assessments: updatedAssessments,
-                simplified_status: statusSummary.dominant_status,
-                status_summary: statusSummary,
-            });
-
-            const variantCount = touchedVariantIds.size;
-            const packageCount = touchedPackages.size;
-            const variantPart = variantCount > 0
-                ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
-                : '';
-            const packagePart = packageCount > 0
-                ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
-                : '';
-
-            let msg = 'Successfully added assessment.';
-            if (packagePart && variantPart) {
-                msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
-            } else if (packagePart) {
-                msg = `Successfully added assessment to ${packagePart}.`;
-            } else if (variantPart) {
-                msg = `Successfully added assessment to ${variantPart}.`;
-            } else if (successCount > 1) {
-                msg = `Successfully added ${successCount} assessments.`;
-            }
-            showMessage(msg, 'success');
-            setClearAssessmentFields(true);
-            setTimeout(() => setClearAssessmentFields(false), 100);
-        }
         } finally {
             setSubmittingMessage(null);
         }
