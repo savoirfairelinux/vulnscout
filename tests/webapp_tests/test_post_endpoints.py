@@ -652,9 +652,9 @@ def test_payload_group_id_no_longer_merges_writes_into_one_group(client, demo_id
     assert second_row["group_id"] != group_id
 
 
-def test_batch_creates_a_group_per_row_not_per_request(client, demo_ids):
-    """A batch is one user action but grouping is per stored row now: rows
-    that used to be fused by a shared invariant key are separate groups."""
+def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
+    """A batch is one user action per item: each item (however many
+    packages it lists) becomes exactly one Assessment row."""
     response = client.post("/api/assessments/batch", json={"assessments": [
         {
             "vuln_id": demo_ids["vuln_id"],
@@ -674,10 +674,10 @@ def test_batch_creates_a_group_per_row_not_per_request(client, demo_ids):
 
     assert response.status_code == 200
     rows = response.get_json()["assessments"]
-    assert len(rows) == 4
-    group_ids = {row["group_id"] for row in rows}
-    assert None not in group_ids
-    assert group_ids == {row["id"] for row in rows}
+    assert len(rows) == 2
+    for row in rows:
+        assert row["group_id"] == row["id"]
+        assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
 
 
 def test_batch_multi_variant_single_vuln_yields_two_groups(client, demo_ids):

@@ -1473,11 +1473,13 @@ def init_app(app: Flask) -> None:
                 # time is out of scope for this phase).
                 created_rows: list[DBAssessment] = []
                 for assessment, variant_id, item_packages, valid_findings in prepared:
-                    for db_pkg in item_packages:
-                        created_rows.append(create_assessment_record(
-                            assessment, [(variant_id, valid_findings[db_pkg.id].id)],
-                            timestamp=getattr(assessment, "timestamp", None),
-                        ))
+                    item_targets = [
+                        (variant_id, valid_findings[db_pkg.id].id) for db_pkg in item_packages
+                    ]
+                    created_rows.append(create_assessment_record(
+                        assessment, item_targets,
+                        timestamp=getattr(assessment, "timestamp", None),
+                    ))
 
                 # group_id is the row's own id, so no preload step is needed
                 # to serialize it.
