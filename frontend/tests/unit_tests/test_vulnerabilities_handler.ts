@@ -492,6 +492,29 @@ describe('buildStatusSummary helpers', () => {
     expect(summary.has_active_status).toBe(false);
   });
 
+  test('a cross-variant assessment counts once per variant it targets', () => {
+    // A fused assessment has variant_id === null (no single shared variant);
+    // its coverage lives in variant_ids and must not collapse into one slot.
+    const fused = {
+      ...makeAssessment('Exploitable', '2024-01-02T00:00:00'),
+      variant_ids: ['v1', 'v2'],
+    };
+    const summary = buildStatusSummary([fused]);
+    expect(summary.counts['Exploitable']).toBe(2);
+    expect(summary.dominant_status).toBe('Exploitable');
+  });
+
+  test('a cross-variant assessment loses to a newer per-variant one', () => {
+    const fused = {
+      ...makeAssessment('Fixed', '2024-01-01T00:00:00'),
+      variant_ids: ['v1', 'v2'],
+    };
+    const newerOnV2 = makeAssessment('Exploitable', '2024-01-03T00:00:00', 'v2');
+    const summary = buildStatusSummary([fused, newerOnV2]);
+    expect(summary.counts['Fixed']).toBe(1);
+    expect(summary.counts['Exploitable']).toBe(1);
+  });
+
   test('multiple variants each contribute one slot', () => {
     // v1 → Fixed, v2 → Exploitable; dominant_status should be Exploitable
     const assessments = [

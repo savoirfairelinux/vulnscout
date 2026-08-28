@@ -1,5 +1,5 @@
 import type { Assessment } from "./assessments";
-import { asStringArray } from "./assessments";
+import { asStringArray, assessmentVariantIds } from "./assessments";
 import Iso8601Duration from "./iso8601duration";
 import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 
@@ -134,13 +134,18 @@ const buildStatusSummary = (assessments: Assessment[], currentPackages?: string[
         };
     }
 
-    // Group assessments by variant_id. Assessments without a variant_id are
+    // Group assessments by variant. A cross-variant assessment covers every
+    // variant it targets, so it is counted once per target rather than being
+    // dropped into the fallback bucket. Assessments with no target at all are
     // grouped together under a single fallback key so they contribute one slot.
     const byVariant = new Map<string, Assessment[]>();
     assessments.forEach((assessment) => {
-        const key = assessment.variant_id ?? '__no_variant__';
-        if (!byVariant.has(key)) byVariant.set(key, []);
-        byVariant.get(key)!.push(assessment);
+        const variantIds = assessmentVariantIds(assessment);
+        const keys = variantIds.length > 0 ? variantIds : ['__no_variant__'];
+        keys.forEach((key) => {
+            if (!byVariant.has(key)) byVariant.set(key, []);
+            byVariant.get(key)!.push(assessment);
+        });
     });
 
     // For each variant keep only the most recent assessment.

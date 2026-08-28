@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment, AssessmentGroup, AssessmentTarget } from "../handlers/assessments";
-import Assessments, { asAssessment, isMultiTargetGroup } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTargetGroup, appliesToVariant, assessmentPackagesInVariant, coversTarget } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -238,7 +238,7 @@ type VariantScopedSnapshot = {
             if (Array.isArray(data)) {
                 const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
                 const scopedAssessments = variantId
-                    ? fullAssessments.filter(a => a.variant_id === variantId)
+                    ? fullAssessments.filter(a => appliesToVariant(a, variantId))
                     : fullAssessments;
                 vuln.assessments = scopedAssessments;
                 setAllVulnAssessments(fullAssessments);
@@ -1064,20 +1064,26 @@ type VariantScopedSnapshot = {
         return Object.values(buckets)
             .map((members): AssessmentGroup => {
                 const head = members[0];
-                const targets: AssessmentTarget[] = members.flatMap(member =>
-                    member.packages.map(pkg => {
-                        const finding = member.variant_id
-                            ? variantFindingsMap[member.variant_id]?.find(item => item.pkg === pkg)
+                // Build from the stored pairs, not from packages x variant_id:
+                // that scalar is null for a genuine cross-variant assessment,
+                // which would pair every package with no variant at all.
+                const targets: AssessmentTarget[] = members.flatMap(member => {
+                    const pairs = member.targets && member.targets.length > 0
+                        ? member.targets
+                        : member.packages.map(pkg => ({ variant_id: member.variant_id ?? null, package: pkg }));
+                    return pairs.map(({ variant_id, package: pkg }) => {
+                        const finding = variant_id
+                            ? variantFindingsMap[variant_id]?.find(item => item.pkg === pkg)
                             : undefined;
                         const outdated = finding?.outdated ?? (
                             variantPackageMapLoaded
-                            && !!member.variant_id
-                            && variantPackageMap[member.variant_id] !== undefined
-                            && !variantPackageMap[member.variant_id].includes(pkg)
+                            && !!variant_id
+                            && variantPackageMap[variant_id] !== undefined
+                            && !variantPackageMap[variant_id].includes(pkg)
                         );
-                        return { variant_id: member.variant_id ?? null, package: pkg, outdated, assessment_id: member.id };
-                    })
-                );
+                        return { variant_id, package: pkg, outdated, assessment_id: member.id };
+                    });
+                });
                 return {
                     group_id: null,
                     vuln_id: head.vuln_id,
@@ -1108,7 +1114,7 @@ type VariantScopedSnapshot = {
         : buildFallbackGroups(effectiveAssessments.filter(assessment => assessment.origin !== 'ai'));
 
     const pendingAiAssessments = allVulnAssessments.filter(a =>
-        a.origin === "ai" && (!variantId || a.variant_id === variantId));
+        a.origin === "ai" && (!variantId || appliesToVariant(a, variantId)));
     const aiRealGroups = assessmentGroups.filter(g =>
         g.origin === 'ai' && (!variantId || g.targets.some(t => t.variant_id === variantId)));
     const aiGroups = aiRealGroups.length > 0
@@ -1117,7 +1123,9 @@ type VariantScopedSnapshot = {
 
     const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
         allVulnAssessments
-            .filter(a => a.origin !== "ai" && a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
+            .filter(a => a.origin !== "ai" && (pkg === null
+                ? appliesToVariant(a, variantIdValue)
+                : coversTarget(a, variantIdValue, pkg)))
             .reduce<Assessment | null>((best, a) => {
                 if (!best) return a;
                 return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
@@ -1134,8 +1142,8 @@ type VariantScopedSnapshot = {
         // now-deprecated versions that are no longer in the active SBOM.
         const assessmentPkgs = [...new Set(
             allVulnAssessments
-                .filter(a => a.origin !== "ai" && a.variant_id === variant.id)
-                .flatMap(a => a.packages)
+                .filter(a => a.origin !== "ai")
+                .flatMap(a => assessmentPackagesInVariant(a, variant.id))
         )];
         const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];
         const hasActivePkgData = variantPackageMapLoaded && variantActivePkgs !== undefined;
