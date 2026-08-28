@@ -335,6 +335,52 @@ def test_batch_missing_package_cancels_whole_batch(client):
         assert len(Assessment.get_by_vulnerability("CVE-1999-12345")) == before
 
 
+def test_resolve_target_set_covers_the_full_cross_product(client, demo_ids):
+    """Two packages x two variants -> up to 4 (pkg, variant) targets, keyed
+    by (package.string_id, variant_id), only for combos an observation
+    actually recorded."""
+    from src.routes._assessment_group import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        packages = [Package.get_by_string_id(p) for p in demo_ids["two_packages"]]
+        variant_ids = [
+            uuid_module.UUID(demo_ids["variant_id"]),
+            uuid_module.UUID(demo_ids["other_variant_id"]),
+        ]
+
+        resolved, unobserved = resolve_target_set(packages, demo_ids["vuln_id"], variant_ids)
+
+        assert unobserved == []
+        assert len(resolved) == 4
+        keys = set(resolved.keys())
+        assert keys == {
+            (demo_ids["two_packages"][0], variant_ids[0]),
+            (demo_ids["two_packages"][0], variant_ids[1]),
+            (demo_ids["two_packages"][1], variant_ids[0]),
+            (demo_ids["two_packages"][1], variant_ids[1]),
+        }
+
+
+def test_resolve_target_set_flags_a_package_unobserved_in_every_variant(client, demo_ids):
+    from src.routes._assessment_group import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        stray = Package.find_or_create("does-not-exist", "9.9.9")
+        from src.extensions import db
+        db.session.commit()
+        packages = [Package.get_by_string_id(demo_ids["two_packages"][0]), stray]
+        variant_ids = [uuid_module.UUID(demo_ids["variant_id"])]
+
+        resolved, unobserved = resolve_target_set(packages, demo_ids["vuln_id"], variant_ids)
+
+        assert unobserved == [stray.string_id]
+        assert all(pkg_id != stray.string_id for pkg_id, _ in resolved.keys())
+
+
 def test_patch_vulnerability_empty(client):
     response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={})
     assert response.status_code == 200
@@ -487,11 +533,9 @@ def test_delete_assessment_not_found(client):
     assert data["error"] == "Assessment not found"
 
 
-def test_multi_package_assessment_creates_a_group_per_package(client, demo_ids):
-    """Grouping is now storage, not inference: a multi-package write still
-    creates one row per package (unmigrated in this phase), and each row is
-    its own group — rows that merely arrived in the same request are no
-    longer fused at read time."""
+def test_multi_package_assessment_is_one_row_with_two_targets(client, demo_ids):
+    """A multi-package write for one variant creates ONE Assessment row,
+    with one AssessmentTarget per package — never one row per package."""
     response = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -504,10 +548,59 @@ def test_multi_package_assessment_creates_a_group_per_package(client, demo_ids):
 
     assert response.status_code == 200
     body = response.get_json()
-    assert len(body["assessments"]) == 2
-    group_ids = {a["group_id"] for a in body["assessments"]}
-    assert None not in group_ids
-    assert group_ids == {a["id"] for a in body["assessments"]}
+    assert len(body["assessments"]) == 1
+    row = body["assessments"][0]
+    assert row["group_id"] == row["id"]
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+    assert row["variant_ids"] == [demo_ids["variant_id"]]
+
+
+def test_multi_variant_assessment_is_one_row_covering_every_variant(client, demo_ids):
+    """Selecting multiple variants for one CVE in one create action still
+    creates exactly ONE Assessment row, with one target per (package,
+    variant) combo an observation actually recorded."""
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["assessments"]) == 1
+    row = body["assessments"][0]
+    assert row["group_id"] == row["id"]
+    # Spans more than one variant -> the collapsed singular field is null,
+    # but the full set is exposed via variant_ids.
+    assert row["variant_id"] is None
+    assert sorted(row["variant_ids"]) == sorted([demo_ids["variant_id"], demo_ids["other_variant_id"]])
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+
+
+def test_multi_variant_assessment_rejects_a_package_unobserved_everywhere(client, demo_ids):
+    from src.models.package import Package
+    from src.extensions import db
+
+    with client.application.app_context():
+        stray = Package.find_or_create("does-not-exist", "9.9.9")
+        db.session.commit()
+
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [demo_ids["two_packages"][0], "does-not-exist@9.9.9"],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "does-not-exist@9.9.9" in response.get_data(as_text=True)
 
 
 def test_single_package_assessment_is_its_own_group(client, demo_ids):
@@ -559,9 +652,9 @@ def test_payload_group_id_no_longer_merges_writes_into_one_group(client, demo_id
     assert second_row["group_id"] != group_id
 
 
-def test_batch_creates_a_group_per_row_not_per_request(client, demo_ids):
-    """A batch is one user action but grouping is per stored row now: rows
-    that used to be fused by a shared invariant key are separate groups."""
+def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
+    """A batch is one user action per item: each item (however many
+    packages it lists) becomes exactly one Assessment row."""
     response = client.post("/api/assessments/batch", json={"assessments": [
         {
             "vuln_id": demo_ids["vuln_id"],
@@ -581,10 +674,10 @@ def test_batch_creates_a_group_per_row_not_per_request(client, demo_ids):
 
     assert response.status_code == 200
     rows = response.get_json()["assessments"]
-    assert len(rows) == 4
-    group_ids = {row["group_id"] for row in rows}
-    assert None not in group_ids
-    assert group_ids == {row["id"] for row in rows}
+    assert len(rows) == 2
+    for row in rows:
+        assert row["group_id"] == row["id"]
+        assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
 
 
 def test_batch_multi_variant_single_vuln_yields_two_groups(client, demo_ids):
