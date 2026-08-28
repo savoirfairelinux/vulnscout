@@ -23,6 +23,7 @@ from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..models.observation import Observation
 from ..models.assessment import Assessment
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.package import Package, _normalize_supplier
 from ..models.project import Project
@@ -737,23 +738,40 @@ def _existing_assessment_identities(
     variant_id: uuid_module.UUID,
     finding_ids: Sequence[uuid_module.UUID],
 ) -> set[tuple]:
-    """Return identities of assessments already attached to these findings."""
+    """Return identities of assessments already attached to these findings.
+
+    Joins through ``assessment_targets`` rather than the assessment's scalar
+    ``finding_id``/``variant_id`` columns, so a genuine multi-target
+    assessment (created with no scalar columns set) is still recognised as
+    already covering one of its targets — the scalar columns would read as
+    ``None`` for such a row and collapse every one of them into the same
+    false identity.
+    """
     identities: set[tuple] = set()
     for chunk in _chunked(finding_ids, _IMPORT_QUERY_CHUNK):
-        for assessment in db.session.execute(
-            db.select(Assessment).where(
-                Assessment.variant_id == variant_id,
-                Assessment.finding_id.in_(chunk),
+        rows = db.session.execute(
+            db.select(
+                AssessmentTarget.finding_id,
+                Assessment.status,
+                Assessment.simplified_status,
+                Assessment.status_notes,
+                Assessment.justification,
+                Assessment.impact_statement,
             )
-        ).scalars().all():
-            identities.add((
-                assessment.finding_id,
-                assessment.status or "",
-                assessment.simplified_status or "",
-                assessment.status_notes or "",
-                assessment.justification or "",
-                assessment.impact_statement or "",
-            ))
+            .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
+            .where(
+                AssessmentTarget.variant_id == variant_id,
+                AssessmentTarget.finding_id.in_(chunk),
+            )
+        ).all()
+        for finding_id, status, simplified_status, status_notes, justification, impact_statement in rows:
+            identities.add(_assessment_identity(finding_id, {
+                "status": status or "",
+                "simplified_status": simplified_status or "",
+                "status_notes": status_notes or "",
+                "justification": justification or "",
+                "impact_statement": impact_statement or "",
+            }))
     return identities
 
 
@@ -878,10 +896,10 @@ def _persist_import_assessments(
     if not item.assessments:
         return 0
 
-    # Assessments whose origin is unset are filtered out of every export and
-    # scan diff (SQL ``NOT IN`` drops NULLs), so an imported assessment must
-    # carry the origin a natively-produced one of the same kind would have —
-    # otherwise it silently disappears the next time the data is exported.
+    # Every automatically-produced assessment records where it came from
+    # (``sbom``, ``nvd``, ``grype``, …); an imported one must carry the
+    # origin a natively-produced one of the same kind would have, so it
+    # reads the same way on the destination as it did on the source.
     origin = item.scan_source if item.scan_type == "tool" else "sbom"
 
     finding_ids = sorted(
@@ -1568,19 +1586,32 @@ def init_app(app: Flask) -> None:
             _new_assess_ids = _after_assess_ids - _before_assess_ids
             if _new_assess_ids:
                 from ..models.finding import Finding as _Finding
+                from ..models.assessment_target import AssessmentTarget as _AssessmentTarget
                 _assess_rows = db.session.execute(
                     db.select(_Assessment.id, _Finding.vulnerability_id, _Assessment.status,
                               _Assessment.simplified_status, _Assessment.justification,
                               _Assessment.impact_statement, _Assessment.status_notes)
-                    .join(_Finding, _Finding.id == _Assessment.finding_id)
+                    .join(_AssessmentTarget, _AssessmentTarget.assessment_id == _Assessment.id)
+                    .join(_Finding, _Finding.id == _AssessmentTarget.finding_id)
                     .where(_Assessment.id.in_(_new_assess_ids))
                 ).all()
-                newly_detected_assessments_list = sorted([
-                    {"vulnerability_id": vid, "status": status or "under_investigation",
-                     "simplified_status": simp or "Pending Assessment", "justification": just or "",
-                     "impact_statement": impact or "", "status_notes": notes or ""}
-                    for _aid, vid, status, simp, just, impact, notes in _assess_rows
-                ], key=lambda a: a["vulnerability_id"])
+                # A multi-target assessment produces one row per target, so
+                # dedupe by assessment id to keep the list one entry per
+                # assessment (matching the scalar-column query it replaces).
+                _seen_new_assess: set[uuid_module.UUID] = set()
+                _new_assess_entries = []
+                for aid, vid, status, simp, just, impact, notes in _assess_rows:
+                    if aid in _seen_new_assess:
+                        continue
+                    _seen_new_assess.add(aid)
+                    _new_assess_entries.append(
+                        {"vulnerability_id": vid, "status": status or "under_investigation",
+                         "simplified_status": simp or "Pending Assessment", "justification": just or "",
+                         "impact_statement": impact or "", "status_notes": notes or ""}
+                    )
+                newly_detected_assessments_list = sorted(
+                    _new_assess_entries, key=lambda a: a["vulnerability_id"]
+                )
             else:
                 newly_detected_assessments_list = []
 

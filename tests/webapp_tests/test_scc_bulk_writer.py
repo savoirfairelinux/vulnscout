@@ -400,6 +400,32 @@ class TestSccBulkWriter:
             assert _db.session.query(Observation).count() == 1
             assert _db.session.query(Assessment).count() == 1
 
+    def test_new_pending_assessment_gets_an_assessment_target_row(self, app):
+        """The bulk-inserted 'Pending Assessment' must carry its own
+        assessment_targets row.
+
+        ``bulk_insert_mappings`` bypasses ``Assessment.create()``'s dual
+        write entirely, so without an explicit insert here the new
+        assessment would be invisible to every target-based query (scan
+        diffs, outdated-assessment cleanup, ...).
+        """
+        from src.models.assessment_target import AssessmentTarget
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            scan = Scan.create("scc", variant.id, scan_type="tool")
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+
+            writer = _SccBulkWriter(scan.id, variant.id, [pkg])
+            _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+            writer.flush()
+
+            assessment = _db.session.query(Assessment).one()
+            target = _db.session.query(AssessmentTarget).one()
+            assert target.assessment_id == assessment.id
+            assert target.variant_id == variant.id
+            assert target.finding_id == assessment.finding_id
+
 
 # ---------------------------------------------------------------------------
 # Pure-function helper coverage (no DB needed)
