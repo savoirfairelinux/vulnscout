@@ -867,6 +867,44 @@ class TestDeleteScanEndpoint:
         scan_ids = [s["id"] for s in json.loads(resp2.data)]
         assert ids["tool_scan_b_id"] not in scan_ids
 
+    def test_delete_scan_removes_assessments_targeting_the_orphaned_finding(self, app, client, ids):
+        """An assessment whose only target is about to be orphaned is deleted too.
+
+        Regression test: ``assessment_targets.finding_id`` is a primary-key
+        column, so the ORM can't cascade-null it like an ordinary foreign
+        key when the finding is deleted — deleting the scan must detach the
+        assessment from the finding explicitly instead of raising.
+        """
+        from src.extensions import db
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.vulnerability import Vulnerability
+        import uuid as uuid_module
+
+        with app.app_context():
+            vuln = db.session.execute(
+                db.select(Vulnerability).where(Vulnerability.id == "CVE-TOOL-2")
+            ).scalar_one()
+            finding = db.session.execute(
+                db.select(Finding).where(
+                    Finding.package_id == uuid_module.UUID(ids["pkg_id"]),
+                    Finding.vulnerability_id == vuln.id,
+                )
+            ).scalar_one()
+            Assessment.create(
+                origin="custom", status="affected",
+                targets=[(uuid_module.UUID(ids["variant_id"]), finding.id)],
+            )
+            assessment_count_before = len(db.session.execute(db.select(Assessment)).scalars().all())
+            assert assessment_count_before == 1
+
+        resp = client.delete(f"/api/scans/{ids['tool_scan_b_id']}")
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["orphaned_findings_removed"] >= 1
+
+        with app.app_context():
+            assert db.session.execute(db.select(Assessment)).scalars().all() == []
+
 
 # ---------------------------------------------------------------------------
 # Tool-scan diff compares against GLOBAL state, not previous same-type scan

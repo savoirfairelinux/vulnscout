@@ -70,7 +70,10 @@ def setup_demo_db(app, extra_packages=None):
         # Link package to vulnerability via Finding
         finding = Finding.get_or_create(pkg.id, "CVE-2020-35492")
 
-        # Demo assessment with known UUID (tests check for this exact ID)
+        # Demo assessment with known UUID (tests check for this exact ID).
+        # Intentionally has no target row: it exercises the "no variant"
+        # (variant_id is None) serialisation path, and is unreachable through
+        # variant-scoped or target-joined listings by design.
         assessment = Assessment(
             id=uuid.UUID("da4d18f0-d89e-4d54-819d-86fc884cc737"),
             status="fixed",
@@ -80,7 +83,6 @@ def setup_demo_db(app, extra_packages=None):
             impact_statement="Yocto reported vulnerability as Patched",
             responses=[],
             workaround="",
-            finding_id=finding.id,
         )
         db.session.add(assessment)
         db.session.commit()

@@ -43,8 +43,7 @@ class TestExportCustomOpenVexAssessments:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="custom",
             )
             _db.session.commit()
@@ -81,8 +80,7 @@ class TestExportCustomVulnScoutData:
             finding = Finding.create(package.id, vulnerability.id)
             Assessment.create(
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=variant.id,
+                targets=[(variant.id, finding.id)],
                 origin="ai",
             )
 

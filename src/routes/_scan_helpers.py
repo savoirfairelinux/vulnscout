@@ -212,8 +212,7 @@ def create_observation_and_assessment(
             Assessment.create(
                 status="under_investigation",
                 simplified_status="Pending Assessment",
-                finding_id=finding.id,
-                variant_id=variant_uuid,
+                targets=[(variant_uuid, finding.id)],
                 origin=origin,
                 commit=False,
             )
