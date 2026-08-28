@@ -191,7 +191,27 @@ class Assessment(Base):
                 return [self.finding.package.string_id]
         except Exception as e:
             verbose(f"[Assessment.packages {self.id!r}] {e}")
-        return []
+        # A genuine multi-target assessment (created via ``targets=`` alone,
+        # with no scalar finding_id dual-written) has no scalar ``finding``
+        # to fall back to. Collect every target's package instead, sorted
+        # deterministically and de-duplicated (mirrors ``Assessment.vuln_id``'s
+        # fallback to ``target_rows``). This property has no scope context —
+        # callers that need a scope-restricted subset must filter it
+        # themselves (e.g. by intersecting with their own allowed variants).
+        result: list[str] = []
+        try:
+            targets = sorted(
+                self.target_rows,
+                key=lambda t: (str(t.variant_id or ""), str(t.finding_id or "")),
+            )
+            for target in targets:
+                if target.finding is not None and target.finding.package is not None:
+                    pkg_id = target.finding.package.string_id
+                    if pkg_id not in result:
+                        result.append(pkg_id)
+        except Exception as e:
+            verbose(f"[Assessment.packages {self.id!r}] {e}")
+        return result
 
     @packages.setter
     def packages(self, value: list[str]) -> None:

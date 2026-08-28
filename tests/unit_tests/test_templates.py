@@ -377,6 +377,177 @@ class TestTemplatesRenderAssessmentsWithVariantId:
 
 
 # ---------------------------------------------------------------------------
+# render() renders one entry per assessment target (DB-backed)
+# ---------------------------------------------------------------------------
+
+class TestRenderMultiTargetAssessments:
+    """A single ``origin="custom"`` assessment can target many (variant,
+    package) pairs (``Assessment.target_rows``). render() must emit one
+    entry per target instead of collapsing to the legacy scalar
+    variant_id/packages columns, which are NULL/empty for a genuine
+    multi-target assessment and previously made it vanish from reports.
+    """
+
+    @pytest.fixture()
+    def app(self):
+        os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+        try:
+            from src.bin.webapp import create_app
+            from src.extensions import db as _db
+            application = create_app()
+            application.config.update({"TESTING": True, "SCAN_FILE": "/dev/null"})
+            with application.app_context():
+                _db.create_all()
+                yield application
+                _db.drop_all()
+        finally:
+            os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
+
+    @staticmethod
+    def _make_variant(project_id, name):
+        from src.models.variant import Variant
+        return Variant.create(f"tmpl-multitarget-var-{name}", project_id)
+
+    @staticmethod
+    def _make_finding(vuln_id, pkg_name):
+        from src.models.package import Package as DBPackage
+        from src.models.vulnerability import Vulnerability as DBVulnerability
+        from src.models.finding import Finding
+        pkg = DBPackage.find_or_create(pkg_name, "1.0")
+        DBVulnerability.get_or_create(vuln_id)
+        return Finding.get_or_create(pkg.id, vuln_id)
+
+    @staticmethod
+    def _render(ctrls, **render_kwargs):
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        templates = Templates(ctrls)
+        with patch.object(templates.env, "get_template") as mock_template:
+            mock_template.return_value.render.side_effect = _capture
+            templates.render("test.jinja2", **render_kwargs)
+        return captured
+
+    def test_a_multi_target_assessment_renders_one_statement_per_target(self, app):
+        from src.models.project import Project
+        from src.models.assessment import Assessment as DBAssessment
+
+        project = Project.create("tmpl-multitarget-proj")
+        variant = self._make_variant(project.id, "a")
+        openssl = self._make_finding("CVE-2026-6000", "openssl")
+        zlib = self._make_finding("CVE-2026-6000", "zlib")
+        DBAssessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
+            commit=True,
+        )
+
+        with patch("src.controllers.vulnerabilities.EPSS_DB") as mock_epss:
+            mock_epss.return_value = MagicMock()
+            captured = self._render(ControllersCache())
+
+        vuln = captured["vulnerabilities"]["CVE-2026-6000"]
+        assert len(vuln["assessments"]) == 2
+        rendered_packages = sorted(p for a in vuln["assessments"] for p in a["packages"])
+        assert rendered_packages == ["openssl@1.0", "zlib@1.0"]
+
+        variant_dict = captured["variants"][str(variant.id)]
+        assert len(variant_dict["assessments"]) == 2
+        assert sorted(p for a in variant_dict["assessments"] for p in a["packages"]) == [
+            "openssl@1.0", "zlib@1.0",
+        ]
+
+    def test_a_cross_variant_target_is_not_leaked_into_a_scoped_report(self, app):
+        """Scoping a report to one variant must not leak a sibling variant's
+        target from the same multi-target assessment into that report."""
+        from src.models.project import Project
+        from src.models.assessment import Assessment as DBAssessment
+        from src.helpers.export_scope import compute_export_scope
+
+        project = Project.create("tmpl-multitarget-scope-proj")
+        variant_a = self._make_variant(project.id, "scope-a")
+        variant_b = self._make_variant(project.id, "scope-b")
+        openssl = self._make_finding("CVE-2026-6001", "openssl")
+        zlib = self._make_finding("CVE-2026-6001", "zlib")
+        DBAssessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, openssl.id), (variant_b.id, zlib.id)],
+            commit=True,
+        )
+
+        scope = compute_export_scope(variant_id=variant_a.id)
+        with patch("src.controllers.vulnerabilities.EPSS_DB") as mock_epss:
+            mock_epss.return_value = MagicMock()
+            captured = self._render(ControllersCache(scope=scope))
+
+        # kwargs["packages"]/["vulnerabilities"] are additionally restricted
+        # to the active SBOM scan's packages (irrelevant here, no scan was
+        # created), so assert on kwargs["assessments"] directly: it is
+        # scoped purely by the assessment's targets vs. the requested
+        # variant, independent of any SBOM/package setup.
+        rendered = list(captured["assessments"].values())
+        assert len(rendered) == 1
+        assert rendered[0]["packages"] == ["openssl@1.0"]
+        assert rendered[0]["variant_id"] == str(variant_a.id)
+
+    def test_a_single_target_assessment_still_renders_once(self, app):
+        """Regression guard: the common single-target case is unaffected."""
+        from src.models.project import Project
+        from src.models.assessment import Assessment as DBAssessment
+
+        project = Project.create("tmpl-singletarget-proj")
+        variant = self._make_variant(project.id, "single")
+        openssl = self._make_finding("CVE-2026-6002", "openssl")
+        DBAssessment.create(
+            status="not_affected", origin="custom",
+            finding_id=openssl.id, variant_id=variant.id,
+            commit=True,
+        )
+
+        with patch("src.controllers.vulnerabilities.EPSS_DB") as mock_epss:
+            mock_epss.return_value = MagicMock()
+            captured = self._render(ControllersCache())
+
+        vuln = captured["vulnerabilities"]["CVE-2026-6002"]
+        assert len(vuln["assessments"]) == 1
+        assert vuln["assessments"][0]["packages"] == ["openssl@1.0"]
+
+    def test_ignore_before_does_not_drop_multi_target_assessments(self, app):
+        """The ``ignore_before`` filter re-keys kwargs["assessments"] by the
+        base assessment id, which every target of a multi-target assessment
+        shares. It must use the same unique composite key as
+        unfiltered_assessments so both targets survive."""
+        from src.models.project import Project
+        from src.models.assessment import Assessment as DBAssessment
+
+        project = Project.create("tmpl-ignorebefore-proj")
+        variant = self._make_variant(project.id, "ignore-before")
+        openssl = self._make_finding("CVE-2026-6003", "openssl")
+        zlib = self._make_finding("CVE-2026-6003", "zlib")
+        DBAssessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
+            commit=True,
+        )
+
+        with patch("src.controllers.vulnerabilities.EPSS_DB") as mock_epss:
+            mock_epss.return_value = MagicMock()
+            captured = self._render(ControllersCache(), ignore_before="2000-01-01T00:00")
+
+        assert len(captured["unfiltered_assessments"]) == 2
+        assert len(captured["assessments"]) == 2
+
+        variant_dict = captured["variants"][str(variant.id)]
+        assert len(variant_dict["assessments"]) == 2
+        assert sorted(p for a in variant_dict["assessments"] for p in a["packages"]) == [
+            "openssl@1.0", "zlib@1.0",
+        ]
+
+
+# ---------------------------------------------------------------------------
 # TemplatesExtensions.escape_adoc — HTML sanitization
 # ---------------------------------------------------------------------------
 
