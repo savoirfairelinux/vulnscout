@@ -232,6 +232,47 @@ _CUSTOM_EXPORT_SECTIONS = (
 )
 
 
+def _is_valid_v2_target(target: object) -> bool:
+    """True when *target* carries enough scope for ``_resolve_v2_target``.
+
+    A target must name a package and identify its variant by id or by name --
+    the name is what lets a backup restore on an instance whose variant UUIDs
+    all differ.
+    """
+    if not isinstance(target, dict):
+        return False
+    if not isinstance(target.get("package"), str):
+        return False
+    return isinstance(target.get("variant_id"), str) or isinstance(target.get("variant"), str)
+
+
+def _is_valid_custom_record(section: str, record: object, version: object) -> bool:
+    """Validate one record of a VulnScout custom-data export."""
+    if not isinstance(record, dict):
+        return False
+    if not isinstance(record.get("vuln_id"), str):
+        return False
+
+    is_assessment = section in {"assessments", "ai_assessments"}
+    if is_assessment:
+        packages = record.get("packages")
+        if not isinstance(packages, list):
+            return False
+        if not all(isinstance(package, str) for package in packages):
+            return False
+
+    # A version-2 assessment carries its scope in ``targets``, so its
+    # top-level ``variant_id`` is null whenever the record spans several
+    # variants -- that is exactly what ``build_custom_data_export`` writes.
+    # Requiring a string here would make VulnScout reject its own export.
+    if version == 2 and is_assessment:
+        targets = record.get("targets")
+        if isinstance(targets, list) and targets:
+            return all(_is_valid_v2_target(target) for target in targets)
+
+    return isinstance(record.get("variant_id"), str)
+
+
 def detect_review_export_format(doc: object) -> str:
     """Return the supported Review export format represented by *doc*.
 
@@ -243,19 +284,13 @@ def detect_review_export_format(doc: object) -> str:
     if not isinstance(doc, dict):
         raise ValueError("Export file must contain a JSON object")
     if doc.get("version") in (1, 2) and isinstance(doc.get("assessments"), list):
+        version = doc.get("version")
         for section in _CUSTOM_EXPORT_SECTIONS:
             value = doc.get(section, [])
             if not isinstance(value, list):
                 raise ValueError(f"Invalid VulnScout JSON: '{section}' must be an array")
             if not all(
-                isinstance(record, dict)
-                and isinstance(record.get("variant_id"), str)
-                and isinstance(record.get("vuln_id"), str)
-                and (
-                    section not in {"assessments", "ai_assessments"}
-                    or isinstance(record.get("packages"), list)
-                    and all(isinstance(package, str) for package in record["packages"])
-                )
+                _is_valid_custom_record(section, record, version)
                 for record in value
             ):
                 raise ValueError(f"Invalid VulnScout JSON: '{section}' contains an invalid record")
