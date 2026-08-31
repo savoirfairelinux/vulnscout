@@ -211,9 +211,29 @@ class Assessment(Base):
         Populated for a single-target assessment or a multi-target one
         confined to one variant; ``None`` for a genuine cross-variant
         assessment, which consumers must tolerate.
+
+        Never use this to answer "does this assessment apply to variant X?":
+        it collapses to ``None`` both for an unscoped record *and* for a
+        cross-variant one, so the comparison silently stops matching the very
+        assessments that cover the most variants.  Use :meth:`covers_variant`.
         """
         variant_ids = {t.variant_id for t in self.target_rows}
         return next(iter(variant_ids)) if len(variant_ids) == 1 else None
+
+    def covers_variant(self, variant_id: "uuid.UUID | None") -> bool:
+        """True when this assessment applies to *variant_id*.
+
+        Replaces the pre-target ``assessment.variant_id == variant_id``
+        comparison: a single-target assessment behaves exactly as the old
+        scalar column did, and a cross-variant assessment now matches each of
+        its variants instead of none of them.  An empty target set is the
+        legacy unscoped record the scalar ``NULL`` used to represent, so it
+        matches only an unscoped query.
+        """
+        target_variant_ids = {t.variant_id for t in self.target_rows}
+        if not target_variant_ids:
+            return variant_id is None
+        return variant_id in target_variant_ids
 
     # ------------------------------------------------------------------
     # group_id -- an assessment is its own group
