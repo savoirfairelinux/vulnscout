@@ -199,7 +199,7 @@ def init_app(app: Flask) -> None:
                 .order_by(ranked.c.timestamp)
             )
         else:
-            ranked = (
+            query = (
                 db.select(
                     DBAssessment.id.label("id"),
                     DBAssessment.source.label("source"),
@@ -216,15 +216,6 @@ def init_app(app: Flask) -> None:
                     Package.name.label("name"),
                     Package.version.label("version"),
                     Package.supplier.label("supplier"),
-                    # A multi-target assessment fans out to one row per target
-                    # here; unlike compact (one entry per target by design),
-                    # this branch's consumers key by assessment id and expect
-                    # exactly one row per assessment, so rank the joined
-                    # targets and keep only one representative per assessment.
-                    func.row_number().over(
-                        partition_by=DBAssessment.id,
-                        order_by=(AssessmentTarget.variant_id, AssessmentTarget.finding_id),
-                    ).label("target_rank"),
                 )
                 .join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
                 .join(Finding, AssessmentTarget.finding_id == Finding.id)
@@ -234,31 +225,21 @@ def init_app(app: Flask) -> None:
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                ranked = ranked.where(AssessmentTarget.variant_id.in_(variant_ids))
-            ranked = ranked.subquery()
-            query = (
-                db.select(
-                    ranked.c.id,
-                    ranked.c.source,
-                    ranked.c.origin,
-                    ranked.c.variant_id,
-                    ranked.c.timestamp,
-                    ranked.c.status,
-                    ranked.c.status_notes,
-                    ranked.c.justification,
-                    ranked.c.impact_statement,
-                    ranked.c.responses,
-                    ranked.c.workaround,
-                    ranked.c.vulnerability_id,
-                    ranked.c.name,
-                    ranked.c.version,
-                    ranked.c.supplier,
-                )
-                .where(ranked.c.target_rank == 1)
-                .order_by(ranked.c.timestamp)
+                query = query.where(AssessmentTarget.variant_id.in_(variant_ids))
+            # A multi-target assessment fans out to one row per target here.
+            # Unlike compact (one entry per target by design), this branch's
+            # consumers key by assessment id and expect exactly one record per
+            # assessment, so the targets are folded back together below rather
+            # than ranked: keeping a single representative would drop the
+            # other packages and variants from the response entirely.
+            query = query.order_by(
+                DBAssessment.timestamp,
+                DBAssessment.id,
+                AssessmentTarget.variant_id,
+                AssessmentTarget.finding_id,
             )
 
-        full_result: list[AssessmentDict] = []
+        full_by_id: dict[str, AssessmentDict] = {}
         compact_result: list[CompactAssessment] = []
         for row in db.session.execute(query):
             package_id = ""
@@ -280,23 +261,46 @@ def init_app(app: Flask) -> None:
                     row.status or "",
                 ])
                 continue
-            full_result.append({
-                "id": str(row.id),
-                "source": row.source or "",
-                "origin": row.origin or "sbom",
-                "vuln_id": row.vulnerability_id or "",
-                "packages": [package_id] if package_id else [],
-                "variant_id": str(row.variant_id) if row.variant_id else None,
-                "timestamp": timestamp,
-                "last_update": timestamp or "",
-                "status": row.status or "",
-                "status_notes": row.status_notes or "",
-                "justification": row.justification or "",
-                "impact_statement": row.impact_statement or "",
-                "responses": list(row.responses or []),
-                "workaround": row.workaround or "",
-            })
-        return compact_result if compact else full_result
+            assessment_id = str(row.id)
+            entry = full_by_id.get(assessment_id)
+            if entry is None:
+                entry = {
+                    "id": assessment_id,
+                    "source": row.source or "",
+                    "origin": row.origin or "sbom",
+                    "vuln_id": row.vulnerability_id or "",
+                    "packages": [],
+                    "variant_id": None,
+                    "variant_ids": [],
+                    "timestamp": timestamp,
+                    "last_update": timestamp or "",
+                    "status": row.status or "",
+                    "status_notes": row.status_notes or "",
+                    "justification": row.justification or "",
+                    "impact_statement": row.impact_statement or "",
+                    "responses": list(row.responses or []),
+                    "workaround": row.workaround or "",
+                }
+                full_by_id[assessment_id] = entry
+            if package_id and package_id not in entry["packages"]:
+                entry["packages"].append(package_id)
+            variant_id = str(row.variant_id) if row.variant_id else None
+            if variant_id and variant_id not in entry["variant_ids"]:
+                entry["variant_ids"].append(variant_id)
+
+        if compact:
+            return compact_result
+
+        for entry in full_by_id.values():
+            entry["variant_ids"].sort()
+            # ``variant_id`` stays for backward compatibility and keeps the
+            # meaning ``Assessment.to_dict`` gives it: the one variant every
+            # target shares, or None for a genuine cross-variant assessment.
+            # Consumers that need the full scope read ``variant_ids``.
+            entry["variant_id"] = (
+                entry["variant_ids"][0] if len(entry["variant_ids"]) == 1 else None
+            )
+        return list(full_by_id.values())
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
