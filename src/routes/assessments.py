@@ -74,7 +74,7 @@ def _is_scanner_author(author: str | None) -> bool:
 def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
     """True if a pending AI assessment already exists for this (vuln, variant)."""
     for a in DBAssessment.get_by_vulnerability(vuln_id):
-        if a.origin == "ai" and a.single_variant_id == variant_id:
+        if a.origin == "ai" and a.covers_variant(variant_id):
             return True
     return False
 
