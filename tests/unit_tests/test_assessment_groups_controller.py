@@ -148,3 +148,46 @@ def test_to_dict_exposes_every_touched_variant(app):
         # The legacy singular field still collapses to None for a genuine
         # cross-variant assessment — unchanged behavior.
         assert data["variant_id"] is None
+
+
+def test_outdated_is_scoped_to_the_variant_the_package_is_stale_in(app, monkeypatch):
+    """A package stale in one variant must not flag the same package elsewhere.
+
+    ``stale_packages`` accumulates across every variant an assessment targets,
+    so it cannot answer a per-variant question; ``stale_targets`` keeps the
+    variant dimension and is what the flag has to key on.  The annotation is
+    injected here so the assertion is about the controller's keying rather
+    than about SBOM scan setup.
+    """
+    with app.app_context():
+        from src.controllers import assessment_groups
+        from src.models.assessment import Assessment
+
+        project = uuid.uuid4()
+        variant_a = _make_variant(project, "a")
+        variant_b = _make_variant(project, "b")
+        openssl_a = _make_finding("CVE-2026-2100", "openssl")
+        openssl_b = _make_finding("CVE-2026-2100", "openssl")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, openssl_a.id), (variant_b.id, openssl_b.id)],
+            commit=True,
+        )
+
+        def _fake_annotate(dicts):
+            for d in dicts:
+                d["outdated"] = True
+                d["stale_packages"] = [openssl_a.package.string_id]
+                d["stale_targets"] = [
+                    {"variant_id": str(variant_a.id), "package_name": "openssl"},
+                ]
+
+        monkeypatch.setattr(
+            assessment_groups, "annotate_assessments_outdated", _fake_annotate)
+
+        groups = assessment_groups.build_groups([assessment])
+
+        outdated_by_variant = {
+            t["variant_id"]: t["outdated"] for t in groups[0]["targets"]}
+        assert outdated_by_variant[str(variant_a.id)] is True
+        assert outdated_by_variant[str(variant_b.id)] is False

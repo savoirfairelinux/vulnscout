@@ -42,8 +42,18 @@ def build_groups(assessments: list[Assessment]) -> list[dict]:
 
     member_dicts = [a.to_dict() for a in assessments]
     annotate_assessments_outdated(member_dicts)
+    # Keyed on the (variant, package name) pair, not on the package alone:
+    # ``stale_packages`` unions every variant the assessment targets, so it
+    # would mark a target outdated because its package went stale in some
+    # *other* variant.  ``stale_targets`` is the annotation that keeps the
+    # variant dimension.  Its ``package_name`` is the bare name, so it pairs
+    # with ``package.name`` rather than with ``string_id``.
     stale_by_assessment = {
-        d["id"]: set(d.get("stale_packages") or []) for d in member_dicts
+        d["id"]: {
+            (target["variant_id"], target["package_name"])
+            for target in d.get("stale_targets") or []
+        }
+        for d in member_dicts
     }
 
     groups = []
@@ -53,7 +63,8 @@ def build_groups(assessments: list[Assessment]) -> list[dict]:
             {
                 "variant_id": str(row.variant_id),
                 "package": row.finding.package.string_id,
-                "outdated": row.finding.package.string_id in stale,
+                "outdated": (
+                    str(row.variant_id), row.finding.package.name) in stale,
                 "assessment_id": str(assessment.id),
             }
             for row in assessment.target_rows
