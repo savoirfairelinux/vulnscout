@@ -94,6 +94,25 @@ const assessmentPackagesInVariant = (assessment: Assessment, variantId: string):
 const coversTarget = (assessment: Assessment, variantId: string, pkg: string): boolean =>
     assessmentPackagesInVariant(assessment, variantId).includes(pkg);
 
+/** Identity of the (variant, package) pairs an assessment covers.
+ *
+ *  Crossing `packages` with `variant_ids` cannot tell (A,openssl)+(B,zlib) apart
+ *  from (A,zlib)+(B,openssl), so two different assessments would share a key and
+ *  one would be dropped as a duplicate. Falls back to the flat sets for payloads
+ *  with no target pairs, which is what the one-variant-per-record shape meant.
+ */
+const assessmentCoverageKey = (assessment: Assessment): string => {
+    if (assessment.targets && assessment.targets.length > 0) {
+        return assessment.targets
+            .map(target => JSON.stringify([target.variant_id ?? '', target.package]))
+            .sort()
+            .join(',');
+    }
+    const packagesKey = [...assessment.packages].sort().join(',');
+    const variantsKey = assessmentVariantIds(assessment).slice().sort().join(',');
+    return `${packagesKey}::${variantsKey}`;
+};
+
 export { assessmentVariantIds, appliesToVariant, assessmentPackagesInVariant, coversTarget };
 
 type AssessmentTarget = {
@@ -258,8 +277,7 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
     const uniqueAssessments: Assessment[] = [];
 
     for (const assessment of assessments) {
-        // Create a unique key using vuln_id, packages, status, and descriptions
-        const packagesKey = assessment.packages.sort().join(',');
+        // Create a unique key using vuln_id, target coverage, status, and descriptions
         const descriptionsKey = [
             assessment.status_notes || '',
             assessment.justification || '',
@@ -267,8 +285,7 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
             assessment.workaround || ''
         ].join('|');
 
-        const variantsKey = assessmentVariantIds(assessment).slice().sort().join(',');
-        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}::${variantsKey}`;
+        const duplicateKey = `${assessment.vuln_id}::${assessmentCoverageKey(assessment)}::${assessment.status}::${descriptionsKey}`;
 
         if (!seen.has(duplicateKey)) {
             seen.add(duplicateKey);

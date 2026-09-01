@@ -217,6 +217,83 @@ describe('removeDuplicateAssessments', () => {
   test('empty array returns empty array', () => {
     expect(removeDuplicateAssessments([])).toEqual([]);
   });
+
+  const makeSparse = (overrides: any = {}) => ({
+    id: 'a1',
+    vuln_id: 'CVE-2024-1',
+    packages: ['openssl@1.0', 'zlib@1.0'],
+    variant_ids: ['A', 'B'],
+    origin: 'sbom',
+    status: 'fixed',
+    simplified_status: 'Fixed',
+    timestamp: '2024-01-01T00:00:00',
+    responses: [],
+    ...overrides,
+  });
+
+  test('does not fuse two assessments with the same sets but opposite pairings', () => {
+    const a1 = makeSparse({
+      id: 'a1',
+      targets: [
+        { variant_id: 'A', package: 'openssl@1.0' },
+        { variant_id: 'B', package: 'zlib@1.0' },
+      ],
+    });
+    const a2 = makeSparse({
+      id: 'a2',
+      targets: [
+        { variant_id: 'A', package: 'zlib@1.0' },
+        { variant_id: 'B', package: 'openssl@1.0' },
+      ],
+    });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(2);
+  });
+
+  test('still dedups identical target pairings', () => {
+    const pairing = [
+      { variant_id: 'A', package: 'openssl@1.0' },
+      { variant_id: 'B', package: 'zlib@1.0' },
+    ];
+    const a1 = makeSparse({ id: 'a1', targets: pairing });
+    const a2 = makeSparse({ id: 'a2', targets: pairing });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
+
+  test('target pair order does not affect the key', () => {
+    const a1 = makeSparse({
+      id: 'a1',
+      targets: [
+        { variant_id: 'A', package: 'openssl@1.0' },
+        { variant_id: 'B', package: 'zlib@1.0' },
+      ],
+    });
+    const a2 = makeSparse({
+      id: 'a2',
+      targets: [
+        { variant_id: 'B', package: 'zlib@1.0' },
+        { variant_id: 'A', package: 'openssl@1.0' },
+      ],
+    });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
+
+  test('single-pair compact-shaped assessments still dedup', () => {
+    const a1 = makeAssessment({
+      id: 'a1',
+      packages: ['pkg@1.0'],
+      variant_id: 'v1',
+      variant_ids: ['v1'],
+      targets: [{ variant_id: 'v1', package: 'pkg@1.0' }],
+    });
+    const a2 = makeAssessment({
+      id: 'a2',
+      packages: ['pkg@1.0'],
+      variant_id: 'v1',
+      variant_ids: ['v1'],
+      targets: [{ variant_id: 'v1', package: 'pkg@1.0' }],
+    });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
 });
 
 describe('isMultiTargetGroup', () => {
