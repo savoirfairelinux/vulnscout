@@ -9,7 +9,7 @@ from typing import Any, Literal, overload
 from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
-from ..models.assessment import STATUS_TO_SIMPLIFIED
+from ..models.assessment_group_member import AssessmentGroupMember, GroupInvariantError
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -27,6 +27,18 @@ from ..helpers.assessment_io import (
     reconcile_review_export,
 )
 from ..helpers.assessment_staleness import annotate_assessments_outdated
+from ..controllers.assessment_groups import build_groups, load_group
+from ._assessment_group import (
+    apply_reconcile,
+    create_assessment_record,
+    find_valid_finding,
+    index_group_rows,
+    parse_reconcile_payload,
+    resolve_package,
+    resolve_targets,
+    validate_assessment_findings,
+    validate_deletions,
+)
 
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
@@ -58,81 +70,6 @@ def _is_scanner_author(author: str | None) -> bool:
     return False
 
 
-def _resolve_package(pkg_string_id: str) -> "Package | None":
-    """Look up an existing Package for 'name@version::supplier'.
-
-    Returns ``None`` when no matching package exists. Writing an assessment must
-    never create a package, so callers block the write when this returns
-    ``None``. Matching is on name + version + supplier (with the same supplier
-    normalization used by :meth:`Package.find_or_create`).
-    """
-    return Package.get_by_string_id(pkg_string_id)
-
-
-def _find_valid_finding(package_id: UUID, vuln_id: str, variant_id: UUID) -> "Finding | None":
-    """Return the finding when it was actually observed for the variant.
-
-    Assessment writes may target active or historical package versions, but
-    they must never invent a package/vulnerability/variant relationship that
-    was not produced by a scan.
-    """
-    from ..models.observation import Observation
-    from ..models.scan import Scan
-
-    return db.session.execute(
-        db.select(Finding)
-        .join(Observation, Observation.finding_id == Finding.id)
-        .join(Scan, Scan.id == Observation.scan_id)
-        .where(
-            Finding.package_id == package_id,
-            Finding.vulnerability_id == vuln_id.upper(),
-            Scan.variant_id == variant_id,
-        )
-        .distinct()
-    ).scalar_one_or_none()
-
-
-def _validate_assessment_findings(
-    packages: list[Package], vuln_id: str, variant_id: UUID
-) -> "tuple[dict[UUID, Finding], list[str]]":
-    findings: dict[UUID, Finding] = {}
-    invalid: list[str] = []
-    for package in packages:
-        finding = _find_valid_finding(package.id, vuln_id, variant_id)
-        if finding is None:
-            invalid.append(package.string_id)
-        else:
-            findings[package.id] = finding
-    return findings, invalid
-
-
-def _create_assessment_record(
-    assessment: "DBAssessment",
-    finding_id: UUID,
-    variant_id: UUID | None,
-    timestamp: datetime | None = None,
-    origin: str = "custom",
-) -> "DBAssessment":
-    """Create a single DBAssessment row from a validated DTO.
-
-    Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
-    """
-    return DBAssessment.create(
-        status=assessment.status or "",
-        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status or "", "Pending Assessment"),
-        finding_id=finding_id,
-        variant_id=variant_id,
-        origin=origin,
-        status_notes=assessment.status_notes,
-        justification=assessment.justification,
-        impact_statement=assessment.impact_statement,
-        workaround=getattr(assessment, "workaround", None),
-        responses=list(assessment.responses) if assessment.responses else [],
-        commit=True,
-        timestamp=timestamp,
-    )
-
-
 def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
     """True if a pending AI assessment already exists for this (vuln, variant)."""
     for a in DBAssessment.get_by_vulnerability(vuln_id):
@@ -141,48 +78,44 @@ def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
     return False
 
 
-def _pending_ai_group(assessment: "DBAssessment") -> list["DBAssessment"]:
-    """All pending AI rows sharing the addressed row's (vuln_id, variant_id)."""
-    vuln_id = assessment.vuln_id
-    return [
-        a for a in DBAssessment.get_by_vulnerability(vuln_id)
-        if a.origin == "ai" and a.variant_id == assessment.variant_id
-    ]
-
-
-def _resolve_ai_group(
-    assessment: "DBAssessment",
+def _resolve_pending_ai_rows(
+    assessment_id: str,
 ) -> "tuple[list[DBAssessment], ResponseReturnValue | None]":
-    """Resolve the set of pending AI assessments an approve/reject applies to.
+    """Resolve the rows a legacy approve/reject request applies to.
 
-    A grouped review row can span several variants (the front-end groups by
-    ``vuln_id`` + status/justification, deliberately ignoring ``variant_id``),
-    so the client may send an explicit ``ids`` list naming every assessment in
-    the row.  Only pending AI rows are eligible; any id that is missing or not a
-    pending AI assessment is rejected so a single request cannot silently
-    approve unrelated rows.  When no ``ids`` are provided we fall back to the
-    legacy (vuln_id, variant_id) grouping for the addressed row alone.
+    The addressed assessment must be a pending AI row.  Approval and rejection
+    are group-wide operations, so the whole group is returned when the row
+    belongs to one; an ungrouped row is its own single-member group.
     """
-    payload = request.get_json(silent=True) or {}
-    raw_ids = payload.get("ids")
-    if not raw_ids:
-        return _pending_ai_group(assessment), None
-    if not isinstance(raw_ids, list) or not all(isinstance(i, str) for i in raw_ids):
-        return [], ({"error": "'ids' must be a list of assessment id strings"}, 400)
+    existing = DBAssessment.get_by_id(assessment_id)
+    if existing is None:
+        return [], ({"error": "Assessment not found"}, 404)
+    if existing.origin != "ai":
+        return [], ({"error": "Not a pending AI assessment"}, 400)
+    group_uuid = AssessmentGroupMember.get_group_id(existing.id)
+    rows = load_group(group_uuid) if group_uuid is not None else [existing]
+    if any(row.origin != "ai" for row in rows):
+        return [], ({"error": "Not a pending AI group"}, 400)
+    return rows, None
 
-    group: list["DBAssessment"] = []
-    seen: set[str] = set()
-    for aid in raw_ids:
-        if aid in seen:
-            continue
-        seen.add(aid)
-        row = DBAssessment.get_by_id(aid)
-        if row is None:
-            return [], ({"error": f"Assessment not found: {aid}"}, 404)
-        if row.origin != "ai":
-            return [], ({"error": f"Not a pending AI assessment: {aid}"}, 400)
-        group.append(row)
-    return group, None
+
+def _approve_rows(rows: "list[DBAssessment]") -> ResponseReturnValue:
+    """Turn every pending AI row into a custom assessment."""
+    approved = []
+    with batch_session():
+        for row in rows:
+            row.update(origin="custom")
+            approved.append(row.to_dict())
+    return {"status": "success", "assessments": approved}, 200
+
+
+def _reject_rows(rows: "list[DBAssessment]") -> ResponseReturnValue:
+    """Delete every pending AI row of the rejected group."""
+    deleted_ids = [str(row.id) for row in rows]
+    with batch_session():
+        for row in rows:
+            row.delete()
+    return {"status": "success", "deleted": deleted_ids}, 200
 
 
 def _parse_batch_record_ids() -> tuple[list[UUID] | None, str | None]:
@@ -423,6 +356,7 @@ def init_app(app: Flask) -> None:
         vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
 
         assessments_serialized = []
+        DBAssessment.preload_group_ids(assessments)
         for a in assessments:
             a_ser = a.to_dict()
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
@@ -994,16 +928,176 @@ def init_app(app: Flask) -> None:
 
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
-        assessments = []
+        rows = []
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
                 if project_variant_ids is not None and a.variant_id not in project_variant_ids:
                     continue
-                assessments.append(a.to_dict())
+                rows.append(a)
+        DBAssessment.preload_group_ids(rows)
+        assessments = [a.to_dict() for a in rows]
         annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments, 200
+
+    @app.route('/api/vulnerabilities/<vuln_id>/assessment-groups', methods=['GET'])
+    def list_assessment_groups(vuln_id: str) -> ResponseReturnValue:
+        """List assessment groups for a vulnerability.
+
+        OpenAPI:
+        query project_id uuid optional Restrict results to one project.
+        response 200 JsonArray Assessment groups for the vulnerability.
+        """
+        project_uuid: UUID | None = None
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+
+        project_variant_ids: set[UUID] | None = None
+        if project_uuid is not None:
+            project_variant_ids = set(db.session.execute(
+                select(DBVariant.id).where(DBVariant.project_id == project_uuid)
+            ).scalars())
+
+        rows = []
+        for finding in Finding.get_by_vulnerability(vuln_id):
+            for a in DBAssessment.get_by_finding(finding.id):
+                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                    continue
+                rows.append(a)
+        return build_groups(rows), 200
+
+    @app.route('/api/assessment-groups/<group_id>', methods=['GET'])
+    def get_assessment_group(group_id: str) -> ResponseReturnValue:
+        """Return one assessment group by its id.
+
+        OpenAPI:
+        response 200 JsonObject The assessment group.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        return build_groups(rows)[0], 200
+
+    @app.route('/api/assessment-groups/<group_id>/reconcile', methods=['POST'])
+    def reconcile_assessment_group(group_id: str) -> ResponseReturnValue:
+        """Bring an assessment group to the requested state in one transaction.
+
+        OpenAPI:
+        body JsonObject optional Desired group content and targets.
+        response 200 JsonObject The reconciled group.
+        response 400 Error Invalid reconcile payload.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
+
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+
+        req, parse_err = parse_reconcile_payload(request.get_json() or {})
+        if parse_err:
+            return parse_err, 400
+        if req is None:
+            return {"error": "Internal error"}, 500
+
+        group_vuln_id = (rows[0].vuln_id or "").upper()
+        if req.vuln_id.upper() != group_vuln_id:
+            return {"error": "vuln_id does not match this group's vulnerability"}, 400
+
+        existing_by_key = index_group_rows(rows)
+        targets, target_err = resolve_targets(req, existing_by_key)
+        if target_err:
+            return target_err, 400
+
+        deletion_err = validate_deletions(rows, targets)
+        if deletion_err:
+            return deletion_err, 400
+
+        try:
+            with batch_session():
+                result = apply_reconcile(req, rows, targets)
+                created_ids = [UUID(a["id"]) for a in result["created"]]
+                if created_ids:
+                    # Every new row joins the group being edited; the group
+                    # id never changes and is never dissolved, even if the
+                    # edit leaves only one member.
+                    AssessmentGroupMember.create_group(
+                        created_ids, group_id=group_uuid, commit=False)
+        except GroupInvariantError as e:
+            return {"error": str(e)}, 400
+        except Exception as e:
+            return {"error": f"DB error: {e}"}, 500
+
+        if result["became_custom"] or result["deleted_non_custom"]:
+            invalidate_scan_list_cache()
+
+        return {
+            "status": "success",
+            "group_id": str(group_uuid),
+            "updated": result["updated"],
+            "created": result["created"],
+            "deleted": result["deleted"],
+        }, 200
+
+    @app.route('/api/reviews/assessment-groups', methods=['GET'])
+    def list_review_assessment_groups() -> ResponseReturnValue:
+        """List assessment groups for the review table.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict results to one variant.
+        query project_id uuid optional Restrict results to one project.
+        query origin string optional Restrict results to one origin.
+        response 200 JsonArray Assessment groups for review.
+        """
+        query = select(DBAssessment)
+        variant_ids: list[UUID] | None = None
+        variant_id = request.args.get('variant_id')
+        if variant_id:
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            query = query.where(DBAssessment.variant_id == variant_uuid)
+            variant_ids = [variant_uuid] if variant_uuid else None
+
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            project_variant_ids = [v.id for v in DBVariant.get_by_project(project_uuid)] if project_uuid else []
+            query = query.where(DBAssessment.variant_id.in_(project_variant_ids))
+            variant_ids = project_variant_ids
+
+        origin = request.args.get('origin')
+        if origin:
+            query = query.where(DBAssessment.origin == origin)
+
+        assessments = list(db.session.execute(query).scalars())
+        groups = build_groups(assessments)
+
+        # Enrich with vulnerability texts for front-end tooltips (single DB
+        # pass) — the review table spans several CVEs, unlike the vuln-scoped
+        # /assessment-groups routes where the caller already knows the texts.
+        vuln_ids = {g["vuln_id"] for g in groups if g.get("vuln_id")}
+        vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
+        for g in groups:
+            g["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts.get(g["vuln_id"], [])))
+
+        return groups, 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
     def list_variants_by_vuln(vuln_id: str) -> ResponseReturnValue:
@@ -1175,7 +1269,7 @@ def init_app(app: Flask) -> None:
         resolved_packages: list[Package] = []
         missing_packages: list[str] = []
         for pkg_string_id in (assessment.packages or []):
-            db_pkg = _resolve_package(pkg_string_id)
+            db_pkg = resolve_package(pkg_string_id)
             if db_pkg is None:
                 missing_packages.append(pkg_string_id)
             else:
@@ -1186,7 +1280,7 @@ def init_app(app: Flask) -> None:
                 + ". Assessments can only be written for existing packages."
             }, 400
 
-        valid_findings, invalid_findings = _validate_assessment_findings(
+        valid_findings, invalid_findings = validate_assessment_findings(
             resolved_packages, vuln_id, variant_id
         )
         if invalid_findings:
@@ -1195,7 +1289,20 @@ def init_app(app: Flask) -> None:
                 + ", ".join(invalid_findings)
             }, 400
 
-        created = []
+        requested_group_id: UUID | None = None
+        if payload_data.get("group_id"):
+            requested_group_id, err = parse_uuid_or_400(
+                payload_data["group_id"], "group_id")
+            if err:
+                return err
+            if requested_group_id is not None:
+                existing_group_rows = load_group(requested_group_id)
+                if not existing_group_rows:
+                    return {"error": "Group not found"}, 404
+                if (existing_group_rows[0].vuln_id or "").upper() != vuln_id.upper():
+                    return {"error": "vuln_id does not match this group's vulnerability"}, 400
+
+        created_rows = []
         try:
             with batch_session():
                 for db_pkg in resolved_packages:
@@ -1203,12 +1310,28 @@ def init_app(app: Flask) -> None:
                     # Always create a new record — never merge with an existing one.
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
-                    db_a = _create_assessment_record(
+                    db_a = create_assessment_record(
                         assessment, finding.id, variant_id, timestamp=shared_timestamp,
                         origin=target_origin)
-                    created.append(db_a.to_dict())
+                    created_rows.append(db_a)
+
+                # Membership is sparse: recorded only when this action produced
+                # several rows, or when it joins a group an earlier request in
+                # the same user action already created.
+                if len(created_rows) > 1 or requested_group_id is not None:
+                    AssessmentGroupMember.create_group(
+                        [row.id for row in created_rows],
+                        group_id=requested_group_id,
+                        commit=False,
+                    )
+        except GroupInvariantError as e:
+            return {"error": str(e)}, 400
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
+
+        # Serialize after the membership rows are flushed so group_id is set.
+        DBAssessment.preload_group_ids(created_rows)
+        created = [row.to_dict() for row in created_rows]
 
         if not created:
             return {"error": "No valid package found"}, 400
@@ -1273,7 +1396,7 @@ def init_app(app: Flask) -> None:
             for pkg_string_id in pkg_list:
                 db_pkg = pkg_cache.get(pkg_string_id)
                 if db_pkg is None:
-                    db_pkg = _resolve_package(pkg_string_id)
+                    db_pkg = resolve_package(pkg_string_id)
                     if db_pkg is not None:
                         pkg_cache[pkg_string_id] = db_pkg
                 if db_pkg is None:
@@ -1289,7 +1412,7 @@ def init_app(app: Flask) -> None:
                 })
                 continue
 
-            valid_findings, invalid_findings = _validate_assessment_findings(
+            valid_findings, invalid_findings = validate_assessment_findings(
                 item_packages, vuln_id, variant_id
             )
             if invalid_findings:
@@ -1315,13 +1438,34 @@ def init_app(app: Flask) -> None:
         results: list[AssessmentDict] = []
         try:
             with batch_session():
+                # A batch is one user action but may span several CVEs, several
+                # projects and several distinct contents.  Group by the group
+                # invariant — project, vulnerability, content and responses —
+                # never per request: fusing rows that differ on any of these
+                # would hide content on read and let one action delete or
+                # approve unrelated rows.
+                created_rows: list[DBAssessment] = []
                 for assessment, variant_id, item_packages, valid_findings in prepared:
                     for db_pkg in item_packages:
-                        db_a = _create_assessment_record(
+                        created_rows.append(create_assessment_record(
                             assessment, valid_findings[db_pkg.id].id, variant_id,
                             timestamp=getattr(assessment, "timestamp", None),
-                        )
-                        results.append(db_a.to_dict())
+                        ))
+
+                keys = AssessmentGroupMember.invariant_keys(
+                    [row.id for row in created_rows])
+                rows_by_key: dict[tuple, list[DBAssessment]] = {}
+                for row in created_rows:
+                    rows_by_key.setdefault(keys[row.id], []).append(row)
+
+                for key_rows in rows_by_key.values():
+                    if len(key_rows) > 1:
+                        AssessmentGroupMember.create_group(
+                            [row.id for row in key_rows], commit=False)
+
+                # Serialize after the membership rows are flushed so group_id is set.
+                DBAssessment.preload_group_ids(created_rows)
+                results = [row.to_dict() for row in created_rows]
         except Exception as e:
             return {
                 "status": "error",
@@ -1358,7 +1502,7 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
-        if existing.finding is None or existing.variant_id is None or _find_valid_finding(
+        if existing.finding is None or existing.variant_id is None or find_valid_finding(
             existing.finding.package_id,
             existing.finding.vulnerability_id,
             existing.variant_id,
@@ -1453,38 +1597,135 @@ def init_app(app: Flask) -> None:
             invalidate_scan_list_cache()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
+    @app.route("/api/assessment-groups/<group_id>/approve", methods=["POST"])
+    def approve_ai_group(group_id: str) -> ResponseReturnValue:
+        """Approve every AI-origin assessment in a group, converting it to custom.
+
+        OpenAPI:
+        response 200 JsonObject Approved assessments.
+        response 400 Error Group is not a pending AI group.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        if any(row.origin != "ai" for row in rows):
+            return {"error": "Not a pending AI group"}, 400
+        return _approve_rows(rows)
+
     @app.route("/api/assessments/<assessment_id>/approve", methods=["POST"])
     def approve_ai_assessment(assessment_id: str) -> ResponseReturnValue:
-        existing = DBAssessment.get_by_id(assessment_id)
-        if existing is None:
-            return {"error": "Assessment not found"}, 404
-        if existing.origin != "ai":
-            return {"error": "Not a pending AI assessment"}, 400
-        group, err = _resolve_ai_group(existing)
+        """Approve a pending AI assessment and every sibling in its group.
+
+        Compatibility wrapper kept for CLI and integration clients written
+        against the pre-group API; it resolves the addressed assessment's group
+        and behaves exactly like the group endpoint.
+
+        OpenAPI:
+        response 200 JsonObject Approved assessments.
+        response 400 Error Not a pending AI assessment.
+        response 404 Error Assessment not found.
+        """
+        rows, err = _resolve_pending_ai_rows(assessment_id)
         if err is not None:
             return err
-        approved = []
-        with batch_session():
-            for row in group:
-                row.update(origin="custom")
-                approved.append(row.to_dict())
-        return {"status": "success", "assessments": approved}, 200
+        return _approve_rows(rows)
+
+    @app.route("/api/assessment-groups/<group_id>/reject", methods=["POST"])
+    def reject_ai_group(group_id: str) -> ResponseReturnValue:
+        """Reject every AI-origin assessment in a group, deleting the whole group.
+
+        OpenAPI:
+        response 200 JsonObject Deleted assessment ids.
+        response 400 Error Group is not a pending AI group.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        if any(row.origin != "ai" for row in rows):
+            return {"error": "Not a pending AI group"}, 400
+        return _reject_rows(rows)
 
     @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
     def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:
-        existing = DBAssessment.get_by_id(assessment_id)
-        if existing is None:
-            return {"error": "Assessment not found"}, 404
-        if existing.origin != "ai":
-            return {"error": "Not a pending AI assessment"}, 400
-        group, err = _resolve_ai_group(existing)
+        """Reject a pending AI assessment and every sibling in its group.
+
+        Compatibility wrapper kept for CLI and integration clients written
+        against the pre-group API; it resolves the addressed assessment's group
+        and behaves exactly like the group endpoint.
+
+        OpenAPI:
+        response 200 JsonObject Deleted assessment ids.
+        response 400 Error Not a pending AI assessment.
+        response 404 Error Assessment not found.
+        """
+        rows, err = _resolve_pending_ai_rows(assessment_id)
         if err is not None:
             return err
-        deleted_ids = [str(row.id) for row in group]
+        return _reject_rows(rows)
+
+    @app.route('/api/assessment-groups/<group_id>', methods=['DELETE'])
+    def delete_assessment_group(group_id: str) -> ResponseReturnValue:
+        """Delete every assessment in a group.
+
+        OpenAPI:
+        response 200 JsonObject Ids of the deleted assessments.
+        response 404 Error No such group.
+        """
+        group_uuid, err = parse_uuid_or_400(group_id, "group_id")
+        if err:
+            return err
+        if group_uuid is None:
+            return {"error": "Internal error"}, 500
+        rows = load_group(group_uuid)
+        if not rows:
+            return {"error": "Group not found"}, 404
+        if any(row.origin == "ai" for row in rows):
+            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}, 400
+        deleted_ids = [str(row.id) for row in rows]
+        was_non_custom = any((row.origin or "") != "custom" for row in rows)
         with batch_session():
-            for row in group:
+            for row in rows:
                 row.delete()
-        return {"status": "success", "deleted": deleted_ids}, 200
+        if was_non_custom:
+            invalidate_scan_list_cache()
+        return {"status": "success", "deleted_ids": deleted_ids}, 200
+
+    @app.route('/api/assessments/<assessment_id>/group', methods=['POST'])
+    def promote_assessment_to_group(assessment_id: str) -> ResponseReturnValue:
+        """Put a single assessment into a group, creating one if needed.
+
+        Lazy creation: an assessment written on its own has no group until an
+        edit gives it a second target.
+
+        OpenAPI:
+        response 200 JsonObject The group id the assessment now belongs to.
+        response 404 Error No such assessment.
+        """
+        assessment_uuid, err = parse_uuid_or_400(assessment_id, "assessment_id")
+        if err:
+            return err
+        if assessment_uuid is None:
+            return {"error": "Internal error"}, 500
+        row = DBAssessment.get_by_id(assessment_uuid)
+        if row is None:
+            return {"error": "Assessment not found"}, 404
+        existing = AssessmentGroupMember.get_group_id(assessment_uuid)
+        if existing is not None:
+            return {"group_id": str(existing)}, 200
+        return {"group_id": str(
+            AssessmentGroupMember.create_group([assessment_uuid]))}, 200
 
 
 def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":

@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -119,12 +119,70 @@ jest.mock('../../src/helpers/exportJson', () => ({
 
 import Review from '../../src/pages/Review';
 import { downloadJson } from '../../src/helpers/exportJson';
+import { STATUS_VEX_TO_GRAPH } from '../../src/handlers/assessments';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/**
+ * Simulate the server's `/api/reviews/assessment-groups` endpoint (backed by
+ * `build_groups()`): assessments sharing an explicit `group_id` collapse into
+ * one group; everything else becomes its own singleton group (bucketed by
+ * array index, not `id`, since a couple of fixtures below intentionally reuse
+ * the same literal id for two unrelated rows). `vuln_texts` is looked up from
+ * whichever fixture (across both the custom and AI lists) carries it for that
+ * vuln_id, mirroring how the real route enriches groups from the Vulnerability
+ * model rather than from any one assessment row.
+ */
+function toAssessmentGroups(list: any[], vulnTextsMap: Record<string, unknown[]>): any[] {
+    const buckets = new Map<string, any[]>();
+    list.forEach((a, idx) => {
+        const key = a.group_id ? `g:${a.group_id}` : `u:${idx}`;
+        const bucket = buckets.get(key);
+        if (bucket) bucket.push(a);
+        else buckets.set(key, [a]);
+    });
+    const groups: any[] = [];
+    for (const [key, members] of buckets) {
+        const head = members[0];
+        const targets = members.flatMap((m: any) => (m.packages ?? []).map((pkg: string) => ({
+            variant_id: m.variant_id ?? null,
+            package: pkg,
+            outdated: Boolean(m.outdated) || Boolean((m.superseded_map?.[pkg] ?? []).length),
+            assessment_id: m.id,
+        })));
+        groups.push({
+            group_id: key.startsWith('g:') ? head.group_id : null,
+            vuln_id: head.vuln_id,
+            status: head.status,
+            simplified_status: STATUS_VEX_TO_GRAPH[head.status] ?? `[invalid status] ${head.status}`,
+            justification: head.justification ?? '',
+            impact_statement: head.impact_statement ?? '',
+            status_notes: head.status_notes ?? '',
+            workaround: head.workaround ?? '',
+            responses: head.responses ?? [],
+            origin: head.origin ?? 'custom',
+            timestamp: head.timestamp,
+            targets,
+            assessment_ids: members.map((m: any) => m.id),
+            vuln_texts: vulnTextsMap[head.vuln_id] ?? [],
+        });
+    }
+    return groups.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+}
+
+function buildVulnTextsMap(allItems: any[]): Record<string, unknown[]> {
+    const map: Record<string, unknown[]> = {};
+    for (const item of allItems) {
+        if (item.vuln_id && !map[item.vuln_id] && item.vuln_texts) {
+            map[item.vuln_id] = item.vuln_texts;
+        }
+    }
+    return map;
+}
 
 const VARIANTS = [
     { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
@@ -135,9 +193,14 @@ const PROJECTS = [{ id: 'proj1', name: 'Project One' }];
 
 const RICH_PKG = 'pkgA@1.0.0::Organization: ACME Corp (info@acme.com)';
 
-/** One custom assessment on a single package/variant. */
-const makeAssessment = (id: string, variantId: string) => ({
+/** One custom assessment on a single package/variant. Pass `groupId` to make
+ *  two calls collapse into a single server-built group (mirroring a real
+ *  `AssessmentGroupMember` link), the same way `RICH_ASSESSMENT`-style
+ *  multi-variant rows are produced by the real `/reviews/assessment-groups`
+ *  endpoint. */
+const makeAssessment = (id: string, variantId: string, groupId?: string) => ({
     id,
+    group_id: groupId ?? null,
     vuln_id: 'CVE-2020-1111',
     packages: ['pkgA@1.0.0'],
     variant_id: variantId,
@@ -243,6 +306,12 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         const url = req.url;
         const method = req.method;
         if (method === 'GET') {
+            if (url.includes('/api/reviews/assessment-groups')) {
+                const origin = new URL(url).searchParams.get('origin');
+                const source = origin === 'ai' ? aiReviewList : reviewList;
+                const vulnTextsMap = buildVulnTextsMap([...reviewList, ...aiReviewList]);
+                return JSON.stringify(toAssessmentGroups(source, vulnTextsMap));
+            }
             if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify(te);
             if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify(cvss);
             if (url.includes('/api/assessments/review/export-custom-data')) {
@@ -275,6 +344,12 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         if (url.includes('/api/assessments/review/import')) return JSON.stringify({ status: 'success' });
         if (url.includes('/api/assessments/review/export-update')) return JSON.stringify({ version: 1, assessments: [] });
         if (!mutationOk) return { status: 500, body: JSON.stringify({ status: 'error' }) };
+        // Lazy promotion: mint a group id for an ungrouped assessment id so
+        // callers that then hit the group-scoped approve/reject endpoints
+        // have a real group id to target.
+        if (/\/api\/assessments\/[^/]+\/group$/.test(url)) {
+            return JSON.stringify({ status: 'success', group_id: 'promoted-group-id' });
+        }
         return JSON.stringify({ status: 'success' });
     });
 }
@@ -339,8 +414,8 @@ describe('Review — editing "Apply to variants"', () => {
     });
 
     test('unchecking a variant deletes its assessment (DELETE) and keeps the other (PUT)', async () => {
-        // Two assessments with identical content are merged into one row.
-        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
+        // Two assessments sharing a group id are merged into one row.
+        mockNetwork([makeAssessment('a1', 'v1', 'g-editvar'), makeAssessment('a2', 'v2', 'g-editvar')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
@@ -460,7 +535,7 @@ describe('Review — loading and error states', () => {
             const url = req.url;
             if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify([]);
             if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify([]);
-            if (url.includes('/api/assessments/review')) return { status: 500, body: 'boom' };
+            if (url.includes('/api/reviews/assessment-groups')) return { status: 500, body: 'boom' };
             if (url.includes('/api/variants')) return JSON.stringify(VARIANTS);
             if (url.includes('/api/projects')) return JSON.stringify(PROJECTS);
             return JSON.stringify([]);
@@ -494,11 +569,11 @@ describe('Review — rendering columns and tabs', () => {
     test('shows outdated on the affected variant instead of the status', async () => {
         mockNetwork([
             {
-                ...makeAssessment('a1', 'v1'),
+                ...makeAssessment('a1', 'v1', 'g-outdated'),
                 outdated: true,
                 superseded_map: {'pkgA@1.0.0': ['pkgA@2.0.0']},
             },
-            makeAssessment('a2', 'v2'),
+            makeAssessment('a2', 'v2', 'g-outdated'),
         ]);
         render(<Review projectId="proj1" />);
 
@@ -595,7 +670,7 @@ describe('Review — AI Assessments tab', () => {
         await screen.findByText('No AI-generated assessments found');
     });
 
-    test('approving a pending AI row calls approveAi with all grouped ids and refreshes the lists', async () => {
+    test('approving an ungrouped pending AI row promotes it to a group, then approves that group', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -605,10 +680,15 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Approve AI suggestion'));
 
         await screen.findByText('AI assessment approved!');
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
+        // The deleted per-assessment approve route no longer exists; the
+        // frontend must mint a real group id first (lazy promotion) and
+        // then call the group-scoped approve endpoint with it.
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/approve'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(false);
     });
 
-    test('rejecting a pending AI row calls rejectAi with all grouped ids and refreshes the lists', async () => {
+    test('rejecting an ungrouped pending AI row promotes it to a group, then rejects that group', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -618,7 +698,9 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Reject AI suggestion'));
 
         await screen.findByText('AI assessment rejected.');
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/reject'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(false);
     });
 
     test('reports an error when approving a pending AI row fails', async () => {
@@ -736,9 +818,12 @@ describe('Review — vulnerability modal', () => {
 // groupAssessments keeps them as two distinct rows — exercising the vuln_id
 // dedup in the display-order navigation list. A third row uses a different
 // vuln_id entirely.
+// Timestamps are ordered newest-first to match `toAssessmentGroups`' sort
+// (mirroring the real `build_groups`, which returns groups newest first), so
+// the raw array order above already equals the rendered table order.
 const NAV_DUP_A = {
     id: 'nav-a', vuln_id: 'CVE-NAV-1', packages: ['pkgA@1.0.0'], variant_id: 'v1',
-    status: 'affected', status_notes: 'note-a', timestamp: '2024-01-01T00:00:00Z',
+    status: 'affected', status_notes: 'note-a', timestamp: '2024-01-03T00:00:00Z',
     origin: 'custom', responses: [],
 };
 const NAV_DUP_B = {
@@ -748,7 +833,7 @@ const NAV_DUP_B = {
 };
 const NAV_OTHER = {
     id: 'nav-c', vuln_id: 'CVE-NAV-2', packages: ['pkgA@1.0.0'], variant_id: 'v1',
-    status: 'affected', status_notes: 'note-c', timestamp: '2024-01-03T00:00:00Z',
+    status: 'affected', status_notes: 'note-c', timestamp: '2024-01-01T00:00:00Z',
     origin: 'custom', responses: [],
 };
 
@@ -765,6 +850,11 @@ function mockNetworkWithVulnById(
     fetchMock.resetMocks();
     fetchMock.mockResponse(async (req) => {
         const url = req.url;
+        if (url.includes('/api/reviews/assessment-groups')) {
+            const origin = new URL(url).searchParams.get('origin');
+            const vulnTextsMap = buildVulnTextsMap(reviewList);
+            return JSON.stringify(toAssessmentGroups(origin === 'ai' ? [] : reviewList, vulnTextsMap));
+        }
         if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify(te);
         if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify(cvss);
         if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
@@ -807,6 +897,11 @@ function mockNetworkWithDeferredVuln(
     fetchMock.resetMocks();
     fetchMock.mockResponse(async (req) => {
         const url = req.url;
+        if (url.includes('/api/reviews/assessment-groups')) {
+            const origin = new URL(url).searchParams.get('origin');
+            const vulnTextsMap = buildVulnTextsMap(reviewList);
+            return JSON.stringify(toAssessmentGroups(origin === 'ai' ? [] : reviewList, vulnTextsMap));
+        }
         if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify([]);
         if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify([]);
         if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
@@ -1183,7 +1278,7 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
 
 describe('Review — filters, search and keyboard', () => {
     test('does not provide a variants filter', async () => {
-        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
+        mockNetwork([makeAssessment('a1', 'v1', 'g-novfilter'), makeAssessment('a2', 'v2', 'g-novfilter')]);
         render(<Review projectId="proj1" />);
 
         await screen.findByText('CVE-2020-1111');
@@ -1192,13 +1287,13 @@ describe('Review — filters, search and keyboard', () => {
 
     test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
         const mixedOutdated = {
-            ...makeAssessment('outdated', 'v1'),
+            ...makeAssessment('outdated', 'v1', 'g-mixed'),
             vuln_id: 'CVE-2020-MIXED',
             outdated: true,
             superseded_map: { 'pkgA@1.0.0': ['pkgA@2.0.0'] },
         };
         const mixedCurrent = {
-            ...makeAssessment('current', 'v2'),
+            ...makeAssessment('current', 'v2', 'g-mixed'),
             vuln_id: 'CVE-2020-MIXED',
             packages: ['pkgB@1.0.0'],
         };
@@ -1379,7 +1474,13 @@ describe('Review — deleting an assessment', () => {
 
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessments/ai-1/reject'),
+                expect.stringContaining('/api/assessments/ai-1/group'),
+                expect.objectContaining({ method: 'POST' }),
+            );
+        });
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/assessment-groups/promoted-group-id/reject'),
                 expect.objectContaining({ method: 'POST' }),
             );
         });
@@ -1456,6 +1557,90 @@ describe('Review — deleting an assessment', () => {
         await waitFor(() => {
             expect(deleteCalls()).toHaveLength(0);
         });
+    });
+});
+
+// ===========================================================================
+// Copying assessment / group ids
+// ===========================================================================
+
+describe('Review — copying assessment ids', () => {
+    /** Replace the clipboard userEvent installs so writes are observable. */
+    const stubClipboard = (writeText: jest.Mock) => {
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText },
+            configurable: true,
+        });
+    };
+
+    test('copies the assessment id of an ungrouped row', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(writeText).toHaveBeenCalledWith('assessment:a1');
+    });
+
+    test('copies the group id when the row is a group', async () => {
+        mockNetwork([makeAssessment('a1', 'v1', 'g1'), makeAssessment('a2', 'v2', 'g1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy group id'));
+
+        expect(writeText).toHaveBeenCalledWith('group:g1');
+    });
+
+    test('confirms the copy next to the button, then reverts', async () => {
+        jest.useFakeTimers();
+        try {
+            mockNetwork([makeAssessment('a1', 'v1')]);
+            render(<Review projectId="proj1" />);
+            const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+            const writeText = jest.fn().mockResolvedValue(undefined);
+            stubClipboard(writeText);
+
+            await user.click(await screen.findByTitle('Copy assessment id'));
+
+            await screen.findByRole('status');
+            await act(async () => { jest.advanceTimersByTime(2000); });
+            await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+            await screen.findByTitle('Copy assessment id');
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('stays quiet when the browser denies clipboard access', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockRejectedValue(new Error('denied'));
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(screen.queryByText('Copied')).not.toBeInTheDocument();
+    });
+
+    test('copies ids from the AI assessments tab too', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(writeText).toHaveBeenCalledWith('assessment:ai1');
     });
 });
 

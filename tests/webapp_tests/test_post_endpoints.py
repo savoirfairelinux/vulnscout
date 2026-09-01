@@ -67,6 +67,56 @@ def runner(app):
     return app.test_cli_runner()
 
 
+@pytest.fixture()
+def demo_ids(app):
+    from src.extensions import db
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+    import uuid as uuid_module
+
+    with app.app_context():
+        vuln_id = "CVE-1999-12345"
+        other_vuln_id = "CVE-1999-99999"
+        for vid in (vuln_id, other_vuln_id):
+            if Vulnerability.get_by_id(vid) is None:
+                Vulnerability.create_record(id=vid)
+
+        pkg_a = Package.find_or_create("cairo", "1.16.0")
+        pkg_b = Package.find_or_create("libpng", "1.6.37")
+        db.session.commit()
+
+        variant_id = uuid_module.UUID("22222222-2222-2222-2222-222222222222")
+        other_variant = Variant(
+            id=uuid_module.uuid4(), name="other",
+            project_id=uuid_module.UUID("11111111-1111-1111-1111-111111111111"))
+        db.session.add(other_variant)
+        db.session.commit()
+
+        existing_scan_id = uuid_module.UUID("33333333-3333-3333-3333-333333333333")
+        other_scan = Scan(id=uuid_module.uuid4(), variant_id=other_variant.id)
+        db.session.add(other_scan)
+        db.session.commit()
+
+        for vid in (vuln_id, other_vuln_id):
+            for pkg in (pkg_a, pkg_b):
+                finding = Finding.get_or_create(pkg.id, vid)
+                db.session.add(Observation(finding_id=finding.id, scan_id=existing_scan_id))
+                db.session.add(Observation(finding_id=finding.id, scan_id=other_scan.id))
+        db.session.commit()
+
+        return {
+            "vuln_id": vuln_id,
+            "other_vuln_id": other_vuln_id,
+            "variant_id": str(variant_id),
+            "other_variant_id": str(other_variant.id),
+            "two_packages": [pkg_a.string_id, pkg_b.string_id],
+        }
+
+
 def test_post_minimal_assessment(client):
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
         'packages': ['cairo@1.16.0'],
@@ -427,6 +477,132 @@ def test_delete_assessment(client):
 def test_delete_assessment_not_found(client):
     response = client.delete("/api/assessments/non-existent-id")
     assert response.status_code == 404
-    
+
     data = json.loads(response.data)
     assert data["error"] == "Assessment not found"
+
+
+def test_multi_package_assessment_creates_one_group(client, demo_ids):
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["assessments"]) == 2
+    group_ids = {a["group_id"] for a in body["assessments"]}
+    assert len(group_ids) == 1
+    assert group_ids != {None}
+
+
+def test_single_package_assessment_creates_no_group(client, demo_ids):
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["assessments"][0]["group_id"] is None
+
+
+def test_payload_group_id_joins_the_existing_group(client, demo_ids):
+    first = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    group_id = first["assessments"][0]["group_id"]
+
+    second = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["other_variant_id"],
+            "group_id": group_id,
+        },
+    )
+
+    assert second.status_code == 200
+    assert second.get_json()["assessments"][0]["group_id"] == group_id
+
+
+def test_batch_groups_per_vulnerability_not_per_request(client, demo_ids):
+    response = client.post("/api/assessments/batch", json={"assessments": [
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+        {
+            "vuln_id": demo_ids["other_vuln_id"],
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ]})
+
+    assert response.status_code == 200
+    by_vuln = {}
+    for row in response.get_json()["assessments"]:
+        by_vuln.setdefault(row["vuln_id"], set()).add(row["group_id"])
+
+    assert len(by_vuln) == 2
+    for vuln_id, group_ids in by_vuln.items():
+        assert len(group_ids) == 1, f"{vuln_id} must have exactly one group"
+        assert group_ids != {None}
+    assert len({next(iter(g)) for g in by_vuln.values()}) == 2, \
+        "different vulnerabilities must not share a group"
+
+
+def test_batch_multi_variant_single_vuln_yields_one_group(client, demo_ids):
+    response = client.post("/api/assessments/batch", json={"assessments": [
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "fixed",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "fixed",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["other_variant_id"],
+        },
+    ]})
+
+    assert response.status_code == 200
+    group_ids = {row["group_id"] for row in response.get_json()["assessments"]}
+    assert len(group_ids) == 1
+    assert group_ids != {None}
+
+
+def test_batch_single_row_vulnerability_gets_no_group(client, demo_ids):
+    response = client.post("/api/assessments/batch", json={"assessments": [{
+        "vuln_id": demo_ids["vuln_id"],
+        "status": "fixed",
+        "packages": [demo_ids["two_packages"][0]],
+        "variant_id": demo_ids["variant_id"],
+    }]})
+
+    assert response.status_code == 200
+    assert response.get_json()["assessments"][0]["group_id"] is None

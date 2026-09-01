@@ -41,6 +41,56 @@ type Assessment = {
 
 export type { Assessment };
 
+type AssessmentTarget = {
+    variant_id: string | null;
+    package: string;
+    outdated: boolean;
+    /** Which underlying assessment record owns this (package, variant) pair —
+     *  needed to PUT/DELETE it directly when a legacy per-row edit applies. */
+    assessment_id: string;
+};
+
+type AssessmentGroup = {
+    group_id: string | null;
+    vuln_id: string;
+    status: string;
+    simplified_status: string;
+    justification: string;
+    impact_statement: string;
+    status_notes: string;
+    workaround: string;
+    responses: string[];
+    origin: string;
+    timestamp: string;
+    targets: AssessmentTarget[];
+    assessment_ids: string[];
+    /** Only populated by the cross-vuln review endpoint; vuln-scoped group
+     *  endpoints omit it since the caller already knows the vulnerability. */
+    vuln_texts?: VulnText[];
+};
+
+type BatchAssessmentItem = {
+    vuln_id: string;
+    packages: string[];
+    status: string;
+    justification?: string;
+    impact_statement?: string;
+    status_notes?: string;
+    workaround?: string;
+    variant_id?: string;
+    /** Shared timestamp so all rows created by one batch action line up. */
+    timestamp?: string;
+};
+
+type BatchResult = {
+    status: 'success' | 'error';
+    assessments: Assessment[];
+    count: number;
+    vuln_count: number;
+};
+
+export type { AssessmentGroup, AssessmentTarget, BatchAssessmentItem, BatchResult };
+
 type ReviewTimeEstimate = {
     id: string;
     vuln_id: string;
@@ -232,22 +282,78 @@ class Assessments {
         return data;
     }
 
-    /** Approve a pending AI assessment group and return the promoted assessments.
-     *
-     * A grouped review row can span multiple variants, so pass every assessment
-     * id in the row via ``ids`` to approve them all. When omitted, the backend
-     * falls back to grouping by the addressed assessment's (vuln, variant). */
-    static async approveAi(assessmentId: string, ids?: string[]): Promise<Assessment[]> {
+    /** Fetch server-built assessment groups for one vulnerability. */
+    static async listGroups(vulnId: string, projectId?: string): Promise<AssessmentGroup[]> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
+            import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}/assessment-groups`,
+            window.location.href
+        );
+        if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: 'cors' });
+        if (!response.ok) throw new Error(`Failed to load assessment groups: ${response.status}`);
+        return await response.json();
+    }
+
+    /** Fetch server-built assessment groups for the review table. */
+    static async listReviewGroups(variantId?: string, projectId?: string, origin?: string): Promise<AssessmentGroup[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + '/api/reviews/assessment-groups', window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        if (projectId) url.searchParams.set('project_id', projectId);
+        if (origin) url.searchParams.set('origin', origin);
+        const response = await fetch(url.toString(), { mode: 'cors' });
+        if (!response.ok) throw new Error(`Failed to load review groups: ${response.status}`);
+        return await response.json();
+    }
+
+    /** Fetch a single group by id. */
+    static async getGroup(groupId: string): Promise<AssessmentGroup> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), { mode: 'cors' });
+        if (!response.ok) throw new Error(`Failed to load group: ${response.status}`);
+        return await response.json();
+    }
+
+    /** Reconcile a group to a desired content/target state in one request. */
+    static async reconcileGroup(groupId: string, body: Record<string, unknown>): Promise<AssessmentGroup> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}/reconcile`,
             window.location.href
         );
         const response = await fetch(url.toString(), {
-            method: "POST",
-            mode: "cors",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(ids && ids.length > 0 ? { ids } : {}),
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
         });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        return await response.json();
+    }
+
+    /** Delete every assessment in a group; returns the deleted ids. */
+    static async deleteGroup(groupId: string): Promise<string[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), { method: 'DELETE', mode: 'cors' });
+        if (!response.ok) throw new Error(`Failed to delete group: ${response.status}`);
+        const data = await response.json();
+        return asStringArray(data?.deleted_ids);
+    }
+
+    /** Approve every AI-origin assessment in a group. */
+    static async approveAiGroup(groupId: string): Promise<Assessment[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}/approve`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `HTTP ${response.status}`);
@@ -257,28 +363,52 @@ class Assessments {
         return data.assessments.flatMap(asAssessment);
     }
 
-    /** Reject a pending AI assessment group and return the deleted assessment ids.
-     *
-     * A grouped review row can span multiple variants, so pass every assessment
-     * id in the row via ``ids`` to reject them all. When omitted, the backend
-     * falls back to grouping by the addressed assessment's (vuln, variant). */
-    static async rejectAi(assessmentId: string, ids?: string[]): Promise<string[]> {
+    /** Reject every AI-origin assessment in a group, deleting it. */
+    static async rejectAiGroup(groupId: string): Promise<string[]> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reject`,
+            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}/reject`,
             window.location.href
         );
-        const response = await fetch(url.toString(), {
-            method: "POST",
-            mode: "cors",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(ids && ids.length > 0 ? { ids } : {}),
-        });
+        const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `HTTP ${response.status}`);
         }
         const data = await response.json();
         return asStringArray(data?.deleted);
+    }
+
+    /** Put a lone assessment into a group so it can gain more targets. */
+    static async promoteToGroup(assessmentId: string): Promise<string> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/group`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
+        if (!response.ok) throw new Error(`Failed to create group: ${response.status}`);
+        const data = await response.json();
+        return data.group_id;
+    }
+
+    /** Create every assessment of one user action in a single request, so the
+     *  backend can assign one group per vulnerability. */
+    static async createBatch(items: BatchAssessmentItem[]): Promise<BatchResult> {
+        const url = new URL(import.meta.env.VITE_API_URL + '/api/assessments/batch', window.location.href);
+        const response = await fetch(url.toString(), {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assessments: items }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            // The batch endpoint reports per-item failures in `errors`, not `error`.
+            const detail = Array.isArray(err.errors) && err.errors.length > 0
+                ? err.errors.map((e: { error?: string }) => e.error).filter(Boolean).join('; ')
+                : err.error;
+            throw new Error(detail || `HTTP ${response.status}`);
+        }
+        return await response.json();
     }
 }
 
