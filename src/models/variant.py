@@ -3,11 +3,10 @@
 
 import uuid
 import typing
-from typing import cast
 
 from ..extensions import db, Base
 
-from sqlalchemy import ForeignKey, Table, UniqueConstraint, event, select
+from sqlalchemy import ForeignKey, UniqueConstraint, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -132,46 +131,14 @@ def _reap_assessment_targets(
 ) -> None:
     """Drop the assessment targets pointing at a variant being deleted.
 
-    ``assessment_targets.variant_id`` has no ``ondelete`` clause and this
-    application keeps sqlite's ``foreign_keys`` pragma off, so nothing removes
-    these rows on its own.  Left behind, they still surface through unfiltered
-    reads (``get_by_vulnerability``, the assessments API) pointing at a variant
-    that no longer exists.
-
-    An assessment left with no targets at all goes with them: it is reachable
-    only through its targets, so it would be an invisible orphan.  An
-    assessment that also targets other variants keeps those and survives.
+    Left behind, these rows still surface through unfiltered reads
+    (``get_by_vulnerability``, the assessments API) pointing at a variant that
+    no longer exists.  An assessment that also targets other variants keeps
+    those and survives; see :func:`reap_targets` for the full rationale.
 
     Registered as a mapper event rather than written into :meth:`delete` so it
     also fires when a variant is removed through the project's ORM cascade.
     """
-    # Core statements against the mapped tables, not raw SQL: the listener gets
-    # a Connection rather than a Session, and only the mapped columns know how
-    # to bind a UUID for the active driver.
-    from .assessment import Assessment
-    from .assessment_target import AssessmentTarget
+    from .assessment_target import AssessmentTarget, reap_targets
 
-    # ``__table__`` is typed as FromClause; these are real Tables, and only
-    # Table carries .delete().
-    targets = cast(Table, AssessmentTarget.__table__)
-    assessments = cast(Table, Assessment.__table__)
-
-    affected = {
-        row[0] for row in connection.execute(
-            select(targets.c.assessment_id).where(targets.c.variant_id == variant.id)
-        )
-    }
-    connection.execute(targets.delete().where(targets.c.variant_id == variant.id))
-    if not affected:
-        return
-
-    # Of the assessments this variant was part of, keep the ones another target
-    # still reaches and drop the rest.
-    still_reachable = {
-        row[0] for row in connection.execute(
-            select(targets.c.assessment_id).where(targets.c.assessment_id.in_(affected))
-        )
-    }
-    orphans = affected - still_reachable
-    if orphans:
-        connection.execute(assessments.delete().where(assessments.c.id.in_(orphans)))
+    reap_targets(connection, AssessmentTarget.variant_id == variant.id)

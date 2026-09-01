@@ -248,3 +248,77 @@ def test_deleting_a_project_reaps_its_variants_assessments(app):
 
     assert db.session.query(AssessmentTarget).count() == 0
     assert db.session.get(Assessment, assessment_id) is None
+
+
+def test_deleting_a_finding_reaps_its_targets_and_orphaned_assessments(app):
+    """Mirrors the variant reaper: ``assessment_targets.finding_id`` is part of
+    the primary key, so the ORM's default null-out would raise on flush."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.project import Project
+
+    project = Project.create("reap-finding-proj")
+    variant = _variant(project.id, "a")
+    finding = _finding("CVE-2026-0013", "openssl")
+    assessment = Assessment.create(
+        status="affected", origin="custom",
+        targets=[(variant.id, finding.id)], commit=True,
+    )
+    assessment_id = assessment.id
+
+    finding.delete()
+
+    assert db.session.query(AssessmentTarget).count() == 0
+    assert db.session.get(Assessment, assessment_id) is None
+
+
+def test_deleting_a_finding_keeps_an_assessment_that_targets_another(app):
+    """A multi-package assessment survives losing one of its findings."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.project import Project
+
+    project = Project.create("reap-finding-keep-proj")
+    variant = _variant(project.id, "a")
+    openssl = _finding("CVE-2026-0014", "openssl")
+    zlib = _finding("CVE-2026-0014", "zlib")
+    assessment = Assessment.create(
+        status="affected", origin="custom",
+        targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
+        commit=True,
+    )
+    assessment_id = assessment.id
+
+    openssl.delete()
+
+    survivor = db.session.get(Assessment, assessment_id)
+    assert survivor is not None
+    assert survivor.targets == [(variant.id, zlib.id)]
+    assert db.session.query(AssessmentTarget).count() == 1
+
+
+def test_deleting_a_package_reaps_its_findings_assessments(app):
+    """The reaper is a mapper event, so the package's ORM cascade triggers it."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.package import Package
+    from src.models.project import Project
+
+    project = Project.create("reap-package-proj")
+    variant = _variant(project.id, "a")
+    finding = _finding("CVE-2026-0015", "openssl")
+    assessment = Assessment.create(
+        status="affected", origin="custom",
+        targets=[(variant.id, finding.id)], commit=True,
+    )
+    assessment_id = assessment.id
+    package = db.session.get(Package, finding.package_id)
+    assert package is not None
+
+    package.delete()
+
+    assert db.session.query(AssessmentTarget).count() == 0
+    assert db.session.get(Assessment, assessment_id) is None
