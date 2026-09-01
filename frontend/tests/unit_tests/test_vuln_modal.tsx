@@ -2544,6 +2544,79 @@ describe('Vulnerability Modal', () => {
         expect(currentHistoryTag).not.toHaveTextContent('Outdated');
     });
 
+    test('shows a verdict only on the pairs a sparse assessment actually covers', async () => {
+        // One assessment covering (Production, pkgA) and (Staging, pkgB) only.
+        // Crossing its variant_ids with its packages would also claim
+        // (Production, pkgB) and (Staging, pkgA), which nobody assessed.
+        const sparseAssessment = {
+            id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            variant_ids: ['var-1', 'var-2'],
+            targets: [
+                { variant_id: 'var-1', package: 'pkgA@1.0.0' },
+                { variant_id: 'var-2', package: 'pkgB@2.0.0' },
+            ],
+            status: 'fixed', simplified_status: 'Fixed', justification: '',
+            impact_statement: '', status_notes: '', workaround: '',
+            timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [],
+            variant_id: null,
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/variant-active-packages')) {
+                return Promise.resolve(JSON.stringify([
+                    {
+                        variant_id: 'var-1', active_packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+                        findings: [
+                            {finding_id: 'f-a1', package: 'pkgA@1.0.0', outdated: false},
+                            {finding_id: 'f-b1', package: 'pkgB@2.0.0', outdated: false},
+                        ],
+                    },
+                    {
+                        variant_id: 'var-2', active_packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+                        findings: [
+                            {finding_id: 'f-a2', package: 'pkgA@1.0.0', outdated: false},
+                            {finding_id: 'f-b2', package: 'pkgB@2.0.0', outdated: false},
+                        ],
+                    },
+                ]));
+            }
+            if (url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([sparseAssessment]));
+            }
+            if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'var-1', name: 'Production', project_id: 'proj1' },
+                    { id: 'var-2', name: 'Staging', project_id: 'proj1' },
+                ]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const sparseVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            packages_current: [],
+            assessments: [sparseAssessment as any],
+        };
+
+        render(<VulnModal vuln={sparseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+
+        const current = (await screen.findByText('Assessments on current SBOM packages and variants')).parentElement as HTMLElement;
+        const rowFor = (variant: string, pkg: string) => within(current)
+            .getAllByRole('row')
+            .find(row => within(row).queryByText(variant) && within(row).queryByText(pkg));
+
+        await waitFor(() => expect(rowFor('Production', 'pkgA@1.0.0')).toBeTruthy());
+        // The assessed pairs carry the verdict...
+        expect(rowFor('Production', 'pkgA@1.0.0')).toHaveTextContent('Fixed');
+        expect(rowFor('Staging', 'pkgB@2.0.0')).toHaveTextContent('Fixed');
+        // ...and the cross-product pairs do not.
+        expect(rowFor('Production', 'pkgB@2.0.0')).not.toHaveTextContent('Fixed');
+        expect(rowFor('Staging', 'pkgA@1.0.0')).not.toHaveTextContent('Fixed');
+    });
+
     const pendingAiAssessment = {
         id: 'assessment-ai-1',
         vuln_id: 'CVE-2010-1234',

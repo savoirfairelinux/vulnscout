@@ -272,6 +272,7 @@ def init_app(app: Flask) -> None:
                     "packages": [],
                     "variant_id": None,
                     "variant_ids": [],
+                    "targets": [],
                     "timestamp": timestamp,
                     "last_update": timestamp or "",
                     "status": row.status or "",
@@ -287,12 +288,19 @@ def init_app(app: Flask) -> None:
             variant_id = str(row.variant_id) if row.variant_id else None
             if variant_id and variant_id not in entry["variant_ids"]:
                 entry["variant_ids"].append(variant_id)
+            # The pair, kept alongside the two flattened sets: those describe
+            # the cross-product, which a sparse target set is not.
+            if package_id and variant_id:
+                pair = {"variant_id": variant_id, "package": package_id}
+                if pair not in entry["targets"]:
+                    entry["targets"].append(pair)
 
         if compact:
             return compact_result
 
         for entry in full_by_id.values():
             entry["variant_ids"].sort()
+            entry["targets"].sort(key=lambda t: (t["variant_id"], t["package"]))
             # ``variant_id`` stays for backward compatibility and keeps the
             # meaning ``Assessment.to_dict`` gives it: the one variant every
             # target shares, or None for a genuine cross-variant assessment.

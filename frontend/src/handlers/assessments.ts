@@ -15,12 +15,24 @@ type VulnText = {
     content: string;
 }
 
+/** One (variant, package) pair an assessment actually applies to. */
+type AssessmentTargetPair = {
+    variant_id: string | null;
+    package: string;
+};
+
 type Assessment = {
     id: string;
     vuln_id: string;
     packages: string[];
     variant_id?: string;
     variant_ids?: string[];
+    /** The exact pairs this assessment covers.
+     *
+     *  ``packages`` and ``variant_ids`` are two independent flattened sets, so
+     *  crossing them describes pairs that were never assessed.  Absent on
+     *  payloads that predate the field. */
+    targets?: AssessmentTargetPair[];
     origin: string;
     status: string;
     simplified_status: string;
@@ -40,7 +52,7 @@ type Assessment = {
     details_loaded?: boolean;
 };
 
-export type { Assessment };
+export type { Assessment, AssessmentTargetPair };
 
 /** Every variant this assessment applies to.
  *
@@ -59,7 +71,30 @@ const assessmentVariantIds = (assessment: Assessment): string[] => {
 const appliesToVariant = (assessment: Assessment, variantId: string): boolean =>
     assessmentVariantIds(assessment).includes(variantId);
 
-export { assessmentVariantIds, appliesToVariant };
+/** The packages this assessment covers *within* one variant.
+ *
+ *  Falls back to the whole package list for payloads with no target pairs,
+ *  which is what the flat schema's one-variant-per-record shape meant.
+ */
+const assessmentPackagesInVariant = (assessment: Assessment, variantId: string): string[] => {
+    if (assessment.targets && assessment.targets.length > 0) {
+        return assessment.targets
+            .filter(target => target.variant_id === variantId)
+            .map(target => target.package);
+    }
+    return appliesToVariant(assessment, variantId) ? assessment.packages : [];
+};
+
+/** True when *assessment* covers the exact (variantId, pkg) pair.
+ *
+ *  Never test variant membership and package membership separately: an
+ *  assessment covering (A, openssl) and (B, zlib) passes both tests for
+ *  (A, zlib), a pair nobody assessed.
+ */
+const coversTarget = (assessment: Assessment, variantId: string, pkg: string): boolean =>
+    assessmentPackagesInVariant(assessment, variantId).includes(pkg);
+
+export { assessmentVariantIds, appliesToVariant, assessmentPackagesInVariant, coversTarget };
 
 type AssessmentTarget = {
     variant_id: string | null;
@@ -143,6 +178,13 @@ const asStringArray = (data: any): string[] => {
     return data.filter((item: any) => typeof item === "string");
 }
 
+const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
+    data
+        .filter((item: any) => item && typeof item === "object"
+            && typeof item.package === "string"
+            && (item.variant_id === null || typeof item.variant_id === "string"))
+        .map((item: any) => ({ variant_id: item.variant_id, package: item.package }));
+
 const asAssessment = (data: any): Assessment | [] => {
     if (Array.isArray(data)) {
         const [id, vuln_id, packageId, variant_id, timestamp, status] = data;
@@ -156,6 +198,7 @@ const asAssessment = (data: any): Assessment | [] => {
             packages: packageId ? [packageId] : [],
             variant_id,
             variant_ids: variant_id ? [variant_id] : [],
+            targets: packageId && variant_id ? [{ variant_id, package: packageId }] : [],
             timestamp,
             status,
             details_loaded: false,
@@ -188,6 +231,7 @@ const asAssessment = (data: any): Assessment | [] => {
         item.simplified_status = STATUS_VEX_TO_GRAPH[data.status];
     if (typeof data?.variant_id === "string") item.variant_id = data.variant_id;
     if (Array.isArray(data?.variant_ids)) item.variant_ids = asStringArray(data.variant_ids);
+    if (Array.isArray(data?.targets)) item.targets = asTargetPairs(data.targets);
     if (typeof data?.status_notes === "string") item.status_notes = data.status_notes;
     if (typeof data?.justification === "string") item.justification = data.justification;
     if (typeof data?.impact_statement === "string") item.impact_statement = data.impact_statement;

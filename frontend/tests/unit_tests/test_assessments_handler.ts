@@ -2,7 +2,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments, isMultiTargetGroup, assessmentVariantIds, appliesToVariant } from '../../src/handlers/assessments';
+import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments, isMultiTargetGroup, assessmentVariantIds, appliesToVariant, assessmentPackagesInVariant, coversTarget } from '../../src/handlers/assessments';
 import type { AssessmentTarget } from '../../src/handlers/assessments';
 
 describe('asStringArray', () => {
@@ -465,5 +465,72 @@ describe('assessmentVariantIds / appliesToVariant', () => {
     const a = make({ variant_id: undefined, variant_ids: [] });
     expect(assessmentVariantIds(a)).toEqual([]);
     expect(appliesToVariant(a, 'v1')).toBe(false);
+  });
+});
+
+describe('target pairs', () => {
+  const sparse = {
+    id: 'a1',
+    vuln_id: 'CVE-1',
+    status: 'fixed',
+    timestamp: '2024-01-01T00:00:00Z',
+    packages: ['openssl@1.0', 'zlib@1.0'],
+    variant_ids: ['A', 'B'],
+    targets: [
+      { variant_id: 'A', package: 'openssl@1.0' },
+      { variant_id: 'B', package: 'zlib@1.0' },
+    ],
+    responses: [],
+    origin: 'custom',
+  };
+
+  test('targets are parsed when present', () => {
+    const result = asAssessment(sparse as any) as any;
+    expect(result.targets).toEqual([
+      { variant_id: 'A', package: 'openssl@1.0' },
+      { variant_id: 'B', package: 'zlib@1.0' },
+    ]);
+  });
+
+  test('malformed target entries are filtered out', () => {
+    const data = { ...sparse, targets: [{ variant_id: 'A', package: 'openssl@1.0' }, { variant_id: 'A' }, 'nope', null, 42] };
+    const result = asAssessment(data as any) as any;
+    expect(result.targets).toEqual([{ variant_id: 'A', package: 'openssl@1.0' }]);
+  });
+
+  test('targets absent when the server omits them', () => {
+    const { targets, ...withoutTargets } = sparse;
+    const result = asAssessment(withoutTargets as any) as any;
+    expect(result.targets).toBeUndefined();
+  });
+
+  test('the compact tuple form synthesizes its single pair', () => {
+    const result = asAssessment(['a2', 'CVE-2', 'openssl@1.0', 'A', '2024-01-01T00:00:00Z', 'fixed'] as any) as any;
+    expect(result.targets).toEqual([{ variant_id: 'A', package: 'openssl@1.0' }]);
+  });
+
+  test('coversTarget matches only the pairs actually assessed', () => {
+    const assessment = asAssessment(sparse as any) as any;
+    expect(coversTarget(assessment, 'A', 'openssl@1.0')).toBe(true);
+    expect(coversTarget(assessment, 'B', 'zlib@1.0')).toBe(true);
+    // The cross-product pairs -- these are what crossing variant_ids with
+    // packages would wrongly report as assessed.
+    expect(coversTarget(assessment, 'A', 'zlib@1.0')).toBe(false);
+    expect(coversTarget(assessment, 'B', 'openssl@1.0')).toBe(false);
+  });
+
+  test('assessmentPackagesInVariant returns only that variant\'s packages', () => {
+    const assessment = asAssessment(sparse as any) as any;
+    expect(assessmentPackagesInVariant(assessment, 'A')).toEqual(['openssl@1.0']);
+    expect(assessmentPackagesInVariant(assessment, 'B')).toEqual(['zlib@1.0']);
+    expect(assessmentPackagesInVariant(assessment, 'C')).toEqual([]);
+  });
+
+  test('without targets it falls back to the flat variant/package test', () => {
+    const { targets, ...flat } = sparse;
+    const assessment = asAssessment({ ...flat, variant_ids: ['A'] } as any) as any;
+    expect(coversTarget(assessment, 'A', 'openssl@1.0')).toBe(true);
+    expect(coversTarget(assessment, 'A', 'zlib@1.0')).toBe(true);
+    expect(coversTarget(assessment, 'B', 'openssl@1.0')).toBe(false);
   });
 });
