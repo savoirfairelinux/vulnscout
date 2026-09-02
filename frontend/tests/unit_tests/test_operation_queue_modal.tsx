@@ -187,6 +187,38 @@ describe('OperationQueueModal', () => {
         expect(cancel).toHaveBeenCalledWith('scan:grype:variant-1');
     });
 
+    it('allows cancellation to be retried when the request is rejected', async () => {
+        jest.spyOn(Operations, 'cancel').mockResolvedValue(false);
+        const { stream } = renderModal();
+        stream.send('snapshot', {
+            seq: 1,
+            operations: [operation({
+                op_id: 'scan:grype:variant-1',
+                status: 'running',
+                scope: { variant_id: 'variant-1', variant_name: 'Variant 1', project_id: 'project-1' },
+            })],
+        });
+
+        const cancelButton = screen.getByRole('button', { name: 'Cancel Grype Scan – Variant 1' });
+        fireEvent.click(cancelButton);
+        expect(cancelButton).not.toBeInTheDocument();
+
+        expect(await screen.findByRole('button', { name: 'Cancel Grype Scan – Variant 1' })).toBeEnabled();
+    });
+
+    it('clears pending cancellation state when the operation finishes', () => {
+        jest.spyOn(Operations, 'cancel').mockResolvedValue(true);
+        const { stream } = renderModal();
+        const running = operation({ op_id: 'scan:grype:variant-1', status: 'running' });
+        stream.send('snapshot', { seq: 1, operations: [running] });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel Grype Scan – Grype Scan' }));
+        stream.send('operation', { ...running, status: 'done', cancellable: false });
+
+        expect(screen.queryByRole('button', { name: /cancel grype scan/i })).not.toBeInTheDocument();
+        expect(screen.getByTitle('Close')).toBeInTheDocument();
+    });
+
     it('does not offer cancellation for unsupported running operations', () => {
         const { stream } = renderModal();
         stream.send('snapshot', {

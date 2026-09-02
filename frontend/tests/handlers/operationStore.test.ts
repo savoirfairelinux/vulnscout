@@ -18,6 +18,7 @@ import {
     refreshProgressPercentage,
     selectByKind,
     selectByQueue,
+    selectBySource,
     subscribe,
     waitForQueue,
 } from "../../src/handlers/operationStore";
@@ -325,6 +326,17 @@ describe("selectors", () => {
         expect(selectByKind("scan").map(item => item.op_id)).toEqual(["scan:grype:v1", "scan:grype:v2"]);
     });
 
+    it("filters by operation kind and source", () => {
+        const stream = connect();
+        seed(stream);
+
+        expect(selectBySource("scan", "grype").map(item => item.op_id)).toEqual([
+            "scan:grype:v1",
+            "scan:grype:v2",
+        ]);
+        expect(selectBySource("refresh", "grype")).toEqual([]);
+    });
+
     it("filters by batch", () => {
         const stream = connect();
         seed(stream);
@@ -562,6 +574,50 @@ describe("enqueueing work", () => {
         await Operations.cancel("scan:grype:v1");
 
         expect(fetchSpy.mock.calls[0][0]).toContain("/api/operations/scan%3Agrype%3Av1/cancel");
+    });
+
+    it("returns the number of operations cancelled from a queue", async () => {
+        const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue({
+            ok: true,
+            json: async () => ({ cancelled: 3 }),
+        } as Response);
+
+        await expect(Operations.cancelQueue("queue/1")).resolves.toBe(3);
+        expect(fetchSpy.mock.calls[0][0]).toContain("/api/operations/queue/queue%2F1/cancel");
+    });
+
+    it("returns zero when queue cancellation fails or has no JSON response", async () => {
+        jest.spyOn(global, "fetch")
+            .mockResolvedValueOnce({ ok: false } as Response)
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => { throw new Error("empty response"); },
+            } as unknown as Response);
+
+        await expect(Operations.cancelQueue("q-failed")).resolves.toBe(0);
+        await expect(Operations.cancelQueue("q-empty")).resolves.toBe(0);
+    });
+
+    it("lists the current operation snapshot", async () => {
+        const current = operation({ op_id: "scan:grype:v1", status: "running" });
+        jest.spyOn(global, "fetch").mockResolvedValue({
+            ok: true,
+            json: async () => ({ operations: [current] }),
+        } as Response);
+
+        await expect(Operations.list()).resolves.toEqual([current]);
+    });
+
+    it("returns an empty snapshot for failed or invalid list responses", async () => {
+        jest.spyOn(global, "fetch")
+            .mockResolvedValueOnce({ ok: false } as Response)
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => { throw new Error("invalid response"); },
+            } as unknown as Response);
+
+        await expect(Operations.list()).resolves.toEqual([]);
+        await expect(Operations.list()).resolves.toEqual([]);
     });
 
     it("dismisses a finished operation for every client", async () => {
