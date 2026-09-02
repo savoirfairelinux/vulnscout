@@ -111,124 +111,124 @@ export default function RunScansWizard({
                 </ol>
             }
         >
-                    {step === 1 && <>
-                        <h3 className="text-base font-semibold text-white">Select scans</h3>
-                        <p className="mt-1 text-sm text-neutral-400">Choose the vulnerability scanners to run.</p>
-                        <div className="mt-4 grid grid-cols-1 gap-2">
-                            {scanTypes.map(({ key, label, description, icon, iconClass }) => (
-                                <label key={key} className={[
-                                    "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition-colors",
-                                    selectedScanTypes.has(key)
-                                        ? "border-cyan-500 bg-cyan-950/40 text-white"
-                                        : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                                ].join(" ")}>
-                                    <input type="checkbox" checked={selectedScanTypes.has(key)} onChange={() => onToggleScanType(key)} className="mt-0.5 accent-cyan-500" />
-                                    <FontAwesomeIcon icon={icon} className={`${iconClass} mt-0.5 w-4`} />
-                                    <span className="flex flex-col"><span className="font-medium">{label}</span><span className="mt-1 text-xs text-zinc-400">{description}</span></span>
-                                </label>
-                            ))}
-                        </div>
-                    </>}
+            {step === 1 && <>
+                <h3 className="text-base font-semibold text-white">Select scans</h3>
+                <p className="mt-1 text-sm text-neutral-400">Choose the vulnerability scanners to run.</p>
+                <div className="mt-4 grid grid-cols-1 gap-2">
+                    {scanTypes.map(({ key, label, description, icon, iconClass }) => (
+                        <label key={key} className={[
+                            "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition-colors",
+                            selectedScanTypes.has(key)
+                                ? "border-cyan-500 bg-cyan-950/40 text-white"
+                                : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                        ].join(" ")}>
+                            <input type="checkbox" checked={selectedScanTypes.has(key)} onChange={() => onToggleScanType(key)} className="mt-0.5 accent-cyan-500" />
+                            <FontAwesomeIcon icon={icon} className={`${iconClass} mt-0.5 w-4`} />
+                            <span className="flex flex-col"><span className="font-medium">{label}</span><span className="mt-1 text-xs text-zinc-400">{description}</span></span>
+                        </label>
+                    ))}
+                </div>
+            </>}
 
-                    {step === 2 && <>
-                        <h3 className="text-base font-semibold text-white">Select context variants</h3>
-                        <p className="mt-1 text-sm text-neutral-400">Choose the variants whose SBOMs should be scanned.</p>
-                        <div className="mt-4 grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1">
-                            {variants.length === 0 && <span className="text-sm text-neutral-500 italic">No variants found</span>}
-                            {variants.map((variant) => (
-                                <label key={variant.id} className={[
-                                    "flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors",
-                                    selectedVariantIds.has(variant.id)
-                                        ? "border-cyan-500 bg-cyan-950/40 text-white"
-                                        : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                                ].join(" ")}>
-                                    <input type="checkbox" checked={selectedVariantIds.has(variant.id)} onChange={() => onToggleVariant(variant.id)} className="accent-cyan-500" />
-                                    <span className="truncate font-medium">{variant.name}</span>
-                                </label>
-                            ))}
-                        </div>
-                        {variants.length > 1 && <div className="mt-3 flex gap-3">
-                            <button type="button" onClick={onSelectAllVariants} className="text-xs text-sky-400 hover:text-sky-300">Select all</button>
-                            <button type="button" onClick={onSelectNoVariants} className="text-xs text-sky-400 hover:text-sky-300">Select none</button>
-                        </div>}
-                    </>}
+            {step === 2 && <>
+                <h3 className="text-base font-semibold text-white">Select context variants</h3>
+                <p className="mt-1 text-sm text-neutral-400">Choose the variants whose SBOMs should be scanned.</p>
+                <div className="mt-4 grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1">
+                    {variants.length === 0 && <span className="text-sm text-neutral-500 italic">No variants found</span>}
+                    {variants.map((variant) => (
+                        <label key={variant.id} className={[
+                            "flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors",
+                            selectedVariantIds.has(variant.id)
+                                ? "border-cyan-500 bg-cyan-950/40 text-white"
+                                : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                        ].join(" ")}>
+                            <input type="checkbox" checked={selectedVariantIds.has(variant.id)} onChange={() => onToggleVariant(variant.id)} className="accent-cyan-500" />
+                            <span className="truncate font-medium">{variant.name}</span>
+                        </label>
+                    ))}
+                </div>
+                {variants.length > 1 && <div className="mt-3 flex gap-3">
+                    <button type="button" onClick={onSelectAllVariants} className="text-xs text-sky-400 hover:text-sky-300">Select all</button>
+                    <button type="button" onClick={onSelectNoVariants} className="text-xs text-sky-400 hover:text-sky-300">Select none</button>
+                </div>}
+            </>}
 
-                    {step === 3 && <>
-                        <h3 className="text-base font-semibold text-white">Exclude kernel packages?</h3>
-                        <p className="mt-1 text-sm text-neutral-400">The main kernel package is always scanned.</p>
-                        <div className="mt-5 grid grid-cols-2 gap-3">
-                            <label className={[
-                                "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
-                                excludeKernel ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                            ].join(" ")}>
-                                <input type="radio" name="exclude-kernel" checked={excludeKernel} onChange={() => onExcludeKernelChange(true)} className="mt-0.5 accent-cyan-500" />
-                                <span className="flex flex-col"><span className="font-medium">Yes</span><span className="mt-1 text-xs text-zinc-400">Avoid duplicate kernel findings.</span></span>
-                            </label>
-                            <label className={[
-                                "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
-                                !excludeKernel ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                            ].join(" ")}>
-                                <input type="radio" name="exclude-kernel" checked={!excludeKernel} onChange={() => onExcludeKernelChange(false)} className="mt-0.5 accent-cyan-500" />
-                                <span className="flex flex-col"><span className="font-medium">No</span><span className="mt-1 text-xs text-zinc-400">Scan every kernel-related package.</span></span>
-                            </label>
-                        </div>
-                        <button type="button" onClick={() => setShowKernelHelp(value => !value)} className="mt-4 text-sm text-sky-300 hover:text-sky-200">
-                            <FontAwesomeIcon icon={faCircleQuestion} className="mr-2" />Why exclude kernel packages?
-                        </button>
-                        {showKernelHelp && <p className="mt-2 rounded border border-sky-700/40 bg-sky-900/30 p-3 text-xs leading-relaxed text-sky-200">Yocto kernel recipes create many companion packages that share the same kernel CPE. Excluding those companions avoids duplicate findings and slower scans while retaining CVE coverage for the real kernel package.</p>}
-                    </>}
+            {step === 3 && <>
+                <h3 className="text-base font-semibold text-white">Exclude kernel packages?</h3>
+                <p className="mt-1 text-sm text-neutral-400">The main kernel package is always scanned.</p>
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                    <label className={[
+                        "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
+                        excludeKernel ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                    ].join(" ")}>
+                        <input type="radio" name="exclude-kernel" checked={excludeKernel} onChange={() => onExcludeKernelChange(true)} className="mt-0.5 accent-cyan-500" />
+                        <span className="flex flex-col"><span className="font-medium">Yes</span><span className="mt-1 text-xs text-zinc-400">Avoid duplicate kernel findings.</span></span>
+                    </label>
+                    <label className={[
+                        "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
+                        !excludeKernel ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                    ].join(" ")}>
+                        <input type="radio" name="exclude-kernel" checked={!excludeKernel} onChange={() => onExcludeKernelChange(false)} className="mt-0.5 accent-cyan-500" />
+                        <span className="flex flex-col"><span className="font-medium">No</span><span className="mt-1 text-xs text-zinc-400">Scan every kernel-related package.</span></span>
+                    </label>
+                </div>
+                <button type="button" onClick={() => setShowKernelHelp(value => !value)} className="mt-4 text-sm text-sky-300 hover:text-sky-200">
+                    <FontAwesomeIcon icon={faCircleQuestion} className="mr-2" />Why exclude kernel packages?
+                </button>
+                {showKernelHelp && <p className="mt-2 rounded border border-sky-700/40 bg-sky-900/30 p-3 text-xs leading-relaxed text-sky-200">Yocto kernel recipes create many companion packages that share the same kernel CPE. Excluding those companions avoids duplicate findings and slower scans while retaining CVE coverage for the real kernel package.</p>}
+            </>}
 
-                    {step === 4 && <>
-                        <h3 className="text-base font-semibold text-white">Refresh data</h3>
-                        <p className="mt-1 text-sm text-neutral-400">Optionally refresh data for vulnerabilities found by this scan.</p>
-                        <div className="mt-4 grid grid-cols-2 gap-3">
-                            {([
-                                ["complete", "Complete refresh", "Refresh every source applicable to the selected scans."],
-                                ["custom", "Custom refresh", "Choose which applicable sources to refresh."],
-                            ] as const).map(([mode, label, description]) => (
-                                <label key={mode} className={[
-                                    "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
-                                    refreshMode === mode ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                                ].join(" ")}>
-                                    <input type="radio" name="refresh-mode" checked={refreshMode === mode} onChange={() => onRefreshModeChange(mode)} className="mt-0.5 accent-cyan-500" />
-                                    <span className="flex flex-col"><span className="font-medium">{label}</span><span className="mt-1 text-xs text-zinc-400">{description}</span></span>
-                                </label>
-                            ))}
-                        </div>
-                        {availableRefreshTypes.size === 0 && <p className="mt-4 text-sm text-neutral-500">The selected scans do not produce CVEs that can be refreshed.</p>}
-                        {refreshMode === "custom" && availableRefreshTypes.size > 0 && <div className="mt-4 grid grid-cols-1 gap-2">
-                            {refreshTypes.filter(({ key }) => availableRefreshTypes.has(key)).map(({ key, label, description }) => (
-                                <label key={key} className={[
-                                    "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition-colors",
-                                    selectedRefreshTypes.has(key)
-                                        ? "border-cyan-500 bg-cyan-950/40 text-white"
-                                        : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                                ].join(" ")}>
-                                    <input type="checkbox" checked={selectedRefreshTypes.has(key)} onChange={() => onToggleRefreshType(key)} className="mt-0.5 accent-cyan-500" />
-                                    <span className="flex flex-col"><span className="font-medium">{label}</span><span className="mt-1 text-xs text-zinc-400">{description}</span></span>
-                                </label>
-                            ))}
-                        </div>}
-                    </>}
+            {step === 4 && <>
+                <h3 className="text-base font-semibold text-white">Refresh data</h3>
+                <p className="mt-1 text-sm text-neutral-400">Optionally refresh data for vulnerabilities found by this scan.</p>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                    {([
+                        ["complete", "Complete refresh", "Refresh every source applicable to the selected scans."],
+                        ["custom", "Custom refresh", "Choose which applicable sources to refresh."],
+                    ] as const).map(([mode, label, description]) => (
+                        <label key={mode} className={[
+                            "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
+                            refreshMode === mode ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                        ].join(" ")}>
+                            <input type="radio" name="refresh-mode" checked={refreshMode === mode} onChange={() => onRefreshModeChange(mode)} className="mt-0.5 accent-cyan-500" />
+                            <span className="flex flex-col"><span className="font-medium">{label}</span><span className="mt-1 text-xs text-zinc-400">{description}</span></span>
+                        </label>
+                    ))}
+                </div>
+                {availableRefreshTypes.size === 0 && <p className="mt-4 text-sm text-neutral-500">The selected scans do not produce CVEs that can be refreshed.</p>}
+                {refreshMode === "custom" && availableRefreshTypes.size > 0 && <div className="mt-4 grid grid-cols-1 gap-2">
+                    {refreshTypes.filter(({ key }) => availableRefreshTypes.has(key)).map(({ key, label, description }) => (
+                        <label key={key} className={[
+                            "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition-colors",
+                            selectedRefreshTypes.has(key)
+                                ? "border-cyan-500 bg-cyan-950/40 text-white"
+                                : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                        ].join(" ")}>
+                            <input type="checkbox" checked={selectedRefreshTypes.has(key)} onChange={() => onToggleRefreshType(key)} className="mt-0.5 accent-cyan-500" />
+                            <span className="flex flex-col"><span className="font-medium">{label}</span><span className="mt-1 text-xs text-zinc-400">{description}</span></span>
+                        </label>
+                    ))}
+                </div>}
+            </>}
 
-                    {step === reviewStep && <>
-                        <h3 className="text-base font-semibold text-white">Review and launch</h3>
-                        <p className="mt-1 text-sm text-neutral-400">Check the launch configuration before starting the scan queue.</p>
-                        <div className="mt-5 space-y-3 text-sm">
-                            <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
-                                <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Scans</h4><p className="mt-1 text-zinc-300">{scanTypes.filter(({ key }) => selectedScanTypes.has(key)).map(({ label }) => label).join(", ")}</p></div><button type="button" onClick={() => setStep(1)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit scans">Edit</button></div>
-                            </section>
-                            <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
-                                <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Context variants</h4><p className="mt-1 text-zinc-300">{variants.filter(variant => selectedVariantIds.has(variant.id)).map(variant => variant.name).join(", ")}</p></div><button type="button" onClick={() => setStep(2)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit context variants">Edit</button></div>
-                            </section>
-                            <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
-                                <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Kernel packages</h4><p className="mt-1 text-zinc-300">{excludeKernel ? "Excluded" : "Included"}</p></div><button type="button" onClick={() => setStep(3)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit kernel package selection">Edit</button></div>
-                            </section>
-                            <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
-                                <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Vulnerability data refresh</h4><p className="mt-1 text-zinc-300">{refreshTypes.filter(({ key }) => effectiveRefreshTypes.has(key)).map(({ label }) => label).join(", ") || "No refresh selected"}</p></div><button type="button" onClick={() => setStep(4)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit vulnerability data refresh">Edit</button></div>
-                            </section>
-                        </div>
-                    </>}
+            {step === reviewStep && <>
+                <h3 className="text-base font-semibold text-white">Review and launch</h3>
+                <p className="mt-1 text-sm text-neutral-400">Check the launch configuration before starting the scan queue.</p>
+                <div className="mt-5 space-y-3 text-sm">
+                    <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
+                        <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Scans</h4><p className="mt-1 text-zinc-300">{scanTypes.filter(({ key }) => selectedScanTypes.has(key)).map(({ label }) => label).join(", ")}</p></div><button type="button" onClick={() => setStep(1)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit scans">Edit</button></div>
+                    </section>
+                    <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
+                        <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Context variants</h4><p className="mt-1 text-zinc-300">{variants.filter(variant => selectedVariantIds.has(variant.id)).map(variant => variant.name).join(", ")}</p></div><button type="button" onClick={() => setStep(2)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit context variants">Edit</button></div>
+                    </section>
+                    <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
+                        <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Kernel packages</h4><p className="mt-1 text-zinc-300">{excludeKernel ? "Excluded" : "Included"}</p></div><button type="button" onClick={() => setStep(3)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit kernel package selection">Edit</button></div>
+                    </section>
+                    <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
+                        <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Vulnerability data refresh</h4><p className="mt-1 text-zinc-300">{refreshTypes.filter(({ key }) => effectiveRefreshTypes.has(key)).map(({ label }) => label).join(", ") || "No refresh selected"}</p></div><button type="button" onClick={() => setStep(4)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit vulnerability data refresh">Edit</button></div>
+                    </section>
+                </div>
+            </>}
         </ModalShell>
     );
 }

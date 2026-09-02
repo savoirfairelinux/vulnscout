@@ -18,6 +18,7 @@ import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faT
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
+import HelpPopover from "./HelpPopover";
 import Variants from '../handlers/variant';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
@@ -450,25 +451,6 @@ type VariantScopedSnapshot = {
 
     const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const modalRef = useRef<HTMLDivElement>(null);
-    const shortcutButtonRef = useRef<HTMLButtonElement>(null);
-    const dropdownRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (dropdownRef.current && shortcutButtonRef.current &&
-                !dropdownRef.current.contains(event.target as Node) &&
-                !shortcutButtonRef.current.contains(event.target as Node)) {
-                setShowShortcutHelper(false);
-            }
-        };
-
-        if (showShortcutHelper) {
-            document.addEventListener('mousedown', handleClickOutside);
-        }
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [showShortcutHelper]);
 
     useEffect(() => {
         // force focus the modal content when the modal opens such that keyboard users can interact with it immediately
@@ -1548,16 +1530,19 @@ type VariantScopedSnapshot = {
     const headerActions = (
         <>
             <div className="relative flex items-center gap-2 px-2 py-2">
-                <button
-                    ref={shortcutButtonRef}
-                    aria-label="shortcut helper"
+                <HelpPopover
+                    ariaLabel="shortcut helper"
                     title="View keyboard shortcuts"
-                    type="button"
-                    className="transition-colors hover:text-blue-400"
-                    onClick={() => setShowShortcutHelper(!showShortcutHelper)}
+                    heading="Keyboard Shortcuts"
+                    open={showShortcutHelper}
+                    onOpenChange={setShowShortcutHelper}
+                    surfaceClassName="w-[300px]"
                 >
-                    <FontAwesomeIcon icon={faCircleQuestion} size="lg" />
-                </button>
+                    <div className="space-y-2 text-neutral-200">
+                        <div className="flex justify-between gap-4"><span className="font-semibold text-neutral-300">← / →</span><span>Previous/Next vulnerability</span></div>
+                        <div className="flex justify-between gap-4"><span className="font-semibold text-neutral-300">Esc</span><span>Close shortcuts</span></div>
+                    </div>
+                </HelpPopover>
                 <a
                     href={docUrl}
                     target="_blank"
@@ -1568,15 +1553,6 @@ type VariantScopedSnapshot = {
                 >
                     <FontAwesomeIcon icon={faBook} size="lg" />
                 </a>
-                {showShortcutHelper && (
-                    <div ref={dropdownRef} className="absolute right-0 top-full z-50 mt-1 w-[300px] rounded-lg border border-cyan-700 bg-cyan-900 p-4 text-sm shadow-lg">
-                        <h3 className="mb-3 font-bold text-white">Keyboard Shortcuts</h3>
-                        <div className="space-y-2 text-gray-100">
-                            <div className="flex justify-between"><span className="font-semibold text-cyan-300">← / →</span><span>Previous/Next vulnerability</span></div>
-                            <div className="flex justify-between"><span className="font-semibold text-cyan-300">Esc</span><span>Close modal</span></div>
-                        </div>
-                    </div>
-                )}
             </div>
             {!readOnly && (
                 <div className="flex flex-wrap items-center gap-2">

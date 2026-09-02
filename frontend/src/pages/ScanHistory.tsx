@@ -547,130 +547,130 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                 <ModalActions><ModalButton onClick={onClose}>Close</ModalButton></ModalActions>
             }
         >
-                    {/* Tab bar */}
-                    {data && (
-                        <div className="flex border-b dark:border-gray-600 px-4 flex-wrap items-center">
-                            <button className={tabCls('packages')} onClick={() => setSection('packages')}>
-                                Packages
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
-                                    {data.package_count.toLocaleString()}
-                                </span>
-                            </button>
-                            <button className={tabCls('findings')} onClick={() => setSection('findings')}>
-                                Findings
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
-                                    {data.finding_count.toLocaleString()}
-                                </span>
-                            </button>
-                            <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
-                                Vulnerabilities
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
-                                    {data.vuln_count.toLocaleString()}
-                                </span>
-                            </button>
-                            <button className={tabCls('assessments')} onClick={() => setSection('assessments')}>
-                                Assessments
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
-                                    {(data.assessment_count ?? 0).toLocaleString()}
-                                </span>
-                            </button>
-                            <div className="ml-auto">
-                                <input
-                                    type="text"
-                                    placeholder="Filter\u2026"
-                                    value={filter}
-                                    onChange={e => setFilter(e.target.value)}
-                                    className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
-                                />
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Body */}
-                    <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
-                        {loading && <p className="text-gray-400">Loading…</p>}
-                        {error && <p className="text-red-400">{error}</p>}
-
-                        {data && section === 'packages' && (
-                            <div className="overflow-auto max-h-[70vh] rounded border border-gray-600">
-                                <table className="w-full text-xs text-left">
-                                    <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
-                                        <tr>
-                                            <th className="px-3 py-2">Package</th>
-                                            <th className="px-3 py-2">Version</th>
-                                            <th className="px-3 py-2">Supplier</th>
-                                            <th className="px-3 py-2">Source</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {filteredPkgs.map(p => (
-                                            <tr key={p.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
-                                                <td className="px-3 py-1.5 font-mono">{p.package_name}</td>
-                                                <td className="px-3 py-1.5 font-mono text-gray-400">{p.package_version}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(p.package_supplier || '') || '—'}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{p.sources.map(formatSourceName).join(', ')}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-
-                        {data && section === 'findings' && (
-                            <div className="overflow-auto max-h-[70vh] rounded border border-gray-600">
-                                <table className="w-full text-xs text-left">
-                                    <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
-                                        <tr>
-                                            <th className="px-3 py-2">Package</th>
-                                            <th className="px-3 py-2">Version</th>
-                                            <th className="px-3 py-2">Supplier</th>
-                                            <th className="px-3 py-2">Vulnerability</th>
-                                            <th className="px-3 py-2">Source</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {filteredFindings.map(f => (
-                                            <tr key={f.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
-                                                <td className="px-3 py-1.5 font-mono">{f.package_name}</td>
-                                                <td className="px-3 py-1.5 font-mono text-gray-400">{f.package_version}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(f.package_supplier || '') || '—'}</td>
-                                                <td className="px-3 py-1.5 font-mono">{f.vulnerability_id}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{f.sources.map(formatSourceName).join(', ')}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-
-                        {data && section === 'vulnerabilities' && (
-                            <div className="overflow-auto max-h-[70vh] rounded border border-gray-600">
-                                <table className="w-full text-xs text-left">
-                                    <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
-                                        <tr>
-                                            <th className="px-3 py-2">Vulnerability</th>
-                                            <th className="px-3 py-2">Source</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {filteredVulns.map(v => (
-                                            <tr key={v.vulnerability_id} className="border-t border-gray-600 hover:bg-gray-600/40">
-                                                <td className="px-3 py-1.5 font-mono">{v.vulnerability_id}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{v.sources.map(formatSourceName).join(', ')}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-
-                        {data && section === 'assessments' && (
-                            <AssessmentDiffTable
-                                entries={filteredAssessments}
-                                label="Active assessments"
-                            />
-                        )}
+            {/* Tab bar */}
+            {data && (
+                <div className="flex border-b dark:border-gray-600 px-4 flex-wrap items-center">
+                    <button className={tabCls('packages')} onClick={() => setSection('packages')}>
+                        Packages
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                            {data.package_count.toLocaleString()}
+                        </span>
+                    </button>
+                    <button className={tabCls('findings')} onClick={() => setSection('findings')}>
+                        Findings
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                            {data.finding_count.toLocaleString()}
+                        </span>
+                    </button>
+                    <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
+                        Vulnerabilities
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                            {data.vuln_count.toLocaleString()}
+                        </span>
+                    </button>
+                    <button className={tabCls('assessments')} onClick={() => setSection('assessments')}>
+                        Assessments
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                            {(data.assessment_count ?? 0).toLocaleString()}
+                        </span>
+                    </button>
+                    <div className="ml-auto">
+                        <input
+                            type="text"
+                            placeholder="Filter\u2026"
+                            value={filter}
+                            onChange={e => setFilter(e.target.value)}
+                            className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
+                        />
                     </div>
+                </div>
+            )}
+
+            {/* Body */}
+            <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
+                {loading && <p className="text-gray-400">Loading…</p>}
+                {error && <p className="text-red-400">{error}</p>}
+
+                {data && section === 'packages' && (
+                    <div className="overflow-auto max-h-[70vh] rounded border border-gray-600">
+                        <table className="w-full text-xs text-left">
+                            <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
+                                <tr>
+                                    <th className="px-3 py-2">Package</th>
+                                    <th className="px-3 py-2">Version</th>
+                                    <th className="px-3 py-2">Supplier</th>
+                                    <th className="px-3 py-2">Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredPkgs.map(p => (
+                                    <tr key={p.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                        <td className="px-3 py-1.5 font-mono">{p.package_name}</td>
+                                        <td className="px-3 py-1.5 font-mono text-gray-400">{p.package_version}</td>
+                                        <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(p.package_supplier || '') || '—'}</td>
+                                        <td className="px-3 py-1.5 text-gray-400">{p.sources.map(formatSourceName).join(', ')}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {data && section === 'findings' && (
+                    <div className="overflow-auto max-h-[70vh] rounded border border-gray-600">
+                        <table className="w-full text-xs text-left">
+                            <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
+                                <tr>
+                                    <th className="px-3 py-2">Package</th>
+                                    <th className="px-3 py-2">Version</th>
+                                    <th className="px-3 py-2">Supplier</th>
+                                    <th className="px-3 py-2">Vulnerability</th>
+                                    <th className="px-3 py-2">Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredFindings.map(f => (
+                                    <tr key={f.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                        <td className="px-3 py-1.5 font-mono">{f.package_name}</td>
+                                        <td className="px-3 py-1.5 font-mono text-gray-400">{f.package_version}</td>
+                                        <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(f.package_supplier || '') || '—'}</td>
+                                        <td className="px-3 py-1.5 font-mono">{f.vulnerability_id}</td>
+                                        <td className="px-3 py-1.5 text-gray-400">{f.sources.map(formatSourceName).join(', ')}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {data && section === 'vulnerabilities' && (
+                    <div className="overflow-auto max-h-[70vh] rounded border border-gray-600">
+                        <table className="w-full text-xs text-left">
+                            <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
+                                <tr>
+                                    <th className="px-3 py-2">Vulnerability</th>
+                                    <th className="px-3 py-2">Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredVulns.map(v => (
+                                    <tr key={v.vulnerability_id} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                        <td className="px-3 py-1.5 font-mono">{v.vulnerability_id}</td>
+                                        <td className="px-3 py-1.5 text-gray-400">{v.sources.map(formatSourceName).join(', ')}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {data && section === 'assessments' && (
+                    <AssessmentDiffTable
+                        entries={filteredAssessments}
+                        label="Active assessments"
+                    />
+                )}
+            </div>
 
         </ModalShell>
     );
@@ -716,309 +716,309 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                 <ModalActions><ModalButton onClick={onClose}>Close</ModalButton></ModalActions>
             }
         >
-                    {/* Tab bar */}
-                    {diff && (
-                        <div className="flex border-b dark:border-gray-600 px-4 flex-wrap">
-                            {!isToolScan && (
-                            <button className={tabCls('packages')} onClick={() => setSection('packages')}>
-                                Packages
-                                {diff.is_first ? (
-                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
-                                        {diff.package_count.toLocaleString()}
-                                    </span>
-                                ) : (
-                                    <>
-                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            +{diff.packages_added.length.toLocaleString()}
-                                        </span>
-                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            −{diff.packages_removed.length.toLocaleString()}
-                                        </span>
-                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            ↑{diff.packages_upgraded.length.toLocaleString()}
-                                        </span>
-                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
-                                            ={diff.packages_unchanged.length.toLocaleString()}
-                                        </span>
-                                    </>
-                                )}
-                            </button>
-                            )}
-                            <button className={tabCls('findings')} onClick={() => setSection('findings')}>
-                                Findings
-                                {(diff.is_first || isToolScan) ? (
-                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
-                                        {diff.finding_count.toLocaleString()}
-                                    </span>
-                                ) : (
-                                    <>
-                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            +{diff.findings_added.length.toLocaleString()}
-                                        </span>
-                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            −{diff.findings_removed.length.toLocaleString()}
-                                        </span>
-                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            ↑{diff.findings_upgraded.length.toLocaleString()}
-                                        </span>
-                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
-                                            ={diff.findings_unchanged.length.toLocaleString()}
-                                        </span>
-                                    </>
-                                )}
-                            </button>
-                            <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
-                                Vulnerabilities
-                                {(diff.is_first || isToolScan) ? (
-                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
-                                        {diff.vuln_count.toLocaleString()}
-                                    </span>
-                                ) : (
-                                    <>
-                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            +{diff.vulns_added.length.toLocaleString()}
-                                        </span>
-                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            −{diff.vulns_removed.length.toLocaleString()}
-                                        </span>
-                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
-                                            ={diff.vulns_unchanged.length.toLocaleString()}
-                                        </span>
-                                    </>
-                                )}
-                            </button>
-                            <button className={tabCls('assessments')} onClick={() => setSection('assessments')}>
-                                Assessments
-                                {diff.is_first ? (
-                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
-                                        {(diff.assessment_count ?? 0).toLocaleString()}
-                                    </span>
-                                ) : (
-                                    <>
-                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0) > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            +{(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0).toLocaleString()}
-                                        </span>
-                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0) > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
-                                            −{(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0).toLocaleString()}
-                                        </span>
-                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
-                                            ={(Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged.length : 0).toLocaleString()}
-                                        </span>
-                                    </>
-                                )}
-                            </button>
-                            {isToolScan && diff.newly_detected_findings != null && (
-                            <button className={tabCls('newly_detected')} onClick={() => setSection('newly_detected')}>
-                                New Discovered
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
-                                    {(diff.newly_detected_findings ?? 0).toLocaleString()} findings
+            {/* Tab bar */}
+            {diff && (
+                <div className="flex border-b dark:border-gray-600 px-4 flex-wrap">
+                    {!isToolScan && (
+                    <button className={tabCls('packages')} onClick={() => setSection('packages')}>
+                        Packages
+                        {diff.is_first ? (
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                {diff.package_count.toLocaleString()}
+                            </span>
+                        ) : (
+                            <>
+                                <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    +{diff.packages_added.length.toLocaleString()}
                                 </span>
-                                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
-                                    {(diff.newly_detected_vulns ?? 0).toLocaleString()} vulns
+                                <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    −{diff.packages_removed.length.toLocaleString()}
                                 </span>
-                                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
-                                    {(diff.newly_detected_assessments_list ?? []).length.toLocaleString()} assessments
+                                <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    ↑{diff.packages_upgraded.length.toLocaleString()}
                                 </span>
-                            </button>
-                            )}
-                        </div>
+                                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                    ={diff.packages_unchanged.length.toLocaleString()}
+                                </span>
+                            </>
+                        )}
+                    </button>
                     )}
+                    <button className={tabCls('findings')} onClick={() => setSection('findings')}>
+                        Findings
+                        {(diff.is_first || isToolScan) ? (
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                {diff.finding_count.toLocaleString()}
+                            </span>
+                        ) : (
+                            <>
+                                <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    +{diff.findings_added.length.toLocaleString()}
+                                </span>
+                                <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    −{diff.findings_removed.length.toLocaleString()}
+                                </span>
+                                <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    ↑{diff.findings_upgraded.length.toLocaleString()}
+                                </span>
+                                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                    ={diff.findings_unchanged.length.toLocaleString()}
+                                </span>
+                            </>
+                        )}
+                    </button>
+                    <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
+                        Vulnerabilities
+                        {(diff.is_first || isToolScan) ? (
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                {diff.vuln_count.toLocaleString()}
+                            </span>
+                        ) : (
+                            <>
+                                <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    +{diff.vulns_added.length.toLocaleString()}
+                                </span>
+                                <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    −{diff.vulns_removed.length.toLocaleString()}
+                                </span>
+                                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                    ={diff.vulns_unchanged.length.toLocaleString()}
+                                </span>
+                            </>
+                        )}
+                    </button>
+                    <button className={tabCls('assessments')} onClick={() => setSection('assessments')}>
+                        Assessments
+                        {diff.is_first ? (
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                {(diff.assessment_count ?? 0).toLocaleString()}
+                            </span>
+                        ) : (
+                            <>
+                                <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0) > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    +{(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0).toLocaleString()}
+                                </span>
+                                <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0) > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                    −{(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0).toLocaleString()}
+                                </span>
+                                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                    ={(Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged.length : 0).toLocaleString()}
+                                </span>
+                            </>
+                        )}
+                    </button>
+                    {isToolScan && diff.newly_detected_findings != null && (
+                    <button className={tabCls('newly_detected')} onClick={() => setSection('newly_detected')}>
+                        New Discovered
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
+                            {(diff.newly_detected_findings ?? 0).toLocaleString()} findings
+                        </span>
+                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
+                            {(diff.newly_detected_vulns ?? 0).toLocaleString()} vulns
+                        </span>
+                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
+                            {(diff.newly_detected_assessments_list ?? []).length.toLocaleString()} assessments
+                        </span>
+                    </button>
+                    )}
+                </div>
+            )}
 
-                    {/* Body */}
-                    <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
-                        {loading && <p className="text-gray-400">Loading…</p>}
-                        {error && <p className="text-red-400">{error}</p>}
-                        {diff && section === 'packages' && (
-                            <>
-                                {diff.is_first && (
-                                    <p className="text-sm text-gray-400 mb-4 italic">
-                                        This is the first scan — all {diff.package_count.toLocaleString()} packages are new.
-                                    </p>
-                                )}
-                                <PackageDiffTable
-                                    entries={diff.packages_added}
-                                    label={diff.is_first ? "All packages" : "Added packages"}
-                                    colorClass={diff.is_first ? "text-cyan-400" : "text-green-400"}
-                                />
-                                {!diff.is_first && (
-                                    <PackageDiffTable
-                                        entries={diff.packages_removed}
-                                        label="Removed packages"
-                                        colorClass="text-red-400"
-                                    />
-                                )}
-                                {!diff.is_first && (
-                                    <PackageUpgradeDiffTable
-                                        entries={diff.packages_upgraded}
-                                        label="Upgraded packages"
-                                        colorClass="text-yellow-400"
-                                    />
-                                )}
-                                {!diff.is_first && (
-                                    <PackageDiffTable
-                                        entries={diff.packages_unchanged}
-                                        label="Unchanged packages"
-                                        colorClass="text-gray-400"
-                                    />
-                                )}
-                            </>
+            {/* Body */}
+            <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
+                {loading && <p className="text-gray-400">Loading…</p>}
+                {error && <p className="text-red-400">{error}</p>}
+                {diff && section === 'packages' && (
+                    <>
+                        {diff.is_first && (
+                            <p className="text-sm text-gray-400 mb-4 italic">
+                                This is the first scan — all {diff.package_count.toLocaleString()} packages are new.
+                            </p>
                         )}
-                        {diff && section === 'findings' && (
-                            <>
-                                {(diff.is_first || isToolScan) ? (
-                                    <>
-                                        <p className="text-sm text-gray-400 mb-4 italic">
-                                            {diff.is_first
-                                                ? `This is the first scan — all ${diff.finding_count.toLocaleString()} findings are listed below.`
-                                                : `All ${diff.finding_count.toLocaleString()} findings detected by this scan.`}
-                                        </p>
-                                        <FindingDiffTable
-                                            entries={diff.all_findings ?? diff.findings_added}
-                                            label="All findings"
-                                            colorClass="text-cyan-400"
-                                        />
-                                    </>
-                                ) : (
-                                    <>
-                                        <FindingDiffTable
-                                            entries={diff.findings_added}
-                                            label="Added findings"
-                                            colorClass="text-green-400"
-                                        />
-                                        <FindingDiffTable
-                                            entries={diff.findings_removed}
-                                            label="Removed findings"
-                                            colorClass="text-red-400"
-                                        />
-                                        {diff.findings_upgraded.length > 0 && (
-                                            <FindingUpgradeDiffTable
-                                                entries={diff.findings_upgraded}
-                                                label="Findings on upgraded packages"
-                                                colorClass="text-yellow-400"
-                                            />
-                                        )}
-                                        <FindingDiffTable
-                                            entries={diff.findings_unchanged}
-                                            label="Unchanged findings"
-                                            colorClass="text-gray-400"
-                                        />
-                                    </>
-                                )}
-                            </>
+                        <PackageDiffTable
+                            entries={diff.packages_added}
+                            label={diff.is_first ? "All packages" : "Added packages"}
+                            colorClass={diff.is_first ? "text-cyan-400" : "text-green-400"}
+                        />
+                        {!diff.is_first && (
+                            <PackageDiffTable
+                                entries={diff.packages_removed}
+                                label="Removed packages"
+                                colorClass="text-red-400"
+                            />
                         )}
-                        {diff && section === 'vulnerabilities' && (
-                            <>
-                                {(diff.is_first || isToolScan) ? (
-                                    <>
-                                        <p className="text-sm text-gray-400 mb-4 italic">
-                                            {diff.is_first
-                                                ? `This is the first scan — all ${diff.vuln_count.toLocaleString()} vulnerabilities are listed below.`
-                                                : `All ${diff.vuln_count.toLocaleString()} vulnerabilities detected by this scan.`}
-                                        </p>
-                                        <VulnDiffList
-                                            vulns={diff.all_vulns ?? diff.vulns_added}
-                                            label="All vulnerabilities"
-                                            colorClass="text-cyan-400"
-                                        />
-                                    </>
-                                ) : (
-                                    <>
-                                        <VulnDiffList
-                                            vulns={diff.vulns_added}
-                                            label="New vulnerabilities"
-                                            colorClass="text-green-400"
-                                        />
-                                        {(() => {
-                                            const originMap: Record<string, string[]> = {};
-                                            for (const f of diff.findings_removed) {
-                                                if (f.origin) {
-                                                    const origins = originMap[f.vulnerability_id] || [];
-                                                    if (!origins.includes(f.origin)) origins.push(f.origin);
-                                                    originMap[f.vulnerability_id] = origins;
-                                                }
-                                            }
-                                            return (
-                                                <VulnDiffList
-                                                    vulns={diff.vulns_removed}
-                                                    label="Removed vulnerabilities"
-                                                    colorClass="text-red-400"
-                                                    originMap={originMap}
-                                                />
-                                            );
-                                        })()}
-                                        <VulnDiffList
-                                            vulns={diff.vulns_unchanged}
-                                            label="Unchanged vulnerabilities"
-                                            colorClass="text-gray-400"
-                                        />
-                                    </>
-                                )}
-                            </>
+                        {!diff.is_first && (
+                            <PackageUpgradeDiffTable
+                                entries={diff.packages_upgraded}
+                                label="Upgraded packages"
+                                colorClass="text-yellow-400"
+                            />
                         )}
-                        {diff && section === 'assessments' && (
+                        {!diff.is_first && (
+                            <PackageDiffTable
+                                entries={diff.packages_unchanged}
+                                label="Unchanged packages"
+                                colorClass="text-gray-400"
+                            />
+                        )}
+                    </>
+                )}
+                {diff && section === 'findings' && (
+                    <>
+                        {(diff.is_first || isToolScan) ? (
                             <>
                                 <p className="text-sm text-gray-400 mb-4 italic">
                                     {diff.is_first
-                                        ? `This is the first scan — all ${(diff.assessment_count ?? 0).toLocaleString()} assessments were created during this import.`
-                                        : `${(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0).toLocaleString()} new, ${(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0).toLocaleString()} removed, ${(Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged.length : 0).toLocaleString()} unchanged assessment(s).`
-                                    }
+                                        ? `This is the first scan — all ${diff.finding_count.toLocaleString()} findings are listed below.`
+                                        : `All ${diff.finding_count.toLocaleString()} findings detected by this scan.`}
                                 </p>
-                                <AssessmentDiffTable
-                                    entries={Array.isArray(diff.assessments_added) ? diff.assessments_added : []}
-                                    label={diff.is_first ? "All assessments" : "New assessments"}
-                                    colorClass={diff.is_first ? "text-cyan-400" : "text-green-400"}
+                                <FindingDiffTable
+                                    entries={diff.all_findings ?? diff.findings_added}
+                                    label="All findings"
+                                    colorClass="text-cyan-400"
                                 />
-                                {!diff.is_first && (
-                                    <AssessmentDiffTable
-                                        entries={Array.isArray(diff.assessments_removed) ? diff.assessments_removed : []}
-                                        label="Removed assessments"
-                                        colorClass="text-red-400"
+                            </>
+                        ) : (
+                            <>
+                                <FindingDiffTable
+                                    entries={diff.findings_added}
+                                    label="Added findings"
+                                    colorClass="text-green-400"
+                                />
+                                <FindingDiffTable
+                                    entries={diff.findings_removed}
+                                    label="Removed findings"
+                                    colorClass="text-red-400"
+                                />
+                                {diff.findings_upgraded.length > 0 && (
+                                    <FindingUpgradeDiffTable
+                                        entries={diff.findings_upgraded}
+                                        label="Findings on upgraded packages"
+                                        colorClass="text-yellow-400"
                                     />
                                 )}
-                                {!diff.is_first && (
-                                    <AssessmentDiffTable
-                                        entries={Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged : []}
-                                        label="Unchanged assessments"
-                                        colorClass="text-gray-400"
-                                    />
-                                )}
+                                <FindingDiffTable
+                                    entries={diff.findings_unchanged}
+                                    label="Unchanged findings"
+                                    colorClass="text-gray-400"
+                                />
                             </>
                         )}
-                        {diff && section === 'newly_detected' && isToolScan && (
+                    </>
+                )}
+                {diff && section === 'vulnerabilities' && (
+                    <>
+                        {(diff.is_first || isToolScan) ? (
                             <>
                                 <p className="text-sm text-gray-400 mb-4 italic">
-                                    Findings and vulnerabilities discovered by the tool scan that were <strong className="text-purple-300">not previously known</strong> — they are new items not found in the SBOM or any earlier tool scan.
+                                    {diff.is_first
+                                        ? `This is the first scan — all ${diff.vuln_count.toLocaleString()} vulnerabilities are listed below.`
+                                        : `All ${diff.vuln_count.toLocaleString()} vulnerabilities detected by this scan.`}
                                 </p>
-                                {diff.newly_detected_findings_list && diff.newly_detected_findings_list.length > 0 ? (
-                                    <FindingDiffTable
-                                        entries={diff.newly_detected_findings_list}
-                                        label="New findings discovered"
-                                        colorClass="text-green-400"
-                                    />
-                                ) : (
-                                    <p className="text-sm text-gray-400 italic mb-4">No new findings discovered.</p>
-                                )}
-                                {diff.newly_detected_vulns_list && diff.newly_detected_vulns_list.length > 0 ? (
-                                    <VulnDiffList
-                                        vulns={diff.newly_detected_vulns_list}
-                                        label="New vulnerabilities discovered"
-                                        colorClass="text-green-400"
-                                    />
-                                ) : (
-                                    <p className="text-sm text-gray-400 italic">No new vulnerabilities discovered.</p>
-                                )}
-                                {diff.newly_detected_assessments_list && diff.newly_detected_assessments_list.length > 0 ? (
-                                    <AssessmentDiffTable
-                                        entries={diff.newly_detected_assessments_list}
-                                        label="New assessments discovered"
-                                        colorClass="text-green-400"
-                                    />
-                                ) : (
-                                    <p className="text-sm text-gray-400 italic">No new assessments discovered.</p>
-                                )}
+                                <VulnDiffList
+                                    vulns={diff.all_vulns ?? diff.vulns_added}
+                                    label="All vulnerabilities"
+                                    colorClass="text-cyan-400"
+                                />
+                            </>
+                        ) : (
+                            <>
+                                <VulnDiffList
+                                    vulns={diff.vulns_added}
+                                    label="New vulnerabilities"
+                                    colorClass="text-green-400"
+                                />
+                                {(() => {
+                                    const originMap: Record<string, string[]> = {};
+                                    for (const f of diff.findings_removed) {
+                                        if (f.origin) {
+                                            const origins = originMap[f.vulnerability_id] || [];
+                                            if (!origins.includes(f.origin)) origins.push(f.origin);
+                                            originMap[f.vulnerability_id] = origins;
+                                        }
+                                    }
+                                    return (
+                                        <VulnDiffList
+                                            vulns={diff.vulns_removed}
+                                            label="Removed vulnerabilities"
+                                            colorClass="text-red-400"
+                                            originMap={originMap}
+                                        />
+                                    );
+                                })()}
+                                <VulnDiffList
+                                    vulns={diff.vulns_unchanged}
+                                    label="Unchanged vulnerabilities"
+                                    colorClass="text-gray-400"
+                                />
                             </>
                         )}
-                    </div>
+                    </>
+                )}
+                {diff && section === 'assessments' && (
+                    <>
+                        <p className="text-sm text-gray-400 mb-4 italic">
+                            {diff.is_first
+                                ? `This is the first scan — all ${(diff.assessment_count ?? 0).toLocaleString()} assessments were created during this import.`
+                                : `${(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0).toLocaleString()} new, ${(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0).toLocaleString()} removed, ${(Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged.length : 0).toLocaleString()} unchanged assessment(s).`
+                            }
+                        </p>
+                        <AssessmentDiffTable
+                            entries={Array.isArray(diff.assessments_added) ? diff.assessments_added : []}
+                            label={diff.is_first ? "All assessments" : "New assessments"}
+                            colorClass={diff.is_first ? "text-cyan-400" : "text-green-400"}
+                        />
+                        {!diff.is_first && (
+                            <AssessmentDiffTable
+                                entries={Array.isArray(diff.assessments_removed) ? diff.assessments_removed : []}
+                                label="Removed assessments"
+                                colorClass="text-red-400"
+                            />
+                        )}
+                        {!diff.is_first && (
+                            <AssessmentDiffTable
+                                entries={Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged : []}
+                                label="Unchanged assessments"
+                                colorClass="text-gray-400"
+                            />
+                        )}
+                    </>
+                )}
+                {diff && section === 'newly_detected' && isToolScan && (
+                    <>
+                        <p className="text-sm text-gray-400 mb-4 italic">
+                            Findings and vulnerabilities discovered by the tool scan that were <strong className="text-purple-300">not previously known</strong> — they are new items not found in the SBOM or any earlier tool scan.
+                        </p>
+                        {diff.newly_detected_findings_list && diff.newly_detected_findings_list.length > 0 ? (
+                            <FindingDiffTable
+                                entries={diff.newly_detected_findings_list}
+                                label="New findings discovered"
+                                colorClass="text-green-400"
+                            />
+                        ) : (
+                            <p className="text-sm text-gray-400 italic mb-4">No new findings discovered.</p>
+                        )}
+                        {diff.newly_detected_vulns_list && diff.newly_detected_vulns_list.length > 0 ? (
+                            <VulnDiffList
+                                vulns={diff.newly_detected_vulns_list}
+                                label="New vulnerabilities discovered"
+                                colorClass="text-green-400"
+                            />
+                        ) : (
+                            <p className="text-sm text-gray-400 italic">No new vulnerabilities discovered.</p>
+                        )}
+                        {diff.newly_detected_assessments_list && diff.newly_detected_assessments_list.length > 0 ? (
+                            <AssessmentDiffTable
+                                entries={diff.newly_detected_assessments_list}
+                                label="New assessments discovered"
+                                colorClass="text-green-400"
+                            />
+                        ) : (
+                            <p className="text-sm text-gray-400 italic">No new assessments discovered.</p>
+                        )}
+                    </>
+                )}
+            </div>
 
         </ModalShell>
     );

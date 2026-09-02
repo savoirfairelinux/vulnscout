@@ -378,6 +378,23 @@ beforeEach(() => {
 });
 
 describe('Review — editing "Apply to variants"', () => {
+    test('Escape asks before discarding an in-progress assessment edit', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(variantCheckbox('Variant Beta'));
+        await user.keyboard('{Escape}');
+
+        expect(screen.getByText('Discard assessment changes?')).toBeInTheDocument();
+        expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+        expect(screen.queryByText('Discard assessment changes?')).not.toBeInTheDocument();
+        expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
+    });
+
     test('checking a new variant creates an assessment for it (POST) and keeps the existing one (PUT)', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);

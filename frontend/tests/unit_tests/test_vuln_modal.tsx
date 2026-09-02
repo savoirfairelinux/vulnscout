@@ -2318,6 +2318,21 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
     });
 
+    test('Escape closes the shortcut helper before the vulnerability dialog', async () => {
+        const user = userEvent.setup();
+        const onClose = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={onClose} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await user.click(screen.getByRole('button', { name: /shortcut helper/i }));
+        expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
+
+        await user.keyboard('{Escape}');
+
+        expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
     test('delete assessment with remaining assessments updates status from most recent', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch

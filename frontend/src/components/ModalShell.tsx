@@ -1,5 +1,5 @@
-import { useEffect, useId } from "react";
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes, MouseEvent, ReactNode, RefObject } from "react";
+import { useEffect, useId, useRef } from "react";
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes, MouseEvent, MutableRefObject, ReactNode } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faXmark } from "@fortawesome/free-solid-svg-icons";
 
@@ -20,6 +20,20 @@ const buttonVariantClasses: Record<ModalButtonVariant, string> = {
     secondary: "border border-neutral-600 bg-neutral-800 text-neutral-200 hover:bg-neutral-700 hover:text-white",
     danger: "bg-red-700 text-white hover:bg-red-600",
 };
+
+let bodyScrollLockCount = 0;
+let originalBodyOverflow = "";
+
+function lockBodyScroll() {
+    if (bodyScrollLockCount === 0) originalBodyOverflow = document.body.style.overflow;
+    bodyScrollLockCount += 1;
+    document.body.style.overflow = "hidden";
+}
+
+function unlockBodyScroll() {
+    bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+    if (bodyScrollLockCount === 0) document.body.style.overflow = originalBodyOverflow;
+}
 
 export function ModalActions({ children, align = "end" }: Readonly<{ children: ReactNode; align?: "end" | "between" }>) {
     return <div className={`flex items-center gap-3 ${align === "between" ? "justify-between" : "justify-end"}`}>{children}</div>;
@@ -121,7 +135,7 @@ export type ModalShellProps = {
     titleId?: string;
     descriptionId?: string;
     contentClassName?: string;
-    panelRef?: RefObject<HTMLDivElement>;
+    panelRef?: MutableRefObject<HTMLDivElement | null>;
     panelTabIndex?: number;
 };
 
@@ -152,17 +166,54 @@ export default function ModalShell({
 }: Readonly<ModalShellProps>) {
     const generatedTitleId = useId();
     const resolvedTitleId = titleId ?? generatedTitleId;
+    const internalPanelRef = useRef<HTMLDivElement | null>(null) as MutableRefObject<HTMLDivElement | null>;
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
 
     useEffect(() => {
-        if (!isOpen || !closeOnEscape || embedded) return;
+        if (!isOpen || embedded) return;
+
+        const previouslyFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const panel = internalPanelRef.current;
+        lockBodyScroll();
+        panel?.focus();
 
         const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") onClose();
+            const openModalPanels = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+            if (openModalPanels[openModalPanels.length - 1] !== panel) return;
+            if (event.key === "Escape" && closeOnEscape) {
+                onCloseRef.current();
+                return;
+            }
+            if (event.key !== "Tab" || !panel) return;
+
+            const focusableElements = Array.from(panel.querySelectorAll<HTMLElement>(
+                'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            )).filter(element => !element.hasAttribute("hidden"));
+            if (focusableElements.length === 0) {
+                event.preventDefault();
+                panel.focus();
+                return;
+            }
+
+            const firstElement = focusableElements[0];
+            const lastElement = focusableElements[focusableElements.length - 1];
+            if (event.shiftKey && document.activeElement === firstElement) {
+                event.preventDefault();
+                lastElement.focus();
+            } else if (!event.shiftKey && document.activeElement === lastElement) {
+                event.preventDefault();
+                firstElement.focus();
+            }
         };
 
         document.addEventListener("keydown", handleKeyDown);
-        return () => document.removeEventListener("keydown", handleKeyDown);
-    }, [closeOnEscape, embedded, isOpen, onClose]);
+        return () => {
+            document.removeEventListener("keydown", handleKeyDown);
+            unlockBodyScroll();
+            previouslyFocusedElement?.focus();
+        };
+    }, [closeOnEscape, embedded, isOpen]);
 
     if (!isOpen) return null;
 
@@ -178,8 +229,11 @@ export default function ModalShell({
             onMouseDown={handleBackdropMouseDown}
         >
             <div
-                ref={panelRef}
-                tabIndex={panelTabIndex}
+                ref={node => {
+                    internalPanelRef.current = node;
+                    if (panelRef) panelRef.current = node;
+                }}
+                tabIndex={panelTabIndex ?? (embedded ? undefined : -1)}
                 role={embedded ? "region" : "dialog"}
                 aria-modal={embedded ? undefined : true}
                 aria-labelledby={resolvedTitleId}
@@ -203,7 +257,7 @@ export default function ModalShell({
                 >
                     {headerContent}
                 </ModalHeader>
-                <div className={`min-h-0 bg-neutral-900 p-5 text-left ${contentClassName}`.trim()}>{children}</div>
+                <div className={`min-h-0 overflow-y-auto bg-neutral-900 p-5 text-left ${contentClassName}`.trim()}>{children}</div>
                 {footer && <footer className={`border-t border-neutral-700 bg-neutral-950/60 px-5 py-4 ${embedded ? "px-10 py-7 [&_button]:px-6 [&_button]:py-3" : ""}`.trim()}>{footer}</footer>}
             </div>
         </div>

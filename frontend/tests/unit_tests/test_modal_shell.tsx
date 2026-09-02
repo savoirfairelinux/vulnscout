@@ -68,6 +68,51 @@ describe("ModalShell", () => {
         expect(defaultProps.onClose).not.toHaveBeenCalled();
     });
 
+    test("traps focus, locks scrolling, and restores focus when closed", () => {
+        const opener = document.createElement("button");
+        document.body.appendChild(opener);
+        opener.focus();
+
+        const { rerender } = render(
+            <ModalShell {...defaultProps}>
+                <button type="button">First</button>
+                <button type="button">Last</button>
+            </ModalShell>
+        );
+
+        const dialog = screen.getByRole("dialog");
+        const first = screen.getByRole("button", { name: "Close modal" });
+        const last = screen.getByRole("button", { name: "Last" });
+        expect(dialog).toHaveFocus();
+        expect(document.body).toHaveStyle({ overflow: "hidden" });
+
+        last.focus();
+        fireEvent.keyDown(document, { key: "Tab" });
+        expect(first).toHaveFocus();
+        first.focus();
+        fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+        expect(last).toHaveFocus();
+
+        rerender(<ModalShell {...defaultProps} isOpen={false}>Content</ModalShell>);
+        expect(opener).toHaveFocus();
+        expect(document.body).not.toHaveStyle({ overflow: "hidden" });
+        opener.remove();
+    });
+
+    test("keeps the focus lifecycle stable when onClose changes", () => {
+        const firstOnClose = jest.fn();
+        const { rerender } = render(<ModalShell {...defaultProps} onClose={firstOnClose}>Content</ModalShell>);
+        const dialog = screen.getByRole("dialog");
+        const secondOnClose = jest.fn();
+
+        rerender(<ModalShell {...defaultProps} onClose={secondOnClose}>Updated content</ModalShell>);
+        expect(dialog).toHaveFocus();
+
+        fireEvent.keyDown(document, { key: "Escape" });
+        expect(firstOnClose).not.toHaveBeenCalled();
+        expect(secondOnClose).toHaveBeenCalledTimes(1);
+    });
+
     test("renders standardized framing with header details, actions, and footer", () => {
         render(
             <ModalShell
@@ -92,7 +137,7 @@ describe("ModalShell", () => {
         expect(screen.getByTestId("modal-backdrop")).toHaveClass("bg-black/70");
         expect(screen.getByRole("dialog")).toHaveClass("max-w-3xl");
         expect(screen.getByRole("dialog")).toHaveClass("border-neutral-700", "bg-neutral-900");
-        expect(screen.getByText("Content")).toHaveClass("custom-content");
+        expect(screen.getByText("Content")).toHaveClass("custom-content", "overflow-y-auto");
         expect(screen.getByRole("contentinfo")).toHaveClass("border-neutral-700", "bg-neutral-950/60");
     });
 

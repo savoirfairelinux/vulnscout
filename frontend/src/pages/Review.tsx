@@ -228,6 +228,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [editVariants, setEditVariants] = useState<Variant[]>([]);
     const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
     const [editSubmitting, setEditSubmitting] = useState(false);
+    const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
+    const [showDiscardEditConfirmation, setShowDiscardEditConfirmation] = useState(false);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
@@ -388,14 +390,28 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const applySearch = () => setSearch(draftSearch.trim());
 
+    const openAssessmentEditor = (row: ReviewRow) => {
+        setEditHasUnsavedChanges(false);
+        setEditingRow(row);
+    };
+
+    const closeAssessmentEditor = () => {
+        if (editSubmitting) return;
+        if (editHasUnsavedChanges) {
+            setShowDiscardEditConfirmation(true);
+            return;
+        }
+        setEditingRow(null);
+    };
+
+    const discardAssessmentEdit = () => {
+        setShowDiscardEditConfirmation(false);
+        setEditHasUnsavedChanges(false);
+        setEditingRow(null);
+    };
+
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                if (editingRow && !editSubmitting) {
-                    setEditingRow(null);
-                    return;
-                }
-            }
             if (event.target instanceof HTMLInputElement ||
                 event.target instanceof HTMLTextAreaElement) {
                 return;
@@ -407,7 +423,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         };
         document.addEventListener('keydown', handleKeyPress);
         return () => document.removeEventListener('keydown', handleKeyPress);
-    }, [editingRow, editSubmitting]);
+    }, []);
 
     useDismissablePopover(showShortcutHelper, [shortcutButtonRef, shortcutDropdownRef], () => setShowShortcutHelper(false));
     useDismissablePopover(showSearchHelper, [searchHelperButtonRef, searchHelperDropdownRef], () => setShowSearchHelper(false));
@@ -1221,7 +1237,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div className="flex flex-wrap items-center justify-center gap-3 h-full">
                     <button
-                        onClick={() => setEditingRow(info.row.original)}
+                        onClick={() => openAssessmentEditor(info.row.original)}
                         className="text-blue-400 hover:text-blue-300 transition-colors"
                         title="Edit assessment"
                     >
@@ -1858,7 +1874,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 <ModalShell
                     isOpen={true}
                     title={editingRow.vuln_id}
-                    onClose={() => setEditingRow(null)}
+                    onClose={closeAssessmentEditor}
                     closeLabel="Close assessment editor"
                     closeDisabled={editSubmitting}
                     closeOnEscape={!editSubmitting}
@@ -1874,7 +1890,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         <EditAssessment
                             assessment={editingRow}
                             onSaveAssessment={handleSaveEdit}
-                            onCancel={() => setEditingRow(null)}
+                            onCancel={closeAssessmentEditor}
+                            onFieldsChange={setEditHasUnsavedChanges}
                             triggerBanner={showMessage}
                             availableVariants={editVariants}
                             defaultSelectedVariantIds={editingRow.variant_ids}
@@ -1885,6 +1902,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     )}
                 </ModalShell>
             )}
+
+            <ConfirmationModal
+                isOpen={showDiscardEditConfirmation}
+                title="Discard assessment changes?"
+                message="Your unsaved assessment changes will be lost."
+                confirmText="Discard changes"
+                cancelText="Keep editing"
+                onConfirm={discardAssessmentEdit}
+                onCancel={() => setShowDiscardEditConfirmation(false)}
+            />
         </div>
     );
 }
