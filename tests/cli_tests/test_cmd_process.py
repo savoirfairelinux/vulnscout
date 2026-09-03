@@ -446,6 +446,30 @@ class TestCmdProcessCoverage:
                 _run_main()
         mock_pt.assert_not_called()
 
+    def test_run_main_match_condition_skips_post_treatment(self, app, monkeypatch):
+        monkeypatch.setenv("MATCH_CONDITION", "cvss > 5")
+        with patch("src.bin.cmd_process.post_treatment") as post_treatment_call, \
+             patch("src.bin.cmd_process.read_inputs"), \
+             patch("src.bin.cmd_process.populate_observations"), \
+             patch("src.bin.cmd_process._evaluate_condition_in_scope", return_value=[]):
+            with app.app_context():
+                from src.bin.cmd_process import _run_main
+                _run_main()
+
+        post_treatment_call.assert_not_called()
+
+    def test_run_main_match_condition_preserves_explicit_refresh(self, app, monkeypatch):
+        monkeypatch.setenv("MATCH_CONDITION", "cvss > 5")
+        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh, \
+             patch("src.bin.cmd_process.read_inputs"), \
+             patch("src.bin.cmd_process.populate_observations"), \
+             patch("src.bin.cmd_process._evaluate_condition_in_scope", return_value=[]):
+            with app.app_context():
+                from src.bin.cmd_process import _run_main
+                _run_main(refresh_vulnerability_data=True)
+
+        refresh.assert_called_once()
+
     def test_run_main_json_cache_write_exception_swallowed(self, app, monkeypatch):
         """IO error writing JSON cache is silently swallowed (lines 360-361)."""
         import json as _json_mod
