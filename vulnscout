@@ -61,8 +61,7 @@ Commands without --project or --variant:
     --dev                           Mount local src/ and start the frontend dev server
     --serve                         Run scan then start web UI (port 7275)
 
-    Reports and assets:
-    --report <template|path>        Generate a report from a template
+    Report assets:
     --add-asset <path>              Stage an image asset for report templates
 
     Data maintenance:
@@ -86,6 +85,10 @@ Commands without --project or --variant:
     --config <key> <value>          Set a config value
     --config-list                   Show current configuration
     --config-clear <key>            Remove a config key
+
+Report generation by project (uses "default" if --project is omitted):
+    --report <template|path>        Generate a report from a template
+                                    Includes all variants in the selected project
 
 Commands with optional --project and --variant (uses "default" project and variant if not specified):
 

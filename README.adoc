@@ -248,6 +248,7 @@ export GRYPE_MEMLIMIT=24GiB
 ===  Generating Reports
 
 Reports are generated from AsciiDoc templates. VulnScout ships with built-in templates and also supports custom ones.
+Reports include every variant in one project. Use `--project` to select it; when omitted, the `default` project is used.
 
 [source,shell]
 ----
@@ -257,8 +258,8 @@ Reports are generated from AsciiDoc templates. VulnScout ships with built-in tem
 # Generate a match-condition report (lists vulnerabilities that triggered the condition)
 ./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
 
-# Register a custom template permanently in the container and generate a report from it
-./vulnscout --report /path/to/my-custom-report.adoc
+# Register a custom template permanently in the container and generate a report
+./vulnscout --project demo --report /path/to/my-custom-report.adoc
 
 # Then generate a report from it by name
 ./vulnscout --project demo --report my-custom-report.adoc

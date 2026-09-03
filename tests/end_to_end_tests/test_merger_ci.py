@@ -431,14 +431,83 @@ def test_export_command_openvex(app, tmp_path):
 
 def test_report_command_txt_template(app, tmp_path):
     """flask report renders vulnerability_summary.txt to output dir (lines 497-504)."""
+    _run_main()
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
+        ])
+    assert result.exit_code == 0, result.output
+    report = (tmp_path / "vulnerability_summary.txt").read_text()
+    assert "CVE-2020-35492" in report
+
+
+def test_report_command_project_scope(app, tmp_path):
+    """A project report contains data from that project's variants only."""
+    from src.extensions import db as database
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    _run_main()
+    with app.app_context():
+        project = Project.create("EmptyReportProject")
+        Variant.create("empty-variant", project.id)
+        database.session.commit()
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", project.name,
+        ])
+
+    assert result.exit_code == 0, result.output
+    report = (tmp_path / "vulnerability_summary.txt").read_text()
+    assert "Total Vulnerabilities: 0" in report
+    assert "CVE-2020-35492" not in report
+
+
+def test_report_command_requires_project(app, tmp_path):
+    """A report cannot silently broaden its scope to every project."""
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "report", "vulnerability_summary.txt",
             "--output-dir", str(tmp_path),
         ])
-    assert result.exit_code == 0, result.output
-    assert (tmp_path / "vulnerability_summary.txt").exists()
+
+    assert result.exit_code != 0
+    assert "Missing option '--project'" in result.output
+
+
+def test_report_command_rejects_unknown_project(app, tmp_path):
+    """Invalid report scope fails rather than broadening the exported data."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", "missing",
+        ])
+
+    assert result.exit_code != 0
+    assert "project 'missing' not found" in result.output
+
+
+def test_report_command_does_not_accept_variant_scope(app, tmp_path):
+    """This change adds project-wide reports, not per-variant reports."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+        ])
+
+    assert result.exit_code != 0
+    assert "No such option '--variant'" in result.output
 
 
 def test_report_command_nonexistent_template(app, tmp_path):
@@ -448,6 +517,7 @@ def test_report_command_nonexistent_template(app, tmp_path):
         result = runner.invoke(args=[
             "report", "does_not_exist.txt",
             "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
         ])
     # Should complete without raising, warning printed to stderr
     assert "does_not_exist.txt" in result.output or result.exit_code == 0
@@ -461,6 +531,7 @@ def test_report_command_with_extra_template_env(app, tmp_path, monkeypatch):
         result = runner.invoke(args=[
             "report", "vulnerability_summary.txt",
             "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
         ])
     assert result.exit_code == 0, result.output
 
@@ -477,6 +548,7 @@ def test_report_command_with_match_condition_cache(app, tmp_path, monkeypatch):
             result = runner.invoke(args=[
                 "report", "vulnerability_summary.txt",
                 "--output-dir", str(tmp_path),
+                "--project", _PROJECT_NAME,
             ])
         assert result.exit_code == 0, result.output
     finally:
