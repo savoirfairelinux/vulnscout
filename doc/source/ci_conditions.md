@@ -83,6 +83,7 @@ The following tokens are evaluated per vulnerability:
 | `effort` | number / boolean | The "most likely" estimation of time needed to fix the vulnerability. Expressed in seconds. Evaluates to `false` when no estimate is set. |
 | `effort_min` | number | The "optimistic" estimation of time needed to fix the vulnerability. Expressed in seconds. |
 | `effort_max` | number | The "pessimistic" estimation of time needed to fix the vulnerability. Expressed in seconds. |
+| `known_exploitable` | boolean | Whether ENISA EUVD lists the vulnerability as known exploitable. |
 | `fixed` | boolean | Whether the vulnerability status is fixed. |
 | `ignored` | boolean | Whether the vulnerability status is ignored / not_affected. |
 | `affected` | boolean | Whether the vulnerability is affecting the project. |
@@ -103,6 +104,11 @@ cvss >= 9.0
 **Fail if any vulnerability is critical or has both high CVSS and EPSS scores:**
 ```
 cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)
+```
+
+**Fail if a vulnerability is critical, has both high CVSS and EPSS scores, or is known exploitable and unresolved:**
+```
+((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) or known_exploitable and (pending or affected))
 ```
 
 **Fail if any vulnerability was not reviewed by a human yet:**
