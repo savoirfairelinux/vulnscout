@@ -12,6 +12,8 @@ Evaluate and enforce conditions on vulnerabilities within a project.
 
 The `vulnscout` command can optionally accept a `--match-condition CONDITION` argument that causes the command to exit with code **2** if the specified condition is met by any vulnerability in scope.
 
+The condition uses vulnerability data already stored by VulnScout. It does not automatically refresh EPSS or other provider data. Add `--refresh-vulnerability-data` to the same command when the condition must use current enrichment data.
+
 The scope is selected as follows:
 
 - With no `--project` or `--variant`, the condition is evaluated for the `default/default` project and variant.
