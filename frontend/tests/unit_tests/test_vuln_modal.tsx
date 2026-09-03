@@ -2011,7 +2011,7 @@ describe('Vulnerability Modal', () => {
         expect(placeholder).toBeInTheDocument();
     });
 
-    test('assessment without status notes shows placeholder', async () => {
+    test('assessment without status notes omits the field', async () => {
         const vulnWithAssessment = {
             ...vulnerability,
             assessments: [{
@@ -2033,12 +2033,11 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // Should show placeholder for missing status notes
-        const placeholder = screen.getByText(/no status notes/i);
-        expect(placeholder).toBeInTheDocument();
+        expect(screen.queryByText(/no status notes/i)).not.toBeInTheDocument();
+        expect(screen.getByText(/update dependency/i)).toBeInTheDocument();
     });
 
-    test('assessment without workaround shows placeholder', async () => {
+    test('assessment without workaround omits the field', async () => {
         const vulnWithAssessment = {
             ...vulnerability,
             assessments: [{
@@ -2060,9 +2059,34 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // Should show placeholder for missing workaround
-        const placeholder = screen.getByText(/no workaround available/i);
-        expect(placeholder).toBeInTheDocument();
+        expect(screen.queryByText(/no workaround available/i)).not.toBeInTheDocument();
+        expect(screen.getByText(/some notes/i)).toBeInTheDocument();
+    });
+
+    test('assessment sentinel notes and workaround are omitted', () => {
+        const vulnWithAssessment = {
+            ...vulnerability,
+            assessments: [{
+                id: 'sentinel-assessment',
+                vuln_id: vulnerability.id,
+                packages: vulnerability.packages,
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: '',
+                impact_statement: 'confirmed impact',
+                status_notes: 'No Status Notes',
+                workaround: ' no workaround available ',
+                timestamp: new Date().toISOString(),
+                origin: 'custom',
+                responses: [],
+            }]
+        };
+
+        render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(screen.getByText(/confirmed impact/i)).toBeInTheDocument();
+        expect(screen.queryByText(/no status notes/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/no workaround available/i)).not.toBeInTheDocument();
     });
 
     test('renders empty CVSS array', async () => {
@@ -2594,10 +2618,42 @@ describe('Vulnerability Modal', () => {
     test('renders pending AI review panel at all times, with approve and reject actions only in edit mode', async () => {
         renderWithPendingAiAssessment();
 
-        expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
+        const aiPanel = (await screen.findByText(/AI-generated/i)).closest('.mb-6');
+        expect(aiPanel).toBeInTheDocument();
         expect(screen.getByText(/Pending review/i)).toBeInTheDocument();
+        expect(aiPanel).toHaveTextContent('ai notes');
+        expect(aiPanel).toHaveTextContent('ai workaround');
         expect(screen.queryByRole('button', { name: /Approve/i })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
+    });
+
+    test('pending AI review omits sentinel status notes and workaround', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([{
+                    ...pendingAiAssessment,
+                    status_notes: 'no status notes',
+                    workaround: 'no workaround available',
+                }]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{ ...vulnerability, assessments: [] }}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
+        expect(screen.getByText('ai impact statement')).toBeInTheDocument();
+        expect(screen.queryByText(/no status notes/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/no workaround available/i)).not.toBeInTheDocument();
     });
 
     test('approving an ungrouped pending AI review promotes it to a group, then calls approveAiGroup', async () => {

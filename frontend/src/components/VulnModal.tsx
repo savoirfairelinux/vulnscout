@@ -50,6 +50,14 @@ type Props = {
 // How long the inline "Copied" confirmation stays next to a copy button.
 const COPIED_FEEDBACK_MS = 2000;
 
+const hasAvailableAssessmentText = (
+    value: string | null | undefined,
+    unavailableText: string
+): boolean => {
+    const normalizedValue = value?.trim().toLowerCase();
+    return Boolean(normalizedValue && normalizedValue !== unavailableText);
+};
+
 const dt_options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
     month: 'long',
@@ -1944,6 +1952,8 @@ type VariantScopedSnapshot = {
                                 {aiGroups.map(group => {
                                     const groupKey = group.group_id ?? group.assessment_ids[0];
                                     const firstTarget = group.targets[0];
+                                    const hasStatusNotes = hasAvailableAssessmentText(group.status_notes, 'no status notes');
+                                    const hasWorkaround = hasAvailableAssessmentText(group.workaround, 'no workaround available');
                                     return (
                                         <div
                                             key={`ai-${encodeURIComponent(groupKey)}`}
@@ -2019,11 +2029,13 @@ type VariantScopedSnapshot = {
                                                 {group.simplified_status}
                                                 {group.justification && <> - {group.justification}</>}
                                             </h3>
-                                            <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                                {group.impact_statement && <>{group.impact_statement}<br/></>}
-                                                {group.status_notes || 'no status notes'}<br/>
-                                                {group.workaround || 'no workaround available'}
-                                            </p>
+                                            {(group.impact_statement || hasStatusNotes || hasWorkaround) && (
+                                                <p className="text-base font-normal text-gray-300 whitespace-pre-line">
+                                                    {group.impact_statement && <>{group.impact_statement}<br/></>}
+                                                    {hasStatusNotes && <>{group.status_notes}<br/></>}
+                                                    {hasWorkaround && group.workaround}
+                                                </p>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -2034,6 +2046,8 @@ type VariantScopedSnapshot = {
                                     const firstId = group.assessment_ids[0];
                                     const isNewlyAdded = group.assessment_ids.some(id => newAssessmentIds.has(id));
                                     const isBeingEdited = editingAssessmentId === firstId;
+                                    const hasStatusNotes = hasAvailableAssessmentText(group.status_notes, 'no status notes');
+                                    const hasWorkaround = hasAvailableAssessmentText(group.workaround, 'no workaround available');
                                     const groupPackages = [...new Set(group.targets.map(t => t.package))];
                                     // Build a synthetic Assessment for EditAssessment, which still expects
                                     // one Assessment object rather than a group.
@@ -2124,12 +2138,12 @@ type VariantScopedSnapshot = {
                                                             )}
                                                         </div>
                                                     </h3>
-                                                    {!isBeingEdited && (
+                                                    {!isBeingEdited && (group.impact_statement || group.status === 'not_affected' || hasStatusNotes || hasWorkaround) && (
                                                         <p className="text-base font-normal text-gray-300 whitespace-pre-line">
                                                             {group.impact_statement && <>{group.impact_statement}<br/></>}
                                                             {!group.impact_statement && group.status == 'not_affected' && <>no impact statement<br/></>}
-                                                            {group.status_notes || 'no status notes'}<br/>
-                                                            {group.workaround || 'no workaround available'}
+                                                            {hasStatusNotes && <>{group.status_notes}<br/></>}
+                                                            {hasWorkaround && group.workaround}
                                                         </p>
                                                     )}
                                                 </div>
