@@ -66,7 +66,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--export-custom-openvex-assessments` | Export custom assessments for the selected `--variant` as an OpenVEX `.json` file |
 | `--import-custom-openvex-assessments <path>` | Import an OpenVEX `.json` file into the selected `--variant` |
 | `--use-current-timestamps` | With either custom import, use the current system time |
-| `--match-condition <expr>` | Exit with code 2 if expression matches any in-scope vulnerability. A project without a variant includes all its variants. Incompatible with `--serve` |
+| `--match-condition <expr>` | Exit with code 2 if expression matches stored data for any in-scope vulnerability; it does not refresh EPSS. A project without a variant includes all its variants. Incompatible with `--serve` |
 | `--delete-scan <id>` | Delete a past scan by its ID |
 
 ### Data Retrieval Commands
