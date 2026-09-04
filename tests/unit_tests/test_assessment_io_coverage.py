@@ -119,15 +119,14 @@ class TestBuildCustomDataExport:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="custom",
             )
             db.session.commit()
 
             result = build_custom_data_export(variant_ids=[var.id])
 
-        assert result["version"] == 1
+        assert result["version"] == 2
         assert len(result["assessments"]) == 1
         # variant name should be resolved on the exported assessment
         assert result["assessments"][0]["variant"] == "io-cov-var"
@@ -147,8 +146,7 @@ class TestBuildCustomDataExport:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="ai",
             )
 
@@ -167,6 +165,9 @@ class TestBuildCustomDataExport:
             "packages": ["ai-pkg@1.0.0"],
             "variant_id": str(var.id),
             "variant": "io-cov-var",
+            "targets": [
+                {"variant_id": str(var.id), "variant": "io-cov-var", "package": "ai-pkg@1.0.0"},
+            ],
         }]
 
 

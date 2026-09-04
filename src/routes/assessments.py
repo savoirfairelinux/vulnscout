@@ -9,7 +9,7 @@ from typing import Any, Literal, overload
 from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
-from ..models.assessment_group_member import AssessmentGroupMember, GroupInvariantError
+from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -35,6 +35,7 @@ from ._assessment_group import (
     index_group_rows,
     parse_reconcile_payload,
     resolve_package,
+    resolve_target_set,
     resolve_targets,
     validate_assessment_findings,
     validate_deletions,
@@ -73,7 +74,7 @@ def _is_scanner_author(author: str | None) -> bool:
 def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
     """True if a pending AI assessment already exists for this (vuln, variant)."""
     for a in DBAssessment.get_by_vulnerability(vuln_id):
-        if a.origin == "ai" and a.variant_id == variant_id:
+        if a.origin == "ai" and a.covers_variant(variant_id):
             return True
     return False
 
@@ -83,20 +84,15 @@ def _resolve_pending_ai_rows(
 ) -> "tuple[list[DBAssessment], ResponseReturnValue | None]":
     """Resolve the rows a legacy approve/reject request applies to.
 
-    The addressed assessment must be a pending AI row.  Approval and rejection
-    are group-wide operations, so the whole group is returned when the row
-    belongs to one; an ungrouped row is its own single-member group.
+    The addressed assessment must be a pending AI row. A group is an
+    assessment, so the group this row belongs to is just the row itself.
     """
     existing = DBAssessment.get_by_id(assessment_id)
     if existing is None:
         return [], ({"error": "Assessment not found"}, 404)
     if existing.origin != "ai":
         return [], ({"error": "Not a pending AI assessment"}, 400)
-    group_uuid = AssessmentGroupMember.get_group_id(existing.id)
-    rows = load_group(group_uuid) if group_uuid is not None else [existing]
-    if any(row.origin != "ai" for row in rows):
-        return [], ({"error": "Not a pending AI group"}, 400)
-    return rows, None
+    return [existing], None
 
 
 def _approve_rows(rows: "list[DBAssessment]") -> ResponseReturnValue:
@@ -162,7 +158,7 @@ def init_app(app: Flask) -> None:
             ranked = (
                 db.select(
                     DBAssessment.id.label("id"),
-                    DBAssessment.variant_id.label("variant_id"),
+                    AssessmentTarget.variant_id.label("variant_id"),
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     Finding.vulnerability_id.label("vulnerability_id"),
@@ -172,20 +168,21 @@ def init_app(app: Flask) -> None:
                     func.row_number().over(
                         partition_by=(
                             Finding.vulnerability_id,
-                            DBAssessment.variant_id,
+                            AssessmentTarget.variant_id,
                             Finding.package_id,
                         ),
                         order_by=(DBAssessment.timestamp.desc(), DBAssessment.id.desc()),
                     ).label("assessment_rank"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                .join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .join(Finding, AssessmentTarget.finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                ranked = ranked.where(DBAssessment.variant_id.in_(variant_ids))
+                ranked = ranked.where(AssessmentTarget.variant_id.in_(variant_ids))
             ranked = ranked.subquery()
             query = (
                 db.select(
@@ -204,33 +201,45 @@ def init_app(app: Flask) -> None:
         else:
             query = (
                 db.select(
-                    DBAssessment.id,
-                    DBAssessment.source,
-                    DBAssessment.origin,
-                    DBAssessment.variant_id,
-                    DBAssessment.timestamp,
-                    DBAssessment.status,
-                    DBAssessment.status_notes,
-                    DBAssessment.justification,
-                    DBAssessment.impact_statement,
-                    DBAssessment.responses,
-                    DBAssessment.workaround,
-                    Finding.vulnerability_id,
-                    Package.name,
-                    Package.version,
-                    Package.supplier,
+                    DBAssessment.id.label("id"),
+                    DBAssessment.source.label("source"),
+                    DBAssessment.origin.label("origin"),
+                    AssessmentTarget.variant_id.label("variant_id"),
+                    DBAssessment.timestamp.label("timestamp"),
+                    DBAssessment.status.label("status"),
+                    DBAssessment.status_notes.label("status_notes"),
+                    DBAssessment.justification.label("justification"),
+                    DBAssessment.impact_statement.label("impact_statement"),
+                    DBAssessment.responses.label("responses"),
+                    DBAssessment.workaround.label("workaround"),
+                    Finding.vulnerability_id.label("vulnerability_id"),
+                    Package.name.label("name"),
+                    Package.version.label("version"),
+                    Package.supplier.label("supplier"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                .join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .join(Finding, AssessmentTarget.finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
-                .order_by(DBAssessment.timestamp)
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                query = query.where(DBAssessment.variant_id.in_(variant_ids))
+                query = query.where(AssessmentTarget.variant_id.in_(variant_ids))
+            # A multi-target assessment fans out to one row per target here.
+            # Unlike compact (one entry per target by design), this branch's
+            # consumers key by assessment id and expect exactly one record per
+            # assessment, so the targets are folded back together below rather
+            # than ranked: keeping a single representative would drop the
+            # other packages and variants from the response entirely.
+            query = query.order_by(
+                DBAssessment.timestamp,
+                DBAssessment.id,
+                AssessmentTarget.variant_id,
+                AssessmentTarget.finding_id,
+            )
 
-        full_result: list[AssessmentDict] = []
+        full_by_id: dict[str, AssessmentDict] = {}
         compact_result: list[CompactAssessment] = []
         for row in db.session.execute(query):
             package_id = ""
@@ -252,23 +261,54 @@ def init_app(app: Flask) -> None:
                     row.status or "",
                 ])
                 continue
-            full_result.append({
-                "id": str(row.id),
-                "source": row.source or "",
-                "origin": row.origin or "sbom",
-                "vuln_id": row.vulnerability_id or "",
-                "packages": [package_id] if package_id else [],
-                "variant_id": str(row.variant_id) if row.variant_id else None,
-                "timestamp": timestamp,
-                "last_update": timestamp or "",
-                "status": row.status or "",
-                "status_notes": row.status_notes or "",
-                "justification": row.justification or "",
-                "impact_statement": row.impact_statement or "",
-                "responses": list(row.responses or []),
-                "workaround": row.workaround or "",
-            })
-        return compact_result if compact else full_result
+            assessment_id = str(row.id)
+            entry = full_by_id.get(assessment_id)
+            if entry is None:
+                entry = {
+                    "id": assessment_id,
+                    "source": row.source or "",
+                    "origin": row.origin or "sbom",
+                    "vuln_id": row.vulnerability_id or "",
+                    "packages": [],
+                    "variant_id": None,
+                    "variant_ids": [],
+                    "targets": [],
+                    "timestamp": timestamp,
+                    "last_update": timestamp or "",
+                    "status": row.status or "",
+                    "status_notes": row.status_notes or "",
+                    "justification": row.justification or "",
+                    "impact_statement": row.impact_statement or "",
+                    "responses": list(row.responses or []),
+                    "workaround": row.workaround or "",
+                }
+                full_by_id[assessment_id] = entry
+            if package_id and package_id not in entry["packages"]:
+                entry["packages"].append(package_id)
+            variant_id = str(row.variant_id) if row.variant_id else None
+            if variant_id and variant_id not in entry["variant_ids"]:
+                entry["variant_ids"].append(variant_id)
+            # The pair, kept alongside the two flattened sets: those describe
+            # the cross-product, which a sparse target set is not.
+            if package_id and variant_id:
+                pair = {"variant_id": variant_id, "package": package_id}
+                if pair not in entry["targets"]:
+                    entry["targets"].append(pair)
+
+        if compact:
+            return compact_result
+
+        for entry in full_by_id.values():
+            entry["variant_ids"].sort()
+            entry["targets"].sort(key=lambda t: (t["variant_id"], t["package"]))
+            # ``variant_id`` stays for backward compatibility and keeps the
+            # meaning ``Assessment.to_dict`` gives it: the one variant every
+            # target shares, or None for a genuine cross-variant assessment.
+            # Consumers that need the full scope read ``variant_ids``.
+            entry["variant_id"] = (
+                entry["variant_ids"][0] if len(entry["variant_ids"]) == 1 else None
+            )
+        return list(full_by_id.values())
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
@@ -356,7 +396,6 @@ def init_app(app: Flask) -> None:
         vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
 
         assessments_serialized = []
-        DBAssessment.preload_group_ids(assessments)
         for a in assessments:
             a_ser = a.to_dict()
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
@@ -418,7 +457,8 @@ def init_app(app: Flask) -> None:
 
         author = request.args.get('author', 'Savoir-faire Linux')
         import json
-        json_data = json.dumps(build_openvex_doc(handmade, author), indent=2)
+        json_data = json.dumps(
+            build_openvex_doc(handmade, author, variant_ids=[variant_uuid]), indent=2)
         filename = re.sub(r"[^\w\-.]", "_", variant.name)
         return json_data, 200, {
             "Content-Type": "application/json",
@@ -807,6 +847,7 @@ def init_app(app: Flask) -> None:
             current = build_openvex_doc(
                 handmade,
                 request.form.get('author', existing.get('author', 'Savoir-faire Linux')),
+                variant_ids=variant_ids,
             )
         else:
             current = build_custom_data_export(variant_ids)
@@ -929,12 +970,17 @@ def init_app(app: Flask) -> None:
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         rows = []
+        seen_ids: set[UUID] = set()
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
-                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                if a.id in seen_ids:
                     continue
+                if project_variant_ids is not None and not any(
+                    t.variant_id in project_variant_ids for t in a.target_rows
+                ):
+                    continue
+                seen_ids.add(a.id)
                 rows.append(a)
-        DBAssessment.preload_group_ids(rows)
         assessments = [a.to_dict() for a in rows]
         annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
@@ -963,10 +1009,16 @@ def init_app(app: Flask) -> None:
             ).scalars())
 
         rows = []
+        seen_ids: set[UUID] = set()
         for finding in Finding.get_by_vulnerability(vuln_id):
             for a in DBAssessment.get_by_finding(finding.id):
-                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                if a.id in seen_ids:
                     continue
+                if project_variant_ids is not None and not any(
+                    t.variant_id in project_variant_ids for t in a.target_rows
+                ):
+                    continue
+                seen_ids.add(a.id)
                 rows.append(a)
         return build_groups(rows), 200
 
@@ -1030,13 +1082,6 @@ def init_app(app: Flask) -> None:
         try:
             with batch_session():
                 result = apply_reconcile(req, rows, targets)
-                created_ids = [UUID(a["id"]) for a in result["created"]]
-                if created_ids:
-                    # Every new row joins the group being edited; the group
-                    # id never changes and is never dissolved, even if the
-                    # edit leaves only one member.
-                    AssessmentGroupMember.create_group(
-                        created_ids, group_id=group_uuid, commit=False)
         except GroupInvariantError as e:
             return {"error": str(e)}, 400
         except Exception as e:
@@ -1064,13 +1109,21 @@ def init_app(app: Flask) -> None:
         response 200 JsonArray Assessment groups for review.
         """
         query = select(DBAssessment)
+        # The variant/project filters below match against the joined target
+        # rather than the assessment; joining once and adding .distinct()
+        # keeps the one-row-per-assessment shape build_groups() expects even
+        # though the join fans out to one row per matching target.
+        joined_targets = False
         variant_ids: list[UUID] | None = None
         variant_id = request.args.get('variant_id')
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            query = query.where(DBAssessment.variant_id == variant_uuid)
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id == variant_uuid)
             variant_ids = [variant_uuid] if variant_uuid else None
 
         project_id = request.args.get('project_id')
@@ -1079,12 +1132,18 @@ def init_app(app: Flask) -> None:
             if err:
                 return err
             project_variant_ids = [v.id for v in DBVariant.get_by_project(project_uuid)] if project_uuid else []
-            query = query.where(DBAssessment.variant_id.in_(project_variant_ids))
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id.in_(project_variant_ids))
             variant_ids = project_variant_ids
 
         origin = request.args.get('origin')
         if origin:
             query = query.where(DBAssessment.origin == origin)
+
+        if joined_targets:
+            query = query.distinct()
 
         assessments = list(db.session.execute(query).scalars())
         groups = build_groups(assessments)
@@ -1217,7 +1276,8 @@ def init_app(app: Flask) -> None:
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:
-        """Create one or more custom assessments for a vulnerability.
+        """Create one custom assessment for a vulnerability, across every
+        selected (package, variant) combo.
 
         OpenAPI:
         body JsonObject optional Assessment creation payload.
@@ -1242,25 +1302,34 @@ def init_app(app: Flask) -> None:
         if not isinstance(assessment, DBAssessment):
             return {"error": "Internal error"}, 500
 
-        # Resolve variant_id once — same for all packages in this request
-        variant_id_raw = payload_data.get('variant_id') or None
-        if not variant_id_raw:
+        # Resolve the effective variant id list: variant_ids (plural) takes
+        # priority when present; otherwise fall back to the legacy singular
+        # variant_id wrapped in a one-element list.
+        raw_variant_ids = payload_data.get("variant_ids")
+        if not (isinstance(raw_variant_ids, list) and raw_variant_ids):
+            single = payload_data.get("variant_id") or None
+            raw_variant_ids = [single] if single else []
+        if not raw_variant_ids:
             return {"error": "variant_id is required"}, 400
-        variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-        if err:
-            return err
-        if variant_id is None:
-            return {"error": "Invalid variant_id"}, 400
+
+        variant_ids: list[UUID] = []
+        for raw in raw_variant_ids:
+            parsed, err = parse_uuid_or_400(raw, "variant_id")
+            if err:
+                return err
+            if parsed is None:
+                return {"error": "Invalid variant_id"}, 400
+            variant_ids.append(parsed)
 
         ai_generated = bool(payload_data.get("ai_generated"))
         target_origin = "ai" if ai_generated else "custom"
-        if ai_generated and _has_pending_ai(vuln_id, variant_id):
+        if ai_generated and any(_has_pending_ai(vuln_id, vid) for vid in variant_ids):
             return {"error": "A pending AI assessment already exists for this variant"}, 409
 
-        # Persist to DB — one Assessment record per package
-        # Use a single timestamp so grouped rows share the exact same value.
-        # Prefer the timestamp from the payload (allows frontend to synchronise
-        # across multiple requests); fall back to server time.
+        # Use a single timestamp so the created row's own targets (and any
+        # sibling row a caller correlates by timestamp) share the exact same
+        # value. Prefer the timestamp from the payload (allows frontend to
+        # synchronise across multiple requests); fall back to server time.
         from datetime import datetime as _dt, timezone as _tz
         shared_timestamp = getattr(assessment, 'timestamp', None) or _dt.now(_tz.utc)
 
@@ -1280,13 +1349,11 @@ def init_app(app: Flask) -> None:
                 + ". Assessments can only be written for existing packages."
             }, 400
 
-        valid_findings, invalid_findings = validate_assessment_findings(
-            resolved_packages, vuln_id, variant_id
-        )
-        if invalid_findings:
+        resolved, unobserved = resolve_target_set(resolved_packages, vuln_id, variant_ids)
+        if unobserved:
             return {
                 "error": "Invalid package version for vulnerability and variant: "
-                + ", ".join(invalid_findings)
+                + ", ".join(unobserved)
             }, 400
 
         requested_group_id: UUID | None = None
@@ -1302,40 +1369,21 @@ def init_app(app: Flask) -> None:
                 if (existing_group_rows[0].vuln_id or "").upper() != vuln_id.upper():
                     return {"error": "vuln_id does not match this group's vulnerability"}, 400
 
-        created_rows = []
+        targets = [(variant_id, finding.id) for (_pkg, variant_id), finding in resolved.items()]
+
         try:
             with batch_session():
-                for db_pkg in resolved_packages:
-                    finding = valid_findings[db_pkg.id]
-                    # Always create a new record — never merge with an existing one.
-                    # from_vuln_assessment does a find-or-update which would overwrite
-                    # previous user assessments on the same (finding, variant).
-                    db_a = create_assessment_record(
-                        assessment, finding.id, variant_id, timestamp=shared_timestamp,
-                        origin=target_origin)
-                    created_rows.append(db_a)
-
-                # Membership is sparse: recorded only when this action produced
-                # several rows, or when it joins a group an earlier request in
-                # the same user action already created.
-                if len(created_rows) > 1 or requested_group_id is not None:
-                    AssessmentGroupMember.create_group(
-                        [row.id for row in created_rows],
-                        group_id=requested_group_id,
-                        commit=False,
-                    )
+                # Always create a new record — never merge with an existing
+                # one. from_vuln_assessment does a find-or-update which would
+                # overwrite previous user assessments on the same target set.
+                db_a = create_assessment_record(
+                    assessment, targets, timestamp=shared_timestamp, origin=target_origin)
         except GroupInvariantError as e:
             return {"error": str(e)}, 400
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
 
-        # Serialize after the membership rows are flushed so group_id is set.
-        DBAssessment.preload_group_ids(created_rows)
-        created = [row.to_dict() for row in created_rows]
-
-        if not created:
-            return {"error": "No valid package found"}, 400
-
+        created = [db_a.to_dict()]
         response_body = {"status": "success", "assessments": created, "assessment": created[0]}
         return response_body, 200
 
@@ -1438,33 +1486,22 @@ def init_app(app: Flask) -> None:
         results: list[AssessmentDict] = []
         try:
             with batch_session():
-                # A batch is one user action but may span several CVEs, several
-                # projects and several distinct contents.  Group by the group
-                # invariant — project, vulnerability, content and responses —
-                # never per request: fusing rows that differ on any of these
-                # would hide content on read and let one action delete or
-                # approve unrelated rows.
+                # A batch is one user action but may span several CVEs,
+                # several projects and several distinct contents. Each item
+                # creates exactly one row covering every package in that
+                # item; batching never fuses separate items together.
                 created_rows: list[DBAssessment] = []
                 for assessment, variant_id, item_packages, valid_findings in prepared:
-                    for db_pkg in item_packages:
-                        created_rows.append(create_assessment_record(
-                            assessment, valid_findings[db_pkg.id].id, variant_id,
-                            timestamp=getattr(assessment, "timestamp", None),
-                        ))
+                    item_targets = [
+                        (variant_id, valid_findings[db_pkg.id].id) for db_pkg in item_packages
+                    ]
+                    created_rows.append(create_assessment_record(
+                        assessment, item_targets,
+                        timestamp=getattr(assessment, "timestamp", None),
+                    ))
 
-                keys = AssessmentGroupMember.invariant_keys(
-                    [row.id for row in created_rows])
-                rows_by_key: dict[tuple, list[DBAssessment]] = {}
-                for row in created_rows:
-                    rows_by_key.setdefault(keys[row.id], []).append(row)
-
-                for key_rows in rows_by_key.values():
-                    if len(key_rows) > 1:
-                        AssessmentGroupMember.create_group(
-                            [row.id for row in key_rows], commit=False)
-
-                # Serialize after the membership rows are flushed so group_id is set.
-                DBAssessment.preload_group_ids(created_rows)
+                # group_id is the row's own id, so no preload step is needed
+                # to serialize it.
                 results = [row.to_dict() for row in created_rows]
         except Exception as e:
             return {
@@ -1502,11 +1539,14 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
-        if existing.finding is None or existing.variant_id is None or find_valid_finding(
-            existing.finding.package_id,
-            existing.finding.vulnerability_id,
-            existing.variant_id,
-        ) is None:
+        if not existing.target_rows or any(
+            find_valid_finding(
+                target.finding.package_id,
+                target.finding.vulnerability_id,
+                target.variant_id,
+            ) is None
+            for target in existing.target_rows
+        ):
             return {"error": "Assessment references a package version that is not valid for its variant"}, 400
 
         was_non_custom = (existing.origin or "") != "custom"
@@ -1704,13 +1744,15 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/<assessment_id>/group', methods=['POST'])
     def promote_assessment_to_group(assessment_id: str) -> ResponseReturnValue:
-        """Put a single assessment into a group, creating one if needed.
+        """Return the group an assessment belongs to.
 
-        Lazy creation: an assessment written on its own has no group until an
-        edit gives it a second target.
+        A group is an assessment, so every assessment already has one: its
+        own id. Kept as a POST, and kept idempotent, for compatibility with
+        clients that call this to lazily create a group before addressing
+        further writes at it.
 
         OpenAPI:
-        response 200 JsonObject The group id the assessment now belongs to.
+        response 200 JsonObject The group id the assessment belongs to.
         response 404 Error No such assessment.
         """
         assessment_uuid, err = parse_uuid_or_400(assessment_id, "assessment_id")
@@ -1721,11 +1763,7 @@ def init_app(app: Flask) -> None:
         row = DBAssessment.get_by_id(assessment_uuid)
         if row is None:
             return {"error": "Assessment not found"}, 404
-        existing = AssessmentGroupMember.get_group_id(assessment_uuid)
-        if existing is not None:
-            return {"group_id": str(existing)}, 200
-        return {"group_id": str(
-            AssessmentGroupMember.create_group([assessment_uuid]))}, 200
+        return {"group_id": str(row.id)}, 200
 
 
 def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":

@@ -6,12 +6,15 @@ import typing
 
 from ..extensions import db, Base
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import ForeignKey, UniqueConstraint, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
-    from ..models import Project, Scan, Assessment, TimeEstimate, Metrics
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.orm import Mapper
+
+    from ..models import Project, Scan, TimeEstimate, Metrics
     from .variant_context import VariantContext
 
 
@@ -31,10 +34,6 @@ class Variant(Base):
         back_populates="variants"
     )
     scans: Mapped[list["Scan"]] = relationship(
-        back_populates="variant",
-        cascade="all, delete-orphan"
-    )
-    assessments: Mapped[list["Assessment"]] = relationship(
         back_populates="variant",
         cascade="all, delete-orphan"
     )
@@ -124,3 +123,22 @@ class Variant(Base):
         """Delete this variant (and its scans via cascade) from the database."""
         db.session.delete(self)
         db.session.commit()
+
+
+@event.listens_for(Variant, "before_delete")
+def _reap_assessment_targets(
+    mapper: "Mapper[Variant]", connection: "Connection", variant: "Variant",
+) -> None:
+    """Drop the assessment targets pointing at a variant being deleted.
+
+    Left behind, these rows still surface through unfiltered reads
+    (``get_by_vulnerability``, the assessments API) pointing at a variant that
+    no longer exists.  An assessment that also targets other variants keeps
+    those and survives; see :func:`reap_targets` for the full rationale.
+
+    Registered as a mapper event rather than written into :meth:`delete` so it
+    also fires when a variant is removed through the project's ORM cascade.
+    """
+    from .assessment_target import AssessmentTarget, reap_targets
+
+    reap_targets(connection, AssessmentTarget.variant_id == variant.id)

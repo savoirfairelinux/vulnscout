@@ -564,14 +564,18 @@ class TestImportScan:
         assert first.get_json()["assessment_count"] == 1
 
         def variant_assessments():
+            from src.models.assessment_target import AssessmentTarget
+
             with app.app_context():
                 project = Project.get_by_name(payload["project_name"])
                 variant = Variant.get_by_name_and_project(
                     payload["variant_name"], project.id
                 )
                 return _db.session.execute(
-                    _db.select(Assessment).where(Assessment.variant_id == variant.id)
-                ).scalars().all()
+                    _db.select(Assessment)
+                    .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+                    .where(AssessmentTarget.variant_id == variant.id)
+                ).scalars().unique().all()
 
         assert len(variant_assessments()) == 1
 

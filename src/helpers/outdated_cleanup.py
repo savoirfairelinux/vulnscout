@@ -12,6 +12,7 @@ unreferenced everywhere.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from typing import Any, TypeVar, cast
 import uuid
@@ -21,6 +22,7 @@ from sqlalchemy.engine import CursorResult
 
 from ..extensions import db, write_lock
 from ..models.assessment import Assessment
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.metrics import Metrics
 from ..models.observation import Observation
@@ -135,36 +137,31 @@ def _stale_sbom_package_pairs(
 
 def _outdated_assessments() -> list[dict]:
     """Return custom assessment data matching the public staleness predicate."""
-    rows = db.session.execute(
-        db.select(
-            Assessment.id,
-            Assessment.origin,
-            Assessment.variant_id,
-            Assessment.finding_id,
-            Finding.vulnerability_id,
-            Package.name,
-            Package.version,
-            Package.supplier,
-        )
-        .outerjoin(Finding, Finding.id == Assessment.finding_id)
-        .outerjoin(Package, Package.id == Finding.package_id)
-        .where(Assessment.origin == "custom", Assessment.variant_id.is_not(None))
-    )
+    db_assessments = db.session.execute(
+        db.select(Assessment)
+        # Every assessment has at least one target row (Assessment.create
+        # refuses an empty target set), so "has a variant" is checked
+        # through that.  ``.any()`` is an EXISTS subquery, not a join, so it
+        # can't multiply rows here.
+        .where(Assessment.origin == "custom", Assessment.target_rows.any())
+    ).scalars().all()
     assessments: list[dict] = []
     ids_by_string: dict[str, uuid.UUID] = {}
-    for assessment_id, origin, variant_id, finding_id, vulnerability_id, name, version, supplier in rows:
-        package_id = f"{name}@{version}" if name is not None else ""
-        if package_id and supplier:
-            package_id += f"::{supplier}"
+    for assessment in db_assessments:
         assessments.append({
-            "id": str(assessment_id),
-            "origin": origin,
-            "variant_id": str(variant_id),
-            "finding_id": finding_id,
-            "vuln_id": vulnerability_id or "",
-            "packages": [package_id] if package_id else [],
+            "id": str(assessment.id),
+            "origin": assessment.origin,
+            # ``single_variant_id`` is the one variant every target shares,
+            # or None for a genuine cross-variant assessment — in which case
+            # annotate_assessments_outdated resolves variant(s) and packages
+            # from the AssessmentTarget rows instead.  Consumers must
+            # tolerate a None variant_id.
+            "variant_id": str(assessment.single_variant_id) if assessment.single_variant_id else None,
+            "finding_ids": [t.finding_id for t in assessment.target_rows],
+            "vuln_id": assessment.vuln_id,
+            "packages": list(assessment.packages),
         })
-        ids_by_string[str(assessment_id)] = assessment_id
+        ids_by_string[str(assessment.id)] = assessment.id
     annotate_assessments_outdated(assessments)
     return [
         {**assessment, "uuid": ids_by_string[assessment["id"]]}
@@ -213,7 +210,11 @@ def outdated_data_preview() -> dict[str, object]:
     assessments = _outdated_assessments()
     package_ids = {package_id for package_id, _ in package_pairs}
     variant_ids = {variant_id for _, variant_id in package_pairs}
-    variant_ids.update(uuid.UUID(assessment["variant_id"]) for assessment in assessments)
+    variant_ids.update(
+        uuid.UUID(assessment["variant_id"])
+        for assessment in assessments
+        if assessment["variant_id"] is not None
+    )
     package_labels: dict[uuid.UUID, str] = {}
     for package_id_chunk in _chunked(package_ids):
         package_labels.update({
@@ -354,7 +355,9 @@ def _delete_orphaned_findings(finding_ids: set[uuid.UUID]) -> tuple[int, set[str
                 db.select(Finding.id, Finding.vulnerability_id)
                 .where(Finding.id.in_(finding_id_chunk))
                 .where(~Finding.observations.any())
-                .where(~Finding.assessments.any())
+                # A finding held only by a multi-target assessment is still
+                # referenced, so reachability runs through assessment_targets.
+                .where(~Finding.assessment_targets.any())
                 .where(~Finding.time_estimates.any())
             ).all()
         )
@@ -362,6 +365,41 @@ def _delete_orphaned_findings(finding_ids: set[uuid.UUID]) -> tuple[int, set[str
     vulnerability_ids = {row[1] for row in rows}
     _delete_in_chunks(Finding, Finding.id, ids)
     return len(ids), vulnerability_ids
+
+
+def remove_target(assessment_id: uuid.UUID, variant_id: uuid.UUID, finding_id: uuid.UUID) -> bool:
+    """Remove one ``(variant, finding)`` target from an assessment.
+
+    The assessment itself is deleted when this was its last remaining target:
+    with no targets left it is unreachable by design (``Assessment.create``
+    refuses to create one with an empty target set), so leaving it behind
+    would be a leak.  Goes through the ORM ``target_rows`` collection rather
+    than a bulk statement so the ``cascade="all, delete-orphan"`` on
+    ``Assessment.target_rows`` fires normally — raw SQL wouldn't cascade,
+    since sqlite ``foreign_keys`` stay off in this application.
+
+    Returns False when the assessment or the target is not found.
+    """
+    assessment = db.session.get(Assessment, assessment_id)
+    if assessment is None:
+        return False
+    target_row = next(
+        (
+            t for t in assessment.target_rows
+            if t.variant_id == variant_id and t.finding_id == finding_id
+        ),
+        None,
+    )
+    if target_row is None:
+        return False
+    assessment.target_rows.remove(target_row)
+    if not assessment.target_rows:
+        db.session.delete(assessment)
+    # Flush so a caller checking db.session.get(Assessment, assessment_id)
+    # right after this call sees the deletion immediately, rather than only
+    # once the enclosing transaction commits.
+    db.session.flush()
+    return True
 
 
 def _delete_orphaned_vulnerabilities(vulnerability_ids: set[str]) -> int:
@@ -405,6 +443,76 @@ def _delete_orphaned_packages(package_pairs: set[StalePackagePair]) -> int:
     return len(ids)
 
 
+def _split_outdated_by_target(
+    outdated_assessments: list[dict],
+) -> tuple[list[uuid.UUID], list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]]:
+    """Split outdated assessments into whole-record and per-target deletions.
+
+    ``annotate_assessments_outdated`` flags an assessment as soon as *one* of
+    its package names is superseded, but an assessment now covers many
+    ``(variant, finding)`` targets.  Deleting the whole record would throw away
+    the analyst's verdict for the targets that are still current, so the stale
+    targets are identified individually here.
+
+    Returns ``(fully_stale_assessment_ids, stale_targets)`` where the first
+    list holds assessments whose every target is superseded (safe to delete
+    outright, which also keeps the behaviour of the single-target era) and the
+    second holds the ``(assessment_id, variant_id, finding_id)`` triples to
+    strip from assessments that survive.
+    """
+    ids = [assessment["uuid"] for assessment in outdated_assessments]
+    if not ids:
+        return [], []
+
+    stale_pairs: dict[uuid.UUID, set[tuple[uuid.UUID, str]]] = {}
+    for assessment in outdated_assessments:
+        pairs: set[tuple[uuid.UUID, str]] = set()
+        for target in assessment.get("stale_targets") or []:
+            try:
+                pairs.add((uuid.UUID(target["variant_id"]), target["package_name"]))
+            except (ValueError, AttributeError, TypeError, KeyError):
+                continue
+        stale_pairs[assessment["uuid"]] = pairs
+
+    # Every target of every outdated assessment, with the package name the
+    # staleness verdict was keyed on.
+    all_targets: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, str]]] = defaultdict(list)
+    for id_chunk in _chunked(ids):
+        for assessment_id, variant_id, finding_id, name in db.session.execute(
+            db.select(
+                AssessmentTarget.assessment_id, AssessmentTarget.variant_id,
+                AssessmentTarget.finding_id, Package.name,
+            )
+            .join(Finding, Finding.id == AssessmentTarget.finding_id)
+            .join(Package, Package.id == Finding.package_id)
+            .where(AssessmentTarget.assessment_id.in_(id_chunk))
+        ):
+            all_targets[assessment_id].append((variant_id, finding_id, name))
+
+    fully_stale: list[uuid.UUID] = []
+    partial: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
+    for assessment_id in ids:
+        targets = all_targets.get(assessment_id, [])
+        pairs = stale_pairs.get(assessment_id, set())
+        # No resolvable targets, or no per-target detail to act on: fall back
+        # to deleting the record, matching the pre-multi-target behaviour.
+        if not targets or not pairs:
+            fully_stale.append(assessment_id)
+            continue
+        stale = [
+            (variant_id, finding_id)
+            for variant_id, finding_id, name in targets
+            if (variant_id, name) in pairs
+        ]
+        if len(stale) >= len(targets):
+            fully_stale.append(assessment_id)
+            continue
+        partial.extend(
+            (assessment_id, variant_id, finding_id) for variant_id, finding_id in stale
+        )
+    return fully_stale, partial
+
+
 def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict[str, int]:
     """Delete every package observation and custom assessment marked outdated.
 
@@ -432,11 +540,24 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
         if candidate_ids is not None and candidate_ids != current_candidates:
             raise ValueError(_STALE_PREVIEW_MESSAGE)
         outdated_finding_ids = {
-            assessment["finding_id"]
+            finding_id
             for assessment in outdated_assessments
-            if assessment["finding_id"] is not None
+            for finding_id in assessment["finding_ids"]
         }
-        _delete_in_chunks(Assessment, Assessment.id, outdated_assessment_ids)
+        fully_stale_ids, partially_stale = _split_outdated_by_target(outdated_assessments)
+        # An assessment whose targets are only partly superseded keeps its
+        # verdict for the targets that are still current: drop the stale
+        # targets one by one and leave the record itself alone.
+        targets_removed = 0
+        for assessment_id, variant_id, finding_id in partially_stale:
+            if remove_target(assessment_id, variant_id, finding_id):
+                targets_removed += 1
+        # Bulk DELETE bypasses the ORM's cascade="all, delete-orphan" on
+        # Assessment.target_rows (sqlite foreign_keys stay off), so the
+        # target rows for these assessments are cleared explicitly first —
+        # otherwise they'd be left dangling, pointing at a deleted assessment.
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, fully_stale_ids)
+        _delete_in_chunks(Assessment, Assessment.id, fully_stale_ids)
         _delete_in_chunks(Observation, Observation.id, stale_observation_ids)
         sbom_packages_deleted, sbom_observations_deleted = _delete_stale_sbom_records(stale_package_pairs)
         sbom_observations_deleted += _delete_superseded_packageless_sbom_observations()
@@ -451,7 +572,8 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
     invalidate_scan_list_cache()
 
     return {
-        "assessments_deleted": len(outdated_assessment_ids),
+        "assessments_deleted": len(fully_stale_ids),
+        "assessment_targets_removed": targets_removed,
         "observations_deleted": len(stale_observation_ids),
         "sbom_packages_deleted": sbom_packages_deleted,
         "sbom_observations_deleted": sbom_observations_deleted,
@@ -539,8 +661,13 @@ def orphaned_vulnerabilities_preview() -> list[dict[str, str | int]]:
         assessment_counts.update({
             vulnerability_id: count
             for vulnerability_id, count in db.session.execute(
-                db.select(Finding.vulnerability_id, db.func.count(Assessment.id))
-                .join(Assessment, Assessment.finding_id == Finding.id)
+                # Reachability runs through assessment_targets.  One target row
+                # per (assessment, finding) pair multiplies rows per
+                # assessment, so count func.distinct(Assessment.id).
+                db.select(Finding.vulnerability_id, db.func.count(db.func.distinct(Assessment.id)))
+                .select_from(Finding)
+                .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+                .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
                 .where(Finding.vulnerability_id.in_(orphan_id_chunk))
                 .group_by(Finding.vulnerability_id)
             ).all()
@@ -554,9 +681,13 @@ def orphaned_vulnerabilities_preview() -> list[dict[str, str | int]]:
 def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> dict[str, int]:
     """Delete CVEs absent from every project/variant and their assessments.
 
-    Bulk ``DELETE`` statements replace the ORM cascade: child rows (findings and
-    their assessments / time-estimates / observations, plus per-CVE metrics and
-    refresh metadata) are cleared explicitly in foreign-key order.
+    Bulk ``DELETE`` statements replace the ORM cascade for findings, time
+    estimates, observations, and per-CVE metrics/refresh metadata.  An
+    assessment can have several targets pointing at different findings, so no
+    single column identifies "this assessment's finding" to key a bulk
+    ``DELETE`` on; assessments are reaped one target at a time via
+    ``remove_target`` instead, which also avoids leaving target rows behind
+    uncascaded (sqlite ``foreign_keys`` stay off).
     """
     with write_lock():
         vulnerability_ids = [str(item["id"]) for item in orphaned_vulnerabilities_preview()]
@@ -570,12 +701,25 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
             finding_ids.extend(db.session.execute(
                 db.select(Finding.id).where(Finding.vulnerability_id.in_(vulnerability_id_chunk))
             ).scalars())
-        assessments_deleted = 0
+
+        target_triples: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = set()
         for finding_id_chunk in _chunked(finding_ids):
-            assessments_deleted += db.session.execute(
-                db.select(db.func.count(Assessment.id)).where(Assessment.finding_id.in_(finding_id_chunk))
-            ).scalar_one()
-        _delete_in_chunks(Assessment, Assessment.finding_id, finding_ids)
+            target_triples.update(db.session.execute(
+                db.select(
+                    AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+                )
+                .where(AssessmentTarget.finding_id.in_(finding_id_chunk))
+            ).tuples().all())
+        candidate_assessment_ids = {assessment_id for assessment_id, _, _ in target_triples}
+        for assessment_id, variant_id, finding_id in target_triples:
+            remove_target(assessment_id, variant_id, finding_id)
+        # An assessment is deleted only once every one of its targets has been
+        # reaped (remove_target keeps siblings alive), so count what's gone.
+        assessments_deleted = sum(
+            1 for assessment_id in candidate_assessment_ids
+            if db.session.get(Assessment, assessment_id) is None
+        )
+
         _delete_in_chunks(TimeEstimate, TimeEstimate.finding_id, finding_ids)
         _delete_in_chunks(Observation, Observation.finding_id, finding_ids)
         _delete_in_chunks(Finding, Finding.id, finding_ids)
