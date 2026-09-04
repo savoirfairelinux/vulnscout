@@ -132,6 +132,25 @@ class TestCmdProcessCoverage:
 
         assert len(scope.variant_ids) == 1
 
+    def test_condition_matches_euvd_known_exploitable(self, app):
+        from src.bin.cmd_process import evaluate_condition
+        from src.controllers import ControllersCache
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            vulnerability = Vulnerability.get_or_create("CVE-2026-0001")
+            vulnerability.euvd_known_exploited = True
+            controllers = ControllersCache()
+
+            matched = evaluate_condition(
+                controllers.vulnerabilities,
+                controllers.assessments,
+                "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) or "
+                "known_exploitable and (pending or affected))",
+            )
+
+        assert matched == [vulnerability.id]
+
     def test_project_condition_matches_each_variant_independently(self, app):
         from src.bin.cmd_process import _condition_scope, _evaluate_condition_in_scope
         from src.models.assessment import Assessment

@@ -319,6 +319,7 @@ class Vulnerabilities {
                     effort: vulnerability.effort.likely.total_seconds || false,
                     effort_min: vulnerability.effort.optimistic.total_seconds || false,
                     effort_max: vulnerability.effort.pessimistic.total_seconds || false,
+                    known_exploitable: vulnerability.euvd?.known_exploited ?? false,
                     fixed: lastAssessment ? ['fixed', 'resolved', 'resolved_with_pedigree'].includes(lastAssessment.status) : false,
                     ignored: lastAssessment ? ['not_affected', 'false_positive'].includes(lastAssessment.status) : false,
                     affected: lastAssessment ? ['affected', 'exploitable'].includes(lastAssessment.status) : false,

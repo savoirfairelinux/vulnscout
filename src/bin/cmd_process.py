@@ -146,6 +146,7 @@ def evaluate_condition(
             "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
             "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,
             "effort_max": False if vuln.effort["pessimistic"] is None else vuln.effort["pessimistic"].total_seconds,
+            "known_exploitable": bool(vuln.euvd_known_exploited),
             "fixed": False,
             "ignored": False,
             "affected": False,
