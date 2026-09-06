@@ -2,10 +2,11 @@ import Vulnerabilities, { type Vulnerability } from "../handlers/vulnerabilities
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import Assessments from "../handlers/assessments";
-import type { NVDProgress } from "../handlers/nvd_progress";
-import type { EPSSProgress } from "../handlers/epss_progress";
+import { getSnapshot as getOperationsSnapshot, refreshProgressOf, subscribe as subscribeToOperations } from "../handlers/operationStore";
+import type { RefreshProgressView } from "../handlers/operationStore";
+import type { Operation, RefreshSource } from "../types/operation";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER, getStatusSortIndex, getTopStatusSummaryLabel, getVulnerabilityStatusSummary } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -19,14 +20,17 @@ import { useDocUrl } from "../helpers/useDocUrl";
 import { formatPkgId } from "../helpers/pkgId";
 
 import MessageBanner from "../components/MessageBanner";
-import NVDProgressHandler from "../handlers/nvd_progress";
-import EPSSProgressHandler from "../handlers/epss_progress";
-import GHSAProgressHandler from "../handlers/ghsa_progress";
-import type { GHSAProgress } from "../handlers/ghsa_progress";
-import EUVDProgressHandler from "../handlers/euvd_progress";
-import type { EUVDProgress } from "../handlers/euvd_progress";
 
 type SourceBanner = { message: string; type: 'error' | 'success' } | null;
+
+/**
+ * Null until the stream reports the source at least once, which keeps the
+ * "nothing observed yet" state distinct from a finished refresh.
+ */
+function refreshProgressFor(source: RefreshSource, snapshot: readonly Operation[]): RefreshProgressView | null {
+    const opId = `refresh:${source}`;
+    return snapshot.some(operation => operation.op_id === opId) ? refreshProgressOf(source) : null;
+}
 
 function useRefreshProgressEffect(
     progress: { in_progress: boolean; phase?: string; current: number; total: number; started_at?: string } | null,
@@ -185,7 +189,7 @@ type PublishedDateFilterProps = {
     setDaysValue: (value: string) => void;
     setDateFrom: (value: string) => void;
     setDateTo: (value: string) => void;
-    nvdProgress: NVDProgress | null;
+    nvdProgress: RefreshProgressView | null;
     hasAnyPublishedDate: boolean;
 };
 
@@ -485,10 +489,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '');
     const [publishedDateFrom, setPublishedDateFrom] = useLocalStorageState(`${preferenceKey}.publishedDate.from`, '');
     const [publishedDateTo, setPublishedDateTo] = useLocalStorageState(`${preferenceKey}.publishedDate.to`, '');
-    const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
-    const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
-    const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
-    const [euvdProgress, setEuvdProgress] = useState<EUVDProgress | null>(null);
+    const operationsSnapshot = useSyncExternalStore(subscribeToOperations, getOperationsSnapshot);
+    const nvdProgress = useMemo(() => refreshProgressFor('nvd', operationsSnapshot), [operationsSnapshot]);
+    const epssProgress = useMemo(() => refreshProgressFor('epss', operationsSnapshot), [operationsSnapshot]);
+    const ghsaProgress = useMemo(() => refreshProgressFor('ghsa', operationsSnapshot), [operationsSnapshot]);
+    const euvdProgress = useMemo(() => refreshProgressFor('euvd', operationsSnapshot), [operationsSnapshot]);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [nvdBanner, setNvdBanner] = useState<SourceBanner>(null);
     const [epssBanner, setEpssBanner] = useState<SourceBanner>(null);
@@ -534,7 +539,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const prevEuvdInProgress = useRef<boolean | null>(null);
     const prevEuvdPhase = useRef<string | null>(null);
     const prevEuvdStartedAt = useRef<string | null>(null);
-    const hasFetchedProgressOnce = useRef(false);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -552,14 +556,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         { syntax: 'only:text', description: 'Show a vuln only when all of its SBOM-affected packages contain text (e.g. only:native keeps vulns whose affected packages are all native)' },
     ];
 
-    const hasAnyGhsaVuln = useMemo(
-        () => vulnerabilities.some(v => v.id?.toUpperCase().startsWith('GHSA-')),
-        [vulnerabilities]
-    );
-
-    // Published dates can come from sources other than NVD (e.g. an
-    // sbom-cve-check scan). When at least one vulnerability already has a
-    // published date, the filter is usable even if NVD has never synced.
     const hasAnyPublishedDate = useMemo(
         () => vulnerabilities.some(v => !!v.published),
         [vulnerabilities]
@@ -653,50 +649,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
     useRefreshProgressEffect(euvdProgress, 'EUVD', prevEuvdInProgress, prevEuvdPhase, prevEuvdStartedAt, setEuvdBanner, onRefreshComplete, 'CVEs');
 
-    const fetchAllProgress = useCallback(async (forceAll = false) => {
-        const shouldPollGhsa = forceAll || hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
-        const shouldPollEpss = forceAll || Boolean(epssProgress?.in_progress);
-        const shouldPollEuvd = forceAll || Boolean(euvdProgress?.in_progress);
-        const [nvd, epss, ghsa, euvd] = await Promise.allSettled([
-            NVDProgressHandler.getProgress(),
-            shouldPollEpss ? EPSSProgressHandler.getProgress() : Promise.resolve(null),
-            shouldPollGhsa ? GHSAProgressHandler.getProgress() : Promise.resolve(null),
-            shouldPollEuvd ? EUVDProgressHandler.getProgress() : Promise.resolve(null),
-        ]);
-        if (nvd.status === 'fulfilled') setNvdProgress(nvd.value);
-        else console.error('Failed to fetch NVD refresh progress:', nvd.reason);
-        if (epss.status === 'fulfilled') setEpssProgress(epss.value);
-        else console.error('Failed to fetch EPSS refresh progress:', epss.reason);
-        if (ghsa.status === 'fulfilled') setGhsaProgress(ghsa.value);
-        else console.error('Failed to fetch GHSA refresh progress:', ghsa.reason);
-        if (euvd.status === 'fulfilled') setEuvdProgress(euvd.value);
-        else console.error('Failed to fetch EUVD refresh progress:', euvd.reason);
-    }, [hasAnyGhsaVuln, ghsaProgress?.in_progress, epssProgress?.in_progress, euvdProgress?.in_progress]);
-
-    // Fetch once on mount so we can recover progress if a refresh was already running.
-    useEffect(() => {
-        if (!hasFetchedProgressOnce.current) {
-            hasFetchedProgressOnce.current = true;
-            void fetchAllProgress(true);
-        }
-    }, [fetchAllProgress]);
-
-    // Poll only while any refresh is actively running.
-    useEffect(() => {
-        const anyInProgress = Boolean(
-            nvdProgress?.in_progress || epssProgress?.in_progress || ghsaProgress?.in_progress || euvdProgress?.in_progress
-        );
-        if (!anyInProgress) {
-            return;
-        }
-
-        const interval = setInterval(() => {
-            void fetchAllProgress();
-        }, 3000);
-
-        return () => clearInterval(interval);
-    }, [nvdProgress?.in_progress, epssProgress?.in_progress, ghsaProgress?.in_progress, euvdProgress?.in_progress, fetchAllProgress]);
-
     const activeBanners = [nvdBanner, epssBanner, ghsaBanner, euvdBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
@@ -704,20 +656,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const visibleBannerCount = activeBanners.length +
         Number(shouldShowMissingDataBanner);
 
-    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => {
+    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', _refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
         else if (source === 'epss') setEpssBanner({ message, type });
         else if (source === 'ghsa') setGhsaBanner({ message, type });
         else if (source === 'euvd') setEuvdBanner({ message, type });
         else setGeneralBanner({ message, type });
-
-        // Refresh progress immediately when the caller signals a refresh has
-        // just started or been cancelled, so active polling can begin/stop
-        // without idle background polling. This relies on an explicit flag
-        // rather than parsing the user-facing banner text.
-        if (source && refreshActivity) {
-            void fetchAllProgress(true);
-        }
     };
 
     const closeBanner = () => {
@@ -2009,10 +1953,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     onRefreshComplete={onRefreshComplete}
                     triggerBanner={triggerBanner}
                     hideBanner={closeBanner}
-                    nvdProgress={nvdProgress}
-                    epssProgress={epssProgress}
-                    ghsaProgress={ghsaProgress}
-                    euvdProgress={euvdProgress}
                 />
             </div>
         </div>

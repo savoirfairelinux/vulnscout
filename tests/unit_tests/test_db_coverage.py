@@ -690,15 +690,6 @@ class TestVulnRoutesEffort:
         data = _json.loads(response.data)
         assert "errors" in data
 
-    def test_get_nvd_progress(self, client, tmp_path, monkeypatch):
-        """GET /api/nvd/progress should return 200 with progress data."""
-        monkeypatch.setenv("NVD_DB_PATH", str(tmp_path / "nvd.db"))
-        response = client.get("/api/nvd/progress")
-        assert response.status_code == 200
-        import json as _json
-        data = _json.loads(response.data)
-        assert "in_progress" in data
-
     def test_patch_effort_update_existing_time_estimate(self, client):
         """Sending effort when the finding already has a TimeEstimate hits the
         existing.update() path (line 66) instead of creating a new one."""

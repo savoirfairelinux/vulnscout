@@ -1,19 +1,15 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from .bulk_refresh import init_app as init_bulk_refresh_app
 from .packages import init_app as init_pkg_app
 from .vulnerabilities import init_app as init_vuln_app
 from .assessments import init_app as init_assess_app
 from .documents import init_app as init_doc_app
-from .nvd_progress import init_app as init_nvd_progress_app
-from .epss_progress import init_app as init_epss_progress_app
-from .ghsa_progress import init_app as init_ghsa_progress_app
-from .euvd_progress import init_app as init_euvd_progress_app
+from .events import init_app as init_events_app
+from .operations import init_app as init_operations_app
 from .project import init_app as init_project_app
 from .variant import init_app as init_variant_app
 from .scans import init_app as init_scans_app
-from .scan_triggers import init_app as init_scan_triggers_app
 from .config import init_app as init_config_app
 from .settings import init_app as init_settings_app
 from .openapi import init_app as init_openapi_app
@@ -26,15 +22,11 @@ def init_app(app):
     init_vuln_app(app)
     init_assess_app(app)
     init_doc_app(app)
-    init_nvd_progress_app(app)
-    init_epss_progress_app(app)
-    init_ghsa_progress_app(app)
-    init_euvd_progress_app(app)
+    init_events_app(app)
+    init_operations_app(app)
     init_project_app(app)
     init_variant_app(app)
     init_scans_app(app)
-    init_scan_triggers_app(app)
-    init_bulk_refresh_app(app)
     init_config_app(app)
     init_settings_app(app)
     init_context_app(app)

@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import NavigationBar from "../components/NavigationBar";
 import OperationQueueModal from "../components/OperationQueueModal";
-import { subscribe as exportSubscribe, getSnapshot as exportGetSnapshot } from "../handlers/exportQueue";
 import MessageBanner from "../components/MessageBanner";
 import Popup from "../components/Popup";
 import type { Package } from "../handlers/packages";
@@ -24,13 +23,8 @@ import type { AppConfig } from "../handlers/config";
 import type { FrontendScope } from "../handlers/config";
 import Projects from '../handlers/project';
 import Variants from '../handlers/variant';
-import ScansHandler from '../handlers/scans';
-import type { RunningScanEntry } from '../handlers/scans';
-import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
-import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot, restoreFromStatus as nvdRestore } from "../handlers/nvdScanState";
-import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot, restoreFromStatus as osvRestore } from "../handlers/osvScanState";
-import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot, restoreFromStatus as sccRestore } from "../handlers/sccScanState";
-import { subscribeToRefreshQueue, getRefreshQueueSnapshot, restoreActiveRefreshes } from "../handlers/activeScanQueue";
+import { subscribe as subscribeToOperations, getSnapshot as getOperationsSnapshot } from "../handlers/operationStore";
+import { isActive } from "../types/operation";
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -83,18 +77,11 @@ function Explorer() {
     >(null);
     const hadActiveScans = useRef(false);
     const setupCheckGeneration = useRef(0);
-    const grypeScanEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
-    const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
-    const osvScanEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
-    const sccScanEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
-    const refreshQueueEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
-    const exportEntries = useSyncExternalStore(exportSubscribe, exportGetSnapshot);
-    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries, ...exportEntries];
-    const trackedScanCount = scanEntries.length;
-    const finishedScanCount = scanEntries
-        .filter(entry => entry.status === "done" || entry.status === "error" || entry.status === "cancelled").length;
-    const activeScanCount = scanEntries
-        .filter(entry => entry.status === "queued" || entry.status === "running").length;
+    // The stream's snapshot frame restores everything already in flight, so no explicit restore is needed.
+    const operations = useSyncExternalStore(subscribeToOperations, getOperationsSnapshot);
+    const trackedScanCount = operations.length;
+    const finishedScanCount = operations.filter(operation => !isActive(operation)).length;
+    const activeScanCount = operations.filter(isActive).length;
 
     useEffect(() => {
         if (activeScanCount > 0 && !hadActiveScans.current) {
@@ -102,22 +89,6 @@ function Explorer() {
         }
         hadActiveScans.current = activeScanCount > 0;
     }, [activeScanCount]);
-
-    useEffect(() => {
-        let cancelled = false;
-        void restoreActiveRefreshes();
-        Promise.all([Variants.listAll().catch(() => []), ScansHandler.getRunningScans()]).then(([variants, running]) => {
-            if (cancelled) return;
-            const nameById = new Map(variants.map(variant => [variant.id, variant.name]));
-            const toEntries = (entries: RunningScanEntry[]) => entries
-                .map(entry => ({ variantId: entry.variant_id, name: nameById.get(entry.variant_id) ?? entry.variant_id, status: entry }));
-            grypeRestore(toEntries(running.grype));
-            nvdRestore(toEntries(running.nvd));
-            osvRestore(toEntries(running.osv));
-            sccRestore(toEntries(running['sbom-cve-check']));
-        }).catch(() => undefined);
-        return () => { cancelled = true; };
-    }, []);
 
     const loadSetupRequirement = useCallback(() => {
         const generation = ++setupCheckGeneration.current;

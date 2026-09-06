@@ -1,48 +1,92 @@
-import ScansHandler from "../../src/handlers/scans";
+import Operations from "../../src/handlers/operations";
 
-const mockFetch = jest.fn();
-global.fetch = mockFetch as typeof fetch;
+const fetchSpy = jest.fn();
+global.fetch = fetchSpy as typeof fetch;
+
+const enqueued = () => JSON.parse(fetchSpy.mock.calls[0][1].body);
 
 beforeEach(() => {
-    mockFetch.mockReset();
+    fetchSpy.mockReset();
 });
 
-describe("ScansHandler.triggerNvdScan", () => {
+describe("queueing an NVD scan", () => {
     const variantId = "variant-uuid-1234";
 
-    it("relies on the backend local data-source default", async () => {
-        mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
-        await ScansHandler.triggerNvdScan(variantId);
-        const url: string = mockFetch.mock.calls[0][0];
-        expect(url).not.toContain("mode=");
+    it("uses the local data source unless another mode is asked for", async () => {
+        fetchSpy.mockResolvedValueOnce({ status: 202, json: async () => ({ queue_id: "q-1", operations: [] }) } as Response);
+
+        await Operations.enqueue([Operations.scanJob("nvd", [variantId])]);
+
+        expect(enqueued().jobs[0].options.mode).toBe("local");
     });
 
-    it("also includes exclude_kernel in the URL", async () => {
-        mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
-        await ScansHandler.triggerNvdScan(variantId, false);
-        const url: string = mockFetch.mock.calls[0][0];
-        expect(url).toContain("exclude_kernel=false");
+    it("carries an explicit API data source through to the backend", async () => {
+        fetchSpy.mockResolvedValueOnce({ status: 202, json: async () => ({ queue_id: "q-1", operations: [] }) } as Response);
+
+        await Operations.enqueue([Operations.scanJob("nvd", [variantId], { mode: "api" })]);
+
+        expect(enqueued().jobs[0].options.mode).toBe("api");
     });
 
-    it("returns ok:true on 202", async () => {
-        mockFetch.mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
-        const result = await ScansHandler.triggerNvdScan(variantId);
+    it("excludes kernel packages unless asked to include them", async () => {
+        fetchSpy.mockResolvedValueOnce({ status: 202, json: async () => ({ queue_id: "q-1", operations: [] }) } as Response);
+
+        await Operations.enqueue([
+            Operations.scanJob("nvd", [variantId]),
+        ]);
+        expect(enqueued().jobs[0].options.exclude_kernel).toBe(true);
+
+        fetchSpy.mockReset();
+        fetchSpy.mockResolvedValueOnce({ status: 202, json: async () => ({ queue_id: "q-2", operations: [] }) } as Response);
+
+        await Operations.enqueue([
+            Operations.scanJob("nvd", [variantId], { excludeKernel: false }),
+        ]);
+        expect(enqueued().jobs[0].options.exclude_kernel).toBe(false);
+    });
+
+    it("scans every requested variant in one batch", async () => {
+        fetchSpy.mockResolvedValueOnce({ status: 202, json: async () => ({ queue_id: "q-1", operations: [] }) } as Response);
+
+        await Operations.enqueue([Operations.scanJob("nvd", [variantId, "variant-uuid-5678"])]);
+
+        expect(enqueued().jobs[0].variant_ids).toEqual([variantId, "variant-uuid-5678"]);
+    });
+
+    it("accepts the batch when the backend queues it", async () => {
+        fetchSpy.mockResolvedValueOnce({ status: 202, json: async () => ({ queue_id: "q-1", operations: [] }) } as Response);
+
+        const result = await Operations.enqueue([Operations.scanJob("nvd", [variantId])]);
+
         expect(result.ok).toBe(true);
     });
 
-    it("returns ok:false on 409 with error message", async () => {
-        mockFetch.mockResolvedValueOnce({
-            ok: false,
+    it("reports why the backend refused a batch already in progress", async () => {
+        fetchSpy.mockResolvedValueOnce({
             status: 409,
             json: async () => ({ error: "already in progress" }),
         } as Response);
-        const result = await ScansHandler.triggerNvdScan(variantId);
+
+        const result = await Operations.enqueue([Operations.scanJob("nvd", [variantId])]);
+
         expect(result.ok).toBe(false);
-        expect(result.error).toContain("already in progress");
+        expect(result.ok === false && result.error).toContain("already in progress");
     });
 
-    it("returns ok:false when fetch rejects", async () => {
-        mockFetch.mockRejectedValueOnce(new Error("network down"));
-        await expect(ScansHandler.triggerNvdScan(variantId)).rejects.toThrow("network down");
+    it("falls back to the HTTP status when the refusal has no message", async () => {
+        fetchSpy.mockResolvedValueOnce({
+            status: 503,
+            json: async () => { throw new Error("invalid JSON"); },
+        } as unknown as Response);
+
+        const result = await Operations.enqueue([Operations.scanJob("nvd", [variantId])]);
+
+        expect(result).toEqual({ ok: false, error: "HTTP 503", conflicts: undefined });
+    });
+
+    it("propagates a network failure to the caller", async () => {
+        fetchSpy.mockRejectedValueOnce(new Error("network down"));
+
+        await expect(Operations.enqueue([Operations.scanJob("nvd", [variantId])])).rejects.toThrow("network down");
     });
 });

@@ -157,14 +157,8 @@ export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, Pac
 
 type ScanStatusResponse = { status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number };
 type RunningScanEntry = ScanStatusResponse & { variant_id: string };
-type RunningScans = {
-    grype: RunningScanEntry[];
-    nvd: RunningScanEntry[];
-    osv: RunningScanEntry[];
-    "sbom-cve-check": RunningScanEntry[];
-};
 
-export type { ScanStatusResponse, RunningScanEntry, RunningScans };
+export type { ScanStatusResponse, RunningScanEntry };
 
 type ScanImportEntry = {
     scan_id: string;
@@ -305,16 +299,6 @@ class ScansHandler {
         return response.ok;
     }
 
-    static async triggerGrypeScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan?exclude_kernel=${excludeKernel}`,
-            { method: 'POST', mode: 'cors' }
-        );
-        if (response.ok || response.status === 202) return { ok: true };
-        const data = await response.json().catch(() => ({}));
-        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
-    }
-
     static async getGlobalResult(scanId: string): Promise<GlobalResult | null> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/scans/${encodeURIComponent(scanId)}/global-result`,
@@ -324,89 +308,6 @@ class ScansHandler {
         const data = await response.json();
         if (typeof data?.scan_id !== 'string') return null;
         return data as GlobalResult;
-    }
-
-    static async getGrypeScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan/status`,
-            { mode: 'cors' }
-        );
-        if (!response.ok) return { status: 'unknown' };
-        return await response.json();
-    }
-
-    static async triggerNvdScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan?exclude_kernel=${excludeKernel}`,
-            { method: 'POST', mode: 'cors' }
-        );
-        if (response.ok || response.status === 202) return { ok: true };
-        const data = await response.json().catch(() => ({}));
-        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
-    }
-
-    static async getNvdScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan/status`,
-            { mode: 'cors' }
-        );
-        if (!response.ok) return { status: 'unknown' };
-        return await response.json();
-    }
-
-    static async triggerOsvScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan?exclude_kernel=${excludeKernel}`,
-            { method: 'POST', mode: 'cors' }
-        );
-        if (response.ok || response.status === 202) return { ok: true };
-        const data = await response.json().catch(() => ({}));
-        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
-    }
-
-    static async getOsvScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan/status`,
-            { mode: 'cors' }
-        );
-        if (!response.ok) return { status: 'unknown' };
-        return await response.json();
-    }
-
-    static async triggerSbomCveCheckScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan?exclude_kernel=${excludeKernel}`,
-            { method: 'POST', mode: 'cors' }
-        );
-        if (response.ok || response.status === 202) return { ok: true };
-        const data = await response.json().catch(() => ({}));
-        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
-    }
-
-    static async getSbomCveCheckScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan/status`,
-            { mode: 'cors' }
-        );
-        if (!response.ok) return { status: 'unknown' };
-        return await response.json();
-    }
-
-    static async getRunningScans(): Promise<RunningScans> {
-        const empty: RunningScans = { grype: [], nvd: [], osv: [], 'sbom-cve-check': [] };
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/scans/running`,
-            { mode: 'cors' }
-        );
-        if (!response.ok) return empty;
-        const data = await response.json().catch(() => null);
-        if (data === null || typeof data !== 'object') return empty;
-        return {
-            grype: Array.isArray(data.grype) ? data.grype : [],
-            nvd: Array.isArray(data.nvd) ? data.nvd : [],
-            osv: Array.isArray(data.osv) ? data.osv : [],
-            'sbom-cve-check': Array.isArray(data['sbom-cve-check']) ? data['sbom-cve-check'] : [],
-        };
     }
 
     static async deleteScan(scanId: string): Promise<{ ok: boolean; error?: string; orphaned_findings_removed?: number }> {
