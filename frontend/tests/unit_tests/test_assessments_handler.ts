@@ -381,3 +381,93 @@ describe('asAssessment outdated flag', () => {
     expect(result.superseded_map).toEqual({ 'firefox@1.0': ['firefox@2.0'] });
   });
 });
+
+import AssessmentReviews, { verdictOf } from "../../src/handlers/assessmentReviews";
+import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
+
+const makeReview = (over: Partial<AssessmentReview> = {}): AssessmentReview => ({
+    id: "r1",
+    assessment_id: "a1",
+    status: "affected",
+    status_notes: "",
+    justification: "",
+    impact_statement: "",
+    workaround: "",
+    responses: [],
+    rationale: "openssl is in the rootfs",
+    timestamp: "2026-08-06T10:00:00Z",
+    verdict: "differs",
+    is_stale: false,
+    ...over,
+});
+
+describe("assessmentReviews handler", () => {
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    test("returns none verdict when there is no review", () => {
+        expect(verdictOf(undefined)).toBe("none");
+    });
+
+    test("returns stale verdict when the assessment changed after the review", () => {
+        expect(verdictOf(makeReview({ is_stale: true }))).toBe("stale");
+    });
+
+    test("returns the server verdict when the review is current", () => {
+        expect(verdictOf(makeReview({ verdict: "agrees" }))).toBe("agrees");
+        expect(verdictOf(makeReview({ verdict: "differs" }))).toBe("differs");
+    });
+
+    test("fetchForScope keys reviews by assessment id", async () => {
+        // Arrange
+        jest.spyOn(global, "fetch").mockResolvedValue({
+            ok: true,
+            json: async () => ({ a1: makeReview() }),
+        } as Response);
+
+        // Act
+        const result = await AssessmentReviews.fetchForScope("v1");
+
+        // Assert
+        expect(result.a1.rationale).toBe("openssl is in the rootfs");
+        expect(String((global.fetch as jest.Mock).mock.calls[0][0])).toContain("variant_id=v1");
+    });
+
+    test("fetchForScope returns an empty map when the request fails", async () => {
+        jest.spyOn(global, "fetch").mockResolvedValue({ ok: false } as Response);
+
+        await expect(AssessmentReviews.fetchForScope("v1")).resolves.toEqual({});
+    });
+
+    test("fetchForScope returns an empty map when fetch itself rejects", async () => {
+        jest.spyOn(global, "fetch").mockRejectedValue(new Error("network down"));
+
+        await expect(AssessmentReviews.fetchForScope("v1")).resolves.toEqual({});
+    });
+
+    test("remove issues a DELETE for the assessment", async () => {
+        // Arrange
+        jest.spyOn(global, "fetch").mockResolvedValue({
+            ok: true,
+            json: async () => ({}),
+        } as Response);
+
+        // Act
+        await AssessmentReviews.remove("a1");
+
+        // Assert
+        const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+        expect(String(url)).toContain("/api/assessments/a1/review");
+        expect(init.method).toBe("DELETE");
+    });
+
+    test("remove throws when the server rejects", async () => {
+        jest.spyOn(global, "fetch").mockResolvedValue({
+            ok: false,
+            json: async () => ({ error: "Review not found" }),
+        } as Response);
+
+        await expect(AssessmentReviews.remove("a1")).rejects.toThrow("Review not found");
+    });
+});

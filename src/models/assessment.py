@@ -3,7 +3,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, relationship, joinedload, mapped_column
@@ -15,6 +15,9 @@ from .vulnerability import Vulnerability
 from .package import Package
 from .finding import Finding
 from .variant import Variant
+
+if TYPE_CHECKING:
+    from .assessment_review import AssessmentReview
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +137,9 @@ class Assessment(Base):
 
     finding: Mapped["Finding | None"] = relationship(back_populates="assessments")
     variant: Mapped["Variant | None"] = relationship(back_populates="assessments")
+    review: Mapped["AssessmentReview | None"] = relationship(
+        back_populates="assessment", cascade="all, delete-orphan", uselist=False
+    )
 
     # ------------------------------------------------------------------
     # Transient attributes (initialised by _init_transient)
@@ -155,9 +161,11 @@ class Assessment(Base):
 
     @property
     def vuln_id(self) -> str:
-        # _vuln_id is always initialised by _init_transient / new_dto; avoid
-        # the repeated hasattr overhead in hot ingestion loops.
-        val = self._vuln_id
+        # _vuln_id is normally initialised by _init_transient / new_dto, but
+        # objects constructed directly (bypassing both) and never reloaded
+        # from the DB never get the SQLAlchemy 'load' event that would set
+        # it, so fall back defensively instead of assuming it is present.
+        val = getattr(self, "_vuln_id", "")
         if val:
             return val
         try:

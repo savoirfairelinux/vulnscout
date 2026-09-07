@@ -21,6 +21,7 @@ from sqlalchemy.engine import CursorResult
 
 from ..extensions import db, write_lock
 from ..models.assessment import Assessment
+from ..models.assessment_review import AssessmentReview
 from ..models.finding import Finding
 from ..models.metrics import Metrics
 from ..models.observation import Observation
@@ -53,6 +54,18 @@ def _chunked(values: Iterable[T]) -> Iterator[list[T]]:
 def _delete_in_chunks(model: type[Any], column: Any, values: Iterable[Any]) -> None:
     for chunk in _chunked(values):
         db.session.execute(db.delete(model).where(column.in_(chunk)))
+
+
+def _delete_assessment_reviews(assessment_ids: Iterable[uuid.UUID]) -> None:
+    """Delete ``assessment_reviews`` rows for the given assessment ids.
+
+    Bulk ``DELETE`` on ``Assessment`` bypasses the ORM's ``delete-orphan``
+    cascade wired on ``Assessment.review``, so reviews must be removed
+    explicitly before (or alongside) removing their parent assessments —
+    the same pattern used for ``Metrics``/``VulnRefresh`` in
+    ``_delete_orphaned_vulnerabilities``.
+    """
+    _delete_in_chunks(AssessmentReview, AssessmentReview.assessment_id, assessment_ids)
 
 
 def _active_identities_by_variant() -> dict[uuid.UUID, set[PackageIdentity]]:
@@ -436,6 +449,7 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
             for assessment in outdated_assessments
             if assessment["finding_id"] is not None
         }
+        _delete_assessment_reviews(outdated_assessment_ids)
         _delete_in_chunks(Assessment, Assessment.id, outdated_assessment_ids)
         _delete_in_chunks(Observation, Observation.id, stale_observation_ids)
         sbom_packages_deleted, sbom_observations_deleted = _delete_stale_sbom_records(stale_package_pairs)
@@ -570,11 +584,13 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
             finding_ids.extend(db.session.execute(
                 db.select(Finding.id).where(Finding.vulnerability_id.in_(vulnerability_id_chunk))
             ).scalars())
-        assessments_deleted = 0
+        assessment_ids: list[uuid.UUID] = []
         for finding_id_chunk in _chunked(finding_ids):
-            assessments_deleted += db.session.execute(
-                db.select(db.func.count(Assessment.id)).where(Assessment.finding_id.in_(finding_id_chunk))
-            ).scalar_one()
+            assessment_ids.extend(db.session.execute(
+                db.select(Assessment.id).where(Assessment.finding_id.in_(finding_id_chunk))
+            ).scalars())
+        assessments_deleted = len(assessment_ids)
+        _delete_assessment_reviews(assessment_ids)
         _delete_in_chunks(Assessment, Assessment.finding_id, finding_ids)
         _delete_in_chunks(TimeEstimate, TimeEstimate.finding_id, finding_ids)
         _delete_in_chunks(Observation, Observation.finding_id, finding_ids)

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment_group_member import AssessmentGroupMember, GroupInvariantError
+from ..models.assessment_review import AssessmentReview
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -902,7 +903,10 @@ def init_app(app: Flask) -> None:
         item = DBAssessment.get_by_id(assessment_id)
         if item is None:
             return {"error": "Not found"}, 404
-        return item.to_dict(), 200
+        payload = item.to_dict()
+        review = AssessmentReview.get_by_assessment(item.id)
+        payload["review"] = review.to_dict() if review else None
+        return payload, 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')
     def list_assess_by_vuln(vuln_id: str) -> ResponseReturnValue:

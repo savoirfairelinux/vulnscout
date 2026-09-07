@@ -12,6 +12,8 @@ import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
+import AssessmentReviews, { verdictOf, summarizeReviews, describeReviewSummary } from "../handlers/assessmentReviews";
+import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -116,9 +118,32 @@ const COPIED_FEEDBACK_MS = 2000;
 const rowCopyKey = (row: ReviewRow) =>
     row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
 
-/** Copies a row's group/assessment id, confirming inline like VulnModal does.
- *  Same styles and confirmation as the copy button in the assessment history,
- *  so the two views stay recognisably the same control. */
+/** The AI review filter's options: one label per verdict an assessment can
+ *  carry. Group members are reviewed independently, so a single row can hold
+ *  several of these at once. */
+const AI_REVIEW_LABELS: Record<ReviewVerdict, string> = {
+    agrees: 'AI review agreed',
+    differs: 'AI review differed',
+    stale: 'AI review stale',
+    none: 'No AI review',
+};
+
+const aiReviewList = [
+    AI_REVIEW_LABELS.agrees,
+    AI_REVIEW_LABELS.differs,
+    AI_REVIEW_LABELS.stale,
+    AI_REVIEW_LABELS.none,
+];
+
+/** Every AI review label a row carries. An assessment without a review counts
+ *  as "No AI review", so a partly reviewed group matches both its verdicts and
+ *  the unreviewed option. */
+const rowAiReviewLabels = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
+    new Set(row.assessment_ids.map(id => AI_REVIEW_LABELS[verdictOf(reviews[id])]));
+
+/** Copies a row's group/assessment id. The confirmation swaps the icon for a
+ *  checkmark in place rather than adding a label, so the button keeps its width
+ *  and never pushes the neighbouring actions onto a second row. */
 function CopyIdButton({ row, copiedKey, onCopy }: {
     row: ReviewRow;
     copiedKey: string | null;
@@ -131,17 +156,14 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
             <button
                 type="button"
                 onClick={() => onCopy(row)}
-                className="text-gray-400 hover:text-gray-200 transition-colors"
+                className={`transition-colors ${copied ? 'text-green-400' : 'text-gray-400 hover:text-gray-200'}`}
                 title={label}
                 aria-label={label}
             >
-                <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
+                <FontAwesomeIcon icon={copied ? faCheck : faCopy} className="w-4 h-4" />
             </button>
             {copied && (
-                <span role="status" className="inline-flex items-center gap-1 text-xs text-green-400">
-                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
-                    Copied
-                </span>
+                <span role="status" className="sr-only">Copied</span>
             )}
         </>
     );
@@ -215,7 +237,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [selectedAiReviews, setSelectedAiReviews] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -339,6 +363,14 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         })();
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
+
+    useEffect(() => {
+        let cancelled = false;
+        AssessmentReviews.fetchForScope(variantId, projectId)
+            .then(data => { if (!cancelled) setReviews(data); })
+            .catch(() => { if (!cancelled) setReviews({}); });
+        return () => { cancelled = true; };
+    }, [variantId, projectId]);
 
     useEffect(() => {
         setLoading(true);
@@ -466,6 +498,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
             return false;
         }
+        if (selectedAiReviews.length) {
+            const labels = rowAiReviewLabels(a, reviews);
+            if (!selectedAiReviews.some(label => labels.has(label))) return false;
+        }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -477,7 +513,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedAiReviews, showOnlyOutdated, reviews]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -500,6 +536,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
+        setSelectedAiReviews([]);
         setShowOnlyOutdated(false);
     };
 
@@ -1236,6 +1273,50 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             ),
         }),
         columnHelper.display({
+            id: "ai_review",
+            header: () => <div className="flex items-center justify-center">AI review</div>,
+            cell: ({ row }) => {
+                const summary = summarizeReviews(row.original.assessment_ids, reviews);
+                const title = describeReviewSummary(summary);
+                const pending = summary.total - summary.reviewed;
+                const singleVerdict = summary.total === 1
+                    ? verdictOf(reviews[row.original.assessment_ids[0]])
+                    : null;
+                let content;
+                if (summary.reviewed === 0) {
+                    content = <span title={title} className="text-gray-500">—</span>;
+                // A single-target row has exactly one verdict, so keep the plain
+                // symbol. Groups get per-verdict counts, because their members
+                // were reviewed against different variant/package contexts and
+                // may legitimately disagree with each other.
+                } else if (singleVerdict === "agrees") {
+                    content = <span title={title} className="text-green-400">✓</span>;
+                } else if (singleVerdict === "stale") {
+                    content = <span title={title} className="text-amber-400">⚠ stale</span>;
+                } else if (singleVerdict !== null) {
+                    content = <span title={title} className="text-amber-400">⚠</span>;
+                } else {
+                    content = (
+                        <span title={title} className="inline-flex items-center gap-1.5 text-sm">
+                            {summary.agrees > 0 && (
+                                <span className="text-green-400">✓{summary.agrees}</span>
+                            )}
+                            {summary.differs > 0 && (
+                                <span className="text-amber-400">⚠{summary.differs}</span>
+                            )}
+                            {summary.stale > 0 && (
+                                <span className="text-amber-400">⚠{summary.stale} stale</span>
+                            )}
+                            {pending > 0 && (
+                                <span className="text-gray-500">—{pending}</span>
+                            )}
+                        </span>
+                    );
+                }
+                return <div className="flex items-center justify-center h-full">{content}</div>;
+            },
+        }),
+        columnHelper.display({
             id: 'actions',
             header: () => <div className="flex items-center justify-center">Actions</div>,
             size: 140,
@@ -1259,7 +1340,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClickWithNav, variantNames, copiedRowKey, copyRowId]);
+    ], [handleVulnClickWithNav, variantNames, copiedRowKey, copyRowId, reviews]);
 
     const aiActionsColumn = useMemo(() => columnHelper.display({
         id: 'ai-actions',
@@ -1567,6 +1648,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             selected={selectedJustifications}
                             setSelected={setSelectedJustifications}
                         />
+
+                        {activeTab === 'assessments' && (
+                            <FilterOption
+                                label="AI review"
+                                options={aiReviewList}
+                                selected={selectedAiReviews}
+                                setSelected={setSelectedAiReviews}
+                            />
+                        )}
 
                         {hasSupplierInfo && (
                             <FilterOption

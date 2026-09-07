@@ -278,6 +278,8 @@ type NetworkOpts = {
     importResult?: Record<string, unknown>;
     vulnDetail?: unknown;
     vulnOk?: boolean;
+    /** Keyed by assessment id — served from the AI-review-verdict endpoint. */
+    reviews?: Record<string, unknown>;
 };
 
 /**
@@ -299,6 +301,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         },
         vulnDetail = { id: 'CVE-2020-1111', version: '4.0', base_score: 5 },
         vulnOk = true,
+        reviews = {},
     } = opts;
 
     fetchMock.resetMocks();
@@ -324,6 +327,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
                     ? JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })
                     : { status: 500, body: JSON.stringify({}) };
             }
+            if (url.includes('/api/assessment-reviews')) return JSON.stringify(reviews);
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
@@ -660,6 +664,26 @@ describe('Review — AI Assessments tab', () => {
 
         expect(await screen.findByTitle('Approve AI suggestion')).toBeInTheDocument();
         expect(screen.getByTitle('Reject AI suggestion')).toBeInTheDocument();
+    });
+
+    test('hides the AI review filter on the AI Assessments tab but shows it on Assessments', async () => {
+        // AI-origin assessments are never reviewed (the feature is gated to
+        // origin === "custom"), so the "AI review" filter is a no-op there;
+        // it should not render on that tab. "Outdated" has no such
+        // restriction and keeps rendering on both tabs.
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        expect(screen.getByRole('button', { name: /AI review/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+
+        await user.click(screen.getByText('AI Assessments'));
+        await screen.findByTitle('Approve AI suggestion');
+
+        expect(screen.queryByRole('button', { name: /AI review/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
     });
 
     test('shows the AI assessments empty state when there are none pending', async () => {
@@ -1600,7 +1624,7 @@ describe('Review — copying assessment ids', () => {
         expect(writeText).toHaveBeenCalledWith('group:g1');
     });
 
-    test('confirms the copy next to the button, then reverts', async () => {
+    test('confirms the copy on the button itself, then reverts', async () => {
         jest.useFakeTimers();
         try {
             mockNetwork([makeAssessment('a1', 'v1')]);
@@ -1612,9 +1636,15 @@ describe('Review — copying assessment ids', () => {
             await user.click(await screen.findByTitle('Copy assessment id'));
 
             await screen.findByRole('status');
+            // The confirmation replaces the icon in place: nothing is added
+            // beside the button, so the neighbouring actions never reflow.
+            const button = screen.getByTitle('Copy assessment id');
+            expect(button.querySelector('[data-icon="check"]')).toBeInTheDocument();
+            expect(button.querySelector('[data-icon="copy"]')).not.toBeInTheDocument();
+
             await act(async () => { jest.advanceTimersByTime(2000); });
             await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
-            await screen.findByTitle('Copy assessment id');
+            expect(screen.getByTitle('Copy assessment id').querySelector('[data-icon="copy"]')).toBeInTheDocument();
         } finally {
             jest.useRealTimers();
         }
@@ -1629,7 +1659,7 @@ describe('Review — copying assessment ids', () => {
 
         await user.click(await screen.findByTitle('Copy assessment id'));
 
-        expect(screen.queryByText('Copied')).not.toBeInTheDocument();
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
     });
 
     test('copies ids from the AI assessments tab too', async () => {
@@ -1906,5 +1936,245 @@ describe('Review — import and export', () => {
         fireEvent.change(fileInput(), { target: { files: [file] } });
 
         await screen.findByText('Import failed — invalid file');
+    });
+});
+
+describe('Review page AI review column', () => {
+    // asAssessment() (frontend/src/handlers/assessments.ts) drops any raw
+    // object missing a string `timestamp`, so — unlike the brief's bare
+    // fixture — these need the same required fields as `makeAssessment`
+    // above (packages/timestamp/responses) or they're silently filtered out
+    // before grouping ever runs.
+    const groupedAssessments = [
+        {
+            id: 'assess-1', vuln_id: 'CVE-2024-0001', status: 'not_affected', group_id: 'group-1',
+            origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
+        },
+        {
+            id: 'assess-2', vuln_id: 'CVE-2024-0001', status: 'not_affected', group_id: 'group-1',
+            origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
+        },
+    ];
+
+    const differsReview = {
+        id: 'r1',
+        assessment_id: 'assess-1',
+        status: 'affected',
+        status_notes: '',
+        justification: '',
+        impact_statement: '',
+        workaround: '',
+        responses: [],
+        rationale: 'in rootfs',
+        timestamp: '2026-08-06T10:00:00Z',
+        verdict: 'differs' as const,
+        is_stale: false,
+    };
+
+    const agreesReview = { ...differsReview, id: 'r2', assessment_id: 'assess-2', verdict: 'agrees' as const };
+
+    test('renders one row per server-side group', async () => {
+        // Arrange
+        mockNetwork(groupedAssessments);
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findAllByText('CVE-2024-0001')).toHaveLength(1);
+    });
+
+    test('a partly reviewed group does not claim a verdict for its unreviewed members', async () => {
+        // Arrange
+        mockNetwork(groupedAssessments, { reviews: { 'assess-1': differsReview } });
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findByTitle('1 differ · 1 not reviewed')).toBeInTheDocument();
+    });
+
+    test('centres the verdict flags in the cell', async () => {
+        mockNetwork(groupedAssessments, { reviews: { 'assess-1': differsReview } });
+
+        render(<Review projectId="proj1" />);
+
+        const flags = await screen.findByTitle('1 differ · 1 not reviewed');
+        expect(flags.parentElement).toHaveClass('justify-center');
+    });
+
+    test('a group whose members were reviewed differently reports both verdicts', async () => {
+        // Group members share the assessment text but target different
+        // variants/packages, so they are reviewed independently and may disagree.
+        // Arrange
+        mockNetwork(groupedAssessments, {
+            reviews: { 'assess-1': differsReview, 'assess-2': agreesReview },
+        });
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findByTitle('1 agree · 1 differ')).toBeInTheDocument();
+    });
+
+    test('renders a dash for assessments with no review', async () => {
+        mockNetwork([groupedAssessments[0]]);
+
+        render(<Review projectId="proj1" />);
+
+        expect(await screen.findByTitle(/not reviewed/i)).toBeInTheDocument();
+    });
+});
+
+describe('Review — AI review filter', () => {
+    /** One custom assessment on its own row, keyed by its own vuln id so each
+     *  verdict is identifiable in the table. */
+    const assessment = (id: string, vulnId: string) => ({
+        id, vuln_id: vulnId, status: 'not_affected', group_id: null,
+        origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
+    });
+
+    const review = (assessmentId: string, verdict: 'agrees' | 'differs', isStale = false) => ({
+        id: `rev-${assessmentId}`,
+        assessment_id: assessmentId,
+        status: 'affected',
+        status_notes: '',
+        justification: '',
+        impact_statement: '',
+        workaround: '',
+        responses: [],
+        rationale: 'because',
+        timestamp: '2026-08-06T10:00:00Z',
+        verdict,
+        is_stale: isStale,
+    });
+
+    const ASSESSMENTS = [
+        assessment('ag-1', 'CVE-2024-AGREE'),
+        assessment('df-1', 'CVE-2024-DIFFER'),
+        assessment('st-1', 'CVE-2024-STALE'),
+        assessment('no-1', 'CVE-2024-NONE'),
+    ];
+
+    const REVIEWS = {
+        'ag-1': review('ag-1', 'agrees'),
+        'df-1': review('df-1', 'differs'),
+        'st-1': review('st-1', 'agrees', true),
+    };
+
+    /** Render the page with the four verdicts present and open the filter. */
+    const openFilter = async (user: ReturnType<typeof userEvent.setup>) => {
+        mockNetwork(ASSESSMENTS, { reviews: REVIEWS });
+        render(<Review projectId="proj1" />);
+        await screen.findByText('CVE-2024-AGREE');
+        await user.click(screen.getByRole('button', { name: /AI review/ }));
+    };
+
+    const expectOnly = async (vulnId: string) => {
+        await waitFor(() => {
+            expect(screen.getAllByText(/^CVE-2024-/)).toHaveLength(1);
+        });
+        expect(screen.getByText(vulnId)).toBeInTheDocument();
+    };
+
+    test('sits between the Justification and Supplier filters', async () => {
+        mockNetwork(ASSESSMENTS, { reviews: REVIEWS });
+        render(<Review projectId="proj1" />);
+
+        await screen.findByText('CVE-2024-AGREE');
+        const filters = screen.getAllByRole('button')
+            .map(b => b.textContent?.trim())
+            .filter(text => text === 'Status' || text === 'Justification' || text === 'AI review');
+        expect(filters).toEqual(['Status', 'Justification', 'AI review']);
+    });
+
+    test('filters to rows whose review agreed', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review agreed' }));
+
+        await expectOnly('CVE-2024-AGREE');
+    });
+
+    test('filters to rows whose review differed', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review differed' }));
+
+        await expectOnly('CVE-2024-DIFFER');
+    });
+
+    test('filters to rows whose review went stale, whatever it concluded', async () => {
+        // The stale row's review agreed, but it was written against an
+        // assessment that has since changed, so it belongs to "stale" only.
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review stale' }));
+
+        await expectOnly('CVE-2024-STALE');
+    });
+
+    test('filters to rows with no review at all', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'No AI review' }));
+
+        await expectOnly('CVE-2024-NONE');
+    });
+
+    test('selecting several options keeps rows matching any of them', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review agreed' }));
+        await user.click(screen.getByRole('checkbox', { name: 'AI review differed' }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2024-NONE')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-2024-AGREE')).toBeInTheDocument();
+        expect(screen.getByText('CVE-2024-DIFFER')).toBeInTheDocument();
+        expect(screen.queryByText('CVE-2024-STALE')).not.toBeInTheDocument();
+    });
+
+    test('a partly reviewed group matches both its verdict and "No AI review"', async () => {
+        // Group members are reviewed independently, so a group holding one
+        // differing review and one unreviewed member belongs to both options.
+        const grouped = [
+            { ...assessment('g-1', 'CVE-2024-GROUP'), group_id: 'group-1' },
+            { ...assessment('g-2', 'CVE-2024-GROUP'), group_id: 'group-1' },
+        ];
+        mockNetwork(grouped, { reviews: { 'g-1': review('g-1', 'differs') } });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2024-GROUP');
+        await user.click(screen.getByRole('button', { name: /AI review/ }));
+        await user.click(screen.getByRole('checkbox', { name: 'AI review differed' }));
+        expect(screen.getByText('CVE-2024-GROUP')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review differed' }));
+        await user.click(screen.getByRole('checkbox', { name: 'No AI review' }));
+        expect(screen.getByText('CVE-2024-GROUP')).toBeInTheDocument();
+    });
+
+    test('reset filters clears the AI review selection', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review agreed' }));
+        await expectOnly('CVE-2024-AGREE');
+
+        await user.click(screen.getByText('Reset Filters'));
+
+        await waitFor(() => {
+            expect(screen.getAllByText(/^CVE-2024-/)).toHaveLength(4);
+        });
     });
 });
