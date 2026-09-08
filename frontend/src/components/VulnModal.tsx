@@ -50,13 +50,7 @@ type Props = {
 // How long the inline "Copied" confirmation stays next to a copy button.
 const COPIED_FEEDBACK_MS = 2000;
 
-const hasAvailableAssessmentText = (
-    value: string | null | undefined,
-    unavailableText: string
-): boolean => {
-    const normalizedValue = value?.trim().toLowerCase();
-    return Boolean(normalizedValue && normalizedValue !== unavailableText);
-};
+const hasAssessmentText = (value: string | null | undefined): boolean => Boolean(value?.trim());
 
 const dt_options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
@@ -1952,8 +1946,8 @@ type VariantScopedSnapshot = {
                                 {aiGroups.map(group => {
                                     const groupKey = group.group_id ?? group.assessment_ids[0];
                                     const firstTarget = group.targets[0];
-                                    const hasStatusNotes = hasAvailableAssessmentText(group.status_notes, 'no status notes');
-                                    const hasWorkaround = hasAvailableAssessmentText(group.workaround, 'no workaround available');
+                                    const hasStatusNotes = hasAssessmentText(group.status_notes);
+                                    const hasWorkaround = hasAssessmentText(group.workaround);
                                     return (
                                         <div
                                             key={`ai-${encodeURIComponent(groupKey)}`}
@@ -2046,8 +2040,8 @@ type VariantScopedSnapshot = {
                                     const firstId = group.assessment_ids[0];
                                     const isNewlyAdded = group.assessment_ids.some(id => newAssessmentIds.has(id));
                                     const isBeingEdited = editingAssessmentId === firstId;
-                                    const hasStatusNotes = hasAvailableAssessmentText(group.status_notes, 'no status notes');
-                                    const hasWorkaround = hasAvailableAssessmentText(group.workaround, 'no workaround available');
+                                    const hasStatusNotes = hasAssessmentText(group.status_notes);
+                                    const hasWorkaround = hasAssessmentText(group.workaround);
                                     const groupPackages = [...new Set(group.targets.map(t => t.package))];
                                     // Build a synthetic Assessment for EditAssessment, which still expects
                                     // one Assessment object rather than a group.
