@@ -106,6 +106,7 @@ describe('SBOM match condition', () => {
         expect(screen.getByRole('heading', { name: 'Match condition' })).toBeInTheDocument();
         expect(screen.getByText('Filter packages by vulnerability facts. Press Enter to apply the condition.')).toBeInTheDocument();
         expect(screen.getByText('field operator value')).toBeInTheDocument();
+        expect(screen.getByText('known_exploitable')).toBeInTheDocument();
         expect(screen.getByText('cvss >= 7 and pending')).toBeInTheDocument();
         expect(screen.getByText('epss >= 10% or fixed')).toBeInTheDocument();
     });
@@ -141,6 +142,7 @@ describe('SBOM match condition', () => {
         const makeVulnerability = (
             id: string,
             assessments: { status: string; timestamp: string }[],
+            knownExploitable = false,
         ) => ({
             id,
             severity: {
@@ -154,10 +156,11 @@ describe('SBOM match condition', () => {
                 likely: new Iso8601Duration('PT1H'),
                 pessimistic: new Iso8601Duration('PT2H'),
             },
+            euvd: { known_exploited: knownExploitable },
             assessments,
         }) as unknown as Vulnerability;
         const facts = [
-            makeVulnerability('CVE-FIXED', [assessment('affected', '2026-01-01'), assessment('fixed', '2026-02-01')]),
+            makeVulnerability('CVE-FIXED', [assessment('affected', '2026-01-01'), assessment('fixed', '2026-02-01')], true),
             makeVulnerability('CVE-IGNORED', [assessment('not_affected', '2026-01-01')]),
             makeVulnerability('CVE-AFFECTED', [assessment('exploitable', '2026-01-01')]),
             makeVulnerability('CVE-PENDING', [assessment('in_triage', '2026-01-01')]),
@@ -170,8 +173,9 @@ describe('SBOM match condition', () => {
         expect(items[0].data).toEqual({
             id: 'CVE-FIXED', cvss: 9.8, cvss_min: 7.5, epss: 0.42,
             effort: 3600, effort_min: 1800, effort_max: 7200,
-            fixed: true, ignored: false, affected: false, pending: false, new: false,
+            known_exploitable: true, fixed: true, ignored: false, affected: false, pending: false, new: false,
         });
+        expect(items[1].data).toMatchObject({ known_exploitable: false });
         expect(items[1].data).toMatchObject({ fixed: false, ignored: true, affected: false, pending: false, new: false });
         expect(items[2].data).toMatchObject({ fixed: false, ignored: false, affected: true, pending: false, new: false });
         expect(items[3].data).toMatchObject({ fixed: false, ignored: false, affected: false, pending: true, new: false });
