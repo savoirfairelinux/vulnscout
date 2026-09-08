@@ -234,6 +234,28 @@ describe('EditAssessment Component', () => {
         expect(mockOnFieldsChange).toHaveBeenCalledWith(false);
     });
 
+    test('reports variant selection changes through onFieldsChange', async () => {
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                onFieldsChange={mockOnFieldsChange}
+                availableVariants={variants}
+                defaultSelectedVariantIds={['v1']}
+            />
+        );
+
+        await user.click(screen.getByRole('checkbox', { name: 'release' }));
+
+        expect(mockOnFieldsChange).toHaveBeenLastCalledWith(true);
+    });
+
     test('resets to original values when clearFields changes', async () => {
         const { rerender } = render(
             <EditAssessment

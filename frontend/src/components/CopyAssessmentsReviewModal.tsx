@@ -1,13 +1,14 @@
-import { useEffect, useReducer, useCallback } from "react";
+import { useReducer, useCallback } from "react";
 import React from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCopy, faXmark, faChevronDown, faChevronRight } from "@fortawesome/free-solid-svg-icons";
+import { faCopy, faChevronDown, faChevronRight } from "@fortawesome/free-solid-svg-icons";
 import type {
     CopyAssessmentsPreviewGroup,
     CopyAssessmentsPreviewCandidate,
     CopyAssessmentsSelection,
     CopyAssessmentsAssessmentDetails,
 } from "../handlers/variant";
+import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -167,16 +168,6 @@ type Props = {
 function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm, onCancel }: Readonly<Props>) {
     const [state, dispatch] = useReducer(reducer, groups, buildInitialState);
 
-    // Escape key to close
-    useEffect(() => {
-        if (!isOpen) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onCancel();
-        };
-        document.addEventListener("keydown", onKey);
-        return () => document.removeEventListener("keydown", onKey);
-    }, [isOpen, onCancel]);
-
     const handleConfirm = useCallback(() => {
         const selections: CopyAssessmentsSelection[] = [];
         for (const g of groups) {
@@ -208,220 +199,199 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
         return g.candidates.some((c) => c.selected) && rowState !== undefined;
     }).length;
 
+    const footer = (
+        <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-zinc-400">
+                {selectableCount === 0
+                    ? "Nothing selected — confirm to copy nothing."
+                    : `${selectableCount} assessment${selectableCount !== 1 ? "s" : ""} will be copied.`}
+            </p>
+            <ModalActions>
+                <ModalButton
+                    onClick={onCancel}
+                >
+                    Cancel
+                </ModalButton>
+                <ModalButton
+                    variant="primary"
+                    onClick={handleConfirm}
+                >
+                    <FontAwesomeIcon icon={faCopy} className="mr-2" aria-hidden="true" />
+                    Confirm Copy
+                </ModalButton>
+            </ModalActions>
+        </div>
+    );
+
     return (
-        <div
-            data-testid="copy-review-modal-backdrop"
-            tabIndex={-1}
-            onMouseDown={(e) => {
-                if (e.target === e.currentTarget) onCancel();
-            }}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
+        <ModalShell
+            isOpen={isOpen}
+            title="Review Copy Alignments"
+            subtitle={previewMessage}
+            icon={<FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />}
+            onClose={onCancel}
+            closeLabel="Close"
+            testId="copy-review-modal-backdrop"
+            size="wide"
+            contentClassName="flex min-h-0 flex-1 flex-col p-0 md:p-0"
+            footer={footer}
         >
-            <div className="relative w-full max-w-4xl max-h-[90vh] mx-4 flex flex-col rounded-lg shadow-2xl bg-slate-800 border border-slate-600">
+            {/* Toolbar */}
+            <div className="flex items-center gap-3 px-5 py-2 border-b border-slate-700/70 bg-slate-900/30">
+                <span className="text-xs text-zinc-400">
+                    {selectableCount} of {totalSelectable} selected
+                </span>
+                <button
+                    type="button"
+                    onClick={() => dispatch({ type: "SELECT_ALL" })}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 underline"
+                >
+                    Select all
+                </button>
+                <button
+                    type="button"
+                    onClick={() => dispatch({ type: "DESELECT_ALL" })}
+                    className="text-xs text-zinc-400 hover:text-zinc-200 underline"
+                >
+                    Deselect all
+                </button>
+            </div>
 
-                {/* Header */}
-                <div className="flex items-center justify-between px-5 py-4 border-b border-slate-600">
-                    <div className="flex items-center gap-2">
-                        <FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />
-                        <div>
-                            <h2 className="text-lg font-semibold text-white">Review Copy Alignments</h2>
-                            {previewMessage && (
-                                <p className="text-xs text-cyan-300 mt-0.5">{previewMessage}</p>
-                            )}
-                        </div>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={onCancel}
-                        className="text-zinc-400 hover:text-white hover:bg-slate-700 rounded-lg p-1.5 transition-colors"
-                        aria-label="Close"
-                    >
-                        <FontAwesomeIcon icon={faXmark} className="w-4 h-4" aria-hidden="true" />
-                    </button>
-                </div>
+            {/* Table */}
+            <div className="flex-1 overflow-auto">
+                {groups.length === 0 ? (
+                    <p className="px-5 py-6 text-sm text-zinc-400 text-center">
+                        No alignments found for the selected options.
+                    </p>
+                ) : (
+                    <table className="min-w-full text-sm text-zinc-200">
+                        <thead className="sticky top-0 bg-slate-800 text-zinc-300 text-xs uppercase tracking-wide z-10">
+                            <tr>
+                                <th className="px-4 py-2 text-left w-10">Copy</th>
+                                <th className="px-4 py-2 text-left">Vulnerability</th>
+                                <th className="px-4 py-2 text-left">Source package</th>
+                                <th className="px-4 py-2 text-left">Target package</th>
+                                <th className="px-4 py-2 w-8" />
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {groups.map((g) => {
+                                const rowState = state.rows[g.source_assessment_id];
+                                const candidateIndex = rowState?.candidateIndex ?? 0;
+                                const currentCandidate = g.candidates[candidateIndex];
+                                const isChecked = rowState?.selected ?? false;
+                                const isDisabled = g.candidates.every((c) => !c.selected);
+                                const isExpanded = rowState?.expanded ?? false;
 
-                {/* Toolbar */}
-                <div className="flex items-center gap-3 px-5 py-2 border-b border-slate-700/70 bg-slate-900/30">
-                    <span className="text-xs text-zinc-400">
-                        {selectableCount} of {totalSelectable} selected
-                    </span>
-                    <button
-                        type="button"
-                        onClick={() => dispatch({ type: "SELECT_ALL" })}
-                        className="text-xs text-cyan-400 hover:text-cyan-300 underline"
-                    >
-                        Select all
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => dispatch({ type: "DESELECT_ALL" })}
-                        className="text-xs text-zinc-400 hover:text-zinc-200 underline"
-                    >
-                        Deselect all
-                    </button>
-                </div>
+                                return (
+                                    <React.Fragment key={g.source_assessment_id}>
+                                    <tr
+                                        className={[
+                                            "border-t border-slate-700/60 transition-colors",
+                                            isDisabled ? "opacity-50" : "hover:bg-slate-700/30",
+                                        ].join(" ")}
+                                    >
+                                        {/* Checkbox */}
+                                        <td className="px-4 py-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={isChecked && !isDisabled}
+                                                disabled={isDisabled}
+                                                onChange={() => dispatch({ type: "TOGGLE", assessmentId: g.source_assessment_id })}
+                                                className="rounded border-slate-500 bg-slate-900 text-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed"
+                                                aria-label={`Include ${g.vulnerability_id}`}
+                                            />
+                                        </td>
 
-                {/* Table */}
-                <div className="flex-1 overflow-auto">
-                    {groups.length === 0 ? (
-                        <p className="px-5 py-6 text-sm text-zinc-400 text-center">
-                            No alignments found for the selected options.
-                        </p>
-                    ) : (
-                        <table className="min-w-full text-sm text-zinc-200">
-                            <thead className="sticky top-0 bg-slate-800 text-zinc-300 text-xs uppercase tracking-wide z-10">
-                                <tr>
-                                    <th className="px-4 py-2 text-left w-10">Copy</th>
-                                    <th className="px-4 py-2 text-left">Vulnerability</th>
-                                    <th className="px-4 py-2 text-left">Source package</th>
-                                    <th className="px-4 py-2 text-left">Target package</th>
-                                    <th className="px-4 py-2 w-8" />
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {groups.map((g) => {
-                                    const rowState = state.rows[g.source_assessment_id];
-                                    const candidateIndex = rowState?.candidateIndex ?? 0;
-                                    const currentCandidate = g.candidates[candidateIndex];
-                                    const isChecked = rowState?.selected ?? false;
-                                    const isDisabled = g.candidates.every((c) => !c.selected);
-                                    const isExpanded = rowState?.expanded ?? false;
+                                        {/* Vulnerability ID */}
+                                        <td className="px-4 py-2 font-mono text-xs text-cyan-300 whitespace-nowrap">
+                                            {g.vulnerability_id}
+                                        </td>
 
-                                    return (
-                                        <React.Fragment key={g.source_assessment_id}>
-                                        <tr
-                                            className={[
-                                                "border-t border-slate-700/60 transition-colors",
-                                                isDisabled ? "opacity-50" : "hover:bg-slate-700/30",
-                                            ].join(" ")}
-                                        >
-                                            {/* Checkbox */}
-                                            <td className="px-4 py-2">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isChecked && !isDisabled}
+                                        {/* Source package */}
+                                        <td className="px-4 py-2 font-mono text-xs text-zinc-300 whitespace-nowrap">
+                                            {g.source_package || "—"}
+                                        </td>
+
+                                        {/* Target package — dropdown if multiple candidates */}
+                                        <td className="px-4 py-2">
+                                            {g.candidates.length === 1 ? (
+                                                <span className={[
+                                                    "font-mono text-xs",
+                                                    currentCandidate?.already_has_custom
+                                                        ? "text-amber-400"
+                                                        : "text-zinc-300",
+                                                ].join(" ")}>
+                                                    {currentCandidate?.target_package || "—"}
+                                                    {currentCandidate?.already_has_custom && (
+                                                        <span className="ml-1 text-amber-500 text-[10px]">(already assessed)</span>
+                                                    )}
+                                                </span>
+                                            ) : (
+                                                <select
+                                                    value={candidateIndex}
+                                                    onChange={(e) =>
+                                                        dispatch({
+                                                            type: "SET_CANDIDATE",
+                                                            assessmentId: g.source_assessment_id,
+                                                            index: Number(e.target.value),
+                                                        })
+                                                    }
                                                     disabled={isDisabled}
-                                                    onChange={() => dispatch({ type: "TOGGLE", assessmentId: g.source_assessment_id })}
-                                                    className="rounded border-slate-500 bg-slate-900 text-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed"
-                                                    aria-label={`Include ${g.vulnerability_id}`}
-                                                />
-                                            </td>
-
-                                            {/* Vulnerability ID */}
-                                            <td className="px-4 py-2 font-mono text-xs text-cyan-300 whitespace-nowrap">
-                                                {g.vulnerability_id}
-                                            </td>
-
-                                            {/* Source package */}
-                                            <td className="px-4 py-2 font-mono text-xs text-zinc-300 whitespace-nowrap">
-                                                {g.source_package || "—"}
-                                            </td>
-
-                                            {/* Target package — dropdown if multiple candidates */}
-                                            <td className="px-4 py-2">
-                                                {g.candidates.length === 1 ? (
-                                                    <span className={[
-                                                        "font-mono text-xs",
-                                                        currentCandidate?.already_has_custom
-                                                            ? "text-amber-400"
-                                                            : "text-zinc-300",
-                                                    ].join(" ")}>
-                                                        {currentCandidate?.target_package || "—"}
-                                                        {currentCandidate?.already_has_custom && (
-                                                            <span className="ml-1 text-amber-500 text-[10px]">(already assessed)</span>
-                                                        )}
-                                                    </span>
-                                                ) : (
-                                                    <select
-                                                        value={candidateIndex}
-                                                        onChange={(e) =>
-                                                            dispatch({
-                                                                type: "SET_CANDIDATE",
-                                                                assessmentId: g.source_assessment_id,
-                                                                index: Number(e.target.value),
-                                                            })
-                                                        }
-                                                        disabled={isDisabled}
-                                                        className="w-full rounded border border-slate-600 bg-slate-900 text-xs text-zinc-200 px-2 py-1 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                                                        aria-label={`Target for ${g.vulnerability_id}`}
-                                                    >
-                                                        {g.candidates.map((c, i) => (
-                                                            <option key={c.target_finding_id} value={i}>
-                                                                {c.target_package || "—"}
-                                                                {c.already_has_custom ? " (already assessed)" : ""}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                )}
-                                            </td>
-
-                                            {/* Expand / collapse details */}
-                                            <td className="px-2 py-2 text-center">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => dispatch({ type: "TOGGLE_EXPAND", assessmentId: g.source_assessment_id })}
-                                                    className="text-zinc-500 hover:text-zinc-200 transition-colors"
-                                                    aria-label={`${isExpanded ? "Collapse" : "Expand"} details for ${g.vulnerability_id}`}
-                                                    aria-expanded={isExpanded}
+                                                    className="w-full rounded border border-slate-600 bg-slate-900 text-xs text-zinc-200 px-2 py-1 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                                                    aria-label={`Target for ${g.vulnerability_id}`}
                                                 >
-                                                    <FontAwesomeIcon
-                                                        icon={isExpanded ? faChevronDown : faChevronRight}
-                                                        className="w-3 h-3"
-                                                        aria-hidden="true"
-                                                    />
-                                                </button>
+                                                    {g.candidates.map((c, i) => (
+                                                        <option key={c.target_finding_id} value={i}>
+                                                            {c.target_package || "—"}
+                                                            {c.already_has_custom ? " (already assessed)" : ""}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                        </td>
+
+                                        {/* Expand / collapse details */}
+                                        <td className="px-2 py-2 text-center">
+                                            <button
+                                                type="button"
+                                                onClick={() => dispatch({ type: "TOGGLE_EXPAND", assessmentId: g.source_assessment_id })}
+                                                className="text-zinc-500 hover:text-zinc-200 transition-colors"
+                                                aria-label={`${isExpanded ? "Collapse" : "Expand"} details for ${g.vulnerability_id}`}
+                                                aria-expanded={isExpanded}
+                                            >
+                                                <FontAwesomeIcon
+                                                    icon={isExpanded ? faChevronDown : faChevronRight}
+                                                    className="w-3 h-3"
+                                                    aria-hidden="true"
+                                                />
+                                            </button>
+                                        </td>
+                                    </tr>
+
+                                    {/* Assessment details sub-row */}
+                                    {isExpanded && (
+                                        <tr
+                                            key={`${g.source_assessment_id}-details`}
+                                            className="bg-slate-900/60 border-b border-slate-700/30"
+                                        >
+                                            <td colSpan={5} className="px-8 pb-3 pt-2">
+                                                {g.assessment_details
+                                                    ? <AssessmentDetailRow details={g.assessment_details} />
+                                                    : <span className="text-xs text-zinc-500 italic">No details available.</span>
+                                                }
                                             </td>
                                         </tr>
-
-                                        {/* Assessment details sub-row */}
-                                        {isExpanded && (
-                                            <tr
-                                                key={`${g.source_assessment_id}-details`}
-                                                className="bg-slate-900/60 border-b border-slate-700/30"
-                                            >
-                                                <td colSpan={5} className="px-8 pb-3 pt-2">
-                                                    {g.assessment_details
-                                                        ? <AssessmentDetailRow details={g.assessment_details} />
-                                                        : <span className="text-xs text-zinc-500 italic">No details available.</span>
-                                                    }
-                                                </td>
-                                            </tr>
-                                        )}
-                                        </React.Fragment>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
-
-                {/* Footer */}
-                <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-slate-600 bg-slate-900/40">
-                    <p className="text-xs text-zinc-400">
-                        {selectableCount === 0
-                            ? "Nothing selected — confirm to copy nothing."
-                            : `${selectableCount} assessment${selectableCount !== 1 ? "s" : ""} will be copied.`}
-                    </p>
-                    <div className="flex gap-3">
-                        <button
-                            type="button"
-                            onClick={onCancel}
-                            className="px-4 py-2 text-sm font-medium text-zinc-300 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleConfirm}
-                            className="px-4 py-2 text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-500 rounded-lg transition-colors"
-                        >
-                            <FontAwesomeIcon icon={faCopy} className="mr-2" aria-hidden="true" />
-                            Confirm Copy
-                        </button>
-                    </div>
-                </div>
+                                    )}
+                                    </React.Fragment>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                )}
             </div>
-        </div>
+
+        </ModalShell>
     );
 }
 

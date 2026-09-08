@@ -200,16 +200,22 @@ function EditAssessment({
     // Check if fields have changes compared to original assessment
     useEffect(() => {
         const initialStatusNotes = assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "");
+        const initialVariantIds = defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []);
+        const initialPackages = defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []);
+        const hasSameValues = (current: string[], initial: string[]) =>
+            current.length === initial.length && current.every(value => initial.includes(value));
         const hasChanges = (
             status !== assessment.status ||
             justification !== (assessment.justification || "none") ||
             statusNotes !== initialStatusNotes ||
             workaround !== (assessment.workaround || "") ||
             impact !== (isImpactStatus ? (assessment.impact_statement || "") : "") ||
+            !hasSameValues(selectedVariantIds, initialVariantIds) ||
+            !hasSameValues(selectedPackages, initialPackages) ||
             !keepCurrentTimestamp
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus]);
+    }, [status, justification, statusNotes, workaround, impact, selectedVariantIds, selectedPackages, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus, defaultSelectedVariantIds, availableVariants, defaultSelectedPackages, availablePackages]);
 
     // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {

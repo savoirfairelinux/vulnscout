@@ -67,7 +67,7 @@ describe('OperationQueueModal', () => {
         expect(screen.getByText('No operations to display.')).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: 'Close operation queue' }));
-        fireEvent.mouseDown(screen.getByRole('dialog', { name: 'Operation queue' }));
+        fireEvent.mouseDown(screen.getByTestId('modal-backdrop'));
         fireEvent.keyDown(document, { key: 'Escape' });
         expect(onClose).toHaveBeenCalledTimes(3);
 

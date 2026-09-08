@@ -30,7 +30,7 @@ import ScansHandler from "../handlers/scans";
 import type { EmptyScanPreview, OrphanedVulnerabilityPreview, OutdatedDataPreview } from "../handlers/scans";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
-import Popup from "../components/Popup";
+import ModalShell from "../components/ModalShell";
 import Transfer from "./Transfer";
 import type { RefreshType } from "../handlers/activeScanQueue";
 import {
@@ -1750,10 +1750,11 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
         onConfirm={handleRemoveNvdKey}
         onCancel={() => setConfirmRemoveNvdKey(false)}
       />
-      <Popup
+      <ModalShell
         isOpen={pendingCleanup !== null}
         title={pendingCleanup?.kind === "empty-scans" ? "Delete Empty Scans" : "Delete Orphaned CVEs"}
         onClose={() => setPendingCleanup(null)}
+        size="compact"
       >
         {pendingCleanup?.kind === "empty-scans" ? (
           <div className="space-y-4">
@@ -1777,7 +1778,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
             <div className="flex justify-end gap-3"><button type="button" onClick={() => setPendingCleanup(null)} className="px-4 py-2 text-sm text-zinc-300">Cancel</button><button type="button" onClick={handleAdditionalCleanup} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800">Delete orphaned CVEs</button></div>
           </div>
         ) : null}
-      </Popup>
+      </ModalShell>
       <ConfirmationModal
         isOpen={confirmDeleteOutdatedData}
         title="Delete Outdated Data"

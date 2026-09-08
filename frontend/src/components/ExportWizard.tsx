@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBoxArchive, faDownload, faFileLines, faLayerGroup, faShieldHalved, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faBoxArchive, faDownload, faFileLines, faLayerGroup, faShieldHalved } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import { queueExport } from "../handlers/exportQueue";
+import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
 export type ExportDocument = {
     id: string;
@@ -107,15 +108,6 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         stepHeadingRef.current?.focus();
     }, [step]);
 
-    useEffect(() => {
-        if (!isOpen) return;
-        const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === "Escape" && !exporting && !embedded) onClose?.();
-        };
-        document.addEventListener("keydown", handleEscape);
-        return () => document.removeEventListener("keydown", handleEscape);
-    }, [embedded, exporting, isOpen, onClose]);
-
     if (!isOpen) return null;
 
     const navigateToStep = (nextStep: WizardStep) => {
@@ -215,134 +207,134 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         }
     };
 
+    const footer = (
+        <ModalActions align="between">
+            <ModalButton onClick={() => navigateToStep(activeSteps[stepIndex - 1])} disabled={stepIndex === 0 || exporting}>Back</ModalButton>
+            {step !== "documents" ? <ModalButton variant="primary" onClick={() => navigateToStep(activeSteps[stepIndex + 1])} disabled={(step === "scope" && (!project || selectedVariantIds.size === 0)) || (step === "type" && exportType === null)}>Next</ModalButton> : <ModalButton variant="primary" onClick={launchExport} disabled={selected.size === 0 || exporting}><FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />{exporting ? "Preparing export..." : "Download export"}</ModalButton>}
+        </ModalActions>
+    );
+
     return (
-        <div
-            className={embedded ? "w-full" : "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"}
-            onMouseDown={event => {
-                if (!embedded && event.target === event.currentTarget && !exporting) onClose?.();
-            }}
+        <ModalShell
+            isOpen={isOpen}
+            embedded={embedded}
+            title="Create export"
+            subtitle={`Step ${stepIndex + 1} of ${activeSteps.length}`}
+            titleId="export-wizard-title"
+            onClose={() => onClose?.()}
+            closeLabel="Close export wizard"
+            showCloseButton={!embedded}
+            closeDisabled={exporting}
+            closeOnEscape={!exporting}
+            closeOnBackdrop={!exporting}
+            size="large"
+            panelRef={dialogRef}
+            panelTabIndex={-1}
+            contentClassName={embedded ? "min-h-[38rem] px-10 py-9 md:px-10 md:py-9" : "min-h-80 px-6 py-5 md:px-6 md:py-5"}
+            footer={footer}
+            headerContent={
+                <ol className={`${embedded ? "mt-6" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
+                    {activeSteps.map((currentStep, index) => (
+                        <li key={currentStep} className={index <= stepIndex ? "text-cyan-300" : "text-neutral-500"}>
+                            <span aria-hidden="true" className="mr-1 font-semibold">{index + 1}.</span>{stepLabels[currentStep]}
+                        </li>
+                    ))}
+                </ol>
+            }
         >
-            <div ref={dialogRef} tabIndex={-1} role={embedded ? "region" : "dialog"} aria-modal={embedded ? undefined : true} aria-labelledby="export-wizard-title" className={`w-full rounded-lg border border-gray-600 bg-gray-800 shadow-xl outline-none ${embedded ? "[&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_h3]:!text-2xl [&_h4]:!text-xl [&_input]:h-5 [&_input]:w-5" : "max-w-2xl"}`}>
-                <div className={`border-b border-neutral-700 ${embedded ? "px-10 py-8" : "px-6 py-4"}`}>
-                    <div className="flex items-center justify-between gap-4">
-                        <div>
-                            <h2 id="export-wizard-title" className={`${embedded ? "text-3xl" : "text-lg"} font-semibold text-white`}>Create export</h2>
-                            <p className="mt-1 text-sm text-neutral-400">Step {stepIndex + 1} of {activeSteps.length}</p>
+            {step === "scope" && <>
+                <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Project scope</h3>
+                {project ? <>
+                    <p className="mt-1 text-sm text-neutral-400">Choose the variants to export from <span className="font-semibold text-white">{project.name}</span>.</p>
+                    <p className="mt-1 text-xs text-neutral-500">Use the project selector in the navigation bar to export another project.</p>
+                    <div className={`mt-5 rounded-lg border border-slate-600 bg-slate-900/40 ${embedded ? "p-6" : "p-4"}`}>
+                        <div className="flex items-center justify-between gap-3">
+                            <h4 className="text-sm font-semibold text-white">Variants ({selectedVariantIds.size} of {variants.length} selected)</h4>
+                            {variants.length > 1 && <div className="flex gap-3 text-xs">
+                                <button type="button" onClick={() => setSelectedVariantIds(new Set(variants.map(variant => variant.id)))} className="rounded border border-cyan-700 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-950/40 hover:text-white">Select all</button>
+                                <button type="button" onClick={() => setSelectedVariantIds(new Set())} className="rounded border border-neutral-600 px-2.5 py-1 font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white">Clear</button>
+                            </div>}
                         </div>
-                        {!embedded && <button type="button" onClick={onClose} disabled={exporting} className="text-neutral-400 hover:text-white disabled:text-neutral-600" aria-label="Close export wizard">
-                            <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
-                        </button>}
+                        <div className="mt-3 grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1">
+                            {variants.map(variant => <label key={variant.id} className={`flex cursor-pointer items-center gap-4 rounded-lg border transition-colors ${embedded ? "px-5 py-4" : "px-3 py-2"} text-sm ${selectedVariantIds.has(variant.id) ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500"}`}>
+                                <input type="checkbox" checked={selectedVariantIds.has(variant.id)} onChange={() => toggleVariant(variant.id)} className="accent-cyan-500" />
+                                <span className="truncate font-medium">{variant.name}</span>
+                            </label>)}
+                        </div>
+                        {variants.length === 0 && <p className="mt-3 text-sm italic text-neutral-500">This project has no variants.</p>}
                     </div>
-                    <ol className={`${embedded ? "mt-6" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
-                        {activeSteps.map((currentStep, index) => (
-                            <li key={currentStep} className={index <= stepIndex ? "text-cyan-300" : "text-neutral-500"}>
-                                <span aria-hidden="true" className="mr-1 font-semibold">{index + 1}.</span>{stepLabels[currentStep]}
-                            </li>
-                        ))}
-                    </ol>
+                </> : <p className="mt-4 rounded border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-200">Select a project from the navigation bar before creating an export.</p>}
+            </>}
+
+            {step === "type" && <>
+                <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">What do you want to export?</h3>
+                <p className="mt-1 text-sm text-neutral-400">Choose one export family. You will select its individual files in the final step.</p>
+                <div className={`mt-6 grid grid-cols-1 ${embedded ? "gap-5 xl:grid-cols-2" : "grid-cols-2 gap-3"}`}>
+                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${exportType === "reports" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                        <input type="radio" name="export-type" checked={exportType === "reports"} onChange={() => { setExportType("reports"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
+                        <FontAwesomeIcon icon={faFileLines} className="mt-0.5 text-cyan-400" aria-hidden="true" />
+                        <span><span className="block font-medium text-white">Reports</span><span className="mt-1 block text-xs text-zinc-400">Built-in and custom reports, consolidated or separated by variant.</span></span>
+                    </label>
+                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${exportType === "sbom" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                        <input type="radio" name="export-type" checked={exportType === "sbom"} onChange={() => { setExportType("sbom"); setMode("per_variant"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
+                        <FontAwesomeIcon icon={faShieldHalved} className="mt-0.5 text-cyan-400" aria-hidden="true" />
+                        <span><span className="block font-medium text-white">SBOM files</span><span className="mt-1 block text-xs text-zinc-400">Generated per variant and downloaded together as a ZIP archive.</span></span>
+                    </label>
                 </div>
+                {exportType === "reports" && <section className="mt-6 border-t border-neutral-700 pt-5" aria-labelledby="output-layout-heading">
+                    <h4 id="output-layout-heading" className="text-sm font-semibold text-white">Output layout</h4>
+                    <p className="mt-1 text-xs text-neutral-400">Choose how project variants are represented in the archive.</p>
+                    <div className={`mt-4 grid grid-cols-1 ${embedded ? "gap-5 xl:grid-cols-2" : "grid-cols-2 gap-3"}`}>
+                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${mode === "consolidated" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                        <input type="radio" name="export-mode" checked={mode === "consolidated"} onChange={() => setMode("consolidated")} className="mt-1 accent-cyan-500" />
+                        <FontAwesomeIcon icon={faLayerGroup} className="mt-0.5 text-cyan-400" aria-hidden="true" />
+                        <span><span className="block font-medium text-white">Consolidated</span><span className="mt-1 block text-xs text-zinc-400">Each selected document combines all project variants.</span></span>
+                    </label>
+                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${mode === "per_variant" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                        <input type="radio" name="export-mode" checked={mode === "per_variant"} onChange={() => setMode("per_variant")} className="mt-1 accent-cyan-500" />
+                        <FontAwesomeIcon icon={faBoxArchive} className="mt-0.5 text-cyan-400" aria-hidden="true" />
+                        <span><span className="block font-medium text-white">One set per variant</span><span className="mt-1 block text-xs text-zinc-400">The ZIP contains a folder and selected files for each variant.</span></span>
+                    </label>
+                    </div>
+                </section>}
+            </>}
 
-                <div className={`${embedded ? "min-h-[38rem] px-10 py-9" : "min-h-80 px-6 py-5"}`}>
-                    {step === "scope" && <>
-                        <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Project scope</h3>
-                        {project ? <>
-                            <p className="mt-1 text-sm text-neutral-400">Choose the variants to export from <span className="font-semibold text-white">{project.name}</span>.</p>
-                            <p className="mt-1 text-xs text-neutral-500">Use the project selector in the navigation bar to export another project.</p>
-                            <div className={`mt-5 rounded-lg border border-slate-600 bg-slate-900/40 ${embedded ? "p-6" : "p-4"}`}>
-                                <div className="flex items-center justify-between gap-3">
-                                    <h4 className="text-sm font-semibold text-white">Variants ({selectedVariantIds.size} of {variants.length} selected)</h4>
-                                    {variants.length > 1 && <div className="flex gap-3 text-xs">
-                                        <button type="button" onClick={() => setSelectedVariantIds(new Set(variants.map(variant => variant.id)))} className="rounded border border-cyan-700 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-950/40 hover:text-white">Select all</button>
-                                        <button type="button" onClick={() => setSelectedVariantIds(new Set())} className="rounded border border-neutral-600 px-2.5 py-1 font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white">Clear</button>
-                                    </div>}
-                                </div>
-                                <div className="mt-3 grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1">
-                                    {variants.map(variant => <label key={variant.id} className={`flex cursor-pointer items-center gap-4 rounded-lg border transition-colors ${embedded ? "px-5 py-4" : "px-3 py-2"} text-sm ${selectedVariantIds.has(variant.id) ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500"}`}>
-                                        <input type="checkbox" checked={selectedVariantIds.has(variant.id)} onChange={() => toggleVariant(variant.id)} className="accent-cyan-500" />
-                                        <span className="truncate font-medium">{variant.name}</span>
-                                    </label>)}
-                                </div>
-                                {variants.length === 0 && <p className="mt-3 text-sm italic text-neutral-500">This project has no variants.</p>}
-                            </div>
-                        </> : <p className="mt-4 rounded border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-200">Select a project from the navigation bar before creating an export.</p>}
-                    </>}
-
-                    {step === "type" && <>
-                        <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">What do you want to export?</h3>
-                        <p className="mt-1 text-sm text-neutral-400">Choose one export family. You will select its individual files in the final step.</p>
-                        <div className={`mt-6 grid grid-cols-1 ${embedded ? "gap-5 xl:grid-cols-2" : "grid-cols-2 gap-3"}`}>
-                            <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${exportType === "reports" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
-                                <input type="radio" name="export-type" checked={exportType === "reports"} onChange={() => { setExportType("reports"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
-                                <FontAwesomeIcon icon={faFileLines} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                                <span><span className="block font-medium text-white">Reports</span><span className="mt-1 block text-xs text-zinc-400">Built-in and custom reports, consolidated or separated by variant.</span></span>
-                            </label>
-                            <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${exportType === "sbom" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
-                                <input type="radio" name="export-type" checked={exportType === "sbom"} onChange={() => { setExportType("sbom"); setMode("per_variant"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
-                                <FontAwesomeIcon icon={faShieldHalved} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                                <span><span className="block font-medium text-white">SBOM files</span><span className="mt-1 block text-xs text-zinc-400">Generated per variant and downloaded together as a ZIP archive.</span></span>
-                            </label>
-                        </div>
-                        {exportType === "reports" && <section className="mt-6 border-t border-neutral-700 pt-5" aria-labelledby="output-layout-heading">
-                            <h4 id="output-layout-heading" className="text-sm font-semibold text-white">Output layout</h4>
-                            <p className="mt-1 text-xs text-neutral-400">Choose how project variants are represented in the archive.</p>
-                            <div className={`mt-4 grid grid-cols-1 ${embedded ? "gap-5 xl:grid-cols-2" : "grid-cols-2 gap-3"}`}>
-                            <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${mode === "consolidated" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
-                                <input type="radio" name="export-mode" checked={mode === "consolidated"} onChange={() => setMode("consolidated")} className="mt-1 accent-cyan-500" />
-                                <FontAwesomeIcon icon={faLayerGroup} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                                <span><span className="block font-medium text-white">Consolidated</span><span className="mt-1 block text-xs text-zinc-400">Each selected document combines all project variants.</span></span>
-                            </label>
-                            <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${mode === "per_variant" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
-                                <input type="radio" name="export-mode" checked={mode === "per_variant"} onChange={() => setMode("per_variant")} className="mt-1 accent-cyan-500" />
-                                <FontAwesomeIcon icon={faBoxArchive} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                                <span><span className="block font-medium text-white">One set per variant</span><span className="mt-1 block text-xs text-zinc-400">The ZIP contains a folder and selected files for each variant.</span></span>
-                            </label>
-                            </div>
-                        </section>}
-                    </>}
-
-                    {step === "documents" && <>
-                        <div className="flex items-start justify-between gap-4">
-                            <div><h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Select {exportType === "sbom" ? "SBOM files" : "reports"}</h3><p className="mt-1 text-sm text-neutral-400">Choose every file to include in the export.</p></div>
-                            <span className="text-sm font-semibold text-cyan-300">{selected.size} selected</span>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-1 border-b border-neutral-700 pb-3">
-                            {exportType === "reports" && reportCategories.map(([key, label]) => <button key={key} type="button" onClick={() => setCategory(key)} className={`rounded px-2.5 py-1 text-xs font-medium ${category === key ? "bg-cyan-800 text-white" : "text-neutral-400 hover:bg-neutral-800 hover:text-white"}`}>{label}</button>)}
-                            <div className="ml-auto flex gap-2">
-                                <button type="button" onClick={selectVisible} className="rounded border border-cyan-700 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-950/40 hover:text-white">Select visible</button>
-                                <button type="button" onClick={clearVisible} className="rounded border border-neutral-600 px-2.5 py-1 text-xs font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white">Clear visible</button>
-                            </div>
-                        </div>
-                        <div className={`mt-3 grid grid-cols-1 gap-2 overflow-y-auto pr-1 ${embedded ? "max-h-96" : "max-h-56"}`}>
-                            {selectionGroups.map(([name, documentSelections]) => {
-                                const documentEnabled = enabledDocuments.has(name);
-                                return <fieldset key={name} className={`rounded-lg border text-sm ${embedded ? "px-5 py-4" : "px-3 py-2.5"} ${documentEnabled ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40"}`}>
-                                    <legend className="sr-only">{name}</legend>
-                                    <div className="flex items-center gap-3">
-                                        <FontAwesomeIcon icon={faFileLines} className="w-4 text-neutral-400" aria-hidden="true" />
-                                        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-medium text-white">
-                                            <input type="checkbox" aria-label="Include" checked={documentEnabled} onChange={() => toggleDocument(name, documentSelections)} className="accent-cyan-500" />
-                                            <span aria-hidden="true" className="truncate">{name}</span>
-                                        </label>
-                                    </div>
-                                    <div className={`mt-2 flex flex-wrap items-center gap-4 border-t border-slate-700 pt-2 pl-7 ${documentEnabled ? "" : "opacity-40"}`}>
-                                        {documentSelections.map(selection => <label key={selection.key} className={`flex items-center gap-1.5 text-xs font-medium uppercase text-neutral-300 ${documentEnabled && documentSelections.length > 1 ? "cursor-pointer" : "cursor-not-allowed"}`}>
-                                            <input type="checkbox" checked={selected.has(selection.key)} disabled={!documentEnabled || documentSelections.length === 1} onChange={() => toggleSelection(selection.key)} className="accent-cyan-500" />
-                                            {selection.extension}
-                                        </label>)}
-                                    </div>
-                                </fieldset>;
-                            })}
-                            {visibleSelections.length === 0 && <p className="py-8 text-center text-sm text-neutral-500">No documents in this category.</p>}
-                        </div>
-                        {error && <div role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">{error}</div>}
-                    </>}
+            {step === "documents" && <>
+                <div className="flex items-start justify-between gap-4">
+                    <div><h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Select {exportType === "sbom" ? "SBOM files" : "reports"}</h3><p className="mt-1 text-sm text-neutral-400">Choose every file to include in the export.</p></div>
+                    <span className="text-sm font-semibold text-cyan-300">{selected.size} selected</span>
                 </div>
-
-                <div className={`flex items-center justify-between border-t border-neutral-700 ${embedded ? "px-10 py-7 [&_button]:px-6 [&_button]:py-3" : "px-6 py-4"}`}>
-                    <button type="button" onClick={() => navigateToStep(activeSteps[stepIndex - 1])} disabled={stepIndex === 0 || exporting} className="rounded px-3 py-1.5 text-sm font-semibold text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-600">Back</button>
-                    {step !== "documents" ? <button type="button" onClick={() => navigateToStep(activeSteps[stepIndex + 1])} disabled={(step === "scope" && (!project || selectedVariantIds.size === 0)) || (step === "type" && exportType === null)} className="rounded bg-cyan-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500">Next</button> : <button type="button" onClick={launchExport} disabled={selected.size === 0 || exporting} className="rounded bg-cyan-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"><FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />{exporting ? "Preparing export..." : "Download export"}</button>}
+                <div className="mt-4 flex flex-wrap gap-1 border-b border-neutral-700 pb-3">
+                    {exportType === "reports" && reportCategories.map(([key, label]) => <button key={key} type="button" onClick={() => setCategory(key)} className={`rounded px-2.5 py-1 text-xs font-medium ${category === key ? "bg-cyan-800 text-white" : "text-neutral-400 hover:bg-neutral-800 hover:text-white"}`}>{label}</button>)}
+                    <div className="ml-auto flex gap-2">
+                        <button type="button" onClick={selectVisible} className="rounded border border-cyan-700 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-950/40 hover:text-white">Select visible</button>
+                        <button type="button" onClick={clearVisible} className="rounded border border-neutral-600 px-2.5 py-1 text-xs font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white">Clear visible</button>
+                    </div>
                 </div>
-            </div>
-        </div>
+                <div className={`mt-3 grid grid-cols-1 gap-2 overflow-y-auto pr-1 ${embedded ? "max-h-96" : "max-h-56"}`}>
+                    {selectionGroups.map(([name, documentSelections]) => {
+                        const documentEnabled = enabledDocuments.has(name);
+                        return <fieldset key={name} className={`rounded-lg border text-sm ${embedded ? "px-5 py-4" : "px-3 py-2.5"} ${documentEnabled ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40"}`}>
+                            <legend className="sr-only">{name}</legend>
+                            <div className="flex items-center gap-3">
+                                <FontAwesomeIcon icon={faFileLines} className="w-4 text-neutral-400" aria-hidden="true" />
+                                <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-medium text-white">
+                                    <input type="checkbox" aria-label="Include" checked={documentEnabled} onChange={() => toggleDocument(name, documentSelections)} className="accent-cyan-500" />
+                                    <span aria-hidden="true" className="truncate">{name}</span>
+                                </label>
+                            </div>
+                            <div className={`mt-2 flex flex-wrap items-center gap-4 border-t border-slate-700 pt-2 pl-7 ${documentEnabled ? "" : "opacity-40"}`}>
+                                {documentSelections.map(selection => <label key={selection.key} className={`flex items-center gap-1.5 text-xs font-medium uppercase text-neutral-300 ${documentEnabled && documentSelections.length > 1 ? "cursor-pointer" : "cursor-not-allowed"}`}>
+                                    <input type="checkbox" checked={selected.has(selection.key)} disabled={!documentEnabled || documentSelections.length === 1} onChange={() => toggleSelection(selection.key)} className="accent-cyan-500" />
+                                    {selection.extension}
+                                </label>)}
+                            </div>
+                        </fieldset>;
+                    })}
+                    {visibleSelections.length === 0 && <p className="py-8 text-center text-sm text-neutral-500">No documents in this category.</p>}
+                </div>
+                {error && <div role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">{error}</div>}
+            </>}
+        </ModalShell>
     );
 }

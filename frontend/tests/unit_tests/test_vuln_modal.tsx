@@ -721,32 +721,25 @@ describe('Vulnerability Modal', () => {
         expect(closeCb).not.toHaveBeenCalled();
     });
 
-    test('clicking the padding area around the modal box closes it without unsaved changes', async () => {
-        // The padding wrapper (between the outer backdrop and the modal content
-        // box) also closes the modal when clicked directly, matching the outer
-        // backdrop's behavior.
+    test('clicking the empty dialog surface closes it without unsaved changes', async () => {
         const closeCb = jest.fn();
-        const { container } = render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
-        expect(paddingWrapper).not.toBeNull();
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        await user.click(paddingWrapper as HTMLElement);
+        await user.click(screen.getByRole('dialog', { name: vulnerability.id }));
 
         expect(closeCb).toHaveBeenCalledTimes(1);
     });
 
-    test('clicking the padding area around the modal box shows confirmation when unsaved changes exist', async () => {
+    test('clicking the empty dialog surface shows confirmation when unsaved changes exist', async () => {
         const closeCb = jest.fn();
-        const { container } = render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const optimistic = screen.getByPlaceholderText(/shortest estimate/i);
         await user.type(optimistic, '5h');
 
-        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
-        await user.click(paddingWrapper as HTMLElement);
+        await user.click(screen.getByRole('dialog', { name: vulnerability.id }));
 
         expect(await screen.findByText(/are you sure you want to close without saving/i)).toBeInTheDocument();
         expect(closeCb).not.toHaveBeenCalled();
@@ -2323,6 +2316,21 @@ describe('Vulnerability Modal', () => {
         // Click again to hide
         await user.click(helpBtn);
         expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
+    });
+
+    test('Escape closes the shortcut helper before the vulnerability dialog', async () => {
+        const user = userEvent.setup();
+        const onClose = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={onClose} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await user.click(screen.getByRole('button', { name: /shortcut helper/i }));
+        expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
+
+        await user.keyboard('{Escape}');
+
+        expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
 
     test('delete assessment with remaining assessments updates status from most recent', async () => {
