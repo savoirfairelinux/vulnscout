@@ -7,6 +7,7 @@
 Assessment, TimeEstimate, Metrics and their controllers."""
 
 import datetime
+import uuid
 import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
@@ -16,6 +17,7 @@ from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.models.finding import Finding
 from src.models.assessment import Assessment
+from src.models.assessment_target import GroupInvariantError
 from src.models.time_estimate import TimeEstimate
 from src.models.metrics import Metrics
 from src.controllers.vulnerabilities import VulnerabilitiesController
@@ -78,9 +80,8 @@ def finding(app, package, vuln):
 @pytest.fixture()
 def assessment(app, finding, variant):
     return Assessment.create(
+        targets=[(variant.id, finding.id)],
         status="under_investigation",
-        finding_id=finding.id,
-        variant_id=variant.id,
     )
 
 
@@ -220,10 +221,6 @@ class TestAssessmentModel:
         results = Assessment.get_by_finding(finding.id)
         assert any(a.id == assessment.id for a in results)
 
-    def test_get_by_variant(self, assessment, variant):
-        results = Assessment.get_by_variant(variant.id)
-        assert any(a.id == assessment.id for a in results)
-
     def test_get_by_finding_and_variant(self, assessment, finding, variant):
         results = Assessment.get_by_finding_and_variant(finding.id, variant.id)
         assert any(a.id == assessment.id for a in results)
@@ -250,7 +247,7 @@ class TestAssessmentModel:
         assert assessment.timestamp is not None
 
     def test_delete(self, app, finding, variant):
-        a = Assessment.create("affected", finding_id=finding.id, variant_id=variant.id)
+        a = Assessment.create("affected", targets=[(variant.id, finding.id)])
         aid = a.id
         a.delete()
         assert Assessment.get_by_id(aid) is None
@@ -481,15 +478,10 @@ class TestAssessmentDBController:
         results = Assessment.get_by_finding(finding.id)
         assert any(a.id == assessment.id for a in results)
 
-    def test_get_by_variant(self, assessment, variant):
-        results = Assessment.get_by_variant(variant.id)
-        assert any(a.id == assessment.id for a in results)
-
     def test_create(self, app, finding, variant):
         a = Assessment.create(
             "affected",
-            finding_id=finding.id,
-            variant_id=variant.id,
+            targets=[(variant.id, finding.id)],
         )
         assert a.status == "affected"
 
@@ -498,7 +490,7 @@ class TestAssessmentDBController:
         assert assessment.status == "fixed"
 
     def test_delete_by_instance(self, app, finding, variant):
-        a = Assessment.create("affected", finding_id=finding.id, variant_id=variant.id)
+        a = Assessment.create("affected", targets=[(variant.id, finding.id)])
         aid = a.id
         a.delete()
         assert Assessment.get_by_id(aid) is None
@@ -645,16 +637,6 @@ class TestMetricsController:
 class TestAssessmentModelExtra:
     """Cover Assessment model paths not exercised by the main TestAssessmentModel."""
 
-    def test_create_with_string_finding_and_variant_ids(self, app, finding, variant):
-        """Assessment.create() with string finding_id and variant_id (lines 522, 524)."""
-        a = Assessment.create(
-            status="affected",
-            finding_id=str(finding.id),
-            variant_id=str(variant.id),
-        )
-        assert a is not None
-        assert a.finding_id == finding.id
-
     def test_from_dict_invalid_uuid_id(self):
         """from_dict() with an unparseable id falls back gracefully (lines 362-363)."""
         a = Assessment.from_dict({"id": "not-a-valid-uuid", "vuln_id": "CVE-X", "packages": []})
@@ -674,11 +656,6 @@ class TestAssessmentModelExtra:
     def test_get_by_finding_with_string_id(self, app, assessment, finding):
         """get_by_finding() accepts a string UUID (line 608)."""
         results = Assessment.get_by_finding(str(finding.id))
-        assert any(a.id == assessment.id for a in results)
-
-    def test_get_by_variant_with_string_id(self, app, assessment, variant):
-        """get_by_variant() accepts a string UUID (line 617)."""
-        results = Assessment.get_by_variant(str(variant.id))
         assert any(a.id == assessment.id for a in results)
 
     def test_get_by_finding_and_variant_with_string_ids(self, app, assessment, finding, variant):
@@ -905,3 +882,128 @@ class TestVulnerabilityModelExtra:
         record = Vulnerability.persist_from_transient(transient)
         assert record is not None
         assert record.publish_date is None
+
+
+# ===========================================================================
+# PR-A: target rows mirrored into the scalar columns
+# ===========================================================================
+
+class TestAssessmentTargetMirroring:
+    """The expand phase writes both the target row and the scalar columns."""
+
+    def test_create_mirrors_its_single_target_into_the_scalar_columns(
+        self, app, variant, finding
+    ):
+        """PR-A dual-writes so unmigrated SQL-expression readers keep working.
+
+        Deleted in PR-D along with the columns.
+        """
+        assessment = Assessment.create(
+            targets=[(variant.id, finding.id)],
+            status="not_affected",
+        )
+        _db.session.flush()
+        assert assessment.variant_id == variant.id
+        assert assessment.finding_id == finding.id
+        assert assessment.targets == [(variant.id, finding.id)]
+
+    def test_create_refuses_an_empty_target_set(self, app):
+        with pytest.raises(GroupInvariantError):
+            Assessment.create(targets=[], status="not_affected")
+
+    def test_add_target_mirrors_the_pair_it_attached(self, app, variant, finding):
+        """``add_target`` is the other write path; it mirrors too."""
+        assessment = Assessment.create(
+            targets=[(variant.id, finding.id)],
+            status="not_affected",
+        )
+        other = Variant.create("MirrorVariant", variant.project_id)
+        assert assessment.add_target(other.id, finding.id) is True
+        assert assessment.variant_id == other.id
+        assert assessment.finding_id == finding.id
+        assert assessment.add_target(other.id, finding.id) is False
+
+    def test_to_dict_reports_variant_ids_and_keeps_variant_id(
+        self, app, variant, finding
+    ):
+        """PR-C's frontend reads variant_ids; older consumers still read variant_id."""
+        assessment = Assessment.create(
+            targets=[(variant.id, finding.id)],
+            status="not_affected",
+        )
+        _db.session.flush()
+        payload = assessment.to_dict()
+        assert payload["variant_ids"] == [str(variant.id)]
+        assert payload["variant_id"] == str(variant.id)
+        assert payload["targets"] == [
+            {"variant_id": str(variant.id), "package": finding.package.string_id}
+        ]
+
+    def test_covers_variant_matches_every_target_variant(self, app, variant, finding):
+        """``covers_variant`` replaces the old ``variant_id ==`` comparison."""
+        assessment = Assessment.create(
+            targets=[(variant.id, finding.id)],
+            status="not_affected",
+        )
+        other = Variant.create("CoversVariant", variant.project_id)
+        assert assessment.covers_variant(variant.id) is True
+        assert assessment.covers_variant(other.id) is False
+        assert assessment.covers_variant(None) is False
+
+    def test_covers_variant_on_a_target_less_record_matches_only_none(self, app):
+        """An empty target set is the legacy unscoped record the NULL represented."""
+        assessment = Assessment(status="not_affected")
+        assert assessment.covers_variant(None) is True
+        assert assessment.covers_variant(uuid.uuid4()) is False
+
+
+class TestMultiPackageDtoPersistence:
+    """A VEX/OpenVEX statement naming several packages is one DTO with several
+    packages; ``_persist_assessment_to_db`` calls ``from_vuln_assessment`` once
+    per package.  Under PR-A's one-target-per-assessment constraint the second
+    call must overwrite the first target rather than append a second row, which
+    is what ``staging`` did with its scalar columns (last package wins).
+    """
+
+    def _two_package_dto(self, vuln, packages):
+        dto = Assessment.new_dto(vuln.id, [p.string_id for p in packages])
+        dto.status = "not_affected"
+        dto.justification = "component_not_present"
+        return dto
+
+    def test_two_package_dto_persists_one_assessment_and_one_target(
+        self, app, variant, vuln
+    ):
+        from src.controllers.assessments import _persist_assessment_to_db
+
+        openssl = Package.create("openssl", "3.0.0")
+        zlib = Package.create("zlib", "1.3")
+        dto = self._two_package_dto(vuln, [openssl, zlib])
+
+        _persist_assessment_to_db(dto, variant_id=variant.id)
+        _db.session.commit()
+
+        rows = _db.session.query(Assessment).all()
+        assert len(rows) == 1
+        record = rows[0]
+        assert len(record.target_rows) == 1
+        # ``staging`` kept the last package's finding in its scalar columns.
+        zlib_finding = Finding.get_by_package_and_vulnerability(zlib.id, vuln.id)
+        assert record.targets == [(variant.id, zlib_finding.id)]
+        assert (record.variant_id, record.finding_id) == (variant.id, zlib_finding.id)
+
+    def test_two_package_dto_stays_visible_to_target_based_readers(
+        self, app, variant, vuln
+    ):
+        from src.controllers.assessments import _persist_assessment_to_db
+
+        openssl = Package.create("openssl", "3.0.0")
+        zlib = Package.create("zlib", "1.3")
+        dto = self._two_package_dto(vuln, [openssl, zlib])
+
+        _persist_assessment_to_db(dto, variant_id=variant.id)
+        _db.session.commit()
+
+        assert len(Assessment.get_by_vulnerability(vuln.id)) == 1
+        zlib_finding = Finding.get_by_package_and_vulnerability(zlib.id, vuln.id)
+        assert len(Assessment.get_by_finding(zlib_finding.id)) == 1

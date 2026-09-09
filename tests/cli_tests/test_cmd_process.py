@@ -180,14 +180,12 @@ class TestCmdProcessCoverage:
             now = datetime.now(timezone.utc)
             Assessment.create(
                 "affected",
-                finding_id=finding.id,
-                variant_id=first_variant.id,
+                targets=[(first_variant.id, finding.id)],
                 timestamp=now - timedelta(days=1),
             )
             Assessment.create(
                 "not_affected",
-                finding_id=finding.id,
-                variant_id=second_variant.id,
+                targets=[(second_variant.id, finding.id)],
                 timestamp=now,
             )
 

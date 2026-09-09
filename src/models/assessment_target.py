@@ -12,7 +12,7 @@ A/zlib — so two independent collections would wrongly imply the cross-product.
 import uuid
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import ForeignKey, Table, select
+from sqlalchemy import ForeignKey, Table, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db, Base
@@ -44,6 +44,18 @@ class AssessmentTarget(Base):
     """Links one :class:`Assessment` to one ``(variant, finding)`` pair."""
 
     __tablename__ = "assessment_targets"
+
+    # PR-A only.  The expand migration creates this constraint, so the model
+    # must declare it too: the test suite builds its schema from this metadata
+    # with ``db.create_all()``, and without it nothing in the suite runs
+    # against the production shape.  It holds the expand phase to exactly one
+    # target per assessment, which is what makes the scalar mirror
+    # (``assessments.variant_id`` / ``.finding_id``) unambiguous.
+    # PR-D drops this constraint together with the mirrored columns; several
+    # targets per assessment (row fusion) become legal from then on.
+    __table_args__ = (
+        UniqueConstraint("assessment_id", name="uq_assessment_targets_assessment_id"),
+    )
 
     # The whole triple is the key: an assessment may repeat neither a variant
     # nor a finding within itself, but may reuse either across the pair.
@@ -163,3 +175,36 @@ def reap_targets(connection: "Connection", criterion: "ColumnElement[bool]") -> 
     orphans = affected - still_reachable
     if orphans:
         connection.execute(assessments.delete().where(assessments.c.id.in_(orphans)))
+
+
+def reap_untargeted_assessments(
+    connection: "Connection", criterion: "ColumnElement[bool]"
+) -> None:
+    """Delete assessments matching *criterion* that no target row reaches.
+
+    PR-A keeps ``assessments.variant_id`` / ``.finding_id`` beside the target
+    rows, and one shape still fills only those columns: the custom-data import
+    of an item that names no variant, which ``staging`` accepted and PR-A must
+    keep accepting (a target's ``variant_id`` is part of its primary key, so
+    there is no target to write).  Such a row hangs off its finding by the
+    mirror alone, so the parents' ``before_delete`` reapers pass their mirror
+    column here to take it along -- the job the ORM cascade did before target
+    rows existed.  An assessment a target still reaches is left to
+    :func:`reap_targets`, which spares it while another target remains.
+
+    PR-D REVERTS THIS: with the scalar columns gone, a target-less assessment
+    cannot exist and this helper has nothing left to find.
+    """
+    from .assessment import Assessment
+
+    targets = cast(Table, AssessmentTarget.__table__)
+    assessments = cast(Table, Assessment.__table__)
+
+    connection.execute(
+        assessments.delete().where(
+            criterion,
+            ~select(targets.c.assessment_id)
+            .where(targets.c.assessment_id == assessments.c.id)
+            .exists(),
+        )
+    )
