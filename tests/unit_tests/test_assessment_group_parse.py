@@ -7,6 +7,8 @@
 
 import uuid
 
+import pytest
+
 from src.routes._assessment_group import parse_reconcile_payload
 
 VARIANT = "22222222-2222-2222-2222-222222222222"
@@ -128,3 +130,14 @@ def test_unknown_justification_is_still_rejected():
     req, err = parse_reconcile_payload(_payload(status="fixed", justification="made_up"))
     assert req is None
     assert err == {"error": "Invalid justification"}
+
+
+def test_create_assessment_record_refuses_a_null_variant():
+    """A target's variant_id is part of its primary key and can never be NULL."""
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import GroupInvariantError
+    from src.routes._assessment_group import create_assessment_record
+
+    with pytest.raises(GroupInvariantError):
+        create_assessment_record(
+            Assessment(status="affected"), uuid.uuid4(), None)

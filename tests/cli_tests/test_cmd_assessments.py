@@ -42,9 +42,8 @@ class TestExportCustomOpenVexAssessments:
             vuln = Vulnerability.create_record("CVE-2099-1234")
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
+                targets=[(var.id, finding.id)],
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
                 origin="custom",
             )
             _db.session.commit()
@@ -80,9 +79,8 @@ class TestExportCustomVulnScoutData:
             vulnerability = Vulnerability.create_record("CVE-2099-5678")
             finding = Finding.create(package.id, vulnerability.id)
             Assessment.create(
+                targets=[(variant.id, finding.id)],
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=variant.id,
                 origin="ai",
             )
 
