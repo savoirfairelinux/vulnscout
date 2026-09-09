@@ -640,7 +640,8 @@ def _global_result_full(
 
     # --- Assessments for active findings in this variant ---
     # Use the same proven JOIN pattern as _assessment_rows_for_scans
-    # (Observation → Finding → Assessment + Scan for variant match).
+    # (Observation → Finding → AssessmentTarget → Assessment + Scan
+    # for variant match).
     # Only include assessments whose timestamp is BEFORE the next scan
     # for this variant — this ensures the global result is a true snapshot
     # of the state at the time of this scan, excluding assessments added

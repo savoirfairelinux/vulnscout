@@ -146,6 +146,286 @@ def _scalar_global_assessment_rows_by_scan(scan_ids):
     return result
 
 
+
+def _scalar_global_assessment_ids_for(
+    sbom_scan,
+    latest_tool,
+    _cache=None,
+    _obs_prefetch=None,
+    _pkg_prefetch=None,
+):
+    """The pre-PR-B shape of :func:`_global_assessment_ids_for`.
+
+    A line-for-line restatement of ``d500d329:src/routes/_scan_diff.py``; the
+    unchanged helpers it calls are imported from production.
+    """
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.scan import Scan
+    from src.routes._scan_queries import _packages_by_scan_ids
+
+    contributing_ids = [sbom_scan.id] if sbom_scan else []
+    contributing_ids += [s.id for s in latest_tool.values()]
+    contributing_ids = list(dict.fromkeys(contributing_ids))
+    if not contributing_ids:
+        return set()
+
+    cache_key = None
+    if _cache is not None:
+        cache_key = frozenset(contributing_ids)
+        cached = _cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    tool_scan_ids = {s.id for s in latest_tool.values()}
+    if _pkg_prefetch is not None:
+        sbom_pkg_ids = _pkg_prefetch.get(sbom_scan.id, set()) if sbom_scan else set()
+    else:
+        sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
+            sbom_scan.id, set()
+        ) if sbom_scan else set()
+
+    result = set()
+    if _obs_prefetch is not None:
+        for sid in contributing_ids:
+            for aid, pkg_id in _obs_prefetch.get(sid, ()):
+                if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+                    continue
+                result.add(aid)
+    else:
+        rows = db.session.execute(
+            db.select(Assessment.id, Observation.scan_id, Finding.package_id)
+            .select_from(Observation)
+            .join(Finding, Finding.id == Observation.finding_id)
+            .join(Assessment, Assessment.finding_id == Finding.id)
+            .join(Scan, Scan.id == Observation.scan_id)
+            .where(
+                Observation.scan_id.in_(contributing_ids),
+                Assessment.variant_id == Scan.variant_id,
+                Assessment.origin.notin_(("custom", "ai")),
+            )
+        ).all()
+        for aid, sid, pkg_id in rows:
+            # Skip tool-scan assessments whose finding's package is not in SBOM
+            if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+                continue
+            result.add(aid)
+    if _cache is not None:
+        _cache[cache_key] = result
+    return result
+
+
+def _scalar_global_result_full(scan, all_variant_scans) -> dict:
+    """The pre-PR-B shape of :func:`_global_result_full`.
+
+    A line-for-line restatement of ``d500d329:src/routes/_scan_diff.py``; the
+    unchanged helpers it calls are imported from production.
+    """
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.scan import Scan
+    from src.routes._scan_diff import _contributing_scans_at
+    from src.routes._scan_queries import _load_scan_with_findings, _TOOL_SOURCE_LABELS
+
+    sbom_scan, latest_tool = _contributing_scans_at(scan, all_variant_scans)
+    if sbom_scan is None:
+        return {
+            "scan_id": str(scan.id),
+            "scan_type": scan.scan_type or "sbom",
+            "packages": [], "findings": [], "vulnerabilities": [], "assessments": [],
+            "package_count": 0, "finding_count": 0, "vuln_count": 0, "assessment_count": 0,
+        }
+
+    contributing_ids = [sbom_scan.id] + [
+        s.id for s in latest_tool.values()
+    ]
+    contributing_ids = list(dict.fromkeys(contributing_ids))
+
+    tool_scan_ids = {s.id for s in latest_tool.values()}
+
+    # --- Packages (from SBOM only) ---
+    pkg_rows = db.session.execute(
+        db.select(
+            Package.id, Package.name, Package.version, Package.supplier,
+            SBOMDocument.source_name, SBOMDocument.format,
+        )
+        .join(SBOMPackage, SBOMPackage.package_id == Package.id)
+        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+        .where(SBOMDocument.scan_id == sbom_scan.id)
+    ).all()
+    pkg_map: dict = {}
+    sbom_pkg_ids = set()
+    for pid, pname, pversion, psupplier, src_name, src_fmt in pkg_rows:
+        sbom_pkg_ids.add(pid)
+        source_label = f"{src_name} ({src_fmt})" if src_fmt else src_name
+        if pid not in pkg_map:
+            pkg_map[pid] = {
+                "package_id": str(pid),
+                "package_name": pname or "unknown",
+                "package_version": pversion or "",
+                "package_supplier": psupplier or "",
+                "sources": [source_label],
+            }
+        else:
+            if source_label not in pkg_map[pid]["sources"]:
+                pkg_map[pid]["sources"].append(source_label)
+    packages = sorted(
+        pkg_map.values(),
+        key=lambda p: (p["package_name"], p["package_version"]),
+    )
+
+    # --- Build scan_id -> source_label mapping ---
+    sbom_loaded = _load_scan_with_findings(sbom_scan.id)
+    sbom_doc_names = []
+    if sbom_loaded and hasattr(sbom_loaded, 'sbom_documents'):
+        for doc in (sbom_loaded.sbom_documents or []):
+            label = (
+                f"{doc.source_name} ({doc.format})"
+                if doc.format else doc.source_name
+            )
+            sbom_doc_names.append(label)
+    sbom_source_label = ", ".join(sbom_doc_names) if sbom_doc_names else "SBOM Scan"
+
+    scan_source_labels: dict = {sbom_scan.id: sbom_source_label}
+    for tool_scan in latest_tool.values():
+        scan_source_labels[tool_scan.id] = _TOOL_SOURCE_LABELS.get(
+            tool_scan.scan_source or "", "Vulnerability Scan"
+        )
+    # --- Findings & vulns (batch query) ---
+    obs_rows = db.session.execute(
+        db.select(
+            Observation.scan_id, Observation.finding_id,
+            Finding.package_id, Finding.vulnerability_id,
+            Package.name, Package.version, Package.supplier,
+        )
+        .join(Finding, Finding.id == Observation.finding_id)
+        .join(Package, Package.id == Finding.package_id)
+        .where(Observation.scan_id.in_(contributing_ids))
+    ).all()
+
+    finding_map: dict = {}
+    vuln_set: dict = {}
+    for sid, fid, pkg_id, vid, pname, pversion, psupplier in obs_rows:
+        # Skip tool-scan findings whose package is not in the SBOM
+        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+            continue
+        source_label = scan_source_labels.get(sid, "Unknown")
+        if fid not in finding_map:
+            finding_map[fid] = {
+                "finding_id": str(fid),
+                "package_name": pname or "unknown",
+                "package_version": pversion or "",
+                "package_supplier": psupplier or "",
+                "package_id": str(pkg_id),
+                "vulnerability_id": vid,
+                "sources": [source_label],
+            }
+        else:
+            if source_label not in finding_map[fid]["sources"]:
+                finding_map[fid]["sources"].append(source_label)
+        vuln_set.setdefault(vid, set()).add(source_label)
+
+    findings = sorted(
+        finding_map.values(),
+        key=lambda f: (f["vulnerability_id"], f["package_name"]),
+    )
+    vulnerabilities = [
+        {"vulnerability_id": vid, "sources": sorted(srcs)}
+        for vid, srcs in sorted(vuln_set.items())
+    ]
+
+    # --- Assessments for active findings in this variant ---
+    next_scan_ts = None
+    for s in sorted(all_variant_scans, key=lambda s: s.timestamp):
+        if s.timestamp > scan.timestamp:
+            next_scan_ts = s.timestamp
+            break
+
+    assessments: list = []
+    assess_q = (
+        db.select(
+            Assessment.id,
+            Finding.vulnerability_id,
+            Assessment.status,
+            Assessment.simplified_status,
+            Assessment.justification,
+            Assessment.impact_statement,
+            Assessment.status_notes,
+            Observation.scan_id,
+            Finding.package_id,
+        )
+        .select_from(Observation)
+        .join(Finding, Finding.id == Observation.finding_id)
+        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(
+            Observation.scan_id.in_(contributing_ids),
+            Assessment.variant_id == Scan.variant_id,
+            Assessment.origin.notin_(("custom", "ai")),
+        )
+    )
+    if next_scan_ts is not None:
+        assess_q = assess_q.where(
+            db.or_(Assessment.timestamp.is_(None), Assessment.timestamp < next_scan_ts)
+        )
+    assess_rows = db.session.execute(assess_q).all()
+
+    seen_assess = set()
+    for aid, vid, status, simp_status, justification, impact, notes, sid, pkg_id in assess_rows:
+        # Skip tool-scan assessments whose finding's package is not in SBOM
+        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+            continue
+        if aid in seen_assess:
+            continue
+        seen_assess.add(aid)
+        package = pkg_map.get(pkg_id, {})
+        assessments.append({
+            "vulnerability_id": vid,
+            "status": status or "under_investigation",
+            "simplified_status": simp_status or "Pending Assessment",
+            "justification": justification or "",
+            "impact_statement": impact or "",
+            "status_notes": notes or "",
+            "package_name": package.get("package_name", ""),
+            "package_version": package.get("package_version", ""),
+            "package_supplier": package.get("package_supplier", ""),
+        })
+    assessments.sort(key=lambda a: a["vulnerability_id"])
+
+    return {
+        "scan_id": str(scan.id),
+        "scan_type": scan.scan_type or "sbom",
+        "packages": packages,
+        "findings": findings,
+        "vulnerabilities": vulnerabilities,
+        "assessments": assessments,
+        "package_count": len(packages),
+        "finding_count": len(findings),
+        "vuln_count": len(vulnerabilities),
+        "assessment_count": len(assessments),
+    }
+
+
+def _assessment_with_target(variant_id, finding_id):
+    """Return the single assessment whose one target row is (variant, finding)."""
+    from src.extensions import db
+    from src.models.assessment import Assessment
+
+    matches = [
+        a for a in db.session.query(Assessment).all()
+        if a.targets == [(variant_id, finding_id)]
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
 def _seed_two_variants(tag: str):
     """Seed two variants of one project, each with an SBOM scan observing the
     same two findings, and one ``sbom`` assessment per (variant, finding).
@@ -387,3 +667,132 @@ def test_untargeted_assessment_is_absent_from_both_reads(app):
         assert _scalar_assessment_rows_for_scans([scan.id]) == []
         assert _global_assessment_rows_by_scan([scan.id]) == {}
         assert _scalar_global_assessment_rows_by_scan([scan.id]) == {}
+
+
+def test_global_assessment_ids_for_equals_the_scalar_read(app):
+    """The global-result ID query returns exactly the set the scalar
+    predicate returned, for both variants' scans."""
+    with app.app_context():
+        from src.routes._scan_diff import _global_assessment_ids_for
+
+        seeded = _seed_two_variants("5009")
+        expected_a = {
+            _assessment_with_target(seeded["variant_a"].id, seeded["openssl"].id).id,
+            _assessment_with_target(seeded["variant_a"].id, seeded["zlib"].id).id,
+        }
+
+        joined_a = _global_assessment_ids_for(seeded["scan_a"], {})
+        joined_b = _global_assessment_ids_for(seeded["scan_b"], {})
+
+        assert joined_a == _scalar_global_assessment_ids_for(seeded["scan_a"], {})
+        assert joined_b == _scalar_global_assessment_ids_for(seeded["scan_b"], {})
+        assert len(joined_a) == 2
+        assert len(joined_b) == 2
+        assert joined_a == expected_a
+
+
+def test_global_assessment_ids_for_excludes_other_variants_assessments(app):
+    """Variant B's assessments never reach variant A's global result, even on
+    findings both scans observe — the scan-to-variant predicate is what keeps
+    them out, and its absence would inflate every scan's assessment count."""
+    with app.app_context():
+        from src.routes._scan_diff import (
+            _global_assessment_count,
+            _global_assessment_ids_for,
+        )
+
+        seeded = _seed_two_variants("5010")
+        b_ids = {
+            _assessment_with_target(seeded["variant_b"].id, seeded["openssl"].id).id,
+            _assessment_with_target(seeded["variant_b"].id, seeded["zlib"].id).id,
+            _assessment_with_target(seeded["variant_b"].id, seeded["only_a"].id).id,
+        }
+
+        ids_a = _global_assessment_ids_for(seeded["scan_a"], {})
+
+        assert len(ids_a) == 2
+        assert ids_a & b_ids == set()
+        assert seeded["custom"].id not in ids_a
+        assert _global_assessment_count(seeded["scan_a"], [seeded["scan_a"]]) == 2
+
+
+def test_global_assessment_ids_for_reaches_a_scalarless_assessment(app):
+    """With the mirrored columns cleared, the target row alone still carries
+    the assessment into the global result — and the scalar read cannot."""
+    with app.app_context():
+        from src.routes._scan_diff import _global_assessment_ids_for
+
+        seeded = _seed_two_variants("5011")
+        stripped = _assessment_with_target(
+            seeded["variant_a"].id, seeded["openssl"].id
+        ).id
+
+        _strip_scalar_mirror(stripped)
+
+        ids_after = _global_assessment_ids_for(seeded["scan_a"], {})
+        assert len(ids_after) == 2
+        assert stripped in ids_after
+        assert stripped not in _scalar_global_assessment_ids_for(seeded["scan_a"], {})
+
+
+def test_global_result_full_equals_the_scalar_read(app):
+    """The serialised global result is byte-identical to the one the scalar
+    predicate produced, assessment list and count included."""
+    with app.app_context():
+        from src.routes._scan_diff import _global_result_full
+
+        seeded = _seed_two_variants("5012")
+        scan_a = seeded["scan_a"]
+
+        joined = _global_result_full(scan_a, [scan_a])
+        scalar = _scalar_global_result_full(scan_a, [scan_a])
+
+        assert joined == scalar
+        assert joined["assessment_count"] == 2
+        assert len(joined["assessments"]) == 2
+
+
+def test_global_result_full_excludes_other_variants_assessments(app):
+    """Variant B's judgements must not appear in variant A's scan result.
+
+    Both scans observe openssl and zlib, so only the scan-to-variant
+    predicate separates them; without it the modal would show five
+    assessments instead of two.
+    """
+    with app.app_context():
+        from src.routes._scan_diff import _global_result_full
+
+        seeded = _seed_two_variants("5013")
+        scan_a = seeded["scan_a"]
+
+        result = _global_result_full(scan_a, [scan_a])
+
+        assert result["assessment_count"] == 2
+        assert sorted(a["status"] for a in result["assessments"]) == [
+            "not_affected", "not_affected",
+        ]
+        # variant B's only_a assessment is "affected"; its openssl/zlib ones
+        # are "not_affected" too, so the count above is the discriminator.
+        assert "affected" not in {a["status"] for a in result["assessments"]}
+        assert "fixed" not in {a["status"] for a in result["assessments"]}
+
+
+def test_global_result_full_reaches_a_scalarless_assessment(app):
+    """The scan-result query reaches an assessment that has only a target
+    row, and the scalar read no longer does."""
+    with app.app_context():
+        from src.routes._scan_diff import _global_result_full
+
+        seeded = _seed_two_variants("5014")
+        scan_a = seeded["scan_a"]
+        stripped = _assessment_with_target(
+            seeded["variant_a"].id, seeded["openssl"].id
+        ).id
+
+        _strip_scalar_mirror(stripped)
+
+        joined = _global_result_full(scan_a, [scan_a])
+        scalar = _scalar_global_result_full(scan_a, [scan_a])
+
+        assert joined["assessment_count"] == 2
+        assert scalar["assessment_count"] == 1
