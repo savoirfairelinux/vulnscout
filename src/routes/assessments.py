@@ -10,6 +10,7 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment_group_member import AssessmentGroupMember, GroupInvariantError
+from ..models.assessment_target import AssessmentTarget
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -162,7 +163,7 @@ def init_app(app: Flask) -> None:
             ranked = (
                 db.select(
                     DBAssessment.id.label("id"),
-                    DBAssessment.variant_id.label("variant_id"),
+                    AssessmentTarget.variant_id.label("variant_id"),
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     Finding.vulnerability_id.label("vulnerability_id"),
@@ -172,19 +173,31 @@ def init_app(app: Flask) -> None:
                     func.row_number().over(
                         partition_by=(
                             Finding.vulnerability_id,
-                            DBAssessment.variant_id,
+                            AssessmentTarget.variant_id,
                             Finding.package_id,
                         ),
                         order_by=(DBAssessment.timestamp.desc(), DBAssessment.id.desc()),
                     ).label("assessment_rank"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                # Outer joins: a genuinely untargeted assessment (still legal
+                # pre-PR-D via allow_untargeted) must keep showing up here,
+                # same as before this query read variant_id off the target
+                # row instead of the assessment's own scalar column.
+                .outerjoin(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .outerjoin(Finding, AssessmentTarget.finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
+                # Filtered on the assessment's own scalar column, not the
+                # joined target: a row built directly (bypassing
+                # Assessment.create's mirroring, as a few legacy fixtures and
+                # write paths still do) may have this scalar set with no
+                # matching AssessmentTarget row yet. At this stage the two
+                # always agree when both are present, so this is equivalent
+                # whenever a target row does exist.
                 ranked = ranked.where(DBAssessment.variant_id.in_(variant_ids))
             ranked = ranked.subquery()
             query = (
@@ -204,33 +217,51 @@ def init_app(app: Flask) -> None:
         else:
             query = (
                 db.select(
-                    DBAssessment.id,
-                    DBAssessment.source,
-                    DBAssessment.origin,
-                    DBAssessment.variant_id,
-                    DBAssessment.timestamp,
-                    DBAssessment.status,
-                    DBAssessment.status_notes,
-                    DBAssessment.justification,
-                    DBAssessment.impact_statement,
-                    DBAssessment.responses,
-                    DBAssessment.workaround,
-                    Finding.vulnerability_id,
-                    Package.name,
-                    Package.version,
-                    Package.supplier,
+                    DBAssessment.id.label("id"),
+                    DBAssessment.source.label("source"),
+                    DBAssessment.origin.label("origin"),
+                    AssessmentTarget.variant_id.label("variant_id"),
+                    DBAssessment.timestamp.label("timestamp"),
+                    DBAssessment.status.label("status"),
+                    DBAssessment.status_notes.label("status_notes"),
+                    DBAssessment.justification.label("justification"),
+                    DBAssessment.impact_statement.label("impact_statement"),
+                    DBAssessment.responses.label("responses"),
+                    DBAssessment.workaround.label("workaround"),
+                    Finding.vulnerability_id.label("vulnerability_id"),
+                    Package.name.label("name"),
+                    Package.version.label("version"),
+                    Package.supplier.label("supplier"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                # Outer joins, for the same reason as the compact branch above:
+                # a genuinely untargeted assessment must still be listed.
+                .outerjoin(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .outerjoin(Finding, AssessmentTarget.finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
-                .order_by(DBAssessment.timestamp)
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
+                # See the compact branch above: filter on the assessment's own
+                # scalar column so a row without a mirrored target row yet
+                # (a few legacy fixtures and write paths still build one that
+                # way) is not silently dropped from a scoped listing.
                 query = query.where(DBAssessment.variant_id.in_(variant_ids))
+            # A multi-target assessment fans out to one row per target here.
+            # Unlike compact (one entry per target by design), this branch's
+            # consumers key by assessment id and expect exactly one record per
+            # assessment, so the targets are folded back together below rather
+            # than ranked: keeping a single representative would drop the
+            # other packages and variants from the response entirely.
+            query = query.order_by(
+                DBAssessment.timestamp,
+                DBAssessment.id,
+                AssessmentTarget.variant_id,
+                AssessmentTarget.finding_id,
+            )
 
-        full_result: list[AssessmentDict] = []
+        full_by_id: dict[str, AssessmentDict] = {}
         compact_result: list[CompactAssessment] = []
         for row in db.session.execute(query):
             package_id = ""
@@ -252,23 +283,54 @@ def init_app(app: Flask) -> None:
                     row.status or "",
                 ])
                 continue
-            full_result.append({
-                "id": str(row.id),
-                "source": row.source or "",
-                "origin": row.origin or "sbom",
-                "vuln_id": row.vulnerability_id or "",
-                "packages": [package_id] if package_id else [],
-                "variant_id": str(row.variant_id) if row.variant_id else None,
-                "timestamp": timestamp,
-                "last_update": timestamp or "",
-                "status": row.status or "",
-                "status_notes": row.status_notes or "",
-                "justification": row.justification or "",
-                "impact_statement": row.impact_statement or "",
-                "responses": list(row.responses or []),
-                "workaround": row.workaround or "",
-            })
-        return compact_result if compact else full_result
+            assessment_id = str(row.id)
+            entry = full_by_id.get(assessment_id)
+            if entry is None:
+                entry = {
+                    "id": assessment_id,
+                    "source": row.source or "",
+                    "origin": row.origin or "sbom",
+                    "vuln_id": row.vulnerability_id or "",
+                    "packages": [],
+                    "variant_id": None,
+                    "variant_ids": [],
+                    "targets": [],
+                    "timestamp": timestamp,
+                    "last_update": timestamp or "",
+                    "status": row.status or "",
+                    "status_notes": row.status_notes or "",
+                    "justification": row.justification or "",
+                    "impact_statement": row.impact_statement or "",
+                    "responses": list(row.responses or []),
+                    "workaround": row.workaround or "",
+                }
+                full_by_id[assessment_id] = entry
+            if package_id and package_id not in entry["packages"]:
+                entry["packages"].append(package_id)
+            variant_id = str(row.variant_id) if row.variant_id else None
+            if variant_id and variant_id not in entry["variant_ids"]:
+                entry["variant_ids"].append(variant_id)
+            # The pair, kept alongside the two flattened sets: those describe
+            # the cross-product, which a sparse target set is not.
+            if package_id and variant_id:
+                pair = {"variant_id": variant_id, "package": package_id}
+                if pair not in entry["targets"]:
+                    entry["targets"].append(pair)
+
+        if compact:
+            return compact_result
+
+        for entry in full_by_id.values():
+            entry["variant_ids"].sort()
+            entry["targets"].sort(key=lambda t: (t["variant_id"], t["package"]))
+            # ``variant_id`` stays for backward compatibility and keeps the
+            # meaning ``Assessment.to_dict`` gives it: the one variant every
+            # target shares, or None for a genuine cross-variant assessment.
+            # Consumers that need the full scope read ``variant_ids``.
+            entry["variant_id"] = (
+                entry["variant_ids"][0] if len(entry["variant_ids"]) == 1 else None
+            )
+        return list(full_by_id.values())
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:

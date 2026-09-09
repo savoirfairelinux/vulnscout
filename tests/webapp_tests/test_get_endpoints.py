@@ -260,7 +260,12 @@ def test_get_vulnerability_by_id(client):
     assert response.status_code == 404
 
 
-def test_get_assessments_dict(client):
+def test_get_assessments_dict(client, app):
+    # The listing now joins through assessment_targets, so the seed
+    # assessment needs a target row to be reachable (see
+    # _give_the_seed_assessment_its_target below).
+    _give_the_seed_assessment_its_target(app)
+
     response = client.get("/api/assessments?format=dict")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -272,7 +277,11 @@ def test_get_assessments_dict(client):
     assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["impact_statement"] == "Yocto reported vulnerability as Patched"
 
 
-def test_get_assessments_compact(client):
+def test_get_assessments_compact(client, app):
+    # See test_get_assessments_dict: the listing now joins through
+    # assessment_targets, so the seed assessment needs a target row.
+    _give_the_seed_assessment_its_target(app)
+
     response = client.get("/api/assessments?format=compact")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -281,7 +290,7 @@ def test_get_assessments_compact(client):
     assert assessment[0] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
     assert assessment[1] == "CVE-2020-35492"
     assert assessment[2] == "cairo@1.16.0"
-    assert assessment[3] is None
+    assert assessment[3] == "22222222-2222-2222-2222-222222222222"
     assert isinstance(assessment[4], str)
     assert assessment[5] == "fixed"
     assert len(assessment) == 6
@@ -319,6 +328,27 @@ def _give_the_seed_assessment_its_target(app):
             AssessmentTarget(variant_id=variant_id, finding_id=finding.id))
         seed.variant_id, seed.finding_id = variant_id, finding.id
         db.session.commit()
+
+
+@pytest.fixture()
+def seeded_project(app):
+    """The demo project, with the seed assessment attached to a target so it
+    is reachable through the project-scoped listing routes."""
+    import uuid
+    from types import SimpleNamespace
+
+    _give_the_seed_assessment_its_target(app)
+    return SimpleNamespace(id=uuid.UUID("11111111-1111-1111-1111-111111111111"))
+
+
+def test_assessment_listing_reports_variant_ids_and_targets(client, seeded_project):
+    """PR-C's additive API change; the frontend starts reading it in Task 13."""
+    response = client.get(f"/api/assessments?project_id={seeded_project.id}")
+    assert response.status_code == 200
+    entry = response.json[0]
+    assert "variant_ids" in entry
+    assert "targets" in entry
+    assert "variant_id" in entry, "old consumers still read the shorthand"
 
 
 def test_get_assessment_by_id(client, app):
