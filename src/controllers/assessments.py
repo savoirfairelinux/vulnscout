@@ -34,17 +34,13 @@ def _persist_assessment_to_db(
         pkg_id_cache = {}
     if finding_cache is None:
         finding_cache = {}
-    if variant_id is None:
-        # An assessment is reachable only through its (variant, finding)
-        # targets, so with no variant there is nothing to attach it to and
-        # Assessment.create would reject it. Say so: this drops the parsed
-        # assessment, and a caller that reached here without a variant (an
-        # ingestion run with no scan, for instance) has a real problem.
-        warn(
-            f"[_persist_assessment_to_db {assessment.vuln_id!r}] no variant in context:"
-            " the assessment cannot be stored and was dropped"
-        )
-        return
+    # No early return on a missing variant_id here: Assessment.from_vuln_assessment
+    # has an existing-row branch that updates status/notes/justification/etc. on
+    # an assessment that already exists with no variant, and that update must
+    # still happen. A brand-new assessment with no variant has nothing to attach
+    # a target to and Assessment.create (called from the create branch, with no
+    # allow_untargeted) raises GroupInvariantError on its own -- caught below,
+    # same as any other persistence failure.
     try:
         ctx = db.session.begin_nested() if use_savepoint else db.session.no_autoflush
         with ctx:
