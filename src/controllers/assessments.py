@@ -200,6 +200,8 @@ class AssessmentsController:
         target_variant_ids = {t.variant_id for t in assessment.target_rows}
         if not target_variant_ids:
             # No targets at all: legacy / API-created record, applies anywhere.
+            # Deliberately diverges from Assessment.covers_variant here, which
+            # treats a NULL variant_id (not an empty target set) as "True".
             return True
         return self.current_variant_id in target_variant_ids
 
