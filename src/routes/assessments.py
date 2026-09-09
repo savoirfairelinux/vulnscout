@@ -1001,10 +1001,16 @@ def init_app(app: Flask) -> None:
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         rows = []
+        seen_ids: set[UUID] = set()
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
-                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                if a.id in seen_ids:
                     continue
+                if project_variant_ids is not None and not any(
+                    t.variant_id in project_variant_ids for t in a.target_rows
+                ):
+                    continue
+                seen_ids.add(a.id)
                 rows.append(a)
         DBAssessment.preload_group_ids(rows)
         assessments = [a.to_dict() for a in rows]
@@ -1035,10 +1041,16 @@ def init_app(app: Flask) -> None:
             ).scalars())
 
         rows = []
+        seen_ids: set[UUID] = set()
         for finding in Finding.get_by_vulnerability(vuln_id):
             for a in DBAssessment.get_by_finding(finding.id):
-                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                if a.id in seen_ids:
                     continue
+                if project_variant_ids is not None and not any(
+                    t.variant_id in project_variant_ids for t in a.target_rows
+                ):
+                    continue
+                seen_ids.add(a.id)
                 rows.append(a)
         return build_groups(rows), 200
 
@@ -1136,13 +1148,21 @@ def init_app(app: Flask) -> None:
         response 200 JsonArray Assessment groups for review.
         """
         query = select(DBAssessment)
+        # The variant/project filters below match against the joined target
+        # rather than the assessment; joining once and adding .distinct()
+        # keeps the one-row-per-assessment shape build_groups() expects even
+        # though the join fans out to one row per matching target.
+        joined_targets = False
         variant_ids: list[UUID] | None = None
         variant_id = request.args.get('variant_id')
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            query = query.where(DBAssessment.variant_id == variant_uuid)
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id == variant_uuid)
             variant_ids = [variant_uuid] if variant_uuid else None
 
         project_id = request.args.get('project_id')
@@ -1151,12 +1171,18 @@ def init_app(app: Flask) -> None:
             if err:
                 return err
             project_variant_ids = [v.id for v in DBVariant.get_by_project(project_uuid)] if project_uuid else []
-            query = query.where(DBAssessment.variant_id.in_(project_variant_ids))
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id.in_(project_variant_ids))
             variant_ids = project_variant_ids
 
         origin = request.args.get('origin')
         if origin:
             query = query.where(DBAssessment.origin == origin)
+
+        if joined_targets:
+            query = query.distinct()
 
         assessments = list(db.session.execute(query).scalars())
         groups = build_groups(assessments)
