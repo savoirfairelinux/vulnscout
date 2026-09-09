@@ -15,6 +15,7 @@ from sqlalchemy import ForeignKey, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..extensions import db, Base
+from .assessment_target import GroupInvariantError
 
 #: Fields that must be identical across a group's members.  A group is read
 #: through its first member (``build_groups`` exposes ``head``) and written as a
@@ -26,12 +27,16 @@ GROUP_CONTENT_FIELDS = (
 )
 
 
-class GroupInvariantError(ValueError):
-    """Raised when a set of assessments may not share one group.
-
-    A group must stay inside one project and one vulnerability, and all of its
-    members must carry the same content, including their VEX responses.
-    """
+#: Groups and targets enforce the same invariant -- one project, one
+#: vulnerability, consistent content -- and both are raised on the same call
+#: path (``create_assessment_record`` -> ``Assessment.create`` ->
+#: ``validate_targets``, then ``AssessmentGroupMember.create_group``).  Two
+#: distinct classes of the same name meant the route handlers caught one and
+#: turned the other into a 500, so there is exactly one class, defined next to
+#: the targets and re-exported here for the modules that import it from this
+#: module.
+__all__ = ["GROUP_CONTENT_FIELDS", "GroupInvariantError", "canonical_responses",
+           "AssessmentGroupMember"]
 
 
 def canonical_responses(responses: "list[str] | None") -> str:
