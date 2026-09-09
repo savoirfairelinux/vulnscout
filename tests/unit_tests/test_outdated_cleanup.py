@@ -136,6 +136,23 @@ def _drop_target_rows(assessment_id: uuid.UUID) -> None:
     db.session.expire_all()
 
 
+def _dangle_target(assessment_id: uuid.UUID) -> None:
+    """Delete the assessment row only, leaving its target row behind.
+
+    This is the residue a PR-A deployment produces: ``delete_outdated_data``
+    and ``delete_orphaned_vulnerabilities`` bulk-DELETE assessments, and Core
+    DML fires none of the mapper events that reap target rows, so every run
+    before PR-B left one dangling ``assessment_targets`` row per deleted
+    assessment.  Such a row names an assessment that no longer exists.
+    """
+    from src.extensions import db
+    from src.models.assessment import Assessment
+
+    db.session.execute(db.delete(Assessment).where(Assessment.id == assessment_id))
+    db.session.commit()
+    db.session.expire_all()
+
+
 def _fetch(model, primary_key):
     """Re-read a row after a bulk DELETE.
 
@@ -393,6 +410,32 @@ class TestDeleteOrphanedFindings:
             assert _delete_orphaned_findings({held.id}) == (0, set())
             assert _fetch(Finding, held.id) is not None
 
+    def test_reaps_a_finding_held_only_by_a_dangling_target_row(self, app):
+        """A target row whose assessment is gone must not hold a finding alive.
+
+        This is the shape an upgraded database carries: PR-A ran its bulk
+        assessment DELETE without reaping targets.  ``ba8c3978`` reaped such a
+        finding, so PR-B must too.
+        """
+        with app.app_context():
+            from src.helpers.outdated_cleanup import _delete_orphaned_findings
+            from src.models.finding import Finding
+            from src.models.project import Project
+
+            variant = _variant(Project.create(name="orphans").id, "a")
+            orphan = _finding("CVE-2026-8013", "busybox")
+            assessment = _custom_assessment(variant.id, orphan.id)
+            _dangle_target(assessment.id)
+
+            assert _target_rows() == [(assessment.id, variant.id, orphan.id)]
+            assert _scalar_orphan_finding_ids({orphan.id}) == [orphan.id]
+            assert _delete_orphaned_findings({orphan.id}) == (1, {"CVE-2026-8013"})
+            assert _fetch(Finding, orphan.id) is None
+            # The residue itself survives, exactly as it did at ba8c3978.
+            # Purging pre-existing dangling rows is a data repair, deferred to
+            # PR-D with the mirror columns.
+            assert _target_rows() == [(assessment.id, variant.id, orphan.id)]
+
 
 class TestDeleteOutdatedData:
     """The bulk assessment delete takes the target rows with it."""
@@ -574,8 +617,38 @@ class TestDeleteOrphanedVulnerabilities:
             }
             assert _fetch(Assessment, assessment_id) is None
 
-    def test_leaves_an_assessment_of_a_different_finding_alone(self, app):
+    def test_does_not_count_a_dangling_target_row_as_an_assessment(self, app):
+        """A target row whose assessment is gone must not inflate the count."""
         with app.app_context():
+            from src.helpers.outdated_cleanup import delete_orphaned_vulnerabilities
+            from src.models.assessment import Assessment
+            from src.models.finding import Finding
+            from src.models.project import Project
+
+            variant = _variant(Project.create(name="orphan-vulns").id, "a")
+            finding_id = _finding("CVE-2026-8045", "openssl").id
+            live_id = _custom_assessment(variant.id, finding_id).id
+            dead_id = _custom_assessment(variant.id, finding_id).id
+            _dangle_target(dead_id)
+
+            # ba8c3978 collected assessments by the scalar mirror, so the
+            # deleted assessment's residue contributed nothing.
+            assert _scalar_assessment_ids_for_findings([finding_id]) == {live_id}
+            assert _target_rows() == sorted([
+                (live_id, variant.id, finding_id),
+                (dead_id, variant.id, finding_id),
+            ])
+
+            result = delete_orphaned_vulnerabilities()
+
+            assert result == {
+                "vulnerabilities_deleted": 1, "assessments_deleted": 1, "findings_deleted": 1,
+            }
+            assert _fetch(Assessment, live_id) is None
+            assert _fetch(Finding, finding_id) is None
+            assert _target_rows() == []
+
+    def test_leaves_an_assessment_of_a_different_finding_alone(self, app):
             from src.extensions import db
             from src.helpers.outdated_cleanup import delete_orphaned_vulnerabilities
             from src.models.assessment import Assessment
