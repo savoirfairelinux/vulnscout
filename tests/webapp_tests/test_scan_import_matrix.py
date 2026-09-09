@@ -104,17 +104,15 @@ def _build_source_db(app):
         # origin mirrors what a native SBOM scan records; assessments without
         # one are filtered out of every export.
         Assessment.create(
-            status="fixed", finding_id=f_cairo_a.id, variant_id=v_sbom.id,
+            status="fixed",
             origin="sbom", simplified_status="fixed",
             justification="patched upstream", status_notes="verified",
-            impact_statement="", commit=False,
-        )
+            impact_statement="", commit=False, targets=[(v_sbom.id, f_cairo_a.id)])
         Assessment.create(
-            status="not_affected", finding_id=f_libpng_b.id, variant_id=v_sbom.id,
+            status="not_affected",
             origin="sbom", simplified_status="not affected",
             justification="component not built", status_notes="",
-            impact_statement="not reachable", commit=False,
-        )
+            impact_statement="not reachable", commit=False, targets=[(v_sbom.id, f_libpng_b.id)])
         ids["sbom_first"] = str(s1.id)
         ids["sbom_second"] = str(s2.id)
         ids["v_sbom"] = str(v_sbom.id)

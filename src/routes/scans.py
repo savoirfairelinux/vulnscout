@@ -904,8 +904,7 @@ def _persist_import_assessments(
             seen.add(identity)
             Assessment.create(
                 status=entry.values["status"],
-                finding_id=target.id,
-                variant_id=item.variant.id,
+                targets=[(item.variant.id, target.id)],
                 source=_IMPORT_SOURCE_LABEL,
                 origin=origin or "sbom",
                 simplified_status=entry.values["simplified_status"],

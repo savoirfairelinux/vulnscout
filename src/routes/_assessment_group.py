@@ -11,6 +11,7 @@ from uuid import UUID
 from ..extensions import db, batch_session
 from ..models import Assessment as DBAssessment, Finding, Package
 from ..models.assessment import STATUS_TO_SIMPLIFIED
+from ..models.assessment_target import GroupInvariantError
 
 
 def resolve_package(pkg_string_id: str) -> "Package | None":
@@ -74,12 +75,17 @@ def create_assessment_record(
     Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
     ``responses`` overrides the DTO's own responses; group reconcile uses it so
     a new member inherits the responses the rest of the group already carries.
+
+    Raises:
+        GroupInvariantError: when ``variant_id`` is ``None``.  A target's
+            ``variant_id`` is part of its primary key and can never be NULL.
     """
+    if variant_id is None:
+        raise GroupInvariantError("An assessment must have a variant")
     return DBAssessment.create(
         status=assessment.status or "",
         simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status or "", "Pending Assessment"),
-        finding_id=finding_id,
-        variant_id=variant_id,
+        targets=[(variant_id, finding_id)],
         origin=origin,
         status_notes=assessment.status_notes,
         justification=assessment.justification,

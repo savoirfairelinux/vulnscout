@@ -703,12 +703,17 @@ def _make_two_grouped_assessments():
     from src.models.package import Package
     from src.models.vulnerability import Vulnerability
 
+    from src.models.project import Project
+    from src.models.variant import Variant
+
     Vulnerability.create_record(id="CVE-2026-0002")
     pkg = Package.create(name="cascade-pkg", version="2.0.0")
     finding = Finding.create(package_id=pkg.id, vulnerability_id="CVE-2026-0002")
+    project = Project.create(name="cascade-project")
+    variant = Variant.create(name="cascade-variant", project_id=project.id)
     return (
-        Assessment.create(status="fixed", finding_id=finding.id),
-        Assessment.create(status="fixed", finding_id=finding.id),
+        Assessment.create(status="fixed", targets=[(variant.id, finding.id)]),
+        Assessment.create(status="fixed", targets=[(variant.id, finding.id)]),
     )
 
 

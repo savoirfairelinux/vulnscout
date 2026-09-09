@@ -506,10 +506,9 @@ def _create_custom_assessment(app):
         finding = Finding.get_or_create(pkg.id, "CVE-2020-35492")
 
         db_a = Assessment.create(
+            targets=[(variant.id, finding.id)],
             status="affected",
             simplified_status="Active",
-            finding_id=finding.id,
-            variant_id=variant.id,
             origin="custom",
             status_notes="test notes",
             justification="",

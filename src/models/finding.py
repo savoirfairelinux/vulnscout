@@ -4,7 +4,7 @@
 import uuid
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import ForeignKey, String, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, relationship, mapped_column
 
 from ..extensions import db, Base
@@ -12,7 +12,11 @@ from ..helpers.verbose import verbose
 from .package import Package
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.orm import Mapper
+
     from ..models import TimeEstimate, Vulnerability, Observation, Assessment
+    from .assessment_target import AssessmentTarget
 
 
 class Finding(Base):
@@ -35,7 +39,23 @@ class Finding(Base):
     observations: Mapped[list["Observation"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
     assessments: Mapped[list["Assessment"]] = relationship(
-        back_populates="finding", cascade="all, delete-orphan")
+        back_populates="finding",
+        # PR-A only: this scalar mirror duplicates one target row, so letting
+        # it cascade would delete an assessment that other targets still
+        # reach.  ``passive_deletes="all"`` leaves the decision to the
+        # ``before_delete`` reaper below, which drops an assessment only once
+        # nothing targets it any more.
+        passive_deletes="all",
+    )
+    assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(
+        back_populates="finding",
+        # finding_id is part of AssessmentTarget's primary key, so the ORM's
+        # default "blank out the child's foreign key" raises rather than
+        # cleaning up, and delete-orphan can't cascade-null it either.
+        # ``passive_deletes="all"`` hands the job to the ``before_delete``
+        # reaper below, which clears the rows on every deletion path.
+        passive_deletes="all",
+    )
     time_estimates: Mapped[list["TimeEstimate"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
 
@@ -145,3 +165,24 @@ class Finding(Base):
         """Delete this finding from the database."""
         db.session.delete(self)
         db.session.commit()
+
+
+@event.listens_for(Finding, "before_delete")
+def _reap_assessment_targets(
+    mapper: "Mapper[Finding]", connection: "Connection", finding: "Finding",
+) -> None:
+    """Drop the assessment targets pointing at a finding being deleted.
+
+    Registered as a mapper event rather than written into :meth:`delete` so it
+    also fires when a finding is removed through the ORM cascade from its
+    package or its vulnerability -- those parents reach the same hazard.
+    """
+    from .assessment import Assessment
+    from .assessment_target import (
+        AssessmentTarget, reap_targets, reap_untargeted_assessments,
+    )
+
+    reap_targets(connection, AssessmentTarget.finding_id == finding.id)
+    # The scalar mirror outlives the target rows in PR-A, and an assessment
+    # written through it alone has none to reap.
+    reap_untargeted_assessments(connection, Assessment.finding_id == finding.id)

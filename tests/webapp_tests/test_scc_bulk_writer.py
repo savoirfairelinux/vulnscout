@@ -168,9 +168,8 @@ class TestSccBulkWriter:
             # Pre-existing finding + assessment for (pkg, CVE) from an earlier run.
             existing = Finding.create(pkg.id, "CVE-2023-0001", commit=False)
             Assessment.create(
-                status="affected", finding_id=existing.id, variant_id=variant.id,
-                origin="nvd", commit=False,
-            )
+                status="affected",
+                origin="nvd", commit=False, targets=[(variant.id, existing.id)])
             _db.session.commit()
             existing_fid = existing.id
 
@@ -235,9 +234,8 @@ class TestSccBulkWriter:
             old_finding = Finding.create(pkg_old.id, "CVE-2023-0001", commit=False)
             Observation.create(finding_id=old_finding.id, scan_id=old_scan.id, commit=False)
             Assessment.create(
+                targets=[(variant.id, old_finding.id)],
                 status="not_affected",
-                finding_id=old_finding.id,
-                variant_id=variant.id,
                 origin="manual",
                 commit=False,
             )
@@ -303,8 +301,8 @@ class TestSccBulkWriter:
             existing = Finding.create(pkg.id, "CVE-2023-0001", commit=False)
             # CDX-VEX "exploitable" is the synonym of OpenVEX "affected".
             Assessment.create(
-                status="exploitable", finding_id=existing.id,
-                variant_id=variant.id, origin="manual", commit=False,
+                status="exploitable", targets=[(variant.id, existing.id)],
+                origin="manual", commit=False,
             )
             _db.session.commit()
 
@@ -362,8 +360,8 @@ class TestSccBulkWriter:
 
             existing = Finding.create(pkg.id, "CVE-2023-0001", commit=False)
             Assessment.create(
-                status="not_affected", finding_id=existing.id,
-                variant_id=variant.id, origin="manual", commit=False,
+                status="not_affected", targets=[(variant.id, existing.id)],
+                origin="manual", commit=False,
             )
             _db.session.commit()
 
@@ -593,3 +591,108 @@ class TestAddExceptionInStatusNotes:
             assessments = _db.session.query(Assessment).all()
             assert len(assessments) == 1
             assert assessments[0].status_notes is None
+
+
+class TestSccBulkWriterTargets:
+    """The bulk writer must dual-write ``assessment_targets`` like every other
+    write path: ``bulk_insert_mappings`` bypasses ``Assessment.create``, so a
+    missing target row makes the whole scan invisible to target-based readers."""
+
+    def test_every_bulk_inserted_assessment_gets_a_target_row(self, app):
+        from src.models.assessment_target import AssessmentTarget
+
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            scan = Scan.create("scc", variant.id, scan_type="tool")
+            pkgs = _make_packages([("openssl", "3.0"), ("zlib", "1.3")])
+
+            writer = _SccBulkWriter(scan.id, variant.id, pkgs)
+            for pkg in pkgs:
+                _scan_pkg(writer, pkg, [
+                    (_Computed("CVE-2023-1001", score=9.8), "affected"),
+                    (_Computed("CVE-2023-1002", score=5.0), "under_investigation"),
+                ])
+            writer.flush()
+
+            assessments = _db.session.query(Assessment).all()
+            assert len(assessments) == 2
+            targets = _db.session.query(AssessmentTarget).all()
+            assert len(targets) == len(assessments)
+
+            untargeted = [
+                a for a in assessments
+                if _db.session.query(AssessmentTarget)
+                .filter_by(assessment_id=a.id).count() == 0
+            ]
+            assert untargeted == []
+
+            # The target row must agree with the scalar mirror it accompanies.
+            for target in targets:
+                mirror = _db.session.get(Assessment, target.assessment_id)
+                assert mirror is not None
+                assert (mirror.variant_id, mirror.finding_id) == (
+                    target.variant_id, target.finding_id)
+
+    def test_target_based_readers_see_bulk_inserted_assessments(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            scan = Scan.create("scc", variant.id, scan_type="tool")
+            pkg = _make_packages([("openssl", "3.0")])[0]
+
+            writer = _SccBulkWriter(scan.id, variant.id, [pkg])
+            _scan_pkg(writer, pkg, [(_Computed("CVE-2023-2001", score=9.8), "affected")])
+            writer.flush()
+
+            finding = _db.session.query(Finding).one()
+            assert len(Assessment.get_by_vulnerability("CVE-2023-2001")) == 1
+            assert len(Assessment.get_by_finding(finding.id)) == 1
+            assert len(Assessment.get_by_finding_and_variant(finding.id, variant.id)) == 1
+            assert len(Assessment.get_by_package(pkg.id)) == 1
+
+    def test_bulk_writer_gives_every_assessment_a_target(self, app):
+        """No write path may produce a target-less assessment.
+
+        A target-less row is invisible to every variant-filtered read, so it
+        would look like silent data loss rather than an error.  The check is
+        raw SQL on purpose: it sees what the database actually holds, not what
+        the ORM would happily synthesise on attribute access.
+        """
+        import sqlalchemy as sa
+
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            scan = Scan.create("scc", variant.id, scan_type="tool")
+            pkgs = _make_packages([
+                ("openssl", "3.0"), ("zlib", "1.3"), ("busybox", "1.36"),
+            ])
+
+            writer = _SccBulkWriter(scan.id, variant.id, pkgs)
+            writer.FLUSH_THRESHOLD = 2  # force several chunked flushes
+            for pkg in pkgs:
+                _scan_pkg(writer, pkg, [
+                    (_Computed("CVE-2024-0001", score=9.8), "affected"),
+                    (_Computed("CVE-2024-0002", score=5.0), "under_investigation"),
+                    (_Computed("CVE-2024-0003", score=2.0), "not_affected"),
+                ])
+            writer.flush()
+
+            assert _db.session.query(Assessment).count() == 3
+
+            orphans = _db.session.execute(sa.text(
+                "SELECT COUNT(*) FROM assessments a"
+                " WHERE NOT EXISTS (SELECT 1 FROM assessment_targets t"
+                "                   WHERE t.assessment_id = a.id)"
+            )).scalar()
+            assert orphans == 0
+
+            # And no target may disagree with the scalar columns it mirrors.
+            mismatched = _db.session.execute(sa.text(
+                "SELECT COUNT(*) FROM assessments a"
+                " JOIN assessment_targets t ON t.assessment_id = a.id"
+                " WHERE a.variant_id IS NOT t.variant_id"
+                "    OR a.finding_id IS NOT t.finding_id"
+            )).scalar()
+            assert mismatched == 0

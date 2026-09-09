@@ -257,9 +257,14 @@ class TestReviewListTexts:
                     description="Same content for both",
                 ),
             ]
+            # Flushed here, as one coherent unit, before Assessment.create()
+            # below: it validates its target against the variants table, so
+            # variant_a/variant_b must already be visible to that query.
+            db.session.add_all(sbom_observations)
+            db.session.flush()
             finding = Finding.get_by_vulnerability(self.VULNERABILITY_ID)[0]
-            assess_a = Assessment.create(status="x", variant_id=self.VARIANT_A, finding_id=finding.id, origin="custom")
-            assess_b = Assessment.create(status="x", variant_id=self.VARIANT_B, finding_id=finding.id, origin="custom")
+            assess_a = Assessment.create(status="x", targets=[(self.VARIANT_A, finding.id)], origin="custom")
+            assess_b = Assessment.create(status="x", targets=[(self.VARIANT_B, finding.id)], origin="custom")
             db.session.add_all(sbom_observations + [assess_a, assess_b])
             db.session.commit()
 
@@ -1518,7 +1523,14 @@ def test_import_custom_data_original_timestamp_normalised_to_utc(client):
 
 
 def test_import_custom_data_assessments_without_variant_field(client):
-    """Import remains backward compatible when variant fields are missing."""
+    """Import remains backward compatible when variant fields are missing.
+
+    ``staging`` stored such an item with a NULL variant and returned success,
+    and PR-A promises no behaviour change, so it still does: scalar columns
+    only, no target row (a target's ``variant_id`` is part of its primary key
+    and can never be NULL).  PR-D, which drops the scalar columns, is where
+    this item has to become an error instead.
+    """
     payload = _custom_data_payload(assessments=[{
         "vuln_id": "CVE-2020-35492",
         "status": "affected",
@@ -1533,6 +1545,24 @@ def test_import_custom_data_assessments_without_variant_field(client):
     result = json.loads(resp.data)
     assert result["status"] == "success"
     assert result["assessments_imported"] >= 1
+
+    from src.extensions import db as _db
+    from src.models.assessment import Assessment as _Assessment
+    from src.models.assessment_target import AssessmentTarget as _AssessmentTarget
+
+    from src.models.finding import Finding as _Finding
+
+    with client.application.app_context():
+        stored = _db.session.query(_Assessment).join(
+            _Finding, _Assessment.finding_id == _Finding.id
+        ).filter(
+            _Assessment.variant_id.is_(None),
+            _Finding.vulnerability_id == "CVE-2020-35492",
+            _Assessment.origin == "custom",
+        ).all()
+        assert len(stored) == 1
+        assert _db.session.query(_AssessmentTarget).filter_by(
+            assessment_id=stored[0].id).count() == 0
 
 
 def test_import_custom_data_assessments_with_variant_name(client):
@@ -1725,9 +1755,8 @@ def _seed_assessment(app, *, vuln_id, pkg_name, pkg_version, status, origin):
         Vulnerability.get_or_create(vuln_id)
         finding = Finding.get_or_create(pkg.id, vuln_id)
         Assessment.create(
+            targets=[(VARIANT_UUID, finding.id)],
             status=status,
-            finding_id=finding.id,
-            variant_id=VARIANT_UUID,
             origin=origin,
         )
 
@@ -1753,9 +1782,8 @@ def test_import_custom_data_duplicate_multiple_existing_rows(app, client):
         # Two assessments sharing finding + variant + status.
         for _ in range(2):
             Assessment.create(
+                targets=[(VARIANT_UUID, finding.id)],
                 status="affected",
-                finding_id=finding.id,
-                variant_id=VARIANT_UUID,
                 origin="custom",
             )
 
@@ -1798,9 +1826,8 @@ def test_import_statements_duplicate_multiple_existing_rows(app):
         finding = Finding.get_or_create(pkg.id, "CVE-1999-0061")
         for _ in range(2):
             Assessment.create(
+                targets=[(VARIANT_UUID, finding.id)],
                 status="fixed",
-                finding_id=finding.id,
-                variant_id=VARIANT_UUID,
                 origin="custom",
             )
 
@@ -1837,9 +1864,8 @@ def test_import_statements_not_skipped_when_only_scanner_assessment_exists(app):
         Vulnerability.get_or_create("CVE-2099-00003")
         finding = Finding.get_or_create(pkg.id, "CVE-2099-00003")
         Assessment.create(
+            targets=[(VARIANT_UUID, finding.id)],
             status="fixed",
-            finding_id=finding.id,
-            variant_id=VARIANT_UUID,
             origin="Imported SBOM",
         )
 

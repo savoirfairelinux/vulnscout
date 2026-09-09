@@ -556,8 +556,7 @@ def import_statements(
                     simplified_status=STATUS_TO_SIMPLIFIED.get(
                         status, "Pending Assessment"
                     ),
-                    finding_id=finding.id,
-                    variant_id=variant_id,
+                    targets=[(variant_id, finding.id)],
                     origin="custom",
                     status_notes=status_notes,
                     justification=justification,
@@ -914,6 +913,15 @@ def import_custom_data(
                     "error": f"Variant '{variant_token}' not found",
                 })
                 continue
+            # An item that names no variant at all is stored variant-less,
+            # exactly as it always was: scalar columns only, no target row.
+            # A target's variant_id is part of its primary key and can never
+            # be NULL, so there is no target to write.  PR-A promises no
+            # behaviour change, and this shape is one `staging` accepted.
+            # PR-D REVERTS THIS: when the scalar columns go, a target-less
+            # assessment cannot exist, and this item becomes a 400
+            # "No variant specified".
+            untargeted = target_variant_id is None
 
             justification = a.get("justification", "")
             impact_statement = a.get("impact_statement", "")
@@ -957,8 +965,11 @@ def import_custom_data(
                         simplified_status=STATUS_TO_SIMPLIFIED.get(
                             status, "Pending Assessment"
                         ),
-                        finding_id=finding.id,
-                        variant_id=target_variant_id,
+                        targets=(
+                            None if target_variant_id is None
+                            else [(target_variant_id, finding.id)]
+                        ),
+                        allow_untargeted=untargeted,
                         origin=origin,
                         status_notes=status_notes,
                         justification=justification,
@@ -966,8 +977,14 @@ def import_custom_data(
                         workaround=workaround,
                         responses=[],
                         timestamp=imported_ts,
-                        commit=True,
+                        commit=not untargeted,
                     )
+                    if untargeted:
+                        # PR-A only: the scalar mirror is the only place this
+                        # record's finding can be named.  Removed with the
+                        # columns in PR-D.
+                        db_a.finding_id = finding.id
+                        db.session.commit()
                     result[imported_key] += 1
                     entry_created_ids.append(db_a.id)
                 except Exception as e:

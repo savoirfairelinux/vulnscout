@@ -6,11 +6,14 @@ import typing
 
 from ..extensions import db, Base
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import ForeignKey, UniqueConstraint, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.orm import Mapper
+
     from ..models import Project, Scan, Assessment, TimeEstimate, Metrics
     from .variant_context import VariantContext
 
@@ -36,7 +39,12 @@ class Variant(Base):
     )
     assessments: Mapped[list["Assessment"]] = relationship(
         back_populates="variant",
-        cascade="all, delete-orphan"
+        # PR-A only: this scalar mirror duplicates one target row, so letting
+        # it cascade would delete an assessment that other targets still
+        # reach.  ``passive_deletes="all"`` leaves the decision to the
+        # ``before_delete`` reaper below, which drops an assessment only once
+        # nothing targets it any more.
+        passive_deletes="all",
     )
     time_estimates: Mapped[list["TimeEstimate"]] = relationship(
         back_populates="variant",
@@ -124,3 +132,28 @@ class Variant(Base):
         """Delete this variant (and its scans via cascade) from the database."""
         db.session.delete(self)
         db.session.commit()
+
+
+@event.listens_for(Variant, "before_delete")
+def _reap_assessment_targets(
+    mapper: "Mapper[Variant]", connection: "Connection", variant: "Variant",
+) -> None:
+    """Drop the assessment targets pointing at a variant being deleted.
+
+    Left behind, these rows still surface through unfiltered reads
+    (``get_by_vulnerability``, the assessments API) pointing at a variant that
+    no longer exists.  An assessment that also targets other variants keeps
+    those and survives; see :func:`reap_targets` for the full rationale.
+
+    Registered as a mapper event rather than written into :meth:`delete` so it
+    also fires when a variant is removed through the project's ORM cascade.
+    """
+    from .assessment import Assessment
+    from .assessment_target import (
+        AssessmentTarget, reap_targets, reap_untargeted_assessments,
+    )
+
+    reap_targets(connection, AssessmentTarget.variant_id == variant.id)
+    # The scalar mirror outlives the target rows in PR-A, and an assessment
+    # written through it alone has none to reap.
+    reap_untargeted_assessments(connection, Assessment.variant_id == variant.id)

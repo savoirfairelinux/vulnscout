@@ -74,9 +74,8 @@ def _build_db(app):
 
         # Assessment on the first SBOM finding (origin=sbom)
         assess_a = Assessment.create(
-            finding_id=finding_old.id,
-            variant_id=variant.id,
             status="fixed",
+            targets=[(variant.id, finding_old.id)],
             justification="test_just",
             impact_statement="test_impact",
             status_notes="test_notes",
@@ -110,9 +109,8 @@ def _build_db(app):
 
         # Assessment on the tool finding (origin=sbom, ts=tool_scan.timestamp)
         assess_tool = Assessment.create(
-            finding_id=finding_tool.id,
-            variant_id=variant.id,
             status="under_investigation",
+            targets=[(variant.id, finding_tool.id)],
             justification="",
             impact_statement="",
             status_notes="tool note",
@@ -121,9 +119,8 @@ def _build_db(app):
         assess_tool.timestamp = tool_scan.timestamp
         # Also a custom assessment (should be excluded from scan history)
         assess_custom = Assessment.create(
-            finding_id=finding_tool_removed.id,
-            variant_id=variant.id,
             status="not_affected",
+            targets=[(variant.id, finding_tool_removed.id)],
             justification="custom_just",
             impact_statement="custom_impact",
             status_notes="custom note",

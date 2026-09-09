@@ -20,6 +20,7 @@ import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.models.assessment import Assessment
+from src.models.assessment_target import AssessmentTarget
 from src.models.finding import Finding
 from src.models.metrics import Metrics
 from src.models.observation import Observation
@@ -132,6 +133,11 @@ def _build_outdated_db(app, *, include_v2_finding: bool = True, include_v2_in_ac
             timestamp=datetime(2024, 1, 2, tzinfo=timezone.utc),
         )
         _db.session.add(assessment)
+        # Direct construction bypasses Assessment.create()'s dual write, so
+        # the target row that makes this assessment reachable through the
+        # listing routes must be added explicitly.
+        _db.session.add(AssessmentTarget(
+            assessment_id=assess_id, variant_id=VARIANT_ID, finding_id=finding_v1.id))
         _db.session.commit()
 
         if include_v2_in_active:
@@ -290,6 +296,9 @@ class TestOutdatedFlag:
                 timestamp=datetime(2024, 1, 3, tzinfo=timezone.utc),
             )
             _db.session.add_all([other_project, other_variant, other_assessment])
+            # Direct construction bypasses Assessment.create()'s dual write.
+            _db.session.add(AssessmentTarget(
+                assessment_id=other_assessment_id, variant_id=other_variant_id, finding_id=finding.id))
             _db.session.commit()
 
         resp = self.client.get(f"/api/vulnerabilities/{CVE_ID}/assessments?project_id={PROJECT_ID}")
@@ -591,6 +600,11 @@ class TestOutdatedFlag:
                 finding_id=finding.id,
                 variant_id=VARIANT_ID,
             ))
+            # Direct construction bypasses Assessment.create()'s dual write, so
+            # the target row that makes this assessment reachable through
+            # assessment_targets must be added explicitly.
+            _db.session.add(AssessmentTarget(
+                assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
             _db.session.commit()
 
         preview = self.client.get("/api/orphaned-vulnerabilities")
@@ -610,6 +624,11 @@ class TestOutdatedFlag:
             assert _db.session.get(Vulnerability, orphaned_cve) is None
             assert _db.session.get(Assessment, orphaned_assessment_id) is None
             assert _db.session.get(Vulnerability, CVE_ID) is not None
+            # The cleanup uses Core bulk DELETEs, which never fire the mapper
+            # events that reap targets: without explicit cleanup the target row
+            # survives, pointing at a deleted assessment and a deleted finding.
+            assert _db.session.query(AssessmentTarget).filter_by(
+                assessment_id=orphaned_assessment_id).count() == 0
 
     def test_orphaned_vulnerabilities_preserve_variant_owned_data(self):
         """Variant metrics and time estimates keep their CVEs out of cleanup."""
@@ -653,9 +672,11 @@ class TestOutdatedFlag:
             vulnerabilities = []
             findings = []
             assessments = []
+            assessment_targets = []
             for index in range(candidate_count):
                 vulnerability_id = f"CVE-2099-{index:05d}"
                 finding_id = uuid.UUID(int=index + 1000)
+                assessment_id = uuid.UUID(int=index + 2000)
                 vulnerabilities.append(Vulnerability(
                     id=vulnerability_id,
                     description="Batched orphan",
@@ -667,15 +688,22 @@ class TestOutdatedFlag:
                     vulnerability_id=vulnerability_id,
                 ))
                 assessments.append(Assessment(
-                    id=uuid.UUID(int=index + 2000),
+                    id=assessment_id,
                     origin="custom",
                     status="not_affected",
                     finding_id=finding_id,
                     variant_id=VARIANT_ID,
                 ))
+                # Direct construction bypasses Assessment.create()'s dual
+                # write, so the target row that makes each assessment
+                # reachable through assessment_targets must be added
+                # explicitly.
+                assessment_targets.append(AssessmentTarget(
+                    assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=finding_id))
             _db.session.add_all(vulnerabilities)
             _db.session.add_all(findings)
             _db.session.add_all(assessments)
+            _db.session.add_all(assessment_targets)
             _db.session.commit()
 
         preview = self.client.get("/api/orphaned-vulnerabilities")

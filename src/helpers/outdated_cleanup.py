@@ -21,6 +21,7 @@ from sqlalchemy.engine import CursorResult
 
 from ..extensions import db, write_lock
 from ..models.assessment import Assessment
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.metrics import Metrics
 from ..models.observation import Observation
@@ -570,11 +571,19 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
             finding_ids.extend(db.session.execute(
                 db.select(Finding.id).where(Finding.vulnerability_id.in_(vulnerability_id_chunk))
             ).scalars())
-        assessments_deleted = 0
+        assessment_ids: list[uuid.UUID] = []
         for finding_id_chunk in _chunked(finding_ids):
-            assessments_deleted += db.session.execute(
-                db.select(db.func.count(Assessment.id)).where(Assessment.finding_id.in_(finding_id_chunk))
-            ).scalar_one()
+            assessment_ids.extend(db.session.execute(
+                db.select(Assessment.id).where(Assessment.finding_id.in_(finding_id_chunk))
+            ).scalars())
+        assessments_deleted = len(assessment_ids)
+        # Core bulk DELETE bypasses the mapper events that normally reap
+        # targets, so the target rows go explicitly and first -- otherwise
+        # they survive pointing at a deleted assessment and a deleted finding.
+        # Both criteria are needed: by finding for any target of a doomed
+        # finding, by assessment for the doomed assessments themselves.
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.finding_id, finding_ids)
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, assessment_ids)
         _delete_in_chunks(Assessment, Assessment.finding_id, finding_ids)
         _delete_in_chunks(TimeEstimate, TimeEstimate.finding_id, finding_ids)
         _delete_in_chunks(Observation, Observation.finding_id, finding_ids)

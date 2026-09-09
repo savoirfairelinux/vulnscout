@@ -12,6 +12,7 @@ from ..models.observation import Observation
 from ..models.vulnerability import Vulnerability as VulnModel
 from ..models.metrics import Metrics as MetricsModel
 from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
+from ..models.assessment_target import AssessmentTarget
 from ..models.package import Package
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
@@ -89,8 +90,7 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
             Assessment.create(
                 status="under_investigation",
                 simplified_status="Pending Assessment",
-                finding_id=finding.id,
-                variant_id=variant_uuid,
+                targets=[(variant_uuid, finding.id)],
                 origin=origin,
                 commit=False,
             )
@@ -428,6 +428,7 @@ class _SccBulkWriter:
         self._finding_rows: list[dict] = []
         self._obs_rows: list[dict] = []
         self._assess_rows: list[dict] = []
+        self._assess_target_rows: list[dict] = []
         self._buffered_findings = 0
 
         self._preload(packages)
@@ -577,8 +578,9 @@ class _SccBulkWriter:
         if is_new_finding and cve_id not in self._variant_existing_cves and cve_id not in self._variant_new_cves:
             self._variant_new_cves.add(cve_id)
             self._last_simplified[finding_id] = "Pending Assessment"
+            assess_id = uuid.uuid4()
             self._assess_rows.append({
-                "id": uuid.uuid4(),
+                "id": assess_id,
                 "status": "under_investigation",
                 "simplified_status": "Pending Assessment",
                 "finding_id": finding_id,
@@ -587,6 +589,16 @@ class _SccBulkWriter:
                 "status_notes": None,
                 "timestamp": datetime.now(timezone.utc),
                 "responses": [],
+            })
+            # Target storage is universal: every assessment -- including this
+            # bulk-inserted "scc" one -- must have its own assessment_targets
+            # row, since bulk_insert_mappings bypasses Assessment.create()'s
+            # dual write entirely.  Without it these rows, which are the bulk
+            # of the data, are invisible to every target-based reader.
+            self._assess_target_rows.append({
+                "assessment_id": assess_id,
+                "variant_id": self._variant_uuid,
+                "finding_id": finding_id,
             })
 
         return cve_id
@@ -609,7 +621,7 @@ class _SccBulkWriter:
                 self._metric_rows.extend(metric_rows)
 
         if not (self._vuln_rows or self._metric_rows or self._finding_rows
-                or self._obs_rows or self._assess_rows):
+                or self._obs_rows or self._assess_rows or self._assess_target_rows):
             return
 
         # Insert in foreign-key dependency order.  Bulk operations bypass the
@@ -625,6 +637,9 @@ class _SccBulkWriter:
                 _db.session.bulk_insert_mappings(sa_inspect(Observation), self._obs_rows)
             if self._assess_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(Assessment), self._assess_rows)
+            if self._assess_target_rows:
+                _db.session.bulk_insert_mappings(
+                    sa_inspect(AssessmentTarget), self._assess_target_rows)
             _db.session.commit()
 
         self._vuln_rows.clear()
@@ -632,6 +647,7 @@ class _SccBulkWriter:
         self._finding_rows.clear()
         self._obs_rows.clear()
         self._assess_rows.clear()
+        self._assess_target_rows.clear()
         self._buffered_findings = 0
 
     def _existing_vuln_ids(self, ids: list[str]) -> set[str]:
