@@ -178,6 +178,22 @@ class TestNewlyDetectedAssessments:
         db.session.commit()
 
         time.sleep(0.05)
+        # A pre-existing assessment from an earlier tool scan of the same
+        # variant.  It belongs to the "before" set, so a join that widened the
+        # result set would surface it beside the new one.
+        old_scan = Scan.create("nvd", variant.id, scan_type="tool")
+        old_scan.scan_source = "nvd"
+        old_finding = _finding("CVE-2026-9011", "openssl")
+        Observation.create(finding_id=old_finding.id, scan_id=old_scan.id)
+        db.session.commit()
+        old_assessment = Assessment.create(
+            status="affected", origin="nvd", status_notes="old",
+            targets=[(variant.id, old_finding.id)],
+        )
+        old_assessment.timestamp = old_scan.timestamp
+        db.session.commit()
+
+        time.sleep(0.05)
         tool_scan = Scan.create("nvd", variant.id, scan_type="tool")
         tool_scan.scan_source = "nvd"
         finding = _finding("CVE-2026-9010", "openssl")

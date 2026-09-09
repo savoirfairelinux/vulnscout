@@ -369,7 +369,13 @@ def _delete_orphaned_findings(finding_ids: set[uuid.UUID]) -> tuple[int, set[str
                 # DELETE, so nothing would reap such an assessment behind us.
                 # PR-D drops the mirror predicate with the column itself.
                 .where(~Finding.assessments.any())
-                .where(~Finding.assessment_targets.any())
+                # ``assessment.has()`` is required, not decoration: a PR-A
+                # deployment's bulk assessment DELETE fired no reaper, so a
+                # database upgraded mid-series carries target rows whose
+                # assessment is already gone.  A bare ``any()`` would let such
+                # residue hold a finding alive forever, where the pre-target
+                # code reaped it.
+                .where(~Finding.assessment_targets.any(AssessmentTarget.assessment.has()))
                 .where(~Finding.time_estimates.any())
             ).all()
         )
@@ -615,6 +621,11 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
             assessment_ids.update(db.session.execute(
                 db.select(AssessmentTarget.assessment_id)
                 .where(AssessmentTarget.finding_id.in_(finding_id_chunk))
+                # Same residue as in ``_delete_orphaned_findings``: a target
+                # row left behind by a PR-A deployment's bulk assessment
+                # DELETE names an assessment that no longer exists, and
+                # counting it would inflate ``assessments_deleted``.
+                .where(AssessmentTarget.assessment.has())
             ).scalars())
             # PR-A only: an assessment with no target row hangs off its
             # finding by the scalar mirror alone.  Left behind it would point
