@@ -279,8 +279,8 @@ def _assessments_by_scan(scans: list[Scan]) -> Dict[uuid_module.UUID, Dict[str, 
     """Return {scan_id: {"total": N, "added": N, "unchanged": N}} for each scan.
 
     An assessment is counted for a scan if:
-      - Its finding_id matches an observation in that scan
-      - Its variant_id matches the scan's variant_id
+      - One of its target rows names a finding observed in that scan
+      - That same target row's variant_id matches the scan's variant_id
 
     An assessment is "added" (new) if it was imported from the SBOM
     (origin == "sbom") and its timestamp >= the scan's timestamp AND
