@@ -160,10 +160,12 @@ def init_app(app: Flask) -> None:
         instead of one query per variant.
         """
         if compact:
+            effective_finding_id = func.coalesce(AssessmentTarget.finding_id, DBAssessment.finding_id)
+            effective_variant_id = func.coalesce(AssessmentTarget.variant_id, DBAssessment.variant_id)
             ranked = (
                 db.select(
                     DBAssessment.id.label("id"),
-                    AssessmentTarget.variant_id.label("variant_id"),
+                    effective_variant_id.label("variant_id"),
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     Finding.vulnerability_id.label("vulnerability_id"),
@@ -173,7 +175,7 @@ def init_app(app: Flask) -> None:
                     func.row_number().over(
                         partition_by=(
                             Finding.vulnerability_id,
-                            AssessmentTarget.variant_id,
+                            effective_variant_id,
                             Finding.package_id,
                         ),
                         order_by=(DBAssessment.timestamp.desc(), DBAssessment.id.desc()),
@@ -182,23 +184,26 @@ def init_app(app: Flask) -> None:
                 # Outer joins: a genuinely untargeted assessment (still legal
                 # pre-PR-D via allow_untargeted) must keep showing up here,
                 # same as before this query read variant_id off the target
-                # row instead of the assessment's own scalar column.
+                # row instead of the assessment's own scalar column. Joining
+                # Finding through the coalesced finding_id (rather than the
+                # bare AssessmentTarget column) keeps an untargeted row's
+                # vulnerability/package data intact, and coalescing the
+                # partition key the same way keeps every untargeted
+                # assessment from collapsing into one window partition.
                 .outerjoin(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
-                .outerjoin(Finding, AssessmentTarget.finding_id == Finding.id)
+                .outerjoin(Finding, effective_finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                # Filtered on the assessment's own scalar column, not the
-                # joined target: a row built directly (bypassing
-                # Assessment.create's mirroring, as a few legacy fixtures and
-                # write paths still do) may have this scalar set with no
-                # matching AssessmentTarget row yet. At this stage the two
-                # always agree when both are present, so this is equivalent
-                # whenever a target row does exist.
-                ranked = ranked.where(DBAssessment.variant_id.in_(variant_ids))
+                # Filtered on the same coalesced expression as the
+                # projection above, so an untargeted row (scalar variant_id
+                # set, no AssessmentTarget row yet) is judged consistently
+                # by both the filter and the output column instead of the
+                # two silently disagreeing.
+                ranked = ranked.where(effective_variant_id.in_(variant_ids))
             ranked = ranked.subquery()
             query = (
                 db.select(
@@ -215,12 +220,14 @@ def init_app(app: Flask) -> None:
                 .order_by(ranked.c.timestamp)
             )
         else:
+            effective_finding_id = func.coalesce(AssessmentTarget.finding_id, DBAssessment.finding_id)
+            effective_variant_id = func.coalesce(AssessmentTarget.variant_id, DBAssessment.variant_id)
             query = (
                 db.select(
                     DBAssessment.id.label("id"),
                     DBAssessment.source.label("source"),
                     DBAssessment.origin.label("origin"),
-                    AssessmentTarget.variant_id.label("variant_id"),
+                    effective_variant_id.label("variant_id"),
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     DBAssessment.status_notes.label("status_notes"),
@@ -234,20 +241,23 @@ def init_app(app: Flask) -> None:
                     Package.supplier.label("supplier"),
                 )
                 # Outer joins, for the same reason as the compact branch above:
-                # a genuinely untargeted assessment must still be listed.
+                # a genuinely untargeted assessment must still be listed, and
+                # joining Finding through the coalesced finding_id keeps its
+                # vuln/package data from coming back empty.
                 .outerjoin(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
-                .outerjoin(Finding, AssessmentTarget.finding_id == Finding.id)
+                .outerjoin(Finding, effective_finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                # See the compact branch above: filter on the assessment's own
-                # scalar column so a row without a mirrored target row yet
-                # (a few legacy fixtures and write paths still build one that
-                # way) is not silently dropped from a scoped listing.
-                query = query.where(DBAssessment.variant_id.in_(variant_ids))
+                # See the compact branch above: filter on the same coalesced
+                # expression as the projection so the filter and the output
+                # column always agree, including for a row without a
+                # mirrored target row yet (a few legacy fixtures and write
+                # paths still build one that way).
+                query = query.where(effective_variant_id.in_(variant_ids))
             # A multi-target assessment fans out to one row per target here.
             # Unlike compact (one entry per target by design), this branch's
             # consumers key by assessment id and expect exactly one record per
@@ -257,8 +267,8 @@ def init_app(app: Flask) -> None:
             query = query.order_by(
                 DBAssessment.timestamp,
                 DBAssessment.id,
-                AssessmentTarget.variant_id,
-                AssessmentTarget.finding_id,
+                effective_variant_id,
+                effective_finding_id,
             )
 
         full_by_id: dict[str, AssessmentDict] = {}
