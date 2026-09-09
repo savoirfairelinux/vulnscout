@@ -6,9 +6,11 @@ import json
 import uuid
 
 import sqlalchemy as sa
+from alembic.operations import Operations
+from alembic.runtime.migration import MigrationContext
 
 migration = importlib.import_module(
-    "src.migrations.versions.x0a1b2c3d4e5_add_assessment_group_members"
+    "src.migrations.versions.x0a1b2c3d4e5_add_assessment_targets"
 )
 
 SHARED_TIMESTAMP = "2026-01-01 00:00:00"
@@ -297,3 +299,71 @@ def test_responses_key_falls_back_to_the_raw_text_when_unparsable():
 
 def test_responses_key_handles_a_non_list_json_value():
     assert migration.responses_key('{"b": 1, "a": 2}') == '{"a": 2, "b": 1}'
+
+
+def _build_pre_upgrade_schema(connection):
+    """The schema as it stands just before this revision runs."""
+    connection.execute(sa.text(
+        "CREATE TABLE variants (id TEXT PRIMARY KEY, project_id TEXT)"
+    ))
+    connection.execute(sa.text(
+        "CREATE TABLE findings (id TEXT PRIMARY KEY, vulnerability_id VARCHAR(50))"
+    ))
+    connection.execute(sa.text(
+        """
+        CREATE TABLE assessments (
+            id TEXT PRIMARY KEY,
+            origin VARCHAR,
+            status VARCHAR,
+            simplified_status VARCHAR,
+            status_notes TEXT,
+            justification TEXT,
+            impact_statement TEXT,
+            workaround TEXT,
+            timestamp TEXT,
+            finding_id TEXT,
+            variant_id TEXT,
+            responses TEXT
+        )
+        """
+    ))
+
+
+def _upgraded_connection():
+    engine = sa.create_engine("sqlite:///:memory:")
+    connection = engine.connect()
+    transaction = connection.begin()
+    _build_pre_upgrade_schema(connection)
+    project_id = _new_id()
+    finding_id = _add_finding(connection, "CVE-2026-0900")
+    _add_assessment(connection, finding_id, _add_variant(connection, project_id))
+    _add_assessment(connection, finding_id, _add_variant(connection, project_id))
+    migration.op = Operations(MigrationContext.configure(connection))
+    migration.upgrade()
+    return connection, transaction
+
+
+def test_upgrade_creates_the_table_and_backfills_it():
+    """The revision must build its own table, not rely on ``create_all``."""
+    connection, transaction = _upgraded_connection()
+    try:
+        assert connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE name = 'assessment_group_members'"
+        )).scalar() == "assessment_group_members"
+        # The two seeded assessments share every key field, so they group.
+        assert len(_groups(connection)) == 2
+    finally:
+        transaction.rollback()
+        connection.close()
+
+
+def test_downgrade_removes_the_table():
+    connection, transaction = _upgraded_connection()
+    try:
+        migration.downgrade()
+        assert connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE name = 'assessment_group_members'"
+        )).scalar() is None
+    finally:
+        transaction.rollback()
+        connection.close()
