@@ -346,9 +346,79 @@ def test_assessment_listing_reports_variant_ids_and_targets(client, seeded_proje
     response = client.get(f"/api/assessments?project_id={seeded_project.id}")
     assert response.status_code == 200
     entry = response.json[0]
-    assert "variant_ids" in entry
-    assert "targets" in entry
-    assert "variant_id" in entry, "old consumers still read the shorthand"
+    assert entry["id"] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    variant_id = "22222222-2222-2222-2222-222222222222"
+    assert entry["variant_ids"] == [variant_id]
+    assert entry["targets"] == [{"variant_id": variant_id, "package": "cairo@1.16.0"}]
+    assert entry["variant_id"] == variant_id, "old consumers still read the shorthand"
+
+
+def _add_untargeted_assessment(app, vuln_id, package_name, status="under_investigation"):
+    """Seed the legacy variant-less assessment shape: scalar ``finding_id`` set,
+    ``variant_id`` NULL, and no ``AssessmentTarget`` row at all.
+
+    This is exactly what ``Assessment.create(allow_untargeted=True)`` plus the
+    manual ``finding_id`` assignment in
+    ``src/helpers/assessment_io.py::import_custom_data`` produces for a custom
+    assessment item that names no variant -- see the demo seed assessment in
+    ``tests/webapp_tests/__init__.py::setup_demo_db``, which is built the same
+    way before ``_give_the_seed_assessment_its_target`` runs.
+    """
+    import uuid
+
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.package import Package
+    from src.models.finding import Finding
+    from src.models.vulnerability import Vulnerability
+
+    with app.app_context():
+        pkg = Package.find_or_create(package_name, "1.0.0")
+        db.session.commit()
+        Vulnerability.get_or_create(vuln_id, description="", status="high")
+        db.session.commit()
+        finding = Finding.get_or_create(pkg.id, vuln_id)
+        assessment = Assessment.create(
+            status=status,
+            targets=None,
+            allow_untargeted=True,
+            commit=False,
+        )
+        assessment.finding_id = finding.id
+        db.session.commit()
+        return str(assessment.id)
+
+
+def test_untargeted_assessments_keep_their_data_and_all_survive_listing(client, app):
+    """C1 regression: an assessment with no ``AssessmentTarget`` row (legacy
+    variant-less shape, still PR-A-legal via ``allow_untargeted=True``) must
+    keep its vuln/package data, and a *second* untargeted assessment for a
+    different vulnerability must not be silently dropped by the compact
+    format's window-partition ranking (both previously collapsed onto the
+    same NULL partition key)."""
+    first_id = _add_untargeted_assessment(app, "CVE-2020-35492", "cairo")
+    second_id = _add_untargeted_assessment(app, "CVE-2021-99999", "libfoo")
+
+    response = client.get("/api/assessments")
+    assert response.status_code == 200
+    by_id = {entry["id"]: entry for entry in response.json}
+    assert first_id in by_id
+    assert second_id in by_id
+    assert by_id[first_id]["vuln_id"] == "CVE-2020-35492"
+    assert by_id[first_id]["packages"] == ["cairo@1.0.0"]
+    assert by_id[second_id]["vuln_id"] == "CVE-2021-99999"
+    assert by_id[second_id]["packages"] == ["libfoo@1.0.0"]
+
+    compact_response = client.get("/api/assessments?format=compact")
+    assert compact_response.status_code == 200
+    compact_by_id = {row[0]: row for row in compact_response.json}
+    assert first_id in compact_by_id, "first untargeted row must survive the partition ranking"
+    assert second_id in compact_by_id, "second untargeted row must survive the partition ranking"
+    # compact row shape: [id, vulnerability, package, variant, timestamp, status]
+    assert compact_by_id[first_id][1] == "CVE-2020-35492"
+    assert compact_by_id[first_id][2] == "cairo@1.0.0"
+    assert compact_by_id[second_id][1] == "CVE-2021-99999"
+    assert compact_by_id[second_id][2] == "libfoo@1.0.0"
 
 
 def test_get_assessment_by_id(client, app):
