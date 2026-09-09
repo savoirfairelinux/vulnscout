@@ -292,6 +292,7 @@ def _global_assessment_rows_by_scan(
     excluded, matching the per-set query.
     """
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     result: Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID]]] = {}
     if not scan_ids:
@@ -300,11 +301,12 @@ def _global_assessment_rows_by_scan(
         db.select(Assessment.id, Observation.scan_id, Finding.package_id)
         .select_from(Observation)
         .join(Finding, Finding.id == Observation.finding_id)
-        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+        .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
         .join(Scan, Scan.id == Observation.scan_id)
         .where(
             Observation.scan_id.in_(scan_ids),
-            Assessment.variant_id == Scan.variant_id,
+            AssessmentTarget.variant_id == Scan.variant_id,
             Assessment.origin != "custom",
         )
     ).all()
@@ -413,6 +415,7 @@ def _global_assessment_ids_for(
     is present in the active SBOM.
     """
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     contributing_ids = [sbom_scan.id] if sbom_scan else []
     contributing_ids += [s.id for s in latest_tool.values()]
@@ -447,11 +450,12 @@ def _global_assessment_ids_for(
             db.select(Assessment.id, Observation.scan_id, Finding.package_id)
             .select_from(Observation)
             .join(Finding, Finding.id == Observation.finding_id)
-            .join(Assessment, Assessment.finding_id == Finding.id)
+            .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+            .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
             .join(Scan, Scan.id == Observation.scan_id)
             .where(
                 Observation.scan_id.in_(contributing_ids),
-                Assessment.variant_id == Scan.variant_id,
+                AssessmentTarget.variant_id == Scan.variant_id,
                 Assessment.origin.notin_(("custom", "ai")),
             )
         ).all()
@@ -642,6 +646,7 @@ def _global_result_full(
     # of the state at the time of this scan, excluding assessments added
     # by later scans.
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     # Compute the next scan's timestamp for the same variant (upper bound)
     next_scan_ts = None
@@ -665,11 +670,12 @@ def _global_result_full(
         )
         .select_from(Observation)
         .join(Finding, Finding.id == Observation.finding_id)
-        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+        .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
         .join(Scan, Scan.id == Observation.scan_id)
         .where(
             Observation.scan_id.in_(contributing_ids),
-            Assessment.variant_id == Scan.variant_id,
+            AssessmentTarget.variant_id == Scan.variant_id,
             Assessment.origin.notin_(("custom", "ai")),
         )
     )
