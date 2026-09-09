@@ -238,6 +238,51 @@ def _process_sbom_background(
                     pass
 
 
+def _findings_for_variant(assessment: "DBAssessment", variant_id: "uuid.UUID"):  # noqa: F821
+    """Return every finding *assessment* targets within *variant_id*.
+
+    An assessment may cover several packages of one variant, so taking just
+    the first target silently drops the rest -- under the flat schema those
+    were separate assessment rows and the copy flow processed all of them.
+    ``target_rows`` carries no inherent order, so results are sorted by the
+    package ``string_id`` the preview displays, with the finding id breaking
+    ties (two packages may share a ``name@version`` when their supplier
+    differs).  Empty when the assessment does not cover *variant_id*.
+    """
+    findings = [
+        t.finding for t in assessment.target_rows
+        if t.variant_id == variant_id and t.finding is not None
+    ]
+    return sorted(
+        findings,
+        key=lambda f: (f.package.string_id if f.package is not None else "", str(f.id)),
+    )
+
+
+def _assessment_finding_pairs(assessments, variant_id: "uuid.UUID"):  # noqa: F821
+    """Yield one ``(assessment, finding)`` pair per finding covered in *variant_id*.
+
+    Flattening the fan-out here keeps the copy loops one level deep while
+    making each of them act on every source package rather than on one
+    arbitrary target.
+    """
+    for assessment in assessments:
+        for finding in _findings_for_variant(assessment, variant_id):
+            yield assessment, finding
+
+
+def _assessment_covers(
+    assessment: "DBAssessment", variant_id: "uuid.UUID", finding_id: "uuid.UUID",  # noqa: F821
+) -> bool:
+    """True when *assessment* already targets this ``(variant, finding)`` pair.
+
+    Copying onto a pair the assessment already asserts would duplicate its own
+    verdict, so candidates are filtered against the whole target set -- not
+    against the single finding the loop is currently on.
+    """
+    return (variant_id, finding_id) in assessment.targets
+
+
 def init_app(app: Flask) -> None:
 
     def _validate_name_from_request(entity_label: str) -> tuple[str, None] | tuple[None, ErrorResponse]:
@@ -580,10 +625,8 @@ def init_app(app: Flask) -> None:
             skipped = 0
             processed_target_finding_ids: set = set()
 
-            for assessment in source_assessments:
-                source_finding = assessment.finding
-                if source_finding is None:
-                    continue
+            for assessment, source_finding in _assessment_finding_pairs(
+                    source_assessments, source_uuid):
                 if source_finding.package_id not in common_pkg_ids:
                     continue
                 # Exact mode: same package_id → same Finding row shared across variants
@@ -615,9 +658,10 @@ def init_app(app: Flask) -> None:
 
         # ---- alternative modes: build grouped candidates ----
         source_vuln_ids: set[str] = {
-            a.finding.vulnerability_id
-            for a in source_assessments
-            if a.finding is not None and a.finding.package_id in source_pkg_ids
+            finding.vulnerability_id
+            for _assessment, finding in _assessment_finding_pairs(
+                source_assessments, source_uuid)
+            if finding.package_id in source_pkg_ids
         }
 
         if source_vuln_ids:
@@ -653,16 +697,15 @@ def init_app(app: Flask) -> None:
         target_custom_assessments = DBAssessment.get_by_origin([target_uuid])
         target_customs_by_finding: dict = {}
         for a in target_custom_assessments:
-            if a.finding_id is not None:
-                target_customs_by_finding.setdefault(a.finding_id, []).append(a)
+            for t in a.target_rows:
+                if t.variant_id == target_uuid:
+                    target_customs_by_finding.setdefault(t.finding_id, []).append(a)
 
         groups = []
         skipped_count = 0
 
-        for assessment in source_assessments:
-            source_finding = assessment.finding
-            if source_finding is None:
-                continue
+        for assessment, source_finding in _assessment_finding_pairs(
+                source_assessments, source_uuid):
             if source_finding.package_id not in source_pkg_ids:
                 continue
 
@@ -675,7 +718,10 @@ def init_app(app: Flask) -> None:
             candidates = []
 
             for tf in potential_targets:
-                if source_uuid == target_uuid and tf.id == source_finding.id:
+                # Not just this loop's source_finding: an assessment covering
+                # several packages must not be copied onto any pair it already
+                # asserts.
+                if _assessment_covers(assessment, target_uuid, tf.id):
                     continue
                 if source_pkg is None or tf.package is None:
                     continue
@@ -952,12 +998,16 @@ def init_app(app: Flask) -> None:
 
                     # Reject mismatched vulnerability ids — a fabricated selection
                     # must not copy a verdict for CVE-A onto a finding for CVE-B.
-                    src_finding = assessment.finding
-                    if (
-                        src_finding is None
-                        or (source_uuid == target_uuid and tgt_finding.id == src_finding.id)
-                        or tgt_finding.vulnerability_id != src_finding.vulnerability_id
+                    # Every target of one assessment shares a vulnerability
+                    # (validate_targets), so agreeing with any source finding is
+                    # agreeing with all of them.
+                    src_findings = _findings_for_variant(assessment, source_uuid)
+                    if not any(
+                        tgt_finding.vulnerability_id == f.vulnerability_id
+                        for f in src_findings
                     ):
+                        continue
+                    if _assessment_covers(assessment, target_uuid, tgt_finding.id):
                         continue
 
                     if tgt_finding.id in processed_in_batch:
