@@ -315,6 +315,37 @@ def _make_variant(project_name: str, variant_name: str):
     return Variant.create(name=variant_name, project_id=project.id)
 
 
+def test_group_and_target_invariants_raise_one_shared_class(app):
+    """The routes import ``GroupInvariantError`` from one module and the
+    assessment-creation path raises it from the other; two distinct classes of
+    the same name made ``except GroupInvariantError`` miss and return 500
+    instead of 400.  Both names must resolve to the same class, and both
+    invariants must really raise it.
+    """
+    with app.app_context():
+        import uuid as _uuid
+
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError as GroupError)
+        from src.models.assessment_target import GroupInvariantError as TargetError
+        from src.routes.assessments import GroupInvariantError as RouteError
+
+        assert GroupError is TargetError is RouteError
+
+        first, second = _make_two_assessments()
+        first.variant_id = _make_variant("shared-a", "variant-a").id
+        second.variant_id = _make_variant("shared-b", "variant-b").id
+        with pytest.raises(RouteError):
+            AssessmentGroupMember.create_group([first.id, second.id])
+
+        with pytest.raises(RouteError):
+            Assessment.create(
+                status="not_affected",
+                targets=[(_uuid.uuid4(), _uuid.uuid4())],
+            )
+
+
 def test_create_group_refuses_assessments_from_two_projects(app):
     """Group reads are project-filtered but writes hit every member."""
     with app.app_context():
