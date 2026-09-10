@@ -800,10 +800,19 @@ class TestImportCustomDataMultiTarget:
     assessment per package (legacy shape); version-2 entries create one
     assessment with many targets instead."""
 
-    def test_v1_multi_package_entry_still_creates_two_assessments(self, app, variant_and_project):
-        """GIVEN a version-1 entry covering 2 packages WHEN imported THEN two
-        independent single-target assessments are created (no fusing, no
-        shared group)."""
+    def test_v1_multi_package_entry_fuses_into_one_assessment(self, app, variant_and_project):
+        """GIVEN a version-1 entry covering 2 packages WHEN imported THEN one
+        fused assessment is created covering both packages as targets --
+        matching how the version-2 branch and the HTTP write paths already
+        fuse a whole user action into a single row, since
+        ``DBAssessment.create`` already accepts a list of targets and
+        creates one row from it. This is not forced by the schema: earlier
+        in this plan a separate ``AssessmentGroupMember.create_group`` call
+        glued per-package rows into one group for exactly this v1 shape
+        (commit 4ccdc2b2); when that mechanism was deleted, nothing replaced
+        it, so a v1 import fanned out into ungrouped, independent rows
+        again until this fix hoisted the create() call out of the
+        per-package loop."""
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
@@ -818,12 +827,10 @@ class TestImportCustomDataMultiTarget:
         }
         with app.app_context():
             result = import_custom_data(data, {var.name: var})
-            assert result["assessments_imported"] == 2
+            assert result["assessments_imported"] == 1
             rows = Assessment.get_by_origin([var.id], origin="custom")
-            assert len(rows) == 2
-            assert {len(row.targets) for row in rows} == {1}
-            # Each row is trivially its own group; none are fused together.
-            assert len({row.id for row in rows}) == 2
+            assert len(rows) == 1
+            assert len(rows[0].targets) == 2
 
     def test_v1_single_package_entry_creates_one_assessment(self, app, variant_and_project):
         """GIVEN a version-1 entry covering only 1 package WHEN imported THEN
@@ -850,7 +857,8 @@ class TestImportCustomDataMultiTarget:
     def test_v1_custom_and_ai_entries_create_independent_assessments(self, app, variant_and_project):
         """GIVEN the same vuln_id/packages appear in both 'assessments' and
         'ai_assessments' WHEN imported THEN the custom-origin and ai-origin
-        rows are entirely independent (no group ever links them)."""
+        rows are entirely independent (no group ever links them), though
+        each entry's own packages still fuse into one row."""
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
@@ -872,18 +880,18 @@ class TestImportCustomDataMultiTarget:
         }
         with app.app_context():
             result = import_custom_data(data, {var.name: var})
-            assert result["assessments_imported"] == 2
-            assert result["ai_assessments_imported"] == 2
+            assert result["assessments_imported"] == 1
+            assert result["ai_assessments_imported"] == 1
 
             custom_rows = Assessment.get_by_origin([var.id], origin="custom")
             ai_rows = Assessment.get_by_origin([var.id], origin="ai")
-            assert len(custom_rows) == 2
-            assert len(ai_rows) == 2
+            assert len(custom_rows) == 1
+            assert len(ai_rows) == 1
             assert {row.id for row in custom_rows}.isdisjoint({row.id for row in ai_rows})
 
     def test_version_1_import_still_works(self, app, variant_and_project):
         """Existing backup archives (no 'targets' key) must stay importable,
-        fanning out one assessment per package exactly as they did before."""
+        fusing every package in one entry into a single assessment row."""
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
@@ -899,7 +907,9 @@ class TestImportCustomDataMultiTarget:
         with app.app_context():
             result = import_custom_data(data, {var.name: var})
             assert result["errors"] == []
-            assert len(Assessment.get_by_vulnerability("CVE-2099-V1IMP")) == 2
+            rows = Assessment.get_by_vulnerability("CVE-2099-V1IMP")
+            assert len(rows) == 1
+            assert len(rows[0].targets) == 2
 
 
 class TestCustomDataVersion2:

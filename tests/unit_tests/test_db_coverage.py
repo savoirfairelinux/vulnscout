@@ -1778,7 +1778,7 @@ class TestEveryWritePathWritesATarget:
         )
         assert result["assessments_imported"] == 0
         assert any(
-            e.get("error") == "No variant specified" for e in result["errors"]
+            e.get("error", "").startswith("No variant specified") for e in result["errors"]
         )
         assert self._orphan_count() == 0
         assert isinstance(variant.id, _uuid.UUID)

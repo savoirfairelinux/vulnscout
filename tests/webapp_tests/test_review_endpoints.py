@@ -1546,7 +1546,8 @@ def test_import_custom_data_assessments_without_variant_field(client):
     assert result["status"] == "error"
     assert result["assessments_imported"] == 0
     assert any(
-        e.get("vuln_id") == "CVE-2020-35492" and e.get("error") == "No variant specified"
+        e.get("vuln_id") == "CVE-2020-35492"
+        and e.get("error", "").startswith("No variant specified")
         for e in result["errors"]
     )
 
@@ -2978,12 +2979,15 @@ def test_promoting_an_already_grouped_assessment_returns_its_group(client, demo_
     assert response.get_json()["group_id"] == existing_group
 
 
-def test_add_assessment_with_group_id_validates_but_does_not_join(client, demo_ids):
-    """A create request naming an existing ``group_id`` is still validated
-    against it (must exist, must match the vulnerability) but always lands
-    as its own independent row: write-time group-joining is out of scope for
-    this phase (a group only grows through reconcile), matching
-    ``test_group_id_payload_no_longer_merges_writes_across_variants`` in
+def test_add_assessment_with_group_id_is_rejected(client, demo_ids):
+    """A create request naming a ``group_id`` is rejected outright with a
+    400 pointing at the reconcile endpoint, whether or not that group
+    actually exists: PK-based grouping makes "group" and "assessment" the
+    same row, and this endpoint always creates a brand-new one, so it has no
+    way to extend an existing group. Silently validating-then-ignoring
+    ``group_id`` used to land the new row as its own independent group
+    instead of the edit the caller asked for; matches
+    ``test_group_id_payload_is_rejected_across_variants`` in
     test_ai_assessments.py.
     """
     created = client.post(
@@ -3006,10 +3010,8 @@ def test_add_assessment_with_group_id_validates_but_does_not_join(client, demo_i
         },
     )
 
-    assert response.status_code == 200
-    body = response.get_json()
-    new_group_id = body["assessments"][0]["group_id"]
-    assert new_group_id != group_id, "lands as its own independent row, not merged in"
+    assert response.status_code == 400
+    assert "reconcile" in response.get_json()["error"]
 
 
 def test_add_assessment_with_unknown_group_id_is_rejected(client, demo_ids):
@@ -3022,10 +3024,11 @@ def test_add_assessment_with_unknown_group_id_is_rejected(client, demo_ids):
             "group_id": str(uuid.uuid4()),
         },
     )
-    assert response.status_code == 404
+    assert response.status_code == 400
+    assert "reconcile" in response.get_json()["error"]
 
 
-def test_add_assessment_with_group_id_rejects_mismatched_vuln_id(client, demo_ids):
+def test_add_assessment_with_group_id_is_rejected_across_different_vulns(client, demo_ids):
     created = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -3046,7 +3049,7 @@ def test_add_assessment_with_group_id_rejects_mismatched_vuln_id(client, demo_id
         },
     )
     assert response.status_code == 400
-    assert "vuln_id" in response.get_json()["error"]
+    assert "reconcile" in response.get_json()["error"]
 
 
 def test_group_endpoints_reject_a_malformed_group_id(client):

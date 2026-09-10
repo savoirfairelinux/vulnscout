@@ -79,6 +79,40 @@ def test_a_finding_held_only_by_a_multi_target_assessment_survives(app):
         assert db.session.get(Finding, zlib.id) is not None
 
 
+def test_reaps_a_finding_held_only_by_a_dangling_target_row(app):
+    """A target row whose assessment is gone must not hold a finding alive.
+
+    A raw Core DML ``DELETE`` on ``assessments`` (as opposed to going through
+    the ORM, which cascades and reaps the target row too) can leave a
+    dangling ``assessment_targets`` row behind, since sqlite's
+    ``foreign_keys`` pragma stays off in this application. Such a row names
+    an assessment that no longer exists and must not count as a reference.
+    """
+    with app.app_context():
+        from src.extensions import db
+        from src.helpers.outdated_cleanup import _delete_orphaned_findings
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+
+        project = uuid.uuid4()
+        variant = _make_variant(project, "a")
+        orphan = _make_finding("CVE-2026-8013", "busybox")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, orphan.id)],
+            commit=True,
+        )
+        db.session.execute(db.delete(Assessment).where(Assessment.id == assessment.id))
+        db.session.commit()
+        db.session.expire_all()
+
+        deleted_count, vulnerability_ids = _delete_orphaned_findings({orphan.id})
+
+        assert deleted_count == 1
+        assert vulnerability_ids == {"CVE-2026-8013"}
+        assert db.session.get(Finding, orphan.id) is None
+
+
 def test_a_finding_with_no_remaining_reference_is_still_reaped(app):
     """The reachability fix doesn't turn _delete_orphaned_findings into a no-op."""
     with app.app_context():

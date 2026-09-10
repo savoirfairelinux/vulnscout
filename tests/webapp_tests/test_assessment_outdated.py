@@ -619,6 +619,47 @@ class TestOutdatedFlag:
             assert _db.session.get(Assessment, orphaned_assessment_id) is None
             assert _db.session.get(Vulnerability, CVE_ID) is not None
 
+    def test_does_not_count_a_dangling_target_row_as_an_assessment(self):
+        """A target row whose assessment is already gone must not inflate
+        ``assessments_deleted``.
+
+        A raw Core DML ``DELETE`` on ``assessments`` (as opposed to going
+        through the ORM, which cascades and reaps the target row too) can
+        leave a dangling ``assessment_targets`` row behind, since sqlite's
+        ``foreign_keys`` pragma stays off in this application. Such a row
+        names an assessment that no longer exists and was not deleted by
+        this run, so it must not be counted as if it were.
+        """
+        orphaned_cve = "CVE-2024-00002"
+        live_id = uuid.UUID("13131313-1313-1313-1313-131313131313")
+        dead_id = uuid.UUID("15151515-1515-1515-1515-151515151515")
+        with self.app.app_context():
+            Vulnerability.create_record(id=orphaned_cve, description="Orphaned", status="low")
+            package = Package.find_or_create("orphaned", "1.0", [], [], "")
+            finding = Finding.get_or_create(package.id, orphaned_cve)
+            for assessment_id in (live_id, dead_id):
+                _db.session.add(Assessment(
+                    id=assessment_id, origin="custom", status="not_affected",
+                ))
+                _db.session.add(AssessmentTarget(
+                    assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
+            _db.session.commit()
+            # Simulate the residue: delete the "dead" assessment through raw
+            # Core DML, which bypasses the ORM cascade and leaves its target
+            # row behind, dangling.
+            _db.session.execute(_db.delete(Assessment).where(Assessment.id == dead_id))
+            _db.session.commit()
+
+        response = self._delete_orphaned_vulnerabilities()
+        assert response.status_code == 200
+        assert json.loads(response.data) == {
+            "vulnerabilities_deleted": 1,
+            "assessments_deleted": 1,
+            "findings_deleted": 1,
+        }
+        with self.app.app_context():
+            assert _db.session.get(Assessment, live_id) is None
+
     def test_orphaned_vulnerabilities_preserve_variant_owned_data(self):
         """Variant metrics and time estimates keep their CVEs out of cleanup."""
         metrics_cve = "CVE-2024-00003"
