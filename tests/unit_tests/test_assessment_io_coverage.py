@@ -23,6 +23,9 @@ from src.helpers.assessment_io import (
     build_custom_data_export,
     detect_review_export_format,
     reconcile_review_export,
+    parse_imported_timestamp,
+    duplicate_assessment_query,
+    duplicate_multitarget_assessment_exists,
 )
 
 
@@ -118,15 +121,15 @@ class TestBuildCustomDataExport:
             vuln = Vulnerability.create_record("CVE-2099-TE01")
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
-                targets=[(var.id, finding.id)],
                 status="not_affected",
+                targets=[(var.id, finding.id)],
                 origin="custom",
             )
             db.session.commit()
 
             result = build_custom_data_export(variant_ids=[var.id])
 
-        assert result["version"] == 1
+        assert result["version"] == 2
         assert len(result["assessments"]) == 1
         # variant name should be resolved on the exported assessment
         assert result["assessments"][0]["variant"] == "io-cov-var"
@@ -145,8 +148,8 @@ class TestBuildCustomDataExport:
             vuln = Vulnerability.create_record("CVE-2099-AI01")
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
-                targets=[(var.id, finding.id)],
                 status="under_investigation",
+                targets=[(var.id, finding.id)],
                 origin="ai",
             )
 
@@ -165,6 +168,9 @@ class TestBuildCustomDataExport:
             "packages": ["ai-pkg@1.0.0"],
             "variant_id": str(var.id),
             "variant": "io-cov-var",
+            "targets": [
+                {"variant_id": str(var.id), "variant": "io-cov-var", "package": "ai-pkg@1.0.0"},
+            ],
         }]
 
 
@@ -557,3 +563,234 @@ class TestImportCustomDataTimeEstimates:
             result = import_custom_data(data, {})
         assert result["status"] == "error"
         assert result["errors"]
+
+
+# ===========================================================================
+# Task-11 validation/edge-case gaps introduced by version-2 targets support
+# ===========================================================================
+
+class TestReviewOpenvexVersionGuard:
+    """Line 215: _is_review_openvex_export rejects a non-integer version.
+
+    ``isinstance(True, int)`` is True in Python (bool subclasses int), so a
+    boolean version does not exercise this guard -- a genuine non-int value
+    (a string) is required.
+    """
+
+    def test_openvex_doc_with_string_version_is_not_a_review_export(self):
+        doc = {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "@id": "stable-id",
+            "author": "author",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "version": "not-an-int",
+            "statements": [],
+        }
+        with pytest.raises(ValueError):
+            detect_review_export_format(doc)
+
+
+class TestValidV2Target:
+    """Lines 243, 245: _is_valid_v2_target's own type guards, reached
+    through detect_review_export_format's per-record validation."""
+
+    def test_v2_target_entry_that_is_not_a_dict_is_rejected(self):
+        payload = {
+            "version": 2,
+            "assessments": [{
+                "vuln_id": "CVE-1", "packages": ["pkg@1"],
+                "targets": ["not-a-dict"],
+            }],
+            "ai_assessments": [], "cvss": [], "time_estimates": [],
+        }
+        with pytest.raises(ValueError):
+            detect_review_export_format(payload)
+
+    def test_v2_target_with_non_string_package_is_rejected(self):
+        payload = {
+            "version": 2,
+            "assessments": [{
+                "vuln_id": "CVE-1", "packages": ["pkg@1"],
+                "targets": [{"variant_id": "v1", "package": 123}],
+            }],
+            "ai_assessments": [], "cvss": [], "time_estimates": [],
+        }
+        with pytest.raises(ValueError):
+            detect_review_export_format(payload)
+
+
+class TestValidCustomRecordPackagesGuard:
+    """Lines 260, 262: _is_valid_custom_record's ``packages`` guards."""
+
+    def test_packages_field_that_is_not_a_list_is_rejected(self):
+        payload = {
+            "version": 1,
+            "assessments": [{
+                "vuln_id": "CVE-1", "variant_id": "v1", "packages": "not-a-list",
+            }],
+            "ai_assessments": [], "cvss": [], "time_estimates": [],
+        }
+        with pytest.raises(ValueError):
+            detect_review_export_format(payload)
+
+    def test_packages_list_with_non_string_entry_is_rejected(self):
+        payload = {
+            "version": 1,
+            "assessments": [{
+                "vuln_id": "CVE-1", "variant_id": "v1", "packages": [123],
+            }],
+            "ai_assessments": [], "cvss": [], "time_estimates": [],
+        }
+        with pytest.raises(ValueError):
+            detect_review_export_format(payload)
+
+
+class TestDetectFormatSectionMustBeArray:
+    """Line 291: a top-level section that is not a list is rejected."""
+
+    def test_cvss_section_that_is_not_a_list_is_rejected(self):
+        payload = {
+            "version": 1, "assessments": [], "ai_assessments": [],
+            "cvss": "not-a-list", "time_estimates": [],
+        }
+        with pytest.raises(ValueError, match="must be an array"):
+            detect_review_export_format(payload)
+
+
+class TestRecordIdentityNonAssessmentSection:
+    """Line 308: _record_identity's fallback for cvss/time_estimates
+    sections (no ``packages`` key), reached through reconcile."""
+
+    def test_reconciling_cvss_section_uses_variant_and_vuln_identity(self):
+        existing = {
+            "version": 1, "assessments": [], "ai_assessments": [],
+            "cvss": [{"vuln_id": "CVE-1", "variant_id": "v1", "base_score": 5.0}],
+            "time_estimates": [],
+        }
+        current = {
+            "version": 1, "assessments": [], "ai_assessments": [],
+            "cvss": [{"vuln_id": "CVE-1", "variant_id": "v1", "base_score": 9.0}],
+            "time_estimates": [],
+        }
+        result = reconcile_review_export(existing, current)
+        assert len(result["cvss"]) == 1
+        assert result["cvss"][0]["base_score"] == 9.0
+
+
+class TestValidateRecordsRejectsNonDictRecord:
+    """Line 362: _validate_records raises when a record is not a dict.
+
+    Reached by bypassing ``detect_review_export_format``'s own record
+    validation: this exercises ``_reconcile_records`` directly by handing it
+    an ``existing`` custom-data document whose ``assessments`` entry is not a
+    dict but whose *outer* shape still satisfies ``_is_valid_custom_record``
+    for the sections that matter to format detection is not otherwise
+    possible, since detection already rejects non-dict records --
+    so this instead confirms the guard raises for the CVSS/time_estimates
+    sections, which are not covered by ``_is_valid_custom_record`` at all.
+    """
+
+    def test_non_dict_cvss_record_is_rejected_during_reconcile(self):
+        existing = {
+            "version": 1, "assessments": [], "ai_assessments": [],
+            "cvss": ["not-a-dict"], "time_estimates": [],
+        }
+        current = {
+            "version": 1, "assessments": [], "ai_assessments": [],
+            "cvss": [], "time_estimates": [],
+        }
+        with pytest.raises(ValueError, match="invalid record"):
+            reconcile_review_export(existing, current)
+
+
+class TestReconcileFormatMismatch:
+    """Line 441: reconciling an OpenVEX existing file against a custom-data
+    current export (or vice versa) is rejected outright."""
+
+    def test_custom_existing_against_openvex_current_is_rejected(self):
+        existing = {
+            "version": 1, "assessments": [], "ai_assessments": [],
+            "cvss": [], "time_estimates": [],
+        }
+        current = {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "@id": "id", "author": "author",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "version": 1, "statements": [],
+        }
+        with pytest.raises(ValueError, match="does not match"):
+            reconcile_review_export(existing, current)
+
+
+class TestParseImportedTimestampNaive:
+    """Line 488: a naive (no timezone) timestamp is assumed UTC."""
+
+    def test_naive_timestamp_is_assumed_utc(self):
+        parsed = parse_imported_timestamp("2026-01-01T00:00:00", True)
+        assert parsed is not None
+        assert parsed.tzinfo is not None
+        assert parsed.utcoffset().total_seconds() == 0
+
+
+class TestDuplicateAssessmentQueryWithTimestamp:
+    """Line 523: the timestamp clause is added when a timestamp is given."""
+
+    def test_query_includes_timestamp_clause_when_given(self):
+        from datetime import datetime, timezone
+
+        query = duplicate_assessment_query(
+            finding_id=_uuid.uuid4(),
+            variant_id=None,
+            status="affected",
+            origin="custom",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        assert "timestamp" in str(query).lower()
+
+
+class TestDuplicateMultitargetEmptySet:
+    """Line 556: an empty target set is never a duplicate."""
+
+    def test_empty_targets_list_is_never_a_duplicate(self, app):
+        with app.app_context():
+            assert duplicate_multitarget_assessment_exists(
+                [], status="affected", origin="custom",
+            ) is False
+
+
+class TestExportOmitsGenuinelyUntargetedAssessments:
+    """Line 828: an assessment with no AssessmentTarget row at all (the
+    legacy scalar-only shape allowed pre-PR-D via ``allow_untargeted``) is
+    omitted from the custom-data export.
+
+    This is not a Task-11 regression: ``Assessment.vuln_id``/``.packages``
+    already resolve purely from ``target_rows`` (a Task-3 decision -- see
+    ``src/routes/assessments.py``'s coalesced-column workaround for the one
+    read path that needs the scalar fallback), so an untargeted row's
+    ``to_dict()`` already carries an empty ``vuln_id``/``packages`` before
+    this task's changes. Exporting it would produce a record so empty that
+    ``import_custom_data`` rejects it on re-import ("Missing vuln_id or
+    status") -- omitting it here avoids manufacturing that dead record.
+    """
+
+    def test_untargeted_assessment_does_not_appear_in_export(self, app):
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.vulnerability import Vulnerability
+        from src.models.assessment import Assessment
+        from src.extensions import db
+
+        with app.app_context():
+            pkg = Package.find_or_create("untargeted-export-pkg", "1.0")
+            Vulnerability.get_or_create("CVE-2099-UNTARGETEXP")
+            finding = Finding.get_or_create(pkg.id, "CVE-2099-UNTARGETEXP")
+            row = Assessment.create(
+                status="affected", origin="custom",
+                targets=None, allow_untargeted=True, commit=False,
+            )
+            row.finding_id = finding.id
+            db.session.commit()
+
+            result = build_custom_data_export()
+
+        assert result["assessments"] == []
