@@ -594,8 +594,8 @@ class _SccBulkWriter:
                 "timestamp": datetime.now(timezone.utc),
                 "responses": [],
             })
-            # Target storage is universal: every assessment — including this
-            # bulk-inserted "scc" one — must have its own assessment_targets
+            # Target storage is universal: every assessment -- including this
+            # bulk-inserted "scc" one -- must have its own assessment_targets
             # row, since bulk_insert_mappings bypasses Assessment.create()'s
             # dual write entirely.
             self._assess_target_rows.append({

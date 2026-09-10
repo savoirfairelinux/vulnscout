@@ -490,7 +490,8 @@ def init_app(app: Flask) -> None:
 
         author = request.args.get('author', 'Savoir-faire Linux')
         import json
-        json_data = json.dumps(build_openvex_doc(handmade, author), indent=2)
+        json_data = json.dumps(
+            build_openvex_doc(handmade, author, variant_ids=[variant_uuid]), indent=2)
         filename = re.sub(r"[^\w\-.]", "_", variant.name)
         return json_data, 200, {
             "Content-Type": "application/json",
@@ -879,6 +880,7 @@ def init_app(app: Flask) -> None:
             current = build_openvex_doc(
                 handmade,
                 request.form.get('author', existing.get('author', 'Savoir-faire Linux')),
+                variant_ids=variant_ids,
             )
         else:
             current = build_custom_data_export(variant_ids)
