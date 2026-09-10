@@ -5,6 +5,8 @@ from flask import current_app
 
 from alembic import context
 
+from src.helpers.schema_guard import assert_schema_is_current
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -106,6 +108,8 @@ def run_migrations_online():
 
         with context.begin_transaction():
             context.run_migrations()
+
+        assert_schema_is_current(connection)
 
 
 if context.is_offline_mode():

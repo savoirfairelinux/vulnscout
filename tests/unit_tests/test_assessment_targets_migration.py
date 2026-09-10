@@ -15,6 +15,7 @@ migration = importlib.import_module(
 )
 
 backfill_targets = migration.backfill_targets
+fuse_duplicates = migration.fuse_duplicates
 
 SHARED_TIMESTAMP = "2026-01-01 00:00:00"
 
@@ -150,6 +151,54 @@ def connection_with_null_variant():
         yield connection
 
 
+@pytest.fixture
+def connection_with_duplicates():
+    """Two assessments produced by one user action, before they are fused.
+
+    Built at the point mid-``upgrade`` where ``fuse_duplicates`` runs: the
+    target table exists and is backfilled, but the scalar columns are still on
+    ``assessments`` because ``fuse_duplicates`` itself still reads them.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _build_pre_upgrade_schema(connection)
+        connection.execute(sa.text(
+            """
+            CREATE TABLE assessment_targets (
+                assessment_id TEXT NOT NULL REFERENCES assessments (id)
+                    ON DELETE CASCADE,
+                variant_id TEXT NOT NULL REFERENCES variants (id),
+                finding_id TEXT NOT NULL REFERENCES findings (id),
+                PRIMARY KEY (assessment_id, variant_id, finding_id)
+            )
+            """
+        ))
+        connection.execute(sa.text(
+            "CREATE INDEX ix_assessment_targets_variant_id"
+            " ON assessment_targets (variant_id)"))
+        connection.execute(sa.text(
+            "CREATE INDEX ix_assessment_targets_finding_id"
+            " ON assessment_targets (finding_id)"))
+
+        project_id = _new_id()
+        variant_a = _add_variant(connection, project_id)
+        variant_b = _add_variant(connection, project_id)
+        finding_a = _add_finding(connection, "CVE-2026-0400")
+
+        first = _add_assessment(connection, finding_a, variant_a)
+        second = _add_assessment(connection, finding_a, variant_b)
+
+        for assessment_id, variant_id in ((first, variant_a), (second, variant_b)):
+            connection.execute(sa.text(
+                "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
+                " VALUES (:a, :v, :f)"
+            ), {"a": assessment_id, "v": variant_id, "f": finding_a})
+
+        _bind_alembic_op(connection)
+
+        yield connection
+
+
 def test_backfill_gives_every_assessment_exactly_one_target(migrated_connection):
     """Every pre-existing assessment gets one target from its scalar columns."""
     rows = migrated_connection.execute(sa.text(
@@ -159,12 +208,40 @@ def test_backfill_gives_every_assessment_exactly_one_target(migrated_connection)
     assert all(count == 1 for _, count in rows)
 
 
-def test_old_columns_survive_the_expand_migration(migrated_connection):
-    """PR-A keeps the scalar columns; readers still depend on them."""
+def test_scalar_columns_are_gone(migrated_connection):
     columns = {row[1] for row in migrated_connection.execute(
         sa.text("PRAGMA table_info(assessments)")).all()}
-    assert "variant_id" in columns
-    assert "finding_id" in columns
+    assert "variant_id" not in columns
+    assert "finding_id" not in columns
+
+
+def test_an_assessment_may_now_hold_several_targets(migrated_connection):
+    """The invariant that made PR-B and PR-C safe is deliberately lifted."""
+    assessment_id, variant_id = migrated_connection.execute(sa.text(
+        "SELECT assessment_id, variant_id FROM assessment_targets LIMIT 1")).one()
+    other_finding = migrated_connection.execute(sa.text(
+        "SELECT id FROM findings WHERE id NOT IN"
+        " (SELECT finding_id FROM assessment_targets WHERE assessment_id = :a)"
+    ), {"a": assessment_id}).scalar()
+    migrated_connection.execute(sa.text(
+        "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
+        " VALUES (:a, :v, :f)"
+    ), {"a": assessment_id, "v": variant_id, "f": other_finding})
+    count = migrated_connection.execute(sa.text(
+        "SELECT COUNT(*) FROM assessment_targets WHERE assessment_id = :a"
+    ), {"a": assessment_id}).scalar()
+    assert count == 2
+
+
+def test_duplicate_rows_from_one_user_action_are_fused(connection_with_duplicates):
+    """Rows sharing project, CVE, content and timestamp become one row."""
+    fuse_duplicates(connection_with_duplicates)
+    survivors = connection_with_duplicates.execute(sa.text(
+        "SELECT COUNT(*) FROM assessments")).scalar()
+    targets = connection_with_duplicates.execute(sa.text(
+        "SELECT COUNT(*) FROM assessment_targets")).scalar()
+    assert survivors == 1
+    assert targets == 2
 
 
 def test_backfill_is_idempotent(migrated_connection):
@@ -175,22 +252,6 @@ def test_backfill_is_idempotent(migrated_connection):
     after = migrated_connection.execute(
         sa.text("SELECT COUNT(*) FROM assessment_targets")).scalar()
     assert after == before
-
-
-def test_assessment_cannot_hold_two_targets_in_the_expand_phase(migrated_connection):
-    """The 1:1 invariant is enforced by the database, not by convention."""
-    assessment_id = migrated_connection.execute(
-        sa.text("SELECT assessment_id FROM assessment_targets LIMIT 1")).scalar()
-    other_finding = migrated_connection.execute(sa.text(
-        "SELECT id FROM findings WHERE id NOT IN"
-        " (SELECT finding_id FROM assessment_targets WHERE assessment_id = :a)"
-    ), {"a": assessment_id}).scalar()
-    with pytest.raises(sa.exc.IntegrityError):
-        migrated_connection.execute(sa.text(
-            "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
-            " SELECT assessment_id, variant_id, :f FROM assessment_targets"
-            " WHERE assessment_id = :a"
-        ), {"a": assessment_id, "f": other_finding})
 
 
 def test_orphan_assessment_stops_the_upgrade(connection_with_null_variant):

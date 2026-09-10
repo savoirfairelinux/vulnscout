@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
+from sqlalchemy import orm, Text, DateTime, JSON
 from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
@@ -14,7 +14,6 @@ from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
 from .package import Package
 from .finding import Finding
-from .variant import Variant
 from .assessment_target import AssessmentTarget, GroupInvariantError, validate_targets
 
 
@@ -97,11 +96,6 @@ RESPONSES_CDX_VEX = [
     "workaround_available"
 ]
 
-#: Marks a row whose group membership has not been resolved yet, so that a
-#: preloaded ``None`` ("this row is ungrouped") is not confused with "unknown".
-_GROUP_ID_UNLOADED = object()
-
-
 # ---------------------------------------------------------------------------
 # Assessment model
 # ---------------------------------------------------------------------------
@@ -131,14 +125,6 @@ class Assessment(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     responses: Mapped[list[str] | None] = mapped_column(JSON)
-
-    # PR-A only: kept so readers not yet migrated to target rows keep working.
-    # Mirrored from the single target; removed in PR-D.
-    finding_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("findings.id"), index=True)
-    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True)
-
-    finding: Mapped["Finding | None"] = relationship(back_populates="assessments")
-    variant: Mapped["Variant | None"] = relationship(back_populates="assessments")
 
     target_rows: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
         back_populates="assessment",
@@ -278,52 +264,13 @@ class Assessment(Base):
         return variant_id in target_variant_ids
 
     # ------------------------------------------------------------------
-    # group_id — preloadable, so serializing a collection stays O(1) queries
+    # group_id -- an assessment is its own group
     # ------------------------------------------------------------------
 
     @property
     def group_id(self) -> "uuid.UUID | None":
-        """The group this assessment belongs to, or ``None`` when ungrouped.
-
-        Callers serializing a collection must call :meth:`preload_group_ids`
-        first: without it every row falls back to its own membership query,
-        which turns an N-row response into N extra queries.
-        """
-        cached = getattr(self, "_group_id", _GROUP_ID_UNLOADED)
-        if cached is not _GROUP_ID_UNLOADED:
-            return cached  # type: ignore[return-value]
-        # Function-local import: the two model modules would otherwise import
-        # each other at module load time.
-        from flask import has_app_context
-        from .assessment_group_member import AssessmentGroupMember
-
-        if getattr(self, "id", None) is None or not has_app_context():
-            return None
-        return AssessmentGroupMember.get_group_id(self.id)
-
-    def set_loaded_group_id(self, group_id: "uuid.UUID | None") -> None:
-        """Cache a group id resolved in bulk, so :meth:`to_dict` needs no query."""
-        self._group_id = group_id
-
-    @staticmethod
-    def preload_group_ids(
-        assessments: "list[Assessment]",
-        memberships: "dict[uuid.UUID, uuid.UUID] | None" = None,
-    ) -> None:
-        """Resolve the group id of every assessment with a single query.
-
-        ``memberships`` lets a caller that already loaded the membership rows
-        (``build_groups``) reuse them instead of querying again.
-        """
-        from .assessment_group_member import AssessmentGroupMember
-
-        rows = [a for a in assessments if getattr(a, "id", None) is not None]
-        if not rows:
-            return
-        if memberships is None:
-            memberships = AssessmentGroupMember.get_group_ids([a.id for a in rows])
-        for row in rows:
-            row.set_loaded_group_id(memberships.get(row.id))
+        """The group this assessment is.  Kept as a property for callers."""
+        return self.id
 
     def __repr__(self) -> str:
         return f"<Assessment id={self.id} status={self.status!r}>"
@@ -360,40 +307,12 @@ class Assessment(Base):
     # ==================================================================
 
     def add_target(self, variant_id: uuid.UUID, finding_id: uuid.UUID) -> bool:
-        """Set this assessment's ``(variant, finding)`` pair; False when unchanged.
-
-        PR-A only: ``uq_assessment_targets_assessment_id`` permits exactly one
-        target row per assessment, so a new pair *replaces* the current one
-        instead of being appended -- the last-write-wins semantics ``staging``
-        had when the pair lived in the scalar columns.  It matters: a VEX
-        statement naming several packages is one DTO persisted once per
-        package (``src/controllers/assessments.py``), so appending would make
-        the second package's flush violate the constraint and lose the record
-        entirely.
-
-        PR-D REVERTS THIS: once the constraint and the scalar columns are gone,
-        this method appends again and a multi-package statement keeps one
-        target row per package.
-        """
+        """Attach one ``(variant, finding)`` pair; False when already present."""
         if (variant_id, finding_id) in set(self.targets):
             return False
-        validate_targets([(variant_id, finding_id)])
-        existing = self._sorted_target_rows()
-        if existing:
-            # Move the existing row rather than deleting and re-inserting one:
-            # the unit of work emits inserts before deletes, so a replace-by-
-            # delete would trip the unique constraint inside a single flush.
-            row = existing[0]
-            row.variant_id, row.finding_id = variant_id, finding_id
-            for extra in existing[1:]:
-                self.target_rows.remove(extra)
-        else:
-            self.target_rows.append(
-                AssessmentTarget(variant_id=variant_id, finding_id=finding_id))
-
-        # PR-A only, as in :meth:`create`: one target per assessment, so the
-        # pair just attached is the pair the scalar columns must name.
-        self.variant_id, self.finding_id = variant_id, finding_id
+        validate_targets(self.targets + [(variant_id, finding_id)])
+        self.target_rows.append(
+            AssessmentTarget(variant_id=variant_id, finding_id=finding_id))
         return True
 
     def add_package(self, package: str | Package) -> bool:
@@ -705,7 +624,6 @@ class Assessment(Base):
         responses: Optional[list] = None,
         timestamp: Optional[datetime] = None,
         commit: bool = True,
-        allow_untargeted: bool = False,
     ) -> "Assessment":
         """Create a new assessment, persist it and return it.
 
@@ -718,32 +636,14 @@ class Assessment(Base):
                 applies to. ``targets`` is the only way to say what an
                 assessment applies to; at least one pair is required.
             commit: If True (default), commit immediately. Set False for bulk operations.
-            allow_untargeted: PR-A only.  Permits the one legacy shape the
-                scalar columns could express and a target row cannot: a record
-                with no variant at all (``assessment_targets.variant_id`` is
-                part of the primary key, so it can never be NULL).  Only the
-                custom-data import uses it, to keep storing variant-less items
-                exactly as ``staging`` did.  PR-D REVERTS THIS: once the
-                columns are gone such a record cannot exist and the import
-                rejects the item instead.
 
         Raises:
             GroupInvariantError: when ``targets`` is empty, or when its pairs
                 may not share one assessment (different projects/vulnerabilities).
         """
         resolved_targets = list(targets or [])
-        if not resolved_targets and not allow_untargeted:
+        if not resolved_targets:
             raise GroupInvariantError("An assessment must have at least one target")
-        # PR-A only.  ``uq_assessment_targets_assessment_id`` permits exactly
-        # one target row, so a multi-pair request cannot be honoured: writing
-        # only the first pair would leave the scalar mirror disagreeing with a
-        # target set the caller believes it asked for.  Refuse instead.
-        # PR-D REVERTS THIS: with the constraint gone, several pairs are the point.
-        if len(resolved_targets) > 1:
-            raise GroupInvariantError(
-                "An assessment may have only one target while the expand phase "
-                "keeps the mirrored variant_id / finding_id columns"
-            )
         validate_targets(resolved_targets)
         assessment = Assessment(
             status=status,
@@ -765,11 +665,6 @@ class Assessment(Base):
         for target_variant_id, target_finding_id in resolved_targets:
             assessment.target_rows.append(AssessmentTarget(
                 variant_id=target_variant_id, finding_id=target_finding_id))
-
-        # PR-A only.  The unique constraint guarantees one target here, so the
-        # mirror is unambiguous.  PR-D drops both the constraint and this block.
-        if resolved_targets:
-            assessment.variant_id, assessment.finding_id = resolved_targets[0]
         if commit:
             db.session.commit()
         else:
