@@ -31,12 +31,11 @@ class GroupInvariantError(ValueError):
     assessments may not share one group.
 
     An assessment stays inside one project and addresses one vulnerability;
-    members cannot disagree about text, since assessment content lives in
-    exactly one place — the assessment row itself.  A group obeys the same
-    rule over its member rows, and ``assessment_group_member`` re-exports this
-    class rather than defining a second one: both are raised on the same call
-    path, so two same-named classes made the route handlers catch one and
-    return 500 for the other.
+    targets cannot disagree about either, since assessment content lives in
+    exactly one place — the assessment row itself.  Because "a group is an
+    assessment" now literally, this is the only invariant class in play; the
+    write path no longer has a separate group-membership model to keep in
+    sync with it.
     """
 
 
