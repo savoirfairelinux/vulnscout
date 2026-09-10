@@ -137,7 +137,8 @@ def export_custom_openvex_assessments_command(output_dir: str, project: str, var
         raise click.ClickException("No custom assessments to export.")
 
     author = get_default_author()
-    document = build_openvex_doc(handmade, author, _dt.now(_tz.utc).isoformat())
+    document = build_openvex_doc(
+        handmade, author, _dt.now(_tz.utc).isoformat(), variant_ids=[variant_obj.id])
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(
         output_dir,

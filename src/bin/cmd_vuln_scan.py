@@ -81,9 +81,11 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
     if fv_key not in assessed_findings:
         assessed_findings.add(fv_key)
         has_assess = _db.session.execute(
-            _db.select(Assessment.id).where(
-                Assessment.finding_id == finding.id,
-                Assessment.variant_id == variant_uuid,
+            _db.select(Assessment.id)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .where(
+                AssessmentTarget.finding_id == finding.id,
+                AssessmentTarget.variant_id == variant_uuid,
             ).limit(1)
         ).scalar_one_or_none()
         if has_assess is None:
@@ -474,12 +476,14 @@ class _SccBulkWriter:
             chunk = finding_ids[i:i + self._SELECT_CHUNK]
             rows = _db.session.execute(
                 _db.select(
-                    Assessment.finding_id,
+                    AssessmentTarget.finding_id,
                     Assessment.status,
                     Assessment.timestamp,
-                ).where(
-                    Assessment.finding_id.in_(chunk),
-                    Assessment.variant_id == self._variant_uuid,
+                )
+                .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
+                .where(
+                    AssessmentTarget.finding_id.in_(chunk),
+                    AssessmentTarget.variant_id == self._variant_uuid,
                 )
             ).all()
             for fid, status, ts in rows:
@@ -590,11 +594,10 @@ class _SccBulkWriter:
                 "timestamp": datetime.now(timezone.utc),
                 "responses": [],
             })
-            # Target storage is universal: every assessment -- including this
-            # bulk-inserted "scc" one -- must have its own assessment_targets
+            # Target storage is universal: every assessment — including this
+            # bulk-inserted "scc" one — must have its own assessment_targets
             # row, since bulk_insert_mappings bypasses Assessment.create()'s
-            # dual write entirely.  Without it these rows, which are the bulk
-            # of the data, are invisible to every target-based reader.
+            # dual write entirely.
             self._assess_target_rows.append({
                 "assessment_id": assess_id,
                 "variant_id": self._variant_uuid,
@@ -638,8 +641,7 @@ class _SccBulkWriter:
             if self._assess_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(Assessment), self._assess_rows)
             if self._assess_target_rows:
-                _db.session.bulk_insert_mappings(
-                    sa_inspect(AssessmentTarget), self._assess_target_rows)
+                _db.session.bulk_insert_mappings(sa_inspect(AssessmentTarget), self._assess_target_rows)
             _db.session.commit()
 
         self._vuln_rows.clear()

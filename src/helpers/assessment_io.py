@@ -61,11 +61,46 @@ def sanitize_variant_name(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_")
 
 
+def scoped_packages(
+    assess: "_Assessment",
+    variant_ids: "list[_uuid.UUID] | set[_uuid.UUID] | None",
+) -> list:
+    """Return *assess*'s package ids, restricted to *variant_ids*.
+
+    ``Assessment.packages`` carries no scope context — it returns the package
+    of every target, across every variant. An assessment is admitted into a
+    scoped export as soon as *one* of its targets is in scope, so a
+    multi-target assessment spanning an in-scope and an out-of-scope variant
+    would otherwise disclose the out-of-scope package in a document published
+    for the in-scope one.
+
+    With 0 or 1 target only one variant is involved and there is nothing to
+    leak, so ``assess.packages`` is returned directly. That also keeps
+    transient DTO assessments working, since they never populate
+    ``target_rows``. Passing ``variant_ids=None`` means "no scope" and is
+    likewise unfiltered.
+    """
+    targets = list(assess.target_rows)
+    if len(targets) <= 1 or variant_ids is None:
+        return assess.packages
+    allowed = set(variant_ids)
+    result: list = []
+    for target in sorted(targets, key=lambda t: (str(t.variant_id or ""), str(t.finding_id or ""))):
+        if target.variant_id not in allowed:
+            continue
+        if target.finding is not None and target.finding.package is not None:
+            pkg_id = target.finding.package.string_id
+            if pkg_id not in result:
+                result.append(pkg_id)
+    return result
+
+
 def build_openvex_doc(
     assessments: "list[_Assessment]",
     author: str,
     now_iso: str | None = None,
     vuln_cache: "dict[str, _Vulnerability | None] | None" = None,
+    variant_ids: "list[_uuid.UUID] | None" = None,
 ) -> dict[str, Any]:
     """Build a single OpenVEX document dict from a list of assessments.
 
@@ -80,6 +115,10 @@ def build_openvex_doc(
     vuln_cache:
         Optional mutable cache ``{vuln_id: VulnModel | None}`` to avoid
         repeated DB lookups across multiple calls.
+    variant_ids:
+        Variants this document is published for.  Products are restricted to
+        targets in this scope so a multi-variant assessment cannot disclose
+        an out-of-scope package.  ``None`` disables the restriction.
 
     Returns
     -------
@@ -105,7 +144,7 @@ def build_openvex_doc(
         }
 
         products = []
-        for pkg_str in assess.packages:
+        for pkg_str in scoped_packages(assess, variant_ids):
             if "@" in pkg_str:
                 name, version = pkg_str.rsplit("@", 1)
             else:
@@ -193,6 +232,47 @@ _CUSTOM_EXPORT_SECTIONS = (
 )
 
 
+def _is_valid_v2_target(target: object) -> bool:
+    """True when *target* carries enough scope for ``_resolve_v2_target``.
+
+    A target must name a package and identify its variant by id or by name --
+    the name is what lets a backup restore on an instance whose variant UUIDs
+    all differ.
+    """
+    if not isinstance(target, dict):
+        return False
+    if not isinstance(target.get("package"), str):
+        return False
+    return isinstance(target.get("variant_id"), str) or isinstance(target.get("variant"), str)
+
+
+def _is_valid_custom_record(section: str, record: object, version: object) -> bool:
+    """Validate one record of a VulnScout custom-data export."""
+    if not isinstance(record, dict):
+        return False
+    if not isinstance(record.get("vuln_id"), str):
+        return False
+
+    is_assessment = section in {"assessments", "ai_assessments"}
+    if is_assessment:
+        packages = record.get("packages")
+        if not isinstance(packages, list):
+            return False
+        if not all(isinstance(package, str) for package in packages):
+            return False
+
+    # A version-2 assessment carries its scope in ``targets``, so its
+    # top-level ``variant_id`` is null whenever the record spans several
+    # variants -- that is exactly what ``build_custom_data_export`` writes.
+    # Requiring a string here would make VulnScout reject its own export.
+    if version == 2 and is_assessment:
+        targets = record.get("targets")
+        if isinstance(targets, list) and targets:
+            return all(_is_valid_v2_target(target) for target in targets)
+
+    return isinstance(record.get("variant_id"), str)
+
+
 def detect_review_export_format(doc: object) -> str:
     """Return the supported Review export format represented by *doc*.
 
@@ -203,20 +283,14 @@ def detect_review_export_format(doc: object) -> str:
         return "openvex"
     if not isinstance(doc, dict):
         raise ValueError("Export file must contain a JSON object")
-    if doc.get("version") == 1 and isinstance(doc.get("assessments"), list):
+    if doc.get("version") in (1, 2) and isinstance(doc.get("assessments"), list):
+        version = doc.get("version")
         for section in _CUSTOM_EXPORT_SECTIONS:
             value = doc.get(section, [])
             if not isinstance(value, list):
                 raise ValueError(f"Invalid VulnScout JSON: '{section}' must be an array")
             if not all(
-                isinstance(record, dict)
-                and isinstance(record.get("variant_id"), str)
-                and isinstance(record.get("vuln_id"), str)
-                and (
-                    section not in {"assessments", "ai_assessments"}
-                    or isinstance(record.get("packages"), list)
-                    and all(isinstance(package, str) for package in record["packages"])
-                )
+                _is_valid_custom_record(section, record, version)
                 for record in value
             ):
                 raise ValueError(f"Invalid VulnScout JSON: '{section}' contains an invalid record")
@@ -422,13 +496,19 @@ def duplicate_assessment_query(
     origin: str,
     timestamp: "_dt | None" = None,
 ) -> Any:
-    """Build the SELECT used to detect an already-imported assessment.
+    """Build the SELECT used to detect an already-imported *untargeted* row.
 
-    When *timestamp* is given (i.e. the caller preserves the timestamps stored
-    in the file) it is part of the identity: an assessment recorded at another
-    date is a distinct entry in the vulnerability's history and must be
-    imported instead of being silently dropped as a duplicate.  Without it,
-    re-importing the same file stays idempotent.
+    PR-A only: the scalar ``variant_id``/``finding_id`` columns are the only
+    place a variant-less legacy import can be matched against, since it has
+    no ``AssessmentTarget`` row for :func:`duplicate_multitarget_assessment_exists`
+    to compare. Removed with the columns in PR-D, when a variant-less item
+    becomes an import error instead (see ``import_custom_data``'s v1 branch).
+
+    When *timestamp* is given (i.e. the caller preserves the timestamps
+    stored in the file) it is part of the identity: an assessment recorded at
+    another date is a distinct entry in the vulnerability's history and must
+    be imported instead of being silently dropped as a duplicate. Without
+    it, re-importing the same file stays idempotent.
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment
@@ -442,6 +522,74 @@ def duplicate_assessment_query(
     if timestamp is not None:
         query = query.where(DBAssessment.timestamp == timestamp)
     return query
+
+
+def duplicate_multitarget_assessment_exists(
+    resolved_targets: "list[tuple[_uuid.UUID, _uuid.UUID]]",
+    status: str,
+    origin: str,
+    timestamp: "_dt | None" = None,
+) -> bool:
+    """Return True when an assessment with exactly this target set already exists.
+
+    Checks the *set* of ``(variant_id, finding_id)`` pairs for exact
+    **equality**, not overlap, since an assessment covering a superset or
+    subset of targets is a different assessment, not a repeat of this one.
+    Works identically for a single-pair set (a single-target import) or a
+    multi-pair set (a multi-target import) — there is no separate scalar
+    column to check against anymore.
+
+    Runs exactly two queries regardless of how many targets are in
+    *resolved_targets*: one to find candidate assessment ids that match on
+    status/origin/timestamp and overlap this exact target set, one to load
+    the full target rows of those (typically few) candidates for the
+    equality check in Python. Called once per imported statement/entry, so
+    this adds a constant, not quadratic, amount of work to an import.
+    """
+    from sqlalchemy import func, or_
+    from ..extensions import db
+    from ..models.assessment import Assessment as DBAssessment
+    from ..models.assessment_target import AssessmentTarget
+
+    wanted = set(resolved_targets)
+    if not wanted:
+        return False
+
+    pair_filters = [
+        (AssessmentTarget.variant_id == v) & (AssessmentTarget.finding_id == f)
+        for v, f in wanted
+    ]
+    candidates_query = (
+        db.select(AssessmentTarget.assessment_id)
+        .join(DBAssessment, DBAssessment.id == AssessmentTarget.assessment_id)
+        .where(
+            DBAssessment.status == status,
+            DBAssessment.origin == origin,
+            or_(*pair_filters),
+        )
+    )
+    if timestamp is not None:
+        candidates_query = candidates_query.where(DBAssessment.timestamp == timestamp)
+    candidates_query = candidates_query.group_by(AssessmentTarget.assessment_id).having(
+        func.count(AssessmentTarget.assessment_id) == len(wanted)
+    )
+    candidate_ids = db.session.execute(candidates_query).scalars().all()
+    if not candidate_ids:
+        return False
+
+    rows = db.session.execute(
+        db.select(
+            AssessmentTarget.assessment_id,
+            AssessmentTarget.variant_id,
+            AssessmentTarget.finding_id,
+        ).where(AssessmentTarget.assessment_id.in_(candidate_ids))
+    ).all()
+
+    by_assessment: "dict[_uuid.UUID, set[tuple[_uuid.UUID, _uuid.UUID]]]" = {}
+    for assessment_id, v, f in rows:
+        by_assessment.setdefault(assessment_id, set()).add((v, f))
+
+    return any(pairs == wanted for pairs in by_assessment.values())
 
 
 def import_statements(
@@ -469,9 +617,7 @@ def import_statements(
         *errors*  — list of error dicts ``{"vuln_id": ..., "error": ...}``.
         *skipped* — count of duplicate assessments that were not re-inserted.
     """
-    from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
-    from ..models.assessment_group_member import AssessmentGroupMember
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
     from ..models.finding import Finding
@@ -526,8 +672,12 @@ def import_statements(
             stmt.get("timestamp"), use_original_timestamps
         )
 
-        statement_created_ids: list[_uuid.UUID] = []
-
+        # Resolve every product to a (variant, finding) target first: one
+        # statement becomes one multi-target assessment, so every product it
+        # names shares one judgement. A duplicate product within the same
+        # statement collapses to a single target.
+        resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
+        seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
         for pkg_string_id in pkg_ids:
             try:
                 if "@" in pkg_string_id:
@@ -538,36 +688,11 @@ def import_statements(
                 DBVuln.get_or_create(vuln_name)
                 finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
-                existing = db.session.execute(
-                    duplicate_assessment_query(
-                        finding_id=finding.id,
-                        variant_id=variant_id,
-                        status=status,
-                        origin="custom",
-                        timestamp=imported_ts,
-                    )
-                ).scalars().first()
-                if existing is not None:
-                    skipped += 1
+                pair = (variant_id, finding.id)
+                if pair in seen_pairs:
                     continue
-
-                db_a = DBAssessment.create(
-                    status=status,
-                    simplified_status=STATUS_TO_SIMPLIFIED.get(
-                        status, "Pending Assessment"
-                    ),
-                    targets=[(variant_id, finding.id)],
-                    origin="custom",
-                    status_notes=status_notes,
-                    justification=justification,
-                    impact_statement=impact_statement,
-                    workaround=workaround,
-                    responses=[],
-                    timestamp=imported_ts,
-                    commit=True,
-                )
-                created.append(db_a.to_dict())
-                statement_created_ids.append(db_a.id)
+                seen_pairs.add(pair)
+                resolved_targets.append(pair)
             except Exception as e:
                 errors.append({
                     "vuln_id": vuln_name,
@@ -575,8 +700,42 @@ def import_statements(
                     "error": str(e),
                 })
 
-        if len(statement_created_ids) > 1:
-            AssessmentGroupMember.create_group(statement_created_ids, commit=True)
+        if not resolved_targets:
+            continue
+
+        # Duplicate detection works on the *complete* target set only.
+        # Checking each product on its own would drop a target that happens
+        # to exist as its own single-target assessment and import a
+        # statement narrower than the one exported -- a subset or superset
+        # is a different judgement, not a repeat of this statement.
+        if duplicate_multitarget_assessment_exists(
+            resolved_targets, status=status, origin="custom", timestamp=imported_ts,
+        ):
+            skipped += 1
+            continue
+
+        try:
+            create_kwargs: dict[str, Any] = dict(
+                status=status,
+                simplified_status=STATUS_TO_SIMPLIFIED.get(
+                    status, "Pending Assessment"
+                ),
+                origin="custom",
+                status_notes=status_notes,
+                justification=justification,
+                impact_statement=impact_statement,
+                workaround=workaround,
+                responses=[],
+                timestamp=imported_ts,
+                commit=True,
+            )
+            db_a = DBAssessment.create(targets=resolved_targets, **create_kwargs)
+            created.append(db_a.to_dict())
+        except Exception as e:
+            # A single catch-all: GroupInvariantError (targets can't share
+            # an assessment) and any other creation failure are reported the
+            # same way, so there is no behavioural reason to distinguish them.
+            errors.append({"vuln_id": vuln_name, "error": str(e)})
 
     return created, errors, skipped
 
@@ -634,9 +793,28 @@ def build_custom_data_export(
     pending_ai = DBAssessment.get_by_origin(variant_ids, origin="ai")
 
     variant_name_by_id: dict[str, str] = {}
+    scope: "set[_uuid.UUID] | None" = set(variant_ids) if variant_ids is not None else None
+
+    def _scoped_target_rows(assessment: "DBAssessment") -> list:
+        """Return the target rows of *assessment* that fall inside the export scope.
+
+        ``get_by_origin`` admits an assessment as soon as *one* of its targets
+        matches the requested variants, so a cross-variant assessment arrives
+        here carrying targets the caller did not ask for.  Exporting those
+        would disclose another variant's packages and, on re-import, restore
+        them -- while ``export-update`` promises the opposite, that variants
+        outside the current selection are removed.  An unscoped export
+        (``variant_ids is None``) still emits every target, so a full backup
+        stays lossless.
+        """
+        if scope is None:
+            return list(assessment.target_rows)
+        return [row for row in assessment.target_rows if row.variant_id in scope]
+
     variant_uuid_set: set[_uuid.UUID] = {
-        a.variant_id for a in [*handmade, *pending_ai]
-        if a.variant_id is not None
+        row.variant_id
+        for a in [*handmade, *pending_ai]
+        for row in _scoped_target_rows(a)
     }
 
     def _export_assessments(
@@ -645,6 +823,17 @@ def build_custom_data_export(
         exported = []
         for assessment in assessments:
             assessment_dict = assessment.to_dict()
+            target_rows = _scoped_target_rows(assessment)
+            if not target_rows:
+                continue
+            # ``packages`` and the top-level ``variant_id`` describe the same
+            # subset as ``targets``; taking them from ``to_dict()`` would span
+            # every target and leak the out-of-scope ones back in.
+            packages = scoped_packages(assessment, variant_ids)
+            scoped_variant_ids = {row.variant_id for row in target_rows}
+            single_variant_id = (
+                str(next(iter(scoped_variant_ids))) if len(scoped_variant_ids) == 1 else None
+            )
             exported.append({
                 "vuln_id": assessment_dict["vuln_id"],
                 "status": assessment_dict["status"],
@@ -654,8 +843,19 @@ def build_custom_data_export(
                 "status_notes": assessment_dict.get("status_notes") or None,
                 "workaround": assessment_dict.get("workaround") or None,
                 "timestamp": assessment_dict["timestamp"],
-                "packages": assessment_dict["packages"],
-                "variant_id": assessment_dict.get("variant_id"),
+                "packages": packages,
+                "variant_id": single_variant_id,
+                # ``variant`` (the human-readable name) travels with the id
+                # because a variant_id generated by another VulnScout instance
+                # never matches a local one -- see ``_resolve_v2_target``.
+                "targets": [
+                    {
+                        "variant_id": str(row.variant_id),
+                        "variant": row.variant.name if row.variant is not None else None,
+                        "package": row.finding.package.string_id,
+                    }
+                    for row in target_rows
+                ],
             })
         return exported
 
@@ -762,7 +962,7 @@ def build_custom_data_export(
         item["variant"] = variant_name_by_id.get(vid) if vid else None
 
     return {
-        "version": 1,
+        "version": 2,
         "exported_at": _dt.now(_tz.utc).isoformat(),
         "assessments": exported_assessments,
         "ai_assessments": exported_ai_assessments,
@@ -806,7 +1006,6 @@ def import_custom_data(
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
-    from ..models.assessment_group_member import AssessmentGroupMember
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
     from ..models.finding import Finding
@@ -817,6 +1016,8 @@ def import_custom_data(
         validate_and_apply_cvss,
         apply_effort,
     )
+
+    is_v2 = data.get("version") == 2
 
     result: dict[str, Any] = {
         "status": "success",
@@ -873,6 +1074,67 @@ def import_custom_data(
             return None
         return mapped_variant.id
 
+    def _resolve_v2_target(
+        raw_target: Any, vuln_name: str,
+    ) -> "tuple[_uuid.UUID | None, _uuid.UUID | None, str | None]":
+        """Resolve one version-2 ``{"variant_id", "package"}`` target.
+
+        Returns ``(variant_id, finding_id, None)`` on success or
+        ``(None, None, error_message)`` when the pair does not resolve. Unlike
+        the version-1 path, packages are looked up rather than auto-created:
+        a version-2 export always refers to packages/findings this database
+        already knows, so a name that does not resolve is reported instead of
+        silently fabricating a new package/finding.
+
+        The variant is resolved with the same precedence as the version-1
+        path: an explicit ``variant_id`` argument to ``import_custom_data``
+        wins, then a target ``variant_id`` that exists locally, then the
+        target's variant *name*. The name fallback is what makes a backup
+        restorable on a different VulnScout instance, where every locally
+        generated variant UUID differs from the exported one.
+        """
+        if not isinstance(raw_target, dict):
+            return None, None, "Invalid target entry"
+        variant_token = raw_target.get("variant_id")
+        pkg_string = raw_target.get("package")
+        if not pkg_string:
+            return None, None, "Target missing package"
+        if variant_id is None and not variant_token and not raw_target.get("variant"):
+            return None, None, "Target missing variant_id or package"
+        resolved_variant_id = _resolve_variant(raw_target)
+        if resolved_variant_id is None:
+            label = raw_target.get("variant") or variant_token
+            return None, None, f"Variant '{label}' not found"
+
+        if "::" in pkg_string:
+            base, supplier = pkg_string.split("::", 1)
+        else:
+            base, supplier = pkg_string, ""
+        if "@" in base:
+            name, version = base.rsplit("@", 1)
+        else:
+            name, version = base, ""
+        pkg = db.session.execute(
+            db.select(Package).where(
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == supplier,
+            )
+        ).scalar_one_or_none()
+        if pkg is None:
+            return None, None, f"Package '{pkg_string}' not found"
+        finding = db.session.execute(
+            db.select(Finding).where(
+                Finding.package_id == pkg.id,
+                Finding.vulnerability_id == vuln_name.upper(),
+            )
+        ).scalar_one_or_none()
+        if finding is None:
+            return None, None, (
+                f"No finding for package '{pkg_string}' and vulnerability '{vuln_name}'"
+            )
+        return resolved_variant_id, finding.id, None
+
     def _import_assessments(
         key: str,
         origin: str,
@@ -893,6 +1155,88 @@ def import_custom_data(
                     "error": "Missing vuln_id or status",
                 })
                 continue
+
+            justification = a.get("justification", "")
+            impact_statement = a.get("impact_statement", "")
+            status_notes = a.get("status_notes", "")
+            workaround = a.get("workaround", "")
+            imported_ts = parse_imported_timestamp(
+                a.get("timestamp"), use_original_timestamps
+            )
+
+            if is_v2:
+                raw_targets = a.get("targets", [])
+                if not isinstance(raw_targets, list) or not raw_targets:
+                    result["errors"].append({
+                        "vuln_id": vuln_name,
+                        "error": "No targets found",
+                    })
+                    continue
+
+                resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
+                seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
+                for raw_target in raw_targets:
+                    pkg_string = (
+                        raw_target.get("package")
+                        if isinstance(raw_target, dict) else None
+                    )
+                    v_id, f_id, error = _resolve_v2_target(raw_target, vuln_name)
+                    if error is not None:
+                        result["errors"].append({
+                            "vuln_id": vuln_name,
+                            "package": pkg_string,
+                            "error": error,
+                        })
+                        continue
+                    assert v_id is not None and f_id is not None
+
+                    pair = (v_id, f_id)
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+                    resolved_targets.append(pair)
+
+                if not resolved_targets:
+                    continue
+
+                # Duplicate detection works on the *complete* target set only.
+                # Checking each pair on its own would drop a target that
+                # happens to exist as its own single-target assessment, and
+                # import an assessment narrower than the one exported --
+                # a subset or superset is a different judgement, not a repeat.
+                if duplicate_multitarget_assessment_exists(
+                    resolved_targets, status=status, origin=origin, timestamp=imported_ts,
+                ):
+                    result[skipped_key] += 1
+                    continue
+
+                try:
+                    create_kwargs: dict[str, Any] = dict(
+                        status=status,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(
+                            status, "Pending Assessment"
+                        ),
+                        origin=origin,
+                        status_notes=status_notes,
+                        justification=justification,
+                        impact_statement=impact_statement,
+                        workaround=workaround,
+                        responses=[],
+                        timestamp=imported_ts,
+                        commit=True,
+                    )
+                    DBAssessment.create(targets=resolved_targets, **create_kwargs)
+                    result[imported_key] += 1
+                except Exception as e:
+                    # A single catch-all: GroupInvariantError (targets can't
+                    # share an assessment, e.g. they span two projects) and
+                    # any other creation failure are reported the same way,
+                    # so there is no behavioural reason to distinguish them.
+                    result["errors"].append({"vuln_id": vuln_name, "error": str(e)})
+                continue
+
+            # Version 1: one statement/entry fans out to one assessment per
+            # package (the legacy shape kept importable for existing backups).
             pkg_ids = a.get("packages", [])
             if not pkg_ids:
                 result["errors"].append({
@@ -908,28 +1252,22 @@ def import_custom_data(
             if variant_token in (None, ""):
                 variant_token = a.get("variant")
             if target_variant_id is None and variant_token not in (None, ""):
+                # A *named* variant that fails to resolve (foreign id, typo,
+                # deleted variant) is reported. This is distinct from the
+                # untargeted case below, where no variant was named at all.
                 result["errors"].append({
                     "vuln_id": vuln_name,
                     "error": f"Variant '{variant_token}' not found",
                 })
                 continue
-            # An item that names no variant at all is stored variant-less,
-            # exactly as it always was: scalar columns only, no target row.
-            # A target's variant_id is part of its primary key and can never
-            # be NULL, so there is no target to write.  PR-A promises no
-            # behaviour change, and this shape is one `staging` accepted.
-            # PR-D REVERTS THIS: when the scalar columns go, a target-less
-            # assessment cannot exist, and this item becomes a 400
-            # "No variant specified".
+            # An item naming no variant at all is stored variant-less, exactly
+            # as `staging` always did: scalar columns only, no target row (a
+            # target's variant_id is part of its primary key and can never be
+            # NULL, so there is no target to write). PR-A promises no
+            # behaviour change here, and this shape is one `staging` accepted.
+            # PR-D REVERTS THIS: once the scalar columns are gone, such an
+            # item is unrepresentable and becomes an import error instead.
             untargeted = target_variant_id is None
-
-            justification = a.get("justification", "")
-            impact_statement = a.get("impact_statement", "")
-            status_notes = a.get("status_notes", "")
-            workaround = a.get("workaround", "")
-            imported_ts = parse_imported_timestamp(
-                a.get("timestamp"), use_original_timestamps
-            )
 
             entry_created_ids: list[_uuid.UUID] = []
 
@@ -947,18 +1285,29 @@ def import_custom_data(
                     DBVuln.get_or_create(vuln_name)
                     finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
-                    existing = db.session.execute(
-                        duplicate_assessment_query(
-                            finding_id=finding.id,
-                            variant_id=target_variant_id,
+                    if untargeted:
+                        existing = db.session.execute(
+                            duplicate_assessment_query(
+                                finding_id=finding.id,
+                                variant_id=None,
+                                status=status,
+                                origin=origin,
+                                timestamp=imported_ts,
+                            )
+                        ).scalars().first()
+                        if existing is not None:
+                            result[skipped_key] += 1
+                            continue
+                    else:
+                        assert target_variant_id is not None
+                        if duplicate_multitarget_assessment_exists(
+                            [(target_variant_id, finding.id)],
                             status=status,
                             origin=origin,
                             timestamp=imported_ts,
-                        )
-                    ).scalars().first()
-                    if existing is not None:
-                        result[skipped_key] += 1
-                        continue
+                        ):
+                            result[skipped_key] += 1
+                            continue
 
                     db_a = DBAssessment.create(
                         status=status,
@@ -966,7 +1315,7 @@ def import_custom_data(
                             status, "Pending Assessment"
                         ),
                         targets=(
-                            None if target_variant_id is None
+                            None if untargeted or target_variant_id is None
                             else [(target_variant_id, finding.id)]
                         ),
                         allow_untargeted=untargeted,
@@ -981,7 +1330,7 @@ def import_custom_data(
                     )
                     if untargeted:
                         # PR-A only: the scalar mirror is the only place this
-                        # record's finding can be named.  Removed with the
+                        # record's finding can be named. Removed with the
                         # columns in PR-D.
                         db_a.finding_id = finding.id
                         db.session.commit()
@@ -994,7 +1343,8 @@ def import_custom_data(
                         "error": str(e),
                     })
 
-            if len(entry_created_ids) > 1:
+            if untargeted and len(entry_created_ids) > 1:
+                from ..models.assessment_group_member import AssessmentGroupMember
                 AssessmentGroupMember.create_group(entry_created_ids, commit=True)
 
     # Import pending AI assessments separately so the Review page continues to
