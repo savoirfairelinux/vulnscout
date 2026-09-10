@@ -84,7 +84,7 @@ describe('CopyAssessmentsReviewModal', () => {
     test('renders a dropdown for multi-candidate groups and plain text for single', () => {
         render(<CopyAssessmentsReviewModal {...baseProps} />);
         // CVE-2024-0001 has two candidates → a select
-        const select = screen.getByLabelText('Target for CVE-2024-0001') as HTMLSelectElement;
+        const select = screen.getByLabelText('Target for CVE-2024-0001 for openssl@1.1.1') as HTMLSelectElement;
         expect(select).toBeInTheDocument();
         expect(select.options).toHaveLength(2);
         // CVE-2024-0002 has one candidate → plain text
@@ -104,7 +104,7 @@ describe('CopyAssessmentsReviewModal', () => {
     test('changing the dropdown updates the chosen target finding', () => {
         const onConfirm = jest.fn();
         render(<CopyAssessmentsReviewModal {...baseProps} onConfirm={onConfirm} />);
-        const select = screen.getByLabelText('Target for CVE-2024-0001') as HTMLSelectElement;
+        const select = screen.getByLabelText('Target for CVE-2024-0001 for openssl@1.1.1') as HTMLSelectElement;
         fireEvent.change(select, { target: { value: '1' } });
         fireEvent.click(screen.getByText('Confirm Copy'));
         expect(onConfirm).toHaveBeenCalledWith([
@@ -124,7 +124,7 @@ describe('CopyAssessmentsReviewModal', () => {
     test('toggling a row checkbox off excludes it from the selections', () => {
         const onConfirm = jest.fn();
         render(<CopyAssessmentsReviewModal {...baseProps} onConfirm={onConfirm} />);
-        fireEvent.click(screen.getByLabelText('Include CVE-2024-0001'));
+        fireEvent.click(screen.getByLabelText('Include CVE-2024-0001 for openssl@1.1.1'));
         fireEvent.click(screen.getByText('Confirm Copy'));
         expect(onConfirm).toHaveBeenCalledWith([
             { source_assessment_id: 'a2', target_finding_id: 'tf3' },
@@ -191,7 +191,7 @@ describe('CopyAssessmentsReviewModal', () => {
         render(
             <CopyAssessmentsReviewModal {...baseProps} groups={groups} onConfirm={onConfirm} />,
         );
-        const checkbox = screen.getByLabelText('Include CVE-2024-9999') as HTMLInputElement;
+        const checkbox = screen.getByLabelText('Include CVE-2024-9999 for openssl@1.1.1') as HTMLInputElement;
         expect(checkbox).toBeDisabled();
         expect(screen.getByText('(already assessed)')).toBeInTheDocument();
         fireEvent.click(screen.getByText('Confirm Copy'));
@@ -223,7 +223,7 @@ describe('CopyAssessmentsReviewModal', () => {
         render(
             <CopyAssessmentsReviewModal {...baseProps} groups={groups} onConfirm={onConfirm} />,
         );
-        const checkbox = screen.getByLabelText('Include CVE-2024-7777') as HTMLInputElement;
+        const checkbox = screen.getByLabelText('Include CVE-2024-7777 for openssl@1.1.1') as HTMLInputElement;
         expect(checkbox).not.toBeDisabled();
         expect(checkbox).toBeChecked();
         expect(screen.getByText('(already assessed)')).toBeInTheDocument();
@@ -241,10 +241,10 @@ describe('CopyAssessmentsReviewModal', () => {
         // Status badge is shown
         expect(screen.getByText('Not affected')).toBeInTheDocument();
         // Collapse the row
-        fireEvent.click(screen.getByLabelText('Collapse details for CVE-2024-0001'));
+        fireEvent.click(screen.getByLabelText('Collapse details for CVE-2024-0001 for openssl@1.1.1'));
         expect(screen.queryByText('component_not_present')).not.toBeInTheDocument();
         // Expand it again
-        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0001'));
+        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0001 for openssl@1.1.1'));
         expect(screen.getByText('component_not_present')).toBeInTheDocument();
     });
 
@@ -271,11 +271,11 @@ describe('CopyAssessmentsReviewModal', () => {
         expect(screen.getByText('component_not_present')).toBeInTheDocument();
         expect(screen.getByText('Exploitable')).toBeInTheDocument();
         // Collapse CVE-2024-0001
-        fireEvent.click(screen.getByLabelText('Collapse details for CVE-2024-0001'));
+        fireEvent.click(screen.getByLabelText('Collapse details for CVE-2024-0001 for openssl@1.1.1'));
         expect(screen.queryByText('component_not_present')).not.toBeInTheDocument();
         // CVE-2024-0002 row should still be expanded
         expect(screen.getByText('Exploitable')).toBeInTheDocument();
-        expect(screen.getByLabelText('Collapse details for CVE-2024-0002')).toBeInTheDocument();
+        expect(screen.getByLabelText('Collapse details for CVE-2024-0002 for curl@7.64.1')).toBeInTheDocument();
     });
 
     test.each([
@@ -293,5 +293,56 @@ describe('CopyAssessmentsReviewModal', () => {
         }];
         render(<CopyAssessmentsReviewModal {...baseProps} groups={groups} />);
         expect(screen.getByText(simplified)).toBeInTheDocument();
+    });
+
+    /** Two preview groups for ONE assessment covering two source packages --
+     *  the shape the copy fan-out produces. They share source_assessment_id
+     *  and vulnerability_id, so anything keyed on either collides. */
+    function makeFanOutGroups(): CopyAssessmentsPreviewGroup[] {
+        return [
+            {
+                source_assessment_id: 'a1',
+                source_finding_id: 'sf1',
+                vulnerability_id: 'CVE-2024-0001',
+                source_package: 'openssl@1.1.1',
+                assessment_details: { simplified_status: 'Not affected', status: 'not_affected' },
+                candidates: [{ target_finding_id: 'tf1', target_package: 'openssl@3.0.0', already_has_custom: false, selected: true }],
+            },
+            {
+                source_assessment_id: 'a1',
+                source_finding_id: 'sf2',
+                vulnerability_id: 'CVE-2024-0001',
+                source_package: 'zlib@1.2.11',
+                assessment_details: { simplified_status: 'Not affected', status: 'not_affected' },
+                candidates: [{ target_finding_id: 'tf2', target_package: 'zlib@1.3.1', already_has_custom: false, selected: true }],
+            },
+        ];
+    }
+
+    test('renders one row per source finding when an assessment covers several', () => {
+        render(<CopyAssessmentsReviewModal {...baseProps} groups={makeFanOutGroups()} />);
+        expect(screen.getByText('openssl@1.1.1')).toBeInTheDocument();
+        expect(screen.getByText('zlib@1.2.11')).toBeInTheDocument();
+        expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+    });
+
+    test('confirms both rows of one fanned-out assessment', () => {
+        const onConfirm = jest.fn();
+        render(<CopyAssessmentsReviewModal {...baseProps} groups={makeFanOutGroups()} onConfirm={onConfirm} />);
+        fireEvent.click(screen.getByText('Confirm Copy'));
+        expect(onConfirm).toHaveBeenCalledWith([
+            { source_assessment_id: 'a1', target_finding_id: 'tf1' },
+            { source_assessment_id: 'a1', target_finding_id: 'tf2' },
+        ]);
+    });
+
+    test('fanned-out rows of one assessment toggle independently', () => {
+        const onConfirm = jest.fn();
+        render(<CopyAssessmentsReviewModal {...baseProps} groups={makeFanOutGroups()} onConfirm={onConfirm} />);
+        fireEvent.click(screen.getByLabelText('Include CVE-2024-0001 for openssl@1.1.1'));
+        fireEvent.click(screen.getByText('Confirm Copy'));
+        expect(onConfirm).toHaveBeenCalledWith([
+            { source_assessment_id: 'a1', target_finding_id: 'tf2' },
+        ]);
     });
 });

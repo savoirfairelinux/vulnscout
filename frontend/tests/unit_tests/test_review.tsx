@@ -132,10 +132,12 @@ const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJs
  * `build_groups()`): assessments sharing an explicit `group_id` collapse into
  * one group; everything else becomes its own singleton group (bucketed by
  * array index, not `id`, since a couple of fixtures below intentionally reuse
- * the same literal id for two unrelated rows). `vuln_texts` is looked up from
- * whichever fixture (across both the custom and AI lists) carries it for that
- * vuln_id, mirroring how the real route enriches groups from the Vulnerability
- * model rather than from any one assessment row.
+ * the same literal id for two unrelated rows), and its `group_id` in the
+ * response is the singleton member's own assessment id, matching how the
+ * real endpoint always sets `group_id` to `assessment.id`. `vuln_texts` is
+ * looked up from whichever fixture (across both the custom and AI lists)
+ * carries it for that vuln_id, mirroring how the real route enriches groups
+ * from the Vulnerability model rather than from any one assessment row.
  */
 function toAssessmentGroups(list: any[], vulnTextsMap: Record<string, unknown[]>): any[] {
     const buckets = new Map<string, any[]>();
@@ -155,7 +157,7 @@ function toAssessmentGroups(list: any[], vulnTextsMap: Record<string, unknown[]>
             assessment_id: m.id,
         })));
         groups.push({
-            group_id: key.startsWith('g:') ? head.group_id : null,
+            group_id: key.startsWith('g:') ? head.group_id : head.id,
             vuln_id: head.vuln_id,
             status: head.status,
             simplified_status: STATUS_VEX_TO_GRAPH[head.status] ?? `[invalid status] ${head.status}`,
@@ -194,10 +196,10 @@ const PROJECTS = [{ id: 'proj1', name: 'Project One' }];
 const RICH_PKG = 'pkgA@1.0.0::Organization: ACME Corp (info@acme.com)';
 
 /** One custom assessment on a single package/variant. Pass `groupId` to make
- *  two calls collapse into a single server-built group (mirroring a real
- *  `AssessmentGroupMember` link), the same way `RICH_ASSESSMENT`-style
- *  multi-variant rows are produced by the real `/reviews/assessment-groups`
- *  endpoint. */
+ *  two calls share the same assessment id, mirroring a server-built group of
+ *  ``AssessmentTarget`` rows on one assessment, the same way
+ *  `RICH_ASSESSMENT`-style multi-variant rows are produced by the real
+ *  `/reviews/assessment-groups` endpoint. */
 const makeAssessment = (id: string, variantId: string, groupId?: string) => ({
     id,
     group_id: groupId ?? null,
@@ -395,7 +397,15 @@ describe('Review — editing "Apply to variants"', () => {
         expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
     });
 
-    test('checking a new variant creates an assessment for it (POST) and keeps the existing one (PUT)', async () => {
+    // NOTE: editing a group used to be a destructive-first sequence — DELETE
+    // the deselected (package, variant) combos, THEN POST the newly-selected
+    // ones — issued as separate requests. A failed POST after a successful
+    // DELETE silently lost data, and the POST also carried the group's own
+    // id as `group_id`, which `add_assessment` unconditionally rejects with
+    // 400 (it only accepts creates; `POST .../reconcile` is for editing an
+    // existing group). Both bugs are fixed by reconciling the group's full
+    // desired state in one atomic request instead.
+    test('checking a new variant reconciles the group to include it, in one request', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -409,28 +419,28 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(variantCheckbox('Variant Beta'));
         await user.click(screen.getByText('Save Changes'));
 
-        await waitFor(() => {
-            expect(postCalls().length).toBeGreaterThan(0);
-        });
+        await screen.findByText('Assessment updated successfully!');
 
-        // Existing v1 assessment is updated in place.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
-
-        // A new assessment is created for the newly-selected variant v2.
-        const post = postCalls().find(c => String(c[0]).includes('/api/vulnerabilities/CVE-2020-1111/assessments'));
-        expect(post).toBeDefined();
-        const body = JSON.parse((post![1] as any).body);
-        expect(body.variant_id).toBe('v2');
-        expect(body.packages).toEqual(['pkgA@1.0.0']);
-
-        // No assessments were removed.
+        // Exactly one mutating request: the group reconcile. No standalone
+        // PUT/DELETE/POST-to-create calls alongside it.
+        expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
+        const reconcileCalls = postCalls().filter(c => String(c[0]).includes('/reconcile'));
+        expect(reconcileCalls).toHaveLength(1);
+
+        const [url, init] = reconcileCalls[0];
+        expect(String(url)).toContain('/api/assessment-groups/a1/reconcile');
+        const body = JSON.parse((init as any).body);
+        expect(body.vuln_id).toBe('CVE-2020-1111');
+        expect(body.packages).toEqual(['pkgA@1.0.0']);
+        expect(body.variant_ids.sort()).toEqual(['v1', 'v2']);
+        expect(body.existing_ids).toEqual(['a1']);
+        // The rejected field must never be sent: reconcile addresses the
+        // group by id in the URL, not by a `group_id` in the body.
+        expect(body.group_id).toBeUndefined();
     });
 
-    test('unchecking a variant deletes its assessment (DELETE) and keeps the other (PUT)', async () => {
+    test('unchecking a variant reconciles the group to drop it, in one request', async () => {
         // Two assessments sharing a group id are merged into one row.
         mockNetwork([makeAssessment('a1', 'v1', 'g-editvar'), makeAssessment('a2', 'v2', 'g-editvar')]);
         render(<Review projectId="proj1" />);
@@ -445,25 +455,24 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(variantCheckbox('Variant Beta'));
         await user.click(screen.getByText('Save Changes'));
 
-        await waitFor(() => {
-            expect(deleteCalls().length).toBeGreaterThan(0);
-        });
+        await screen.findByText('Assessment updated successfully!');
 
-        // v2 assessment is deleted, v1 assessment is updated.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a2'),
-            expect.objectContaining({ method: 'DELETE' })
-        );
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
+        // Exactly one mutating request: the group reconcile. No standalone
+        // PUT/DELETE calls alongside it.
+        expect(putCalls()).toHaveLength(0);
+        expect(deleteCalls()).toHaveLength(0);
+        const reconcileCalls = postCalls().filter(c => String(c[0]).includes('/reconcile'));
+        expect(reconcileCalls).toHaveLength(1);
 
-        // Nothing new was created.
-        expect(postCalls()).toHaveLength(0);
+        const [url, init] = reconcileCalls[0];
+        expect(String(url)).toContain('/api/assessment-groups/g-editvar/reconcile');
+        const body = JSON.parse((init as any).body);
+        expect(body.variant_ids).toEqual(['v1']);
+        expect(body.existing_ids.sort()).toEqual(['a1', 'a2']);
+        expect(body.group_id).toBeUndefined();
     });
 
-    test('editing without changing the variant selection neither creates nor deletes assessments', async () => {
+    test('editing without changing the variant selection still reconciles (idempotent), in one request', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -471,16 +480,45 @@ describe('Review — editing "Apply to variants"', () => {
         await openEditor(user);
         await user.click(screen.getByText('Save Changes'));
 
-        await waitFor(() => {
-            expect(putCalls().length).toBeGreaterThan(0);
-        });
+        await screen.findByText('Assessment updated successfully!');
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
+        expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
-        expect(postCalls()).toHaveLength(0);
+        const reconcileCalls = postCalls().filter(c => String(c[0]).includes('/reconcile'));
+        expect(reconcileCalls).toHaveLength(1);
+        const body = JSON.parse((reconcileCalls[0][1] as any).body);
+        expect(body.variant_ids).toEqual(['v1']);
+    });
+
+    // Regression test for the live data-loss bug: editing a multi-target
+    // group used to DELETE deselected targets before POSTing replacements,
+    // so a failure on the POST (which the backend now always returns for a
+    // group edit, since it carries a rejected `group_id`) left the DELETE
+    // already applied — deselected packages/variants vanished with no
+    // replacement. Reconciling in one request must leave zero partial
+    // mutations behind when the whole edit fails.
+    test('a failed edit to a multi-target group performs NO partial delete (atomicity)', async () => {
+        mockNetwork(
+            [makeAssessment('a1', 'v1', 'g-atomic'), makeAssessment('a2', 'v2', 'g-atomic')],
+            { mutationOk: false }
+        );
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        // Deselect Beta — under the old flow this alone would fire a DELETE
+        // for a2 before the (also failing) POST/PUT calls ran.
+        await user.click(variantCheckbox('Variant Beta'));
+        await user.click(screen.getByText('Save Changes'));
+
+        await screen.findByText('Failed to update assessment.');
+
+        // The whole edit was one request, and it failed — nothing was ever
+        // deleted or updated in isolation.
+        expect(deleteCalls()).toHaveLength(0);
+        expect(putCalls()).toHaveLength(0);
+        const reconcileCalls = postCalls().filter(c => String(c[0]).includes('/reconcile'));
+        expect(reconcileCalls).toHaveLength(1);
     });
 
     test('a successful edit reports success and notifies the parent', async () => {
@@ -687,7 +725,7 @@ describe('Review — AI Assessments tab', () => {
         await screen.findByText('No AI-generated assessments found');
     });
 
-    test('approving an ungrouped pending AI row promotes it to a group, then approves that group', async () => {
+    test('approving a pending AI row calls the group approve endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -697,15 +735,15 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Approve AI suggestion'));
 
         await screen.findByText('AI assessment approved!');
-        // The deleted per-assessment approve route no longer exists; the
-        // frontend must mint a real group id first (lazy promotion) and
-        // then call the group-scoped approve endpoint with it.
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/approve'))).toBe(true);
+        // group_id is always the assessment's own id, so approving never
+        // needs the lazy-promotion route — it can call the group-scoped
+        // endpoint directly.
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(false);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/ai1/approve'))).toBe(true);
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(false);
     });
 
-    test('rejecting an ungrouped pending AI row promotes it to a group, then rejects that group', async () => {
+    test('rejecting a pending AI row calls the group reject endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -715,8 +753,8 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Reject AI suggestion'));
 
         await screen.findByText('AI assessment rejected.');
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(true);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/promoted-group-id/reject'))).toBe(true);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(false);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/ai1/reject'))).toBe(true);
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(false);
     });
 
@@ -1475,7 +1513,7 @@ describe('Review — deleting an assessment', () => {
 
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessments/a1'),
+                expect.stringContaining('/api/assessment-groups/a1'),
                 expect.objectContaining({ method: 'DELETE' }),
             );
         });
@@ -1489,18 +1527,19 @@ describe('Review — deleting an assessment', () => {
         await user.click(await screen.findByText('AI Assessments'));
         await selectFirstTableRow(user);
 
+        // group_id is always the assessment's own id, so bulk rejection never
+        // needs the lazy-promotion route — it can call the group-scoped
+        // endpoint directly.
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessments/ai-1/group'),
+                expect.stringContaining('/api/assessment-groups/ai-1/reject'),
                 expect.objectContaining({ method: 'POST' }),
             );
         });
-        await waitFor(() => {
-            expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessment-groups/promoted-group-id/reject'),
-                expect.objectContaining({ method: 'POST' }),
-            );
-        });
+        expect(fetchMock).not.toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/ai-1/group'),
+            expect.anything(),
+        );
     });
 
     test('bulk deletion removes selected time estimates', async () => {
@@ -1546,7 +1585,7 @@ describe('Review — deleting an assessment', () => {
 
         await screen.findByText('Assessment deleted successfully!');
         expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
+            expect.stringContaining('/api/assessment-groups/a1'),
             expect.objectContaining({ method: 'DELETE' })
         );
         expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ type: 'delete', vulnId: 'CVE-2020-1111' }));
@@ -1612,6 +1651,41 @@ describe('Review — copying assessment ids', () => {
         await user.click(await screen.findByTitle('Copy group id'));
 
         expect(writeText).toHaveBeenCalledWith('group:g1');
+    });
+
+    test('two groups with swapped (variant, package) pairings stay distinct (not collapsed by a flattened key)', async () => {
+        // Both groups span the exact same variant set {v1, v2} and package
+        // set {openssl, zlib} once flattened — but g1 pairs
+        // (v1, openssl) + (v2, zlib) while g2 pairs (v1, zlib) + (v2, openssl).
+        // A history/table key built from the flattened sets could not tell
+        // them apart; keying on the server-assigned group_id (one
+        // assessment row's own id) can, since Task 15 fused writers to one
+        // row per (variant, package) target set rather than per flattened
+        // variant list.
+        mockNetwork(
+            [
+                { id: 'g1a', group_id: 'g1', vuln_id: 'CVE-DEDUP', packages: ['openssl@1.0.0'], variant_id: 'v1', status: 'affected', timestamp: '2024-05-01T00:00:00Z', origin: 'custom', responses: [] },
+                { id: 'g1b', group_id: 'g1', vuln_id: 'CVE-DEDUP', packages: ['zlib@1.0.0'], variant_id: 'v2', status: 'affected', timestamp: '2024-05-01T00:00:00Z', origin: 'custom', responses: [] },
+                { id: 'g2a', group_id: 'g2', vuln_id: 'CVE-DEDUP', packages: ['zlib@1.0.0'], variant_id: 'v1', status: 'affected', timestamp: '2024-05-02T00:00:00Z', origin: 'custom', responses: [] },
+                { id: 'g2b', group_id: 'g2', vuln_id: 'CVE-DEDUP', packages: ['openssl@1.0.0'], variant_id: 'v2', status: 'affected', timestamp: '2024-05-02T00:00:00Z', origin: 'custom', responses: [] },
+            ],
+            { packages: [{ name: 'openssl', version: '1.0.0' }, { name: 'zlib', version: '1.0.0' }] }
+        );
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        const copyButtons = await screen.findAllByTitle('Copy group id');
+        // Two distinct groups must render as two distinct rows, never merged
+        // into one because their flattened variant/package sets match.
+        expect(copyButtons).toHaveLength(2);
+
+        await user.click(copyButtons[0]);
+        await user.click(copyButtons[1]);
+
+        const copiedIds = writeText.mock.calls.map(call => call[0]);
+        expect(copiedIds.sort()).toEqual(['group:g1', 'group:g2']);
     });
 
     test('confirms the copy next to the button, then reverts', async () => {
