@@ -3,7 +3,7 @@ import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { AssessmentGroup, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
-import { asAssessment } from "../handlers/assessments";
+import { asAssessment, isMultiTargetGroup } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
@@ -114,10 +114,12 @@ function toReviewRow(
 // How long the copy button shows its "copied" confirmation before reverting.
 const COPIED_FEEDBACK_MS = 2000;
 
-/** The clipboard payload for a row: its group id when grouped, otherwise the
- *  id of its single assessment. Mirrors VulnModal's copy buttons. */
+/** The clipboard payload for a row: prefixed by whether the row spans more
+ *  than one (variant, package) target, since that's the user-facing
+ *  distinction between "a group" and "a single assessment". Mirrors
+ *  VulnModal's copy buttons. */
 const rowCopyKey = (row: ReviewRow) =>
-    row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
+    `${isMultiTargetGroup(row.targets) ? 'group' : 'assessment'}:${row.group_id ?? row.assessment_ids[0]}`;
 
 /** Copies a row's group/assessment id, confirming inline like VulnModal does.
  *  Same styles and confirmation as the copy button in the assessment history,
@@ -128,7 +130,7 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
     onCopy: (row: ReviewRow) => void;
 }) {
     const copied = copiedKey === rowCopyKey(row);
-    const label = row.group_id ? 'Copy group id' : 'Copy assessment id';
+    const label = isMultiTargetGroup(row.targets) ? 'Copy group id' : 'Copy assessment id';
     return (
         <>
             <button
@@ -908,117 +910,43 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (!editingRow) return;
         setEditSubmitting(true);
 
-        // Share a single timestamp across all rows created in this edit action.
-        const editSharedTimestamp = new Date().toISOString();
-
-        // Target (package × variant) combos from the form selection.
-        const targetVariantIds: Array<string | undefined> =
-            data.variant_ids && data.variant_ids.length > 0 ? data.variant_ids : [undefined];
+        // Target (package × variant) combos from the form selection, falling
+        // back to the row's current scope when the user left it untouched.
+        const targetVariantIds: string[] =
+            data.variant_ids && data.variant_ids.length > 0 ? data.variant_ids : editingRow.variant_ids;
         const targetPackages: string[] =
             data.packages && data.packages.length > 0 ? data.packages : editingRow.packages;
 
-        // Existing group targets indexed by (package, variant) key — each
-        // target already carries the id of the assessment record that owns it.
-        const existingByKey = new Map<string, string>();
-        for (const t of editingRow.targets) {
-            existingByKey.set(`${t.package}::${t.variant_id ?? ''}`, t.assessment_id);
-        }
-
-        // Desired set of (package, variant) keys after the edit.
-        const targetKeys = new Set<string>();
-        for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
-                targetKeys.add(`${pkg}::${vid ?? ''}`);
-            }
-        }
-
-        let anyError = false;
-
-        // 1. Update combos that persist, delete combos that were deselected.
-        for (const [key, existingId] of existingByKey) {
-            try {
-                if (targetKeys.has(key)) {
-                    const res = await fetch(
-                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existingId)}`,
-                        {
-                            method: 'PUT',
-                            mode: 'cors',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                status: data.status,
-                                justification: data.justification,
-                                impact_statement: data.impact_statement,
-                                status_notes: data.status_notes,
-                                workaround: data.workaround,
-                            }),
-                        }
-                    );
-                    if (!res.ok) anyError = true;
-                } else {
-                    const res = await fetch(
-                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existingId)}`,
-                        { method: 'DELETE', mode: 'cors' }
-                    );
-                    if (!res.ok) anyError = true;
-                }
-            } catch {
-                anyError = true;
-            }
-        }
-
-        // 2. Create newly-selected combos — batch packages per variant so the
-        //    new rows share one timestamp.
-        const newPkgsByVariant = new Map<string | undefined, string[]>();
-        for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
-                const key = `${pkg}::${vid ?? ''}`;
-                if (!existingByKey.has(key)) {
-                    const arr = newPkgsByVariant.get(vid) ?? [];
-                    arr.push(pkg);
-                    newPkgsByVariant.set(vid, arr);
-                }
-            }
-        }
-
-        for (const [vid, pkgs] of newPkgsByVariant) {
-            if (pkgs.length === 0) continue;
-            try {
-                const body: Record<string, unknown> = {
-                    vuln_id: editingRow.vuln_id,
-                    packages: pkgs,
-                    status: data.status,
-                    justification: data.justification,
-                    impact_statement: data.impact_statement,
-                    status_notes: data.status_notes,
-                    workaround: data.workaround,
-                    timestamp: editSharedTimestamp,
-                };
-                if (vid) body.variant_id = vid;
-                if (editingRow.group_id) body.group_id = editingRow.group_id;
-                const res = await fetch(
-                    import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(editingRow.vuln_id)}/assessments`,
-                    {
-                        method: 'POST',
-                        mode: 'cors',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                    }
-                );
-                if (!res.ok) anyError = true;
-            } catch {
-                anyError = true;
-            }
-        }
-
-        if (!anyError) {
+        // A group is one assessment row: bring it to the desired (packages ×
+        // variant_ids) state and content in ONE request. The backend applies
+        // every create/update/delete inside a single DB transaction, so a
+        // failure never leaves some targets deleted and the replacements
+        // missing — the destructive-first POST-then-DELETE sequence this
+        // replaced could do exactly that. This also sidesteps `add_assessment`
+        // rejecting `group_id` in its body: reconcile is the endpoint meant
+        // for editing an existing group, not the create endpoint.
+        try {
+            await Assessments.reconcileGroup(editingRow.group_id ?? editingRow.assessment_ids[0], {
+                vuln_id: editingRow.vuln_id,
+                packages: targetPackages,
+                variant_ids: targetVariantIds,
+                existing_ids: editingRow.assessment_ids,
+                status: data.status,
+                justification: data.justification,
+                impact_statement: data.impact_statement,
+                status_notes: data.status_notes,
+                workaround: data.workaround,
+                timestamp: new Date().toISOString(),
+            });
             await refreshAssessments();
             setEditingRow(null);
             onAssessmentChanged?.({ type: 'update', vulnId: editingRow.vuln_id, ids: editingRow.assessment_ids, data });
             showMessage('Assessment updated successfully!', 'success');
-        } else {
+        } catch {
             showMessage('Failed to update assessment.', 'error');
+        } finally {
+            setEditSubmitting(false);
         }
-        setEditSubmitting(false);
     }, [editingRow, refreshAssessments, onAssessmentChanged, showMessage]);
 
     const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {

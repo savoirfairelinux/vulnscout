@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment, AssessmentGroup, AssessmentTarget } from "../handlers/assessments";
-import Assessments, { asAssessment } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTargetGroup, appliesToVariant, assessmentPackagesInVariant, coversTarget } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -238,7 +238,7 @@ type VariantScopedSnapshot = {
             if (Array.isArray(data)) {
                 const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
                 const scopedAssessments = variantId
-                    ? fullAssessments.filter(a => a.variant_id === variantId)
+                    ? fullAssessments.filter(a => appliesToVariant(a, variantId))
                     : fullAssessments;
                 vuln.assessments = scopedAssessments;
                 setAllVulnAssessments(fullAssessments);
@@ -608,7 +608,7 @@ type VariantScopedSnapshot = {
     }, [vuln, patchVuln]);
 
     const groupCopyKey = (group: AssessmentGroup) =>
-        group.group_id ? `group:${group.group_id}` : `assessment:${group.assessment_ids[0]}`;
+        `${isMultiTargetGroup(group.targets) ? 'group' : 'assessment'}:${group.group_id ?? group.assessment_ids[0]}`;
 
     const copyGroupId = async (group: AssessmentGroup) => {
         const text = groupCopyKey(group);
@@ -1064,20 +1064,26 @@ type VariantScopedSnapshot = {
         return Object.values(buckets)
             .map((members): AssessmentGroup => {
                 const head = members[0];
-                const targets: AssessmentTarget[] = members.flatMap(member =>
-                    member.packages.map(pkg => {
-                        const finding = member.variant_id
-                            ? variantFindingsMap[member.variant_id]?.find(item => item.pkg === pkg)
+                // Build from the stored pairs, not from packages x variant_id:
+                // that scalar is null for a genuine cross-variant assessment,
+                // which would pair every package with no variant at all.
+                const targets: AssessmentTarget[] = members.flatMap(member => {
+                    const pairs = member.targets && member.targets.length > 0
+                        ? member.targets
+                        : member.packages.map(pkg => ({ variant_id: member.variant_id ?? null, package: pkg }));
+                    return pairs.map(({ variant_id, package: pkg }) => {
+                        const finding = variant_id
+                            ? variantFindingsMap[variant_id]?.find(item => item.pkg === pkg)
                             : undefined;
                         const outdated = finding?.outdated ?? (
                             variantPackageMapLoaded
-                            && !!member.variant_id
-                            && variantPackageMap[member.variant_id] !== undefined
-                            && !variantPackageMap[member.variant_id].includes(pkg)
+                            && !!variant_id
+                            && variantPackageMap[variant_id] !== undefined
+                            && !variantPackageMap[variant_id].includes(pkg)
                         );
-                        return { variant_id: member.variant_id ?? null, package: pkg, outdated, assessment_id: member.id };
-                    })
-                );
+                        return { variant_id, package: pkg, outdated, assessment_id: member.id };
+                    });
+                });
                 return {
                     group_id: null,
                     vuln_id: head.vuln_id,
@@ -1108,7 +1114,7 @@ type VariantScopedSnapshot = {
         : buildFallbackGroups(effectiveAssessments.filter(assessment => assessment.origin !== 'ai'));
 
     const pendingAiAssessments = allVulnAssessments.filter(a =>
-        a.origin === "ai" && (!variantId || a.variant_id === variantId));
+        a.origin === "ai" && (!variantId || appliesToVariant(a, variantId)));
     const aiRealGroups = assessmentGroups.filter(g =>
         g.origin === 'ai' && (!variantId || g.targets.some(t => t.variant_id === variantId)));
     const aiGroups = aiRealGroups.length > 0
@@ -1117,7 +1123,9 @@ type VariantScopedSnapshot = {
 
     const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
         allVulnAssessments
-            .filter(a => a.origin !== "ai" && a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
+            .filter(a => a.origin !== "ai" && (pkg === null
+                ? appliesToVariant(a, variantIdValue)
+                : coversTarget(a, variantIdValue, pkg)))
             .reduce<Assessment | null>((best, a) => {
                 if (!best) return a;
                 return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
@@ -1134,8 +1142,8 @@ type VariantScopedSnapshot = {
         // now-deprecated versions that are no longer in the active SBOM.
         const assessmentPkgs = [...new Set(
             allVulnAssessments
-                .filter(a => a.origin !== "ai" && a.variant_id === variant.id)
-                .flatMap(a => a.packages)
+                .filter(a => a.origin !== "ai")
+                .flatMap(a => assessmentPackagesInVariant(a, variant.id))
         )];
         const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];
         const hasActivePkgData = variantPackageMapLoaded && variantActivePkgs !== undefined;
@@ -1267,114 +1275,92 @@ type VariantScopedSnapshot = {
         // Determine which variants to post to.
         // Prefer explicit selections from the form; fall back to the current
         // variantId context so the assessment is never stored without a variant.
-        const variantIds: Array<string | undefined> =
+        const variantIds: string[] =
             content.variant_ids && content.variant_ids.length > 0
                 ? content.variant_ids
                 : variantId
                 ? [variantId]
-                : [undefined];
+                : [];
 
         const { variant_ids: _, ...baseContent } = content;
-
-        // Share a single timestamp across all variant requests so grouped
-        // assessment rows get the exact same value in the database.
         const sharedTimestamp = new Date().toISOString();
-
-        let successCount = 0;
-        let lastCasted: Assessment | null = null;
-        const touchedVariantIds = new Set<string>();
-        const touchedPackages = new Set<string>();
 
         setSubmittingMessage('Adding assessment...');
         try {
-        // Post every variant in a single batch request
-        const items = variantIds.map(vid =>
-            vid
-                ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp }
-                : { ...baseContent, timestamp: sharedTimestamp }
-        );
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/batch`, {
-            method: 'POST',
-            mode: 'cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ assessments: items })
-        });
-        const data = await response.json();
-        if (response.ok !== false && data?.status === 'success') {
-            // Backend returns one record per (package, variant) pair.
-            const rawList: unknown[] = Array.isArray(data?.assessments) ? data.assessments : [];
-            for (const raw of rawList) {
-                const casted = asAssessment(raw);
+            // One user action -> one request -> one fused Assessment row,
+            // whose target_rows cover every selected (package, variant) combo.
+            const response = await fetch(
+                import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`,
+                {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ...baseContent,
+                        variant_ids: variantIds,
+                        timestamp: sharedTimestamp,
+                    }),
+                }
+            );
+            const data = await response.json();
+            const row = data?.assessment ?? (Array.isArray(data?.assessments) ? data.assessments[0] : undefined);
+            if (response.ok !== false && data?.status === 'success' && row) {
+                const casted = asAssessment(row);
                 if (!Array.isArray(casted) && typeof casted === 'object') {
-                    successCount++;
-                    lastCasted = casted;
-                    if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
-                    for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
-
-                    // Highlight the very first created assessment
-                    if (successCount === 1) {
-                        setNewAssessmentIds(prev => new Set(prev).add(casted.id));
-                        setTimeout(() => {
-                            setNewAssessmentIds(prev => {
-                                const newSet = new Set(prev);
-                                newSet.delete(casted.id);
-                                return newSet;
-                            });
-                        }, 5500);
-                    }
+                    setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                    setTimeout(() => {
+                        setNewAssessmentIds(prev => {
+                            const newSet = new Set(prev);
+                            newSet.delete(casted.id);
+                            return newSet;
+                        });
+                    }, 5500);
 
                     appendAssessment(casted);
                     vuln.assessments.push(casted);
                     // Keep allVulnAssessments in sync so variant tags appear immediately
                     setAllVulnAssessments(prev => [...prev, casted]);
                     vuln.simplified_status = casted.simplified_status;
+
+                    // History renders from the server-built groups, so
+                    // refresh them or the assessment just created stays
+                    // invisible until the modal is reopened.
+                    await refreshAssessmentGroups();
+
+                    const updatedAssessments = [...vuln.assessments];
+                    const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                    patchVuln(vuln.id, {
+                        ...vuln,
+                        assessments: updatedAssessments,
+                        simplified_status: statusSummary.dominant_status,
+                        status_summary: statusSummary,
+                    });
+
+                    const variantCount = casted.variant_ids?.length ?? 0;
+                    const packageCount = casted.packages.length;
+                    const variantPart = variantCount > 0
+                        ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
+                        : '';
+                    const packagePart = packageCount > 0
+                        ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
+                        : '';
+
+                    let msg = 'Successfully added assessment.';
+                    if (packagePart && variantPart) {
+                        msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
+                    } else if (packagePart) {
+                        msg = `Successfully added assessment to ${packagePart}.`;
+                    } else if (variantPart) {
+                        msg = `Successfully added assessment to ${variantPart}.`;
+                    }
+                    showMessage(msg, 'success');
+                    setClearAssessmentFields(true);
+                    setTimeout(() => setClearAssessmentFields(false), 100);
                 }
+            } else {
+                const detail = String(data?.error ?? 'The selected package versions are not valid for every selected variant.');
+                showMessage(`Assessment not added: ${escape(detail)}`, 'error');
             }
-            // History renders from the server-built groups, so refresh them or
-            // the assessment just created stays invisible until the modal is
-            // reopened.
-            if (successCount > 0) await refreshAssessmentGroups();
-        } else {
-            const errors = Array.isArray(data?.errors)
-                ? data.errors.map((entry: {error?: unknown}) => String(entry?.error ?? '')).filter(Boolean).join('; ')
-                : '';
-            const detail = errors || String(data?.error ?? 'The selected package versions are not valid for every selected variant.');
-            showMessage(`Assessment not added: ${escape(detail)}`, 'error');
-        }
-
-        if (lastCasted) {
-            const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
-            patchVuln(vuln.id, {
-                ...vuln,
-                assessments: updatedAssessments,
-                simplified_status: statusSummary.dominant_status,
-                status_summary: statusSummary,
-            });
-
-            const variantCount = touchedVariantIds.size;
-            const packageCount = touchedPackages.size;
-            const variantPart = variantCount > 0
-                ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
-                : '';
-            const packagePart = packageCount > 0
-                ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
-                : '';
-
-            let msg = 'Successfully added assessment.';
-            if (packagePart && variantPart) {
-                msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
-            } else if (packagePart) {
-                msg = `Successfully added assessment to ${packagePart}.`;
-            } else if (variantPart) {
-                msg = `Successfully added assessment to ${variantPart}.`;
-            } else if (successCount > 1) {
-                msg = `Successfully added ${successCount} assessments.`;
-            }
-            showMessage(msg, 'success');
-            setClearAssessmentFields(true);
-            setTimeout(() => setClearAssessmentFields(false), 100);
-        }
         } finally {
             setSubmittingMessage(null);
         }
@@ -1985,8 +1971,8 @@ type VariantScopedSnapshot = {
                                                     <button
                                                         type="button"
                                                         onClick={() => copyGroupId(group)}
-                                                        aria-label={group.group_id ? "Copy group id" : "Copy assessment id"}
-                                                        title={group.group_id ? "Copy group id" : "Copy assessment id"}
+                                                        aria-label={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
+                                                        title={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
                                                         className="text-amber-300 hover:text-amber-100 transition-colors"
                                                     >
                                                         <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
@@ -2118,8 +2104,8 @@ type VariantScopedSnapshot = {
                                                             <button
                                                                 type="button"
                                                                 onClick={() => copyGroupId(group)}
-                                                                aria-label={group.group_id ? "Copy group id" : "Copy assessment id"}
-                                                                title={group.group_id ? "Copy group id" : "Copy assessment id"}
+                                                                aria-label={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
+                                                                title={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
                                                                 className="text-gray-400 hover:text-gray-200 transition-colors"
                                                             >
                                                                 <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />

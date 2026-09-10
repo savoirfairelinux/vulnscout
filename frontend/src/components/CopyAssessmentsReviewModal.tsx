@@ -24,22 +24,31 @@ type RowState = {
 };
 
 type ModalState = {
-    /** Per-group row state, keyed by source_assessment_id. */
+    /** Per-group row state, keyed by groupKey. */
     rows: Record<string, RowState>;
 };
 
 type Action =
-    | { type: "TOGGLE"; assessmentId: string }
-    | { type: "TOGGLE_EXPAND"; assessmentId: string }
-    | { type: "SET_CANDIDATE"; assessmentId: string; index: number }
+    | { type: "TOGGLE"; rowKey: string }
+    | { type: "TOGGLE_EXPAND"; rowKey: string }
+    | { type: "SET_CANDIDATE"; rowKey: string; index: number }
     | { type: "SELECT_ALL" }
     | { type: "DESELECT_ALL" };
+
+/** Row identity: one preview group per (source assessment, source finding).
+ *
+ *  One assessment covering several packages yields one group per package, so
+ *  source_assessment_id alone is not unique -- keying on it would give those
+ *  rows one shared checkbox and a duplicate React key. */
+function groupKey(g: CopyAssessmentsPreviewGroup): string {
+    return `${g.source_assessment_id}::${g.source_finding_id}`;
+}
 
 function buildInitialState(groups: CopyAssessmentsPreviewGroup[]): ModalState {
     const rows: Record<string, RowState> = {};
     for (const g of groups) {
         const defaultIndex = g.candidates.findIndex((c) => c.selected);
-        rows[g.source_assessment_id] = {
+        rows[groupKey(g)] = {
             selected: defaultIndex >= 0,
             candidateIndex: Math.max(0, defaultIndex),
             expanded: true,
@@ -51,29 +60,29 @@ function buildInitialState(groups: CopyAssessmentsPreviewGroup[]): ModalState {
 function reducer(state: ModalState, action: Action): ModalState {
     switch (action.type) {
         case "TOGGLE": {
-            const prev = state.rows[action.assessmentId];
+            const prev = state.rows[action.rowKey];
             if (!prev) return state;
             return {
                 ...state,
-                rows: { ...state.rows, [action.assessmentId]: { ...prev, selected: !prev.selected } },
+                rows: { ...state.rows, [action.rowKey]: { ...prev, selected: !prev.selected } },
             };
         }
         case "TOGGLE_EXPAND": {
-            const prev = state.rows[action.assessmentId];
+            const prev = state.rows[action.rowKey];
             if (!prev) return state;
             return {
                 ...state,
-                rows: { ...state.rows, [action.assessmentId]: { ...prev, expanded: !prev.expanded } },
+                rows: { ...state.rows, [action.rowKey]: { ...prev, expanded: !prev.expanded } },
             };
         }
         case "SET_CANDIDATE": {
-            const prev = state.rows[action.assessmentId];
+            const prev = state.rows[action.rowKey];
             if (!prev) return state;
             return {
                 ...state,
                 rows: {
                     ...state.rows,
-                    [action.assessmentId]: {
+                    [action.rowKey]: {
                         ...prev,
                         candidateIndex: action.index,
                         selected: true,
@@ -171,7 +180,7 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
     const handleConfirm = useCallback(() => {
         const selections: CopyAssessmentsSelection[] = [];
         for (const g of groups) {
-            const rowState = state.rows[g.source_assessment_id];
+            const rowState = state.rows[groupKey(g)];
             if (!rowState?.selected) continue;
             // Skip groups the copy condition disallows entirely.
             if (!g.candidates.some((c) => c.selected)) continue;
@@ -189,12 +198,12 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
     if (!isOpen) return null;
 
     const selectableCount = groups.filter((g) => {
-        const rowState = state.rows[g.source_assessment_id];
+        const rowState = state.rows[groupKey(g)];
         return rowState?.selected && g.candidates.some((c) => c.selected);
     }).length;
 
     const totalSelectable = groups.filter((g) => {
-        const rowState = state.rows[g.source_assessment_id];
+        const rowState = state.rows[groupKey(g)];
         // Has at least one candidate the copy condition allows
         return g.candidates.some((c) => c.selected) && rowState !== undefined;
     }).length;
@@ -276,7 +285,7 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                         </thead>
                         <tbody>
                             {groups.map((g) => {
-                                const rowState = state.rows[g.source_assessment_id];
+                                const rowState = state.rows[groupKey(g)];
                                 const candidateIndex = rowState?.candidateIndex ?? 0;
                                 const currentCandidate = g.candidates[candidateIndex];
                                 const isChecked = rowState?.selected ?? false;
@@ -284,7 +293,7 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                                 const isExpanded = rowState?.expanded ?? false;
 
                                 return (
-                                    <React.Fragment key={g.source_assessment_id}>
+                                    <React.Fragment key={groupKey(g)}>
                                     <tr
                                         className={[
                                             "border-t border-slate-700/60 transition-colors",
@@ -297,9 +306,9 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                                                 type="checkbox"
                                                 checked={isChecked && !isDisabled}
                                                 disabled={isDisabled}
-                                                onChange={() => dispatch({ type: "TOGGLE", assessmentId: g.source_assessment_id })}
+                                                onChange={() => dispatch({ type: "TOGGLE", rowKey: groupKey(g) })}
                                                 className="rounded border-slate-500 bg-slate-900 text-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed"
-                                                aria-label={`Include ${g.vulnerability_id}`}
+                                                aria-label={`Include ${g.vulnerability_id} for ${g.source_package}`}
                                             />
                                         </td>
 
@@ -333,13 +342,13 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                                                     onChange={(e) =>
                                                         dispatch({
                                                             type: "SET_CANDIDATE",
-                                                            assessmentId: g.source_assessment_id,
+                                                            rowKey: groupKey(g),
                                                             index: Number(e.target.value),
                                                         })
                                                     }
                                                     disabled={isDisabled}
                                                     className="w-full rounded border border-slate-600 bg-slate-900 text-xs text-zinc-200 px-2 py-1 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                                                    aria-label={`Target for ${g.vulnerability_id}`}
+                                                    aria-label={`Target for ${g.vulnerability_id} for ${g.source_package}`}
                                                 >
                                                     {g.candidates.map((c, i) => (
                                                         <option key={c.target_finding_id} value={i}>
@@ -355,9 +364,9 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                                         <td className="px-2 py-2 text-center">
                                             <button
                                                 type="button"
-                                                onClick={() => dispatch({ type: "TOGGLE_EXPAND", assessmentId: g.source_assessment_id })}
+                                                onClick={() => dispatch({ type: "TOGGLE_EXPAND", rowKey: groupKey(g) })}
                                                 className="text-zinc-500 hover:text-zinc-200 transition-colors"
-                                                aria-label={`${isExpanded ? "Collapse" : "Expand"} details for ${g.vulnerability_id}`}
+                                                aria-label={`${isExpanded ? "Collapse" : "Expand"} details for ${g.vulnerability_id} for ${g.source_package}`}
                                                 aria-expanded={isExpanded}
                                             >
                                                 <FontAwesomeIcon
@@ -372,7 +381,7 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                                     {/* Assessment details sub-row */}
                                     {isExpanded && (
                                         <tr
-                                            key={`${g.source_assessment_id}-details`}
+                                            key={`${groupKey(g)}-details`}
                                             className="bg-slate-900/60 border-b border-slate-700/30"
                                         >
                                             <td colSpan={5} className="px-8 pb-3 pt-2">
