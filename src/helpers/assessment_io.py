@@ -489,41 +489,6 @@ def parse_imported_timestamp(raw_ts: object, use_original_timestamps: bool) -> "
     return parsed.astimezone(_tz.utc)
 
 
-def duplicate_assessment_query(
-    finding_id: "_uuid.UUID",
-    variant_id: "_uuid.UUID | None",
-    status: str,
-    origin: str,
-    timestamp: "_dt | None" = None,
-) -> Any:
-    """Build the SELECT used to detect an already-imported *untargeted* row.
-
-    PR-A only: the scalar ``variant_id``/``finding_id`` columns are the only
-    place a variant-less legacy import can be matched against, since it has
-    no ``AssessmentTarget`` row for :func:`duplicate_multitarget_assessment_exists`
-    to compare. Removed with the columns in PR-D, when a variant-less item
-    becomes an import error instead (see ``import_custom_data``'s v1 branch).
-
-    When *timestamp* is given (i.e. the caller preserves the timestamps
-    stored in the file) it is part of the identity: an assessment recorded at
-    another date is a distinct entry in the vulnerability's history and must
-    be imported instead of being silently dropped as a duplicate. Without
-    it, re-importing the same file stays idempotent.
-    """
-    from ..extensions import db
-    from ..models.assessment import Assessment as DBAssessment
-
-    query = db.select(DBAssessment).where(
-        DBAssessment.finding_id == finding_id,
-        DBAssessment.variant_id == variant_id,
-        DBAssessment.status == status,
-        DBAssessment.origin == origin,
-    )
-    if timestamp is not None:
-        query = query.where(DBAssessment.timestamp == timestamp)
-    return query
-
-
 def duplicate_multitarget_assessment_exists(
     resolved_targets: "list[tuple[_uuid.UUID, _uuid.UUID]]",
     status: str,
@@ -1251,25 +1216,22 @@ def import_custom_data(
             variant_token = a.get("variant_id")
             if variant_token in (None, ""):
                 variant_token = a.get("variant")
-            if target_variant_id is None and variant_token not in (None, ""):
-                # A *named* variant that fails to resolve (foreign id, typo,
-                # deleted variant) is reported. This is distinct from the
-                # untargeted case below, where no variant was named at all.
+            if target_variant_id is None:
+                # A target's variant_id is part of its primary key and can
+                # never be NULL, so an assessment with no resolvable variant
+                # is unrepresentable -- report it instead of silently dropping
+                # the variant. PR-A/Task 11 briefly kept a variant-less legacy
+                # shape alive (scalar columns only, no target row) to match
+                # what `staging` accepted; Task 14 dropped those scalar
+                # columns, so that shape no longer exists to fall back to.
                 result["errors"].append({
                     "vuln_id": vuln_name,
-                    "error": f"Variant '{variant_token}' not found",
+                    "error": (
+                        f"Variant '{variant_token}' not found" if variant_token not in (None, "")
+                        else "No variant specified"
+                    ),
                 })
                 continue
-            # An item naming no variant at all is stored variant-less, exactly
-            # as `staging` always did: scalar columns only, no target row (a
-            # target's variant_id is part of its primary key and can never be
-            # NULL, so there is no target to write). PR-A promises no
-            # behaviour change here, and this shape is one `staging` accepted.
-            # PR-D REVERTS THIS: once the scalar columns are gone, such an
-            # item is unrepresentable and becomes an import error instead.
-            untargeted = target_variant_id is None
-
-            entry_created_ids: list[_uuid.UUID] = []
 
             for pkg_string_id in pkg_ids:
                 try:
@@ -1285,40 +1247,22 @@ def import_custom_data(
                     DBVuln.get_or_create(vuln_name)
                     finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
-                    if untargeted:
-                        existing = db.session.execute(
-                            duplicate_assessment_query(
-                                finding_id=finding.id,
-                                variant_id=None,
-                                status=status,
-                                origin=origin,
-                                timestamp=imported_ts,
-                            )
-                        ).scalars().first()
-                        if existing is not None:
-                            result[skipped_key] += 1
-                            continue
-                    else:
-                        assert target_variant_id is not None
-                        if duplicate_multitarget_assessment_exists(
-                            [(target_variant_id, finding.id)],
-                            status=status,
-                            origin=origin,
-                            timestamp=imported_ts,
-                        ):
-                            result[skipped_key] += 1
-                            continue
+                    existing = duplicate_multitarget_assessment_exists(
+                        [(target_variant_id, finding.id)],
+                        status=status,
+                        origin=origin,
+                        timestamp=imported_ts,
+                    )
+                    if existing:
+                        result[skipped_key] += 1
+                        continue
 
-                    db_a = DBAssessment.create(
+                    DBAssessment.create(
                         status=status,
                         simplified_status=STATUS_TO_SIMPLIFIED.get(
                             status, "Pending Assessment"
                         ),
-                        targets=(
-                            None if untargeted or target_variant_id is None
-                            else [(target_variant_id, finding.id)]
-                        ),
-                        allow_untargeted=untargeted,
+                        targets=[(target_variant_id, finding.id)],
                         origin=origin,
                         status_notes=status_notes,
                         justification=justification,
@@ -1326,26 +1270,15 @@ def import_custom_data(
                         workaround=workaround,
                         responses=[],
                         timestamp=imported_ts,
-                        commit=not untargeted,
+                        commit=True,
                     )
-                    if untargeted:
-                        # PR-A only: the scalar mirror is the only place this
-                        # record's finding can be named. Removed with the
-                        # columns in PR-D.
-                        db_a.finding_id = finding.id
-                        db.session.commit()
                     result[imported_key] += 1
-                    entry_created_ids.append(db_a.id)
                 except Exception as e:
                     result["errors"].append({
                         "vuln_id": vuln_name,
                         "package": pkg_string_id,
                         "error": str(e),
                     })
-
-            if len(entry_created_ids) > 1:
-                from ..models.assessment_group_member import AssessmentGroupMember
-                AssessmentGroupMember.create_group(entry_created_ids, commit=True)
 
     # Import pending AI assessments separately so the Review page continues to
     # surface them in its AI Assessments tab for approval or rejection.

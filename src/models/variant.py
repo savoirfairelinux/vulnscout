@@ -14,7 +14,7 @@ if typing.TYPE_CHECKING:
     from sqlalchemy.engine import Connection
     from sqlalchemy.orm import Mapper
 
-    from ..models import Project, Scan, Assessment, TimeEstimate, Metrics
+    from ..models import Project, Scan, TimeEstimate, Metrics
     from .variant_context import VariantContext
 
 
@@ -36,15 +36,6 @@ class Variant(Base):
     scans: Mapped[list["Scan"]] = relationship(
         back_populates="variant",
         cascade="all, delete-orphan"
-    )
-    assessments: Mapped[list["Assessment"]] = relationship(
-        back_populates="variant",
-        # PR-A only: this scalar mirror duplicates one target row, so letting
-        # it cascade would delete an assessment that other targets still
-        # reach.  ``passive_deletes="all"`` leaves the decision to the
-        # ``before_delete`` reaper below, which drops an assessment only once
-        # nothing targets it any more.
-        passive_deletes="all",
     )
     time_estimates: Mapped[list["TimeEstimate"]] = relationship(
         back_populates="variant",
@@ -148,12 +139,6 @@ def _reap_assessment_targets(
     Registered as a mapper event rather than written into :meth:`delete` so it
     also fires when a variant is removed through the project's ORM cascade.
     """
-    from .assessment import Assessment
-    from .assessment_target import (
-        AssessmentTarget, reap_targets, reap_untargeted_assessments,
-    )
+    from .assessment_target import AssessmentTarget, reap_targets
 
     reap_targets(connection, AssessmentTarget.variant_id == variant.id)
-    # The scalar mirror outlives the target rows in PR-A, and an assessment
-    # written through it alone has none to reap.
-    reap_untargeted_assessments(connection, Assessment.variant_id == variant.id)
