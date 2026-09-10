@@ -14,9 +14,6 @@ migration = importlib.import_module(
     "src.migrations.versions.x0a1b2c3d4e5_add_assessment_targets"
 )
 
-backfill_targets = migration.backfill_targets
-fuse_duplicates = migration.fuse_duplicates
-
 SHARED_TIMESTAMP = "2026-01-01 00:00:00"
 
 
@@ -24,8 +21,332 @@ def _new_id() -> str:
     return uuid.uuid4().hex
 
 
+def _build_schema(connection):
+    connection.execute(sa.text(
+        "CREATE TABLE variants (id TEXT PRIMARY KEY, project_id TEXT)"
+    ))
+    connection.execute(sa.text(
+        "CREATE TABLE findings (id TEXT PRIMARY KEY, vulnerability_id VARCHAR(50))"
+    ))
+    connection.execute(sa.text(
+        """
+        CREATE TABLE assessments (
+            id TEXT PRIMARY KEY,
+            origin VARCHAR,
+            status VARCHAR,
+            simplified_status VARCHAR,
+            status_notes TEXT,
+            justification TEXT,
+            impact_statement TEXT,
+            workaround TEXT,
+            timestamp TEXT,
+            finding_id TEXT,
+            variant_id TEXT,
+            responses TEXT
+        )
+        """
+    ))
+    connection.execute(sa.text(
+        """
+        CREATE TABLE assessment_targets (
+            assessment_id TEXT NOT NULL,
+            variant_id TEXT NOT NULL,
+            finding_id TEXT NOT NULL,
+            PRIMARY KEY (assessment_id, variant_id, finding_id)
+        )
+        """
+    ))
+
+
+def _add_variant(connection, project_id: str) -> str:
+    variant_id = _new_id()
+    connection.execute(
+        sa.text("INSERT INTO variants (id, project_id) VALUES (:id, :project_id)"),
+        {"id": variant_id, "project_id": project_id},
+    )
+    return variant_id
+
+
+def _add_finding(connection, vuln_id: str) -> str:
+    finding_id = _new_id()
+    connection.execute(
+        sa.text(
+            "INSERT INTO findings (id, vulnerability_id) VALUES (:id, :vuln_id)"
+        ),
+        {"id": finding_id, "vuln_id": vuln_id},
+    )
+    return finding_id
+
+
+def _add_assessment(
+    connection,
+    finding_id: str,
+    variant_id: str | None,
+    *,
+    status: str = "not_affected",
+    timestamp: str = SHARED_TIMESTAMP,
+    responses: "list[str] | None" = None,
+) -> str:
+    assessment_id = _new_id()
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO assessments (
+                id, origin, status, simplified_status, status_notes,
+                justification, impact_statement, workaround, timestamp,
+                finding_id, variant_id, responses
+            ) VALUES (
+                :id, 'import', :status, 'fixed', 'notes',
+                'code_not_reachable', 'no impact', 'none', :timestamp,
+                :finding_id, :variant_id, :responses
+            )
+            """
+        ),
+        {
+            "id": assessment_id,
+            "status": status,
+            "timestamp": timestamp,
+            "finding_id": finding_id,
+            "variant_id": variant_id,
+            "responses": json.dumps(responses) if responses is not None else None,
+        },
+    )
+    return assessment_id
+
+
+def _existing_assessments(connection) -> set[str]:
+    return {
+        row["id"]
+        for row in connection.execute(sa.text(
+            "SELECT id FROM assessments"
+        )).mappings()
+    }
+
+
+def _target_counts(connection) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in connection.execute(sa.text(
+        "SELECT assessment_id FROM assessment_targets"
+    )).mappings():
+        counts[row["assessment_id"]] = counts.get(row["assessment_id"], 0) + 1
+    return counts
+
+
+def _run_backfill(connection):
+    migration.backfill_targets(connection)
+    migration.fuse_duplicates(connection)
+
+
+def test_backfill_never_groups_assessments_across_projects():
+    """Identical assessments in two projects must not fuse into one row.
+
+    Reads are project-filtered, so a fused row spanning two projects would let
+    one project delete or reconcile the other project's assessment.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0001")
+        project_a_variant = _add_variant(connection, _new_id())
+        project_b_variant = _add_variant(connection, _new_id())
+        first = _add_assessment(connection, finding_id, project_a_variant)
+        second = _add_assessment(connection, finding_id, project_b_variant)
+
+        _run_backfill(connection)
+
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
+
+    assert remaining == {first, second}
+    assert counts.get(first) == 1
+    assert counts.get(second) == 1
+
+
+def test_backfill_still_groups_assessments_within_one_project():
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0002")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id))
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id))
+
+        _run_backfill(connection)
+
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
+
+    assert len(remaining) == 1
+    survivor = next(iter(remaining))
+    assert survivor in {first, second}
+    assert counts.get(survivor) == 2
+
+
+def test_upgrade_aborts_on_an_assessment_with_no_variant():
+    """A target is a ``(variant, finding)`` pair; a variant-less row has none.
+
+    The old group backfill tolerated this by bucketing variant-less rows under
+    a ``NULL`` project key, since a group only recorded membership. A target
+    row cannot express "no variant", so this now has to abort instead of
+    silently producing a row with no valid target.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0003")
+        _add_assessment(connection, finding_id, None)
+
+        with pytest.raises(RuntimeError, match="no valid target"):
+            migration.backfill_targets(connection)
+
+
+def test_backfill_stays_sparse_for_unique_assessments():
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0004")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            status="affected")
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            status="not_affected")
+
+        _run_backfill(connection)
+
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
+
+    assert remaining == {first, second}
+    assert counts.get(first) == 1
+    assert counts.get(second) == 1
+
+
+def test_backfill_never_groups_assessments_with_different_responses():
+    """Otherwise-identical rows carrying different VEX responses stay apart.
+
+    Fusing rows with different response sets would discard one set entirely,
+    so they must remain separate assessments.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0005")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["will_not_fix"])
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["update"])
+
+        _run_backfill(connection)
+
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
+
+    assert remaining == {first, second}
+    assert counts.get(first) == 1
+    assert counts.get(second) == 1
+
+
+def test_backfill_groups_rows_whose_responses_only_differ_in_order():
+    """Response order is not meaningful, so it must not split a real fusion."""
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0006")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["update", "will_not_fix"])
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=["will_not_fix", "update"])
+
+        _run_backfill(connection)
+
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
+
+    assert len(remaining) == 1
+    survivor = next(iter(remaining))
+    assert survivor in {first, second}
+    assert counts.get(survivor) == 2
+
+
+def test_backfill_treats_missing_and_empty_responses_as_equal():
+    """A NULL column and an empty list both mean "no responses"."""
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0007")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=None)
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            responses=[])
+
+        _run_backfill(connection)
+
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
+
+    assert len(remaining) == 1
+    survivor = next(iter(remaining))
+    assert survivor in {first, second}
+    assert counts.get(survivor) == 2
+
+
+def test_upgrade_aborts_on_an_assessment_with_no_finding():
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as connection:
+        _build_schema(connection)
+        connection.execute(sa.text(
+            "INSERT INTO assessments (id, origin, status, timestamp,"
+            " finding_id, variant_id) VALUES (:id, 'custom', 'affected',"
+            " :ts, NULL, NULL)"
+        ), {"id": _new_id(), "ts": SHARED_TIMESTAMP})
+
+        with pytest.raises(RuntimeError, match="no valid target"):
+            migration.backfill_targets(connection)
+
+
+def test_responses_key_normalizes_equivalent_encodings():
+    """Decoded (PostgreSQL) and text (SQLite) JSON must produce one key."""
+    assert migration.responses_key(None) == migration.responses_key("[]")
+    assert migration.responses_key(["update"]) == migration.responses_key('["update"]')
+
+
+def test_responses_key_falls_back_to_the_raw_text_when_unparsable():
+    """An unparsable value keeps rows apart instead of fusing them."""
+    assert migration.responses_key("not json") == "not json"
+
+
+def test_responses_key_handles_a_non_list_json_value():
+    assert migration.responses_key('{"b": 1, "a": 2}') == '{"a": 2, "b": 1}'
+
+
 def _build_pre_upgrade_schema(connection):
-    """Create the schema as it stands just before this revision runs."""
+    """Create the schema as it stands just before this revision runs.
+
+    ``_build_schema`` above pre-creates ``assessment_targets`` so the backfill
+    helpers can be called on their own; ``upgrade()`` creates that table
+    itself, and drops indexes the helper never creates, so it needs the real
+    pre-revision shape.
+    """
     connection.execute(sa.text(
         "CREATE TABLE variants (id TEXT PRIMARY KEY, project_id TEXT)"
     ))
@@ -59,160 +380,50 @@ def _build_pre_upgrade_schema(connection):
     ))
 
 
-def _add_variant(connection, project_id: str) -> str:
-    variant_id = _new_id()
-    connection.execute(
-        sa.text("INSERT INTO variants (id, project_id) VALUES (:id, :project_id)"),
-        {"id": variant_id, "project_id": project_id},
-    )
-    return variant_id
-
-
-def _add_finding(connection, vuln_id: str) -> str:
-    finding_id = _new_id()
-    connection.execute(
-        sa.text(
-            "INSERT INTO findings (id, vulnerability_id) VALUES (:id, :vuln_id)"
-        ),
-        {"id": finding_id, "vuln_id": vuln_id},
-    )
-    return finding_id
-
-
-def _add_assessment(
-    connection,
-    finding_id: "str | None",
-    variant_id: "str | None",
-    *,
-    status: str = "not_affected",
-    timestamp: str = SHARED_TIMESTAMP,
-    responses: "list[str] | None" = None,
-) -> str:
-    assessment_id = _new_id()
-    connection.execute(
-        sa.text(
-            """
-            INSERT INTO assessments (
-                id, source, origin, status, simplified_status, status_notes,
-                justification, impact_statement, workaround, timestamp,
-                finding_id, variant_id, responses
-            ) VALUES (
-                :id, 'manual', 'import', :status, 'fixed', 'notes',
-                'code_not_reachable', 'no impact', 'none', :timestamp,
-                :finding_id, :variant_id, :responses
-            )
-            """
-        ),
-        {
-            "id": assessment_id,
-            "status": status,
-            "timestamp": timestamp,
-            "finding_id": finding_id,
-            "variant_id": variant_id,
-            "responses": json.dumps(responses) if responses is not None else None,
-        },
-    )
-    return assessment_id
-
-
 def _bind_alembic_op(connection):
     migration.op = Operations(MigrationContext.configure(connection))
 
 
+def _assessment_columns(connection) -> set[str]:
+    return {
+        row[1]
+        for row in connection.execute(sa.text("PRAGMA table_info(assessments)"))
+    }
+
+
+def _targets(connection) -> set[tuple]:
+    return {
+        (row["assessment_id"], row["variant_id"], row["finding_id"])
+        for row in connection.execute(sa.text(
+            "SELECT assessment_id, variant_id, finding_id FROM assessment_targets"
+        )).mappings()
+    }
+
+
 @pytest.fixture
 def migrated_connection():
-    """A connection holding the post-upgrade schema and its backfilled targets."""
+    """A connection holding the post-upgrade schema and its backfilled targets.
+
+    The two seed assessments use different findings (and thus different CVEs)
+    so ``fuse_duplicates`` -- which buckets by vulnerability among other
+    fields -- leaves them apart; each keeps exactly one target after upgrade,
+    matching what a single scalar-column row backfills to.
+    """
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
         _build_pre_upgrade_schema(connection)
         project_id = _new_id()
         variant_a = _add_variant(connection, project_id)
         variant_b = _add_variant(connection, project_id)
-        finding_a = _add_finding(connection, "CVE-2026-0100")
-        _add_finding(connection, "CVE-2026-0101")
+        finding_a = _add_finding(connection, "CVE-2026-0900")
+        finding_b = _add_finding(connection, "CVE-2026-0901")
         _add_assessment(connection, finding_a, variant_a)
-        _add_assessment(connection, finding_a, variant_b)
+        _add_assessment(connection, finding_b, variant_b)
 
         _bind_alembic_op(connection)
         migration.upgrade()
 
         yield connection
-
-
-@pytest.fixture
-def connection_with_null_variant():
-    """A pre-upgrade connection holding one assessment with no variant."""
-    engine = sa.create_engine("sqlite:///:memory:")
-    with engine.begin() as connection:
-        _build_pre_upgrade_schema(connection)
-        _add_assessment(
-            connection, _add_finding(connection, "CVE-2026-0200"), None)
-
-        yield connection
-
-
-@pytest.fixture
-def connection_with_duplicates():
-    """Two assessments produced by one user action, before they are fused.
-
-    Built at the point mid-``upgrade`` where ``fuse_duplicates`` runs: the
-    target table exists and is backfilled, but the scalar columns are still on
-    ``assessments`` because ``fuse_duplicates`` itself still reads them.
-    """
-    engine = sa.create_engine("sqlite:///:memory:")
-    with engine.begin() as connection:
-        _build_pre_upgrade_schema(connection)
-        connection.execute(sa.text(
-            """
-            CREATE TABLE assessment_targets (
-                assessment_id TEXT NOT NULL REFERENCES assessments (id)
-                    ON DELETE CASCADE,
-                variant_id TEXT NOT NULL REFERENCES variants (id),
-                finding_id TEXT NOT NULL REFERENCES findings (id),
-                PRIMARY KEY (assessment_id, variant_id, finding_id)
-            )
-            """
-        ))
-        connection.execute(sa.text(
-            "CREATE INDEX ix_assessment_targets_variant_id"
-            " ON assessment_targets (variant_id)"))
-        connection.execute(sa.text(
-            "CREATE INDEX ix_assessment_targets_finding_id"
-            " ON assessment_targets (finding_id)"))
-
-        project_id = _new_id()
-        variant_a = _add_variant(connection, project_id)
-        variant_b = _add_variant(connection, project_id)
-        finding_a = _add_finding(connection, "CVE-2026-0400")
-
-        first = _add_assessment(connection, finding_a, variant_a)
-        second = _add_assessment(connection, finding_a, variant_b)
-
-        for assessment_id, variant_id in ((first, variant_a), (second, variant_b)):
-            connection.execute(sa.text(
-                "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
-                " VALUES (:a, :v, :f)"
-            ), {"a": assessment_id, "v": variant_id, "f": finding_a})
-
-        _bind_alembic_op(connection)
-
-        yield connection
-
-
-def test_backfill_gives_every_assessment_exactly_one_target(migrated_connection):
-    """Every pre-existing assessment gets one target from its scalar columns."""
-    rows = migrated_connection.execute(sa.text(
-        "SELECT assessment_id, COUNT(*) FROM assessment_targets GROUP BY assessment_id"
-    )).all()
-    assert rows, "backfill produced no targets"
-    assert all(count == 1 for _, count in rows)
-
-
-def test_scalar_columns_are_gone(migrated_connection):
-    columns = {row[1] for row in migrated_connection.execute(
-        sa.text("PRAGMA table_info(assessments)")).all()}
-    assert "variant_id" not in columns
-    assert "finding_id" not in columns
 
 
 def test_an_assessment_may_now_hold_several_targets(migrated_connection):
@@ -233,483 +444,70 @@ def test_an_assessment_may_now_hold_several_targets(migrated_connection):
     assert count == 2
 
 
-def test_duplicate_rows_from_one_user_action_are_fused(connection_with_duplicates):
-    """Rows sharing project, CVE, content and timestamp become one row."""
-    fuse_duplicates(connection_with_duplicates)
-    survivors = connection_with_duplicates.execute(sa.text(
-        "SELECT COUNT(*) FROM assessments")).scalar()
-    targets = connection_with_duplicates.execute(sa.text(
-        "SELECT COUNT(*) FROM assessment_targets")).scalar()
-    assert survivors == 1
-    assert targets == 2
-
-
-def test_backfill_is_idempotent(migrated_connection):
-    """Re-running the backfill against populated targets adds nothing."""
-    before = migrated_connection.execute(
-        sa.text("SELECT COUNT(*) FROM assessment_targets")).scalar()
-    backfill_targets(migrated_connection)
-    after = migrated_connection.execute(
-        sa.text("SELECT COUNT(*) FROM assessment_targets")).scalar()
-    assert after == before
-
-
-def test_orphan_assessment_stops_the_upgrade(connection_with_null_variant):
-    """An assessment with a NULL column would migrate to zero targets."""
-    with pytest.raises(RuntimeError, match="no valid target"):
-        backfill_targets(connection_with_null_variant)
-
-
-def test_upgrade_mirrors_the_scalar_columns_onto_every_target(migrated_connection):
-    """Each target names exactly the pair its assessment still carries."""
-    mismatched = migrated_connection.execute(sa.text(
-        "SELECT COUNT(*) FROM assessments a JOIN assessment_targets t"
-        " ON t.assessment_id = a.id"
-        " WHERE t.variant_id != a.variant_id OR t.finding_id != a.finding_id"
-    )).scalar()
-    assert mismatched == 0
-
-
-def test_downgrade_drops_both_tables_and_keeps_the_scalar_columns(
-    migrated_connection,
-):
-    """``downgrade`` reverses ``upgrade``, which never touched the scalar columns.
-
-    Both halves of the revision have to come off: leaving
-    ``assessment_group_members`` behind would make a re-upgrade adopt a table
-    holding memberships computed from a schema that has since moved.
-    """
-    migration.downgrade()
-
-    columns = {row[1] for row in migrated_connection.execute(
-        sa.text("PRAGMA table_info(assessments)")).all()}
-    remaining = set(migrated_connection.execute(sa.text(
-        "SELECT name FROM sqlite_master WHERE name IN"
-        " ('assessment_targets', 'assessment_group_members')"
-    )).scalars().all())
-
-    assert remaining == set()
-    assert "variant_id" in columns
-    assert "finding_id" in columns
-
-
-@pytest.fixture
-def pre_upgrade_connection():
-    """A seeded connection holding the schema as it stands before this revision."""
+def test_upgrade_moves_targets_off_the_scalar_columns_and_fuses_duplicates():
     engine = sa.create_engine("sqlite:///:memory:")
+
     with engine.begin() as connection:
         _build_pre_upgrade_schema(connection)
         project_id = _new_id()
+        finding_id = _add_finding(connection, "CVE-2026-0100")
         variant_a = _add_variant(connection, project_id)
         variant_b = _add_variant(connection, project_id)
-        finding_a = _add_finding(connection, "CVE-2026-0300")
-        _add_finding(connection, "CVE-2026-0301")
-        _add_assessment(connection, finding_a, variant_a)
-        _add_assessment(connection, finding_a, variant_b)
+        first = _add_assessment(connection, finding_id, variant_a)
+        second = _add_assessment(connection, finding_id, variant_b)
+        other_finding = _add_finding(connection, "CVE-2026-0101")
+        lone = _add_assessment(connection, other_finding, variant_a)
 
         _bind_alembic_op(connection)
-
-        yield connection
-
-
-def _target_rows(connection):
-    return set(connection.execute(sa.text(
-        "SELECT assessment_id, variant_id, finding_id FROM assessment_targets"
-    )).all())
-
-
-def test_upgrade_is_idempotent(pre_upgrade_connection):
-    """A retried upgrade completes instead of dying on 'table already exists'."""
-    migration.upgrade()
-    after_first = _target_rows(pre_upgrade_connection)
-
-    migration.upgrade()
-
-    assert _target_rows(pre_upgrade_connection) == after_first
-
-
-def test_upgrade_completes_when_the_table_exists_but_is_empty(pre_upgrade_connection):
-    """A table created by a crashed run is adopted and then backfilled."""
-    migration._create_target_table()
-    assert _target_rows(pre_upgrade_connection) == set()
-
-    migration.upgrade()
-
-    expected = set(pre_upgrade_connection.execute(sa.text(
-        "SELECT id, variant_id, finding_id FROM assessments")).all())
-    assert _target_rows(pre_upgrade_connection) == expected
-
-
-def test_upgrade_refuses_a_table_with_unexpected_columns(pre_upgrade_connection):
-    """A same-named table of a different shape is a divergent schema, not ours."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL, group_id TEXT NOT NULL,"
-        " PRIMARY KEY (assessment_id, group_id))"
-    ))
-
-    with pytest.raises(RuntimeError, match="already exists with columns"):
         migration.upgrade()
 
+        columns = _assessment_columns(connection)
+        remaining = _existing_assessments(connection)
+        targets = _targets(connection)
 
-def test_upgrade_refuses_a_table_missing_an_index(pre_upgrade_connection):
-    """A partially created table stops the upgrade rather than half-applying it."""
-    migration._create_target_table()
-    pre_upgrade_connection.execute(
-        sa.text("DROP INDEX ix_assessment_targets_finding_id"))
+    assert "variant_id" not in columns
+    assert "finding_id" not in columns
+    survivor = min(first, second, key=str)
+    assert remaining == {survivor, lone}
+    assert targets == {
+        (survivor, variant_a, finding_id),
+        (survivor, variant_b, finding_id),
+        (lone, variant_a, other_finding),
+    }
 
-    with pytest.raises(RuntimeError, match="missing index"):
+
+def test_downgrade_gives_every_target_its_own_assessment_row_again():
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_pre_upgrade_schema(connection)
+        project_id = _new_id()
+        finding_id = _add_finding(connection, "CVE-2026-0200")
+        variant_a = _add_variant(connection, project_id)
+        variant_b = _add_variant(connection, project_id)
+        _add_assessment(connection, finding_id, variant_a)
+        _add_assessment(connection, finding_id, variant_b)
+
+        _bind_alembic_op(connection)
         migration.upgrade()
+        assert len(_existing_assessments(connection)) == 1
 
+        migration.downgrade()
 
-def test_upgrade_refuses_a_table_without_the_unique_constraint(pre_upgrade_connection):
-    """Without the 1:1 constraint the PR-B/PR-C reader swaps are not neutral."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL, variant_id TEXT NOT NULL,"
-        " finding_id TEXT NOT NULL,"
-        " PRIMARY KEY (assessment_id, variant_id, finding_id))"
-    ))
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE INDEX ix_assessment_targets_variant_id"
-        " ON assessment_targets (variant_id)"))
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE INDEX ix_assessment_targets_finding_id"
-        " ON assessment_targets (finding_id)"))
-
-    with pytest.raises(RuntimeError, match="no unique constraint named"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_a_unique_constraint_over_the_wrong_columns(
-        pre_upgrade_connection):
-    """The right name over the wrong columns permits several targets per assessment."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL, variant_id TEXT NOT NULL,"
-        " finding_id TEXT NOT NULL,"
-        " PRIMARY KEY (assessment_id, variant_id, finding_id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id"
-        " UNIQUE (assessment_id, variant_id))"
-    ))
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE INDEX ix_assessment_targets_variant_id"
-        " ON assessment_targets (variant_id)"))
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE INDEX ix_assessment_targets_finding_id"
-        " ON assessment_targets (finding_id)"))
-
-    with pytest.raises(RuntimeError, match="requires it to cover"):
-        migration.upgrade()
-
-
-def _create_lookup_indexes(connection):
-    """Add the two lookup indexes this revision defines, by name and column."""
-    connection.execute(sa.text(
-        "CREATE INDEX ix_assessment_targets_variant_id"
-        " ON assessment_targets (variant_id)"))
-    connection.execute(sa.text(
-        "CREATE INDEX ix_assessment_targets_finding_id"
-        " ON assessment_targets (finding_id)"))
-
-
-def test_upgrade_refuses_a_table_with_the_wrong_primary_key(pre_upgrade_connection):
-    """A single-column key lets one assessment hold contradictory triples."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL REFERENCES assessments (id)"
-        " ON DELETE CASCADE,"
-        " variant_id TEXT NOT NULL REFERENCES variants (id),"
-        " finding_id TEXT NOT NULL REFERENCES findings (id),"
-        " PRIMARY KEY (assessment_id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id))"
-    ))
-    _create_lookup_indexes(pre_upgrade_connection)
-
-    with pytest.raises(RuntimeError, match="requires the composite key"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_a_table_with_no_primary_key(pre_upgrade_connection):
-    """A missing key is a divergence too, not an absence the guard can ignore."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL REFERENCES assessments (id)"
-        " ON DELETE CASCADE,"
-        " variant_id TEXT NOT NULL REFERENCES variants (id),"
-        " finding_id TEXT NOT NULL REFERENCES findings (id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id))"
-    ))
-    _create_lookup_indexes(pre_upgrade_connection)
-
-    with pytest.raises(RuntimeError, match="requires the composite key"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_an_index_over_the_wrong_column(pre_upgrade_connection):
-    """The expected name over the wrong column leaves the lookup unindexed."""
-    migration._create_target_table()
-    pre_upgrade_connection.execute(
-        sa.text("DROP INDEX ix_assessment_targets_finding_id"))
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE INDEX ix_assessment_targets_finding_id"
-        " ON assessment_targets (assessment_id)"))
-
-    with pytest.raises(RuntimeError, match="covers.*requires it to cover"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_a_table_without_its_foreign_keys(pre_upgrade_connection):
-    """Unreferenced targets can name rows that do not exist."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL, variant_id TEXT NOT NULL,"
-        " finding_id TEXT NOT NULL,"
-        " PRIMARY KEY (assessment_id, variant_id, finding_id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id))"
-    ))
-    _create_lookup_indexes(pre_upgrade_connection)
-
-    with pytest.raises(RuntimeError, match="carries no foreign key on"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_a_foreign_key_to_the_wrong_table(pre_upgrade_connection):
-    """A key pointing elsewhere constrains the wrong rows."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL REFERENCES variants (id),"
-        " variant_id TEXT NOT NULL REFERENCES variants (id),"
-        " finding_id TEXT NOT NULL REFERENCES findings (id),"
-        " PRIMARY KEY (assessment_id, variant_id, finding_id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id))"
-    ))
-    _create_lookup_indexes(pre_upgrade_connection)
-
-    with pytest.raises(RuntimeError, match="references table 'variants'"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_a_foreign_key_to_the_wrong_column(pre_upgrade_connection):
-    """A key onto a non-key column of the right table is still divergent."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL REFERENCES assessments (id)"
-        " ON DELETE CASCADE,"
-        " variant_id TEXT NOT NULL REFERENCES variants (project_id),"
-        " finding_id TEXT NOT NULL REFERENCES findings (id),"
-        " PRIMARY KEY (assessment_id, variant_id, finding_id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id))"
-    ))
-    _create_lookup_indexes(pre_upgrade_connection)
-
-    with pytest.raises(RuntimeError, match="references \\['project_id'\\]"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_a_duplicate_divergent_foreign_key(pre_upgrade_connection):
-    """The expected key beside a divergent one over the same column is divergent.
-
-    Keying reflected foreign keys by their constrained columns alone lets the
-    second key replace the first in the lookup, so a table constraining
-    ``assessment_id`` against both ``assessments`` and ``variants`` would pass
-    verification and be adopted.  Every reflected key has to be accounted for.
-    """
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL,"
-        " variant_id TEXT NOT NULL REFERENCES variants (id),"
-        " finding_id TEXT NOT NULL REFERENCES findings (id),"
-        " PRIMARY KEY (assessment_id, variant_id, finding_id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id),"
-        " FOREIGN KEY (assessment_id) REFERENCES variants (id),"
-        " FOREIGN KEY (assessment_id) REFERENCES assessments (id)"
-        " ON DELETE CASCADE)"
-    ))
-    _create_lookup_indexes(pre_upgrade_connection)
-
-    with pytest.raises(RuntimeError, match="foreign keys on \\['assessment_id'\\]"):
-        migration.upgrade()
-
-
-def test_upgrade_refuses_a_foreign_key_this_revision_does_not_define(
-        pre_upgrade_connection):
-    """A key over columns this revision never constrains is still a divergence."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_targets ("
-        " assessment_id TEXT NOT NULL REFERENCES assessments (id)"
-        " ON DELETE CASCADE,"
-        " variant_id TEXT NOT NULL REFERENCES variants (id),"
-        " finding_id TEXT NOT NULL REFERENCES findings (id),"
-        " PRIMARY KEY (assessment_id, variant_id, finding_id),"
-        " CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id),"
-        " FOREIGN KEY (variant_id, finding_id)"
-        " REFERENCES variants (id, project_id))"
-    ))
-    _create_lookup_indexes(pre_upgrade_connection)
-
-    with pytest.raises(RuntimeError, match="that this revision does not define"):
-        migration.upgrade()
-
-
-class _NoReferredColumnsInspector:
-    """An inspector reporting the expected keys without their referred columns.
-
-    No SQLite reference omits them -- the dialect resolves an implicit
-    reference to the referred primary key -- so the dialect gap the guard
-    refuses on is reproduced here rather than in the database.
-    """
-
-    def get_foreign_keys(self, table_name):
-        """Report every expected key, each missing ``referred_columns``."""
-        return [
-            {
-                'constrained_columns': sorted(constrained),
-                'referred_table': referred_table,
-            }
-            for constrained, (referred_table, _columns)
-            in migration.EXPECTED_FOREIGN_KEYS.items()
+        columns = _assessment_columns(connection)
+        rows = [
+            (row["variant_id"], row["finding_id"], row["status"])
+            for row in connection.execute(sa.text(
+                "SELECT variant_id, finding_id, status FROM assessments"
+            )).mappings()
         ]
+        target_table = connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE name = 'assessment_targets'"
+        )).scalar()
 
-
-def test_verification_refuses_a_dialect_that_omits_referred_columns():
-    """An unperformed check cannot be reported as a passed one."""
-    with pytest.raises(RuntimeError, match="reports no referred columns"):
-        migration._verify_foreign_keys(
-            _NoReferredColumnsInspector(),
-            migration.TARGET_TABLE,
-            migration.EXPECTED_FOREIGN_KEYS,
-        )
-
-
-def test_conflicting_pre_existing_target_stops_the_backfill(pre_upgrade_connection):
-    """A target disagreeing with the scalar columns cannot be silently kept.
-
-    ``uq_assessment_targets_assessment_id`` allows one target per assessment, so
-    the correct row cannot be inserted beside the wrong one.  Ignoring the
-    collision would leave the target table and the scalar columns contradicting
-    each other while the migration reported success.
-    """
-    migration._create_target_table()
-    assessment_id, variant_id, finding_id = pre_upgrade_connection.execute(sa.text(
-        "SELECT id, variant_id, finding_id FROM assessments LIMIT 1")).one()
-    other_variant = pre_upgrade_connection.execute(sa.text(
-        "SELECT id FROM variants WHERE id != :v"), {"v": variant_id}).scalar()
-    pre_upgrade_connection.execute(sa.text(
-        "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
-        " VALUES (:a, :v, :f)"
-    ), {"a": assessment_id, "v": other_variant, "f": finding_id})
-
-    with pytest.raises(RuntimeError, match="contradicts their"):
-        migration.upgrade()
-
-    still_wrong = pre_upgrade_connection.execute(sa.text(
-        "SELECT variant_id FROM assessment_targets WHERE assessment_id = :a"
-    ), {"a": assessment_id}).scalar()
-    assert still_wrong == other_variant, "the migration must not half-repair"
-
-
-def test_conflicting_finding_id_stops_the_backfill(pre_upgrade_connection):
-    """The same guard covers a target whose finding_id drifted from the scalar."""
-    migration._create_target_table()
-    assessment_id, variant_id, finding_id = pre_upgrade_connection.execute(sa.text(
-        "SELECT id, variant_id, finding_id FROM assessments LIMIT 1")).one()
-    other_finding = pre_upgrade_connection.execute(sa.text(
-        "SELECT id FROM findings WHERE id != :f"), {"f": finding_id}).scalar()
-    pre_upgrade_connection.execute(sa.text(
-        "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
-        " VALUES (:a, :v, :f)"
-    ), {"a": assessment_id, "v": variant_id, "f": other_finding})
-
-    with pytest.raises(RuntimeError, match="contradicts their"):
-        backfill_targets(pre_upgrade_connection)
-
-
-def test_backfill_completes_assessments_missing_a_target(pre_upgrade_connection):
-    """A half-finished backfill is finished, not abandoned."""
-    migration._create_target_table()
-    assessment_id, variant_id, finding_id = pre_upgrade_connection.execute(sa.text(
-        "SELECT id, variant_id, finding_id FROM assessments LIMIT 1")).one()
-    pre_upgrade_connection.execute(sa.text(
-        "INSERT INTO assessment_targets (assessment_id, variant_id, finding_id)"
-        " VALUES (:a, :v, :f)"
-    ), {"a": assessment_id, "v": variant_id, "f": finding_id})
-
-    backfill_targets(pre_upgrade_connection)
-
-    expected = set(pre_upgrade_connection.execute(sa.text(
-        "SELECT id, variant_id, finding_id FROM assessments")).all())
-    assert _target_rows(pre_upgrade_connection) == expected
-
-
-# --- the group-members half of this revision (PR-D removes it) -------------
-
-
-def test_upgrade_creates_both_tables_this_revision_defines(pre_upgrade_connection):
-    """One revision, two tables.
-
-    ``assessment_group_members`` shipped on staging under this same revision
-    id.  The model, the controller and the routes still read it throughout
-    PR-A, so an amendment that creates only ``assessment_targets`` leaves a
-    freshly migrated database unable to serve a single assessment POST.
-    """
-    migration.upgrade()
-
-    tables = set(pre_upgrade_connection.execute(sa.text(
-        "SELECT name FROM sqlite_master WHERE type = 'table'"
-    )).scalars().all())
-
-    assert "assessment_group_members" in tables
-    assert "assessment_targets" in tables
-
-
-def test_upgrade_adopts_a_group_table_left_by_the_staging_revision(
-    pre_upgrade_connection,
-):
-    """A database stamped at staging's form of this revision already has it.
-
-    Re-running the amended revision there must adopt the existing table rather
-    than die on 'table already exists', which is the only way such a database
-    can ever pick the targets half up.
-    """
-    migration._create_group_table()
-    pre_upgrade_connection.execute(sa.text(
-        "INSERT INTO assessment_group_members (assessment_id, group_id)"
-        " SELECT id, :group_id FROM assessments"
-    ), {"group_id": _new_id()})
-    before = set(pre_upgrade_connection.execute(sa.text(
-        "SELECT assessment_id, group_id FROM assessment_group_members")).all())
-
-    migration.upgrade()
-
-    assert set(pre_upgrade_connection.execute(sa.text(
-        "SELECT assessment_id, group_id FROM assessment_group_members"
-    )).all()) == before
-    assert _target_rows(pre_upgrade_connection) == set(
-        pre_upgrade_connection.execute(sa.text(
-            "SELECT id, variant_id, finding_id FROM assessments")).all())
-
-
-def test_group_backfill_is_idempotent(pre_upgrade_connection):
-    """A retried upgrade must not collide with the memberships it already wrote."""
-    migration.upgrade()
-    after_first = set(pre_upgrade_connection.execute(sa.text(
-        "SELECT assessment_id, group_id FROM assessment_group_members")).all())
-    assert after_first, "the two seeded assessments share a key and must group"
-
-    migration.upgrade()
-
-    assert set(pre_upgrade_connection.execute(sa.text(
-        "SELECT assessment_id, group_id FROM assessment_group_members"
-    )).all()) == after_first
-
-
-def test_upgrade_refuses_a_divergent_group_table(pre_upgrade_connection):
-    """A same-named table of another shape is not the one this revision defines."""
-    pre_upgrade_connection.execute(sa.text(
-        "CREATE TABLE assessment_group_members ("
-        " assessment_id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL)"
-    ))
-
-    with pytest.raises(RuntimeError, match="already exists with columns"):
-        migration.upgrade()
+    assert "variant_id" in columns and "finding_id" in columns
+    assert target_table is None
+    assert sorted(rows) == sorted([
+        (variant_a, finding_id, "not_affected"),
+        (variant_b, finding_id, "not_affected"),
+    ])
