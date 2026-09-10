@@ -40,6 +40,25 @@ def upgrade():
             'ix_assessment_targets_variant_id', 'assessment_targets', ['variant_id'])
         op.create_index(
             'ix_assessment_targets_finding_id', 'assessment_targets', ['finding_id'])
+    else:
+        # A database can already carry this table under an earlier physical
+        # shape of this same revision (pre-release PR-A/B/C forms), which
+        # created it WITH a one-target-per-assessment unique constraint and
+        # never dropped the scalar assessments.variant_id/finding_id columns.
+        # If that constraint survives, fuse_duplicates below will try to move
+        # a second target onto a survivor assessment that already owns a row
+        # for it; the UPDATE OR IGNORE swallows the resulting unique-
+        # constraint violation while the paired DELETE still removes the
+        # source row, silently destroying that target. Drop the stale
+        # constraint up front so adoption of such a database ends up fully
+        # and correctly migrated instead of quietly losing rows.
+        uniques = {
+            u['name'] for u in inspector.get_unique_constraints('assessment_targets')
+        }
+        if 'uq_assessment_targets_assessment_id' in uniques:
+            with op.batch_alter_table('assessment_targets') as batch:
+                batch.drop_constraint(
+                    'uq_assessment_targets_assessment_id', type_='unique')
 
     assessment_columns = {c['name'] for c in inspector.get_columns('assessments')}
     if 'variant_id' in assessment_columns or 'finding_id' in assessment_columns:

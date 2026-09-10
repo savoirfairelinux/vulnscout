@@ -232,9 +232,25 @@ def test_the_assessment_revision_can_be_re_run_on_a_migrated_database(
     an already-migrated database back one revision and forward again is the
     closest reproduction of a database stamped at the ``staging`` form of this
     revision meeting the amended form of it.
+
+    Table existence alone does not prove the re-run is safe: a table that
+    already exists but under a stale physical shape (an earlier pre-release
+    form of this revision carried a one-target-per-assessment unique
+    constraint that this one does not) can pass an existence check while a
+    later step still silently drops rows.  So this also proves no target row
+    is lost across the re-run, not just that the table survives.
     """
     db_copy = tmp_path / "rerun.db"
     shutil.copyfile(migrated_db_path, db_copy)
+
+    engine = sa.create_engine(f"sqlite:///{db_copy}")
+    try:
+        with engine.connect() as connection:
+            targets_before = set(connection.execute(sa.text(
+                "SELECT assessment_id, variant_id, finding_id FROM assessment_targets"
+            )).fetchall())
+    finally:
+        engine.dispose()
 
     _flask(db_copy, "stamp", "w9f0a1b2c3d4")
     _flask(db_copy, "upgrade")
@@ -242,8 +258,16 @@ def test_the_assessment_revision_can_be_re_run_on_a_migrated_database(
     engine = sa.create_engine(f"sqlite:///{db_copy}")
     try:
         tables = set(sa.inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            targets_after = set(connection.execute(sa.text(
+                "SELECT assessment_id, variant_id, finding_id FROM assessment_targets"
+            )).fetchall())
     finally:
         engine.dispose()
 
     assert "assessment_group_members" not in tables
     assert "assessment_targets" in tables
+    assert targets_after == targets_before, (
+        "re-running the assessment_targets revision must not lose or "
+        "duplicate any target row"
+    )

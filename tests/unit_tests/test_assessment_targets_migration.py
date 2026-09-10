@@ -511,3 +511,86 @@ def test_downgrade_gives_every_target_its_own_assessment_row_again():
         (variant_a, finding_id, "not_affected"),
         (variant_b, finding_id, "not_affected"),
     ])
+
+
+def _build_pr_a_b_c_shaped_schema(connection):
+    """Recreate the physical shape this revision had in PR-A/B/C.
+
+    That form of the revision created ``assessment_targets`` WITH a
+    ``uq_assessment_targets_assessment_id`` unique constraint (one target per
+    assessment) and never dropped the scalar ``assessments.variant_id`` /
+    ``finding_id`` columns.  A database can reach exactly this shape today via
+    a manual ``flask db stamp`` to this revision followed by a re-upgrade --
+    the same scenario the re-run test in
+    ``tests/webapp_tests/test_migration_chain_schema.py`` exercises.
+    """
+    _build_pre_upgrade_schema(connection)
+    connection.execute(sa.text(
+        """
+        CREATE TABLE assessment_targets (
+            assessment_id TEXT NOT NULL,
+            variant_id TEXT NOT NULL,
+            finding_id TEXT NOT NULL,
+            PRIMARY KEY (assessment_id, variant_id, finding_id),
+            CONSTRAINT uq_assessment_targets_assessment_id UNIQUE (assessment_id)
+        )
+        """
+    ))
+    connection.execute(sa.text(
+        "CREATE INDEX ix_assessment_targets_variant_id"
+        " ON assessment_targets (variant_id)"
+    ))
+    connection.execute(sa.text(
+        "CREATE INDEX ix_assessment_targets_finding_id"
+        " ON assessment_targets (finding_id)"
+    ))
+
+
+def test_upgrade_does_not_drop_a_target_when_adopting_a_pre_release_shaped_table():
+    """Re-running upgrade() on a PR-A/B/C-shaped database must lose no targets.
+
+    The table-existence guard alone would skip ``create_table`` (keeping the
+    stale one-target-per-assessment unique constraint) while still running
+    ``fuse_duplicates``, whose ``UPDATE OR IGNORE`` silently swallows the
+    resulting unique-constraint violation while the paired ``DELETE`` still
+    removes the source row -- destroying one of two fusible targets instead of
+    merging them.  Two assessments here share every fusible field but target
+    different variants of the same finding, so a correct upgrade must fuse
+    them into one assessment row carrying BOTH targets.
+    """
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_pr_a_b_c_shaped_schema(connection)
+        project_id = _new_id()
+        finding_id = _add_finding(connection, "CVE-2026-0950")
+        variant_a = _add_variant(connection, project_id)
+        variant_b = _add_variant(connection, project_id)
+        first = _add_assessment(connection, finding_id, variant_a)
+        second = _add_assessment(connection, finding_id, variant_b)
+        for assessment_id, variant_id in ((first, variant_a), (second, variant_b)):
+            connection.execute(sa.text(
+                "INSERT INTO assessment_targets"
+                " (assessment_id, variant_id, finding_id)"
+                " VALUES (:a, :v, :f)"
+            ), {"a": assessment_id, "v": variant_id, "f": finding_id})
+
+        _bind_alembic_op(connection)
+        migration.upgrade()
+
+        remaining = _existing_assessments(connection)
+        targets = _targets(connection)
+        uniques_after = {
+            row["name"] for row in connection.execute(sa.text(
+                "SELECT name FROM sqlite_master"
+                " WHERE type = 'index' AND tbl_name = 'assessment_targets'"
+            )).mappings()
+        }
+
+    assert len(remaining) == 1
+    survivor = next(iter(remaining))
+    assert targets == {
+        (survivor, variant_a, finding_id),
+        (survivor, variant_b, finding_id),
+    }
+    assert "uq_assessment_targets_assessment_id" not in uniques_after
