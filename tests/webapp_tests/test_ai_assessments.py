@@ -160,47 +160,34 @@ def test_approve_promotes_group_to_custom(client):
     assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
 
 
-def test_approve_promotes_multi_package_group(client):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    group_id = body["assessments"][0]["group_id"]
-    assert group_id is not None, "multi-package writes must already be grouped"
+def test_approve_promotes_only_the_addressed_row(client, app):
+    """Two separate AI writes (different variants) are two separate user
+    actions and stay two separate rows; approving one's group must not
+    promote the other."""
+    other_variant = "22222222-2222-2222-2222-222222222224"
+    _add_variant(app, other_variant)
 
-    resp = client.post(f"/api/assessment-groups/{group_id}/approve")
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
+    assert first["group_id"] == first["id"]
+    assert second["group_id"] == second["id"]
+    assert first["id"] != second["id"]
+
+    resp = client.post(f"/api/assessment-groups/{first['group_id']}/approve")
 
     assert resp.status_code == 200
     approved = json.loads(resp.data)["assessments"]
-    assert len(approved) >= 2
-    assert all(a["origin"] == "custom" for a in approved)
+    assert {a["id"] for a in approved} == {first["id"]}
+    assert approved[0]["origin"] == "custom"
 
     listed = json.loads(client.get("/api/assessments?format=list").data)
-    promoted = [a for a in listed if a["id"] in {row["id"] for row in approved}]
-    assert len(promoted) >= 2
-    assert all(a["origin"] == "custom" for a in promoted)
-
-
-def test_approve_group_update_is_atomic(client, app, monkeypatch):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    ids = [row["id"] for row in body["assessments"]]
-    group_id = body["assessments"][0]["group_id"]
-
-    original_update = DBAssessment.update
-    call_count = 0
-
-    def flaky_update(self, *args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
-            raise RuntimeError("boom")
-        return original_update(self, *args, **kwargs)
-
-    monkeypatch.setattr(DBAssessment, "update", flaky_update)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        client.post(f"/api/assessment-groups/{group_id}/approve")
-
-    with app.app_context():
-        reloaded = [DBAssessment.get_by_id(assessment_id) for assessment_id in ids]
-        assert all(row is not None and row.origin == "ai" for row in reloaded)
+    listed_ids = {a["id"] for a in listed}
+    assert first["id"] in listed_ids
+    assert second["id"] not in listed_ids
+    still_pending = json.loads(client.get("/api/assessments/review/ai").data)
+    assert any(a["id"] == second["id"] for a in still_pending)
 
 
 def test_approve_missing_returns_404(client):
@@ -236,54 +223,48 @@ def _add_variant(app, variant_id):
         db.session.commit()
 
 
-def test_approve_spans_multiple_variants_via_explicit_group(client, app):
-    """A review row can cover several variants; explicitly grouping the writes
-    (via ``group_id`` on the second write) must promote every member together,
-    not just the addressed variant's assessment. Grouping across variants is
-    no longer inferred from (vuln_id, variant_id) — it is explicit, via the
-    same AssessmentGroupMember mechanism every other multi-target write uses."""
+def test_group_id_payload_no_longer_merges_writes_across_variants(client, app):
+    """Joining an existing group at write time is out of scope for this
+    phase (a group only grows through reconcile, once it already holds real
+    targets — see test_post_endpoints.py). Posting a second AI write with an
+    existing assessment's id as ``group_id`` simply creates its own,
+    independent row instead of merging into it."""
     other_variant = "22222222-2222-2222-2222-222222222223"
     _add_variant(app, other_variant)
 
     a1 = json.loads(_post_ai(client).data)["assessment"]["id"]
     group_id = _group_id_for(client, a1)
-    a2 = json.loads(
-        _post_ai(client, variant_id=other_variant, group_id=group_id).data
-    )["assessment"]["id"]
+    a2_resp = _post_ai(client, variant_id=other_variant, group_id=group_id)
+    assert a2_resp.status_code == 200
+    a2_row = json.loads(a2_resp.data)["assessment"]
+    assert a2_row["group_id"] == a2_row["id"]
+    assert a2_row["group_id"] != group_id
 
     resp = client.post(f"/api/assessment-groups/{group_id}/approve")
     assert resp.status_code == 200
-    approved = {a["id"]: a for a in json.loads(resp.data)["assessments"]}
-    assert set(approved) == {a1, a2}
-    assert all(a["origin"] == "custom" for a in approved.values())
+    approved = {a["id"] for a in json.loads(resp.data)["assessments"]}
+    assert approved == {a1}
+
+    # the sibling row remains pending, untouched by the first row's approval
+    still_pending = json.loads(client.get("/api/assessments/review/ai").data)
+    assert any(a["id"] == a2_row["id"] for a in still_pending)
 
 
-def test_reject_spans_multiple_variants_via_explicit_group(client, app):
-    other_variant = "22222222-2222-2222-2222-222222222223"
-    _add_variant(app, other_variant)
-
-    a1 = json.loads(_post_ai(client).data)["assessment"]["id"]
-    group_id = _group_id_for(client, a1)
-    a2 = json.loads(
-        _post_ai(client, variant_id=other_variant, group_id=group_id).data
-    )["assessment"]["id"]
-
-    resp = client.post(f"/api/assessment-groups/{group_id}/reject")
-    assert resp.status_code == 200
-    assert set(json.loads(resp.data)["deleted"]) == {a1, a2}
-    listed = json.loads(client.get("/api/assessments?format=list").data)
-    assert not ({a1, a2} & {a["id"] for a in listed})
-
-
-def test_joining_a_pending_ai_group_with_a_custom_row_is_refused(client):
-    """A group must stay homogeneous: mixing origins would break approval."""
+def test_joining_a_pending_ai_group_with_a_custom_row_no_longer_conflicts(client):
+    """Origin homogeneity is enforced per-row now (a group is one row, one
+    origin); the legacy ``group_id`` payload no longer fuses across writes,
+    so a mismatched-origin write is simply its own independent row rather
+    than being refused."""
     aid = _get_first_ai_id(client)
     group_id = _group_id_for(client, aid)
     r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
         "packages": [PKG2], "status": "affected", "variant_id": str(VARIANT_UUID),
         "group_id": group_id,
     })
-    assert r.status_code == 400
+    assert r.status_code == 200
+    new_row = json.loads(r.data)["assessment"]
+    assert new_row["origin"] == "custom"
+    assert new_row["group_id"] == new_row["id"]
 
     # the pending AI row must remain untouched and still approvable
     listed = json.loads(client.get("/api/assessments/review/ai").data)
@@ -291,67 +272,25 @@ def test_joining_a_pending_ai_group_with_a_custom_row_is_refused(client):
     assert client.post(f"/api/assessment-groups/{group_id}/approve").status_code == 200
 
 
-def test_approve_rejects_group_with_non_ai_member(client, app):
-    """Legacy heterogeneous groups are still refused by approve."""
-    aid = _get_first_ai_id(client)
-    group_id = _group_id_for(client, aid)
-    other = json.loads(client.post(
-        f"/api/vulnerabilities/{VULN_ID}/assessments",
-        json={"packages": [PKG2], "status": "affected",
-              "variant_id": str(VARIANT_UUID)},
-    ).data)["assessment"]["id"]
-    # Bypass the write-time invariant the way pre-existing data would.
-    with app.app_context():
-        from src.models.assessment_group_member import AssessmentGroupMember
+def test_reject_deletes_only_the_addressed_row(client, app):
+    """Two separate AI writes (different variants) stay two separate rows;
+    rejecting one's group must not delete the other."""
+    other_variant = "22222222-2222-2222-2222-222222222225"
+    _add_variant(app, other_variant)
 
-        db.session.add(AssessmentGroupMember(
-            assessment_id=uuid.UUID(other), group_id=uuid.UUID(group_id)))
-        db.session.commit()
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
 
-    resp = client.post(f"/api/assessment-groups/{group_id}/approve")
-    assert resp.status_code == 400
-    # the pending AI row must remain untouched
-    listed = json.loads(client.get("/api/assessments/review/ai").data)
-    assert any(a["id"] == aid for a in listed)
-
-
-def test_reject_deletes_group(client):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    group_id = body["assessment"]["group_id"]
-    ids = {a["id"] for a in body["assessments"]}
-
-    resp = client.post(f"/api/assessment-groups/{group_id}/reject")
+    resp = client.post(f"/api/assessment-groups/{first['group_id']}/reject")
 
     assert resp.status_code == 200
-    assert len(body["assessments"]) >= 2
-    assert set(json.loads(resp.data)["deleted"]) == ids
+    assert set(json.loads(resp.data)["deleted"]) == {first["id"]}
     listed = json.loads(client.get("/api/assessments?format=list").data)
-    assert not (ids & {a["id"] for a in listed})
-
-
-def test_reject_group_delete_is_atomic(client, app, monkeypatch):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    ids = [row["id"] for row in body["assessments"]]
-    group_id = body["assessment"]["group_id"]
-
-    original_delete = DBAssessment.delete
-    call_count = 0
-
-    def flaky_delete(self, *args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
-            raise RuntimeError("boom")
-        return original_delete(self, *args, **kwargs)
-
-    monkeypatch.setattr(DBAssessment, "delete", flaky_delete)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        client.post(f"/api/assessment-groups/{group_id}/reject")
-
-    with app.app_context():
-        reloaded = [DBAssessment.get_by_id(assessment_id) for assessment_id in ids]
-        assert all(row is not None and row.origin == "ai" for row in reloaded)
+    assert first["id"] not in {a["id"] for a in listed}
+    still_pending = json.loads(client.get("/api/assessments/review/ai").data)
+    assert any(a["id"] == second["id"] for a in still_pending)
 
 
 def test_reject_missing_returns_404(client):
@@ -570,19 +509,27 @@ def test_pending_ai_excluded_from_report_templates(client):
 
 # ── legacy per-assessment approve/reject (compatibility wrappers) ─────────
 
-def test_legacy_approve_promotes_the_whole_group(client):
-    """Pre-group clients address one id; the whole group is still approved."""
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    ids = {a["id"] for a in body["assessments"]}
-    addressed = body["assessment"]["id"]
+def test_legacy_approve_promotes_only_the_addressed_row(client, app):
+    """Pre-group clients address one id. Two separate AI writes (different
+    variants) stay two separate rows, so the legacy wrapper only ever
+    promotes the addressed row."""
+    other_variant = "22222222-2222-2222-2222-222222222226"
+    _add_variant(app, other_variant)
 
-    resp = client.post(f"/api/assessments/{addressed}/approve")
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
+
+    resp = client.post(f"/api/assessments/{first['id']}/approve")
 
     assert resp.status_code == 200
     approved = json.loads(resp.data)["assessments"]
-    assert {a["id"] for a in approved} == ids
-    assert all(a["origin"] == "custom" for a in approved)
-    assert not json.loads(client.get("/api/assessments/review/ai").data)
+    assert {a["id"] for a in approved} == {first["id"]}
+    assert approved[0]["origin"] == "custom"
+    still_pending = {a["id"] for a in json.loads(
+        client.get("/api/assessments/review/ai").data)}
+    assert still_pending == {second["id"]}
 
 
 def test_legacy_approve_works_on_an_ungrouped_assessment(client):
@@ -595,17 +542,24 @@ def test_legacy_approve_works_on_an_ungrouped_assessment(client):
     assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
 
 
-def test_legacy_reject_deletes_the_whole_group(client):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    ids = {a["id"] for a in body["assessments"]}
-    addressed = body["assessment"]["id"]
+def test_legacy_reject_deletes_only_the_addressed_row(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222227"
+    _add_variant(app, other_variant)
 
-    resp = client.post(f"/api/assessments/{addressed}/reject")
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
+
+    resp = client.post(f"/api/assessments/{first['id']}/reject")
 
     assert resp.status_code == 200
-    assert set(json.loads(resp.data)["deleted"]) == ids
+    assert set(json.loads(resp.data)["deleted"]) == {first["id"]}
     listed = json.loads(client.get("/api/assessments?format=list").data)
-    assert not (ids & {a["id"] for a in listed})
+    assert first["id"] not in {a["id"] for a in listed}
+    still_pending = {a["id"] for a in json.loads(
+        client.get("/api/assessments/review/ai").data)}
+    assert still_pending == {second["id"]}
 
 
 def test_legacy_approve_rejects_a_non_ai_assessment(client):
@@ -627,23 +581,7 @@ def test_legacy_approve_returns_404_for_unknown_assessment(client):
     assert client.post(f"/api/assessments/{unknown}/reject").status_code == 404
 
 
-def test_legacy_approve_refuses_a_group_with_a_non_ai_member(client, app):
-    """Legacy clients must not approve half of a heterogeneous group."""
-    aid = _get_first_ai_id(client)
-    group_id = _group_id_for(client, aid)
-    other = json.loads(client.post(
-        f"/api/vulnerabilities/{VULN_ID}/assessments",
-        json={"packages": [PKG2], "status": "affected",
-              "variant_id": str(VARIANT_UUID)},
-    ).data)["assessment"]["id"]
-    with app.app_context():
-        from src.models.assessment_group_member import AssessmentGroupMember
-
-        db.session.add(AssessmentGroupMember(
-            assessment_id=uuid.UUID(other), group_id=uuid.UUID(group_id)))
-        db.session.commit()
-
-    resp = client.post(f"/api/assessments/{aid}/approve")
-
-    assert resp.status_code == 400
-    assert json.loads(resp.data)["error"] == "Not a pending AI group"
+# NOTE: there is deliberately no test for "approve refuses a group with a
+# non-AI member". A group is an assessment, and an assessment carries a
+# single `origin`, so a group spanning two origins is unrepresentable
+# rather than merely rejected.

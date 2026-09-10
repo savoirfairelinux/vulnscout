@@ -74,30 +74,33 @@ def test_migration_chain_creates_every_model_table(migrated_tables):
 
 
 def test_migration_chain_creates_the_assessment_tables(migrated_tables):
-    """Both halves of the assessment schema must survive the chain.
+    """The fused assessment-target schema must survive the chain.
 
-    ``assessment_group_members`` and ``assessment_targets`` are created by the
-    same, in-place-amended revision; naming them explicitly keeps a future
-    amendment from quietly dropping either one.  The group-members half is
-    still read by the model and the routes throughout PR-A, PR-B and PR-C, and
-    a database that lacks it fails on the first assessment POST.
+    ``assessment_targets`` is created by revision x0a1b2c3d4e5; naming it
+    explicitly keeps a future amendment from quietly dropping it.
+
+    ``assessment_group_members`` no longer exists: PR-D's write-path fusion
+    (Task 15) makes "a group is an assessment" literally true, so the
+    membership table this plan used mid-series is fully retired -- no
+    migration creates it and the model is deleted -- and this test must not
+    assert for it any more.
     """
     tables = set(migrated_tables.get_table_names())
     assert "assessments" in tables
-    assert "assessment_group_members" in tables
+    assert "assessment_group_members" not in tables
     assert "assessment_targets" in tables
 
     target_columns = {c["name"] for c in migrated_tables.get_columns("assessment_targets")}
     assert target_columns == {"assessment_id", "variant_id", "finding_id"}
 
-    group_columns = {c["name"] for c in migrated_tables.get_columns("assessment_group_members")}
-    assert group_columns == {"assessment_id", "group_id"}
-
-    assert any(
+    # Task 15 lifts the one-target-per-assessment invariant (Task 14 already
+    # dropped it from the migration itself); several targets per assessment
+    # are legal from here on, so no unique constraint on assessment_id alone
+    # is expected any more.
+    assert not any(
         u["name"] == "uq_assessment_targets_assessment_id"
-        and u["column_names"] == ["assessment_id"]
         for u in migrated_tables.get_unique_constraints("assessment_targets")
-    ), "one target per assessment must be enforced by the migrated schema"
+    ), "the one-target-per-assessment constraint must not survive PR-D"
 
 
 def test_migration_chain_creates_every_model_column(migrated_tables):
@@ -242,5 +245,5 @@ def test_the_assessment_revision_can_be_re_run_on_a_migrated_database(
     finally:
         engine.dispose()
 
-    assert "assessment_group_members" in tables
+    assert "assessment_group_members" not in tables
     assert "assessment_targets" in tables

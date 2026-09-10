@@ -431,9 +431,6 @@ class TestAssessmentFromVulnAssessment:
         va.set_status("in_triage")
         a = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
         assert a.single_variant_id == variant.id
-        # PR-A mirrors the single target into the scalar column.
-        assert a.variant_id == variant.id
-        assert a.finding_id == finding.id
 
     def test_from_vuln_assessment_separate_record_per_variant(self, app, finding, variant, project):
         """Each variant must get its own assessment row for the same finding."""
@@ -1655,19 +1652,17 @@ class TestMetricsFromCvssRaiseOnNoExisting:
 class TestEveryWritePathWritesATarget:
     """Drive every production assessment-write path and count the orphans.
 
-    `assessment_targets` is the storage PR-B/PR-C read from.  A row without a
-    target is invisible to every target-joined query, so it reads as silent
-    data loss rather than an error.  This test exercises the real production
-    functions (no mocks) and then asks the database — in raw SQL, so the ORM
-    cannot paper over what is actually stored — how many assessments have no
-    target row.
+    `assessment_targets` is the storage every read path joins through.  A row
+    without a target is invisible to every target-joined query, so it reads
+    as silent data loss rather than an error.  This test exercises the real
+    production functions (no mocks) and then asks the database — in raw SQL,
+    so the ORM cannot paper over what is actually stored — how many
+    assessments have no target row.
 
-    Exactly one shape is allowed to have none: a custom-data import item that
-    names no variant at all.  ``assessment_targets.variant_id`` is part of the
-    primary key and can never be NULL, and ``staging`` stored such an item with
-    a NULL variant and reported success, so PR-A keeps doing that via
-    ``Assessment.create(allow_untargeted=True)``.  PR-D removes the shape along
-    with the scalar columns.
+    No shape is allowed to have none any more: PR-D drops the scalar
+    ``variant_id``/``finding_id`` mirror columns, so a custom-data import item
+    naming no variant at all is unrepresentable and is now an import error
+    (see ``import_custom_data``'s v1 branch) instead of a target-less row.
     """
 
     @staticmethod
@@ -1731,7 +1726,7 @@ class TestEveryWritePathWritesATarget:
         finding_3 = Finding.get_or_create(pkg_b.id, "CVE-2030-0003")
         create_assessment_record(
             Assessment.new_dto("CVE-2030-0003", [pkg_b.string_id]),
-            finding_3.id, variant.id)
+            [(variant.id, finding_3.id)])
 
         # 4. controllers.assessments._persist_assessment_to_db (SBOM ingestion),
         #    with a DTO naming two packages — the shape that once silently
@@ -1767,9 +1762,10 @@ class TestEveryWritePathWritesATarget:
         assert targeted_total >= 5, "every write path above must have stored a row"
         assert self._orphan_count() == 0
 
-        # 6. helpers.assessment_io.import_custom_data with no variant at all —
-        #    the one legacy shape that legitimately has no target row.
-        import_custom_data(
+        # 6. helpers.assessment_io.import_custom_data with no variant at all
+        #    is now an import error -- unrepresentable once the scalar
+        #    columns are gone -- rather than a target-less row.
+        result = import_custom_data(
             {
                 "version": 1,
                 "assessments": [{
@@ -1780,26 +1776,9 @@ class TestEveryWritePathWritesATarget:
             },
             {},
         )
-
-        untargeted = self._untargeted_ids()
-        assert len(untargeted) == 1, (
-            "only the variant-less custom-data import may be untargeted; "
-            f"found {len(untargeted)}"
+        assert result["assessments_imported"] == 0
+        assert any(
+            e.get("error") == "No variant specified" for e in result["errors"]
         )
-        orphan = _db.session.get(Assessment, next(iter(untargeted)))
-        assert orphan is not None
-        assert orphan.origin == "custom"
-        assert orphan.variant_id is None
-        # staging stored the finding in the scalar column; PR-A still does.
-        assert orphan.finding_id is not None
-
-        # Every targeted row's single target agrees with its scalar mirror.
-        import sqlalchemy as sa
-        mismatched = _db.session.execute(sa.text(
-            "SELECT COUNT(*) FROM assessments a"
-            " JOIN assessment_targets t ON t.assessment_id = a.id"
-            " WHERE a.variant_id IS NOT t.variant_id"
-            "    OR a.finding_id IS NOT t.finding_id"
-        )).scalar()
-        assert mismatched == 0
+        assert self._orphan_count() == 0
         assert isinstance(variant.id, _uuid.UUID)

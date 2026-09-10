@@ -59,12 +59,6 @@ def _make_finding_and_variant():
     return finding, variant
 
 
-@pytest.mark.skip(
-    reason="Assessment.create raises GroupInvariantError for more than one target"
-    " pair (the ORM guard in Assessment.create fires before the DB is ever"
-    " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-    " constraint is never the thing that stops this -- PR-A's expand-phase"
-    " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
 def test_a_multi_target_assessment_is_one_group_with_two_targets(app):
     with app.app_context():
         from src.controllers.assessment_groups import build_groups
@@ -113,11 +107,6 @@ def test_two_content_identical_assessments_stay_two_groups(app):
         assert len(groups) == 2
 
 
-@pytest.mark.skip(
-    reason="load_group still resolves groups through AssessmentGroupMember"
-    " (the write path Task 15 fuses); an assessment written on its own has no"
-    " membership row, so 'a group is now an assessment' only holds once"
-    " Task 15/14 land. Enable then.")
 def test_load_group_returns_the_assessment_itself(app):
     with app.app_context():
         from src.controllers.assessment_groups import load_group
@@ -138,12 +127,6 @@ def test_load_group_of_an_unknown_id_is_empty(app):
         assert load_group(uuid.uuid4()) == []
 
 
-@pytest.mark.skip(
-    reason="Assessment.create raises GroupInvariantError for more than one target"
-    " pair (the ORM guard in Assessment.create fires before the DB is ever"
-    " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-    " constraint is never the thing that stops this -- PR-A's expand-phase"
-    " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
 def test_to_dict_exposes_every_touched_variant(app):
     with app.app_context():
         from src.models.assessment import Assessment
@@ -167,12 +150,6 @@ def test_to_dict_exposes_every_touched_variant(app):
         assert data["variant_id"] is None
 
 
-@pytest.mark.skip(
-    reason="Assessment.create raises GroupInvariantError for more than one target"
-    " pair (the ORM guard in Assessment.create fires before the DB is ever"
-    " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-    " constraint is never the thing that stops this -- PR-A's expand-phase"
-    " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
 def test_outdated_is_scoped_to_the_variant_the_package_is_stale_in(app, monkeypatch):
     """A package stale in one variant must not flag the same package elsewhere.
 

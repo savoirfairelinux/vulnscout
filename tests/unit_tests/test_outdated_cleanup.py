@@ -1,29 +1,16 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for PR-B's target-join conversion of ``src/helpers/outdated_cleanup.py``.
+"""Tests for src/helpers/outdated_cleanup.py's multi-target reachability.
 
-The cleanup module reaches an assessment's variant and finding through its
-``assessment_targets`` rows instead of the scalar ``Assessment.variant_id`` /
-``Assessment.finding_id`` columns.  These are *delete* paths, so three
-properties have to hold at once:
-
-1. **Equivalence** — on data written through the ordinary write paths, the
-   target-joined queries return exactly what the scalar ones at ``ba8c3978``
-   returned.  The oracles below are line-for-line restatements of that code.
-2. **Reach** — an assessment held only by its target row (the PR-D shape,
-   simulated here by stripping the mirrored scalars from a committed row,
-   since ``uq_assessment_targets_assessment_id`` forbids a second target) is
-   still found by every migrated site.
-3. **No leak, no over-delete** — the one shape PR-A still writes without a
-   target row (the variant-less custom-data import: NULL ``variant_id``,
-   non-NULL ``finding_id``) must keep being collected by the delete paths and
-   must keep protecting its finding from the orphan reaper.  Nothing may be
-   left dangling either: bulk DELETE bypasses the mapper events that reap
-   target rows.
+Assessments are reachable only through their assessment_targets rows now, not
+the scalar Assessment.finding_id/variant_id columns.  A reachability query
+that still consults the scalar column can silently delete a finding (or leave
+an assessment behind, or leave its target rows behind) that is actually still
+in use — these tests guard the two silent-failure sites identified for this
+task: _delete_orphaned_findings and the target-reaping helper.
 """
 
-import os
 import uuid
 
 import pytest
@@ -31,6 +18,7 @@ import pytest
 
 @pytest.fixture()
 def app():
+    import os
     from src.bin.webapp import create_app
     from src.extensions import db as _db
 
@@ -46,631 +34,249 @@ def app():
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
 
-# ---------------------------------------------------------------------------
-# Seed helpers
-# ---------------------------------------------------------------------------
-
-def _variant(project_id: uuid.UUID, name: str):
+def _make_variant(project, variant_name: str):
+    """Create a variant under *project* (a project name or an existing project id)."""
+    from src.models.project import Project
     from src.models.variant import Variant
 
-    return Variant.create(name=name, project_id=project_id)
+    project_id = project if isinstance(project, uuid.UUID) else Project.create(name=project).id
+    return Variant.create(name=variant_name, project_id=project_id)
 
 
-def _finding(vuln_id: str, pkg_name: str, version: str = "1.0.0"):
+def _make_finding(vuln_id: str, pkg_name: str):
+    """Create a finding for *pkg_name* against *vuln_id*, reusing the
+    vulnerability record if a prior call already created it."""
     from src.extensions import db
     from src.models.finding import Finding
     from src.models.package import Package
     from src.models.vulnerability import Vulnerability
 
     vuln = db.session.get(Vulnerability, vuln_id.upper()) or Vulnerability.create_record(id=vuln_id)
-    pkg = Package.find_or_create(pkg_name, version)
-    db.session.commit()
-    return Finding.get_or_create(pkg.id, vuln.id)
+    pkg = Package.create(name=pkg_name, version="1.0.0")
+    return Finding.create(package_id=pkg.id, vulnerability_id=vuln.id)
 
 
-def _sbom_scan(variant_id: uuid.UUID, packages, name: str = "sbom"):
-    """Create an SBOM scan for *variant_id* listing *packages*."""
-    from src.extensions import db
-    from src.models.sbom_document import SBOMDocument
-    from src.models.sbom_package import SBOMPackage
-    from src.models.scan import Scan
+def test_a_finding_held_only_by_a_multi_target_assessment_survives(app):
+    """_delete_orphaned_findings must see reachability through targets."""
+    with app.app_context():
+        from src.extensions import db
+        from src.helpers.outdated_cleanup import _delete_orphaned_findings
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
 
-    scan = Scan.create(name, variant_id, scan_type="sbom")
-    document = SBOMDocument.create(f"/{name}.json", "spdx", scan.id)
-    for package in packages:
-        SBOMPackage.create(document.id, package.id)
-    db.session.commit()
-    return scan
-
-
-def _custom_assessment(variant_id: uuid.UUID, finding_id: uuid.UUID):
-    from src.extensions import db
-    from src.models.assessment import Assessment
-
-    assessment = Assessment.create(
-        status="not_affected", origin="custom",
-        targets=[(variant_id, finding_id)],
-    )
-    db.session.commit()
-    return assessment
-
-
-def _strip_scalar_mirror(assessment_id: uuid.UUID) -> None:
-    """Clear the mirrored scalar columns, leaving only the target row.
-
-    This is the PR-D row shape.  Reached through Core SQL rather than the ORM
-    so the model's mirroring logic cannot put the columns back.
-    """
-    from src.extensions import db
-    from src.models.assessment import Assessment
-
-    db.session.execute(
-        db.update(Assessment)
-        .where(Assessment.id == assessment_id)
-        .values(variant_id=None, finding_id=None)
-    )
-    db.session.commit()
-    db.session.expire_all()
-
-
-def _drop_target_rows(assessment_id: uuid.UUID) -> None:
-    """Leave the scalar mirror alone and remove the target rows.
-
-    This is the legacy target-less shape PR-A still accepts: the variant-less
-    custom-data import writes ``finding_id`` with a NULL ``variant_id``, and a
-    target row cannot exist for it because ``variant_id`` is part of the
-    target's primary key.  Written here through Core SQL because
-    ``Assessment.create`` refuses to produce it directly.
-    """
-    from src.extensions import db
-    from src.models.assessment import Assessment
-    from src.models.assessment_target import AssessmentTarget
-
-    db.session.execute(
-        db.delete(AssessmentTarget).where(AssessmentTarget.assessment_id == assessment_id)
-    )
-    db.session.execute(
-        db.update(Assessment).where(Assessment.id == assessment_id).values(variant_id=None)
-    )
-    db.session.commit()
-    db.session.expire_all()
-
-
-def _dangle_target(assessment_id: uuid.UUID) -> None:
-    """Delete the assessment row only, leaving its target row behind.
-
-    This is the residue a PR-A deployment produces: ``delete_outdated_data``
-    and ``delete_orphaned_vulnerabilities`` bulk-DELETE assessments, and Core
-    DML fires none of the mapper events that reap target rows, so every run
-    before PR-B left one dangling ``assessment_targets`` row per deleted
-    assessment.  Such a row names an assessment that no longer exists.
-    """
-    from src.extensions import db
-    from src.models.assessment import Assessment
-
-    db.session.execute(db.delete(Assessment).where(Assessment.id == assessment_id))
-    db.session.commit()
-    db.session.expire_all()
-
-
-def _fetch(model, primary_key):
-    """Re-read a row after a bulk DELETE.
-
-    ``db.session.get`` would otherwise try to refresh the stale instance the
-    identity map still holds and raise ``ObjectDeletedError``; expunging first
-    forces a fresh SELECT, which is what these assertions are about.
-    """
-    from src.extensions import db
-
-    db.session.expunge_all()
-    return db.session.get(model, primary_key)
-
-
-def _target_rows():
-    from src.extensions import db
-    from src.models.assessment_target import AssessmentTarget
-
-    return sorted(
-        db.session.execute(
-            db.select(
-                AssessmentTarget.assessment_id,
-                AssessmentTarget.variant_id,
-                AssessmentTarget.finding_id,
-            )
-        ).all()
-    )
-
-
-# ---------------------------------------------------------------------------
-# Oracles: the queries exactly as they stood at ba8c3978, before this task.
-# ---------------------------------------------------------------------------
-
-def _scalar_outdated_assessments():
-    """Pre-PR-B :func:`_outdated_assessments`, kept as the equivalence oracle."""
-    from src.extensions import db
-    from src.helpers.assessment_staleness import annotate_assessments_outdated
-    from src.models.assessment import Assessment
-    from src.models.finding import Finding
-    from src.models.package import Package
-
-    rows = db.session.execute(
-        db.select(
-            Assessment.id,
-            Assessment.origin,
-            Assessment.variant_id,
-            Assessment.finding_id,
-            Finding.vulnerability_id,
-            Package.name,
-            Package.version,
-            Package.supplier,
+        project = uuid.uuid4()
+        variant = _make_variant(project, "a")
+        openssl = _make_finding("CVE-2026-4000", "openssl")
+        zlib = _make_finding("CVE-2026-4000", "zlib")
+        Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
+            commit=True,
         )
-        .outerjoin(Finding, Finding.id == Assessment.finding_id)
-        .outerjoin(Package, Package.id == Finding.package_id)
-        .where(Assessment.origin == "custom", Assessment.variant_id.is_not(None))
-    )
-    assessments: list[dict] = []
-    ids_by_string: dict[str, uuid.UUID] = {}
-    for assessment_id, origin, variant_id, finding_id, vulnerability_id, name, version, supplier in rows:
-        package_id = f"{name}@{version}" if name is not None else ""
-        if package_id and supplier:
-            package_id += f"::{supplier}"
-        assessments.append({
-            "id": str(assessment_id),
-            "origin": origin,
-            "variant_id": str(variant_id),
-            "finding_id": finding_id,
-            "vuln_id": vulnerability_id or "",
-            "packages": [package_id] if package_id else [],
-        })
-        ids_by_string[str(assessment_id)] = assessment_id
-    annotate_assessments_outdated(assessments)
-    return [
-        {**assessment, "uuid": ids_by_string[assessment["id"]]}
-        for assessment in assessments
-        if assessment["outdated"]
-    ]
+
+        _delete_orphaned_findings({zlib.id})
+
+        assert db.session.get(Finding, zlib.id) is not None
 
 
-def _scalar_orphan_finding_ids(finding_ids):
-    """Pre-PR-B :func:`_delete_orphaned_findings` selection, without the delete."""
-    from src.extensions import db
-    from src.models.finding import Finding
+def test_a_finding_with_no_remaining_reference_is_still_reaped(app):
+    """The reachability fix doesn't turn _delete_orphaned_findings into a no-op."""
+    with app.app_context():
+        from src.extensions import db
+        from src.helpers.outdated_cleanup import _delete_orphaned_findings
+        from src.models.finding import Finding
 
-    return sorted(db.session.execute(
-        db.select(Finding.id)
-        .where(Finding.id.in_(finding_ids))
-        .where(~Finding.observations.any())
-        .where(~Finding.assessments.any())
-        .where(~Finding.time_estimates.any())
-    ).scalars(), key=str)
+        project = uuid.uuid4()
+        _make_variant(project, "a")
+        orphan = _make_finding("CVE-2026-4002", "curl")
 
+        deleted_count, vulnerability_ids = _delete_orphaned_findings({orphan.id})
 
-def _scalar_assessment_counts(vulnerability_ids):
-    """Pre-PR-B assessment count of :func:`orphaned_vulnerabilities_preview`."""
-    from src.extensions import db
-    from src.models.assessment import Assessment
-    from src.models.finding import Finding
-
-    return {
-        vulnerability_id: count
-        for vulnerability_id, count in db.session.execute(
-            db.select(Finding.vulnerability_id, db.func.count(Assessment.id))
-            .join(Assessment, Assessment.finding_id == Finding.id)
-            .where(Finding.vulnerability_id.in_(vulnerability_ids))
-            .group_by(Finding.vulnerability_id)
-        ).all()
-    }
+        assert deleted_count == 1
+        assert vulnerability_ids == {"CVE-2026-4002"}
+        assert db.session.get(Finding, orphan.id) is None
 
 
-def _scalar_assessment_ids_for_findings(finding_ids):
-    """Pre-PR-B assessment selection of :func:`delete_orphaned_vulnerabilities`."""
-    from src.extensions import db
-    from src.models.assessment import Assessment
+def test_reaping_one_target_leaves_the_assessment_and_its_siblings(app):
+    """remove_target deletes only the reaped target, not the whole assessment."""
+    with app.app_context():
+        from src.extensions import db
+        from src.helpers.outdated_cleanup import remove_target
+        from src.models.assessment import Assessment
 
-    return set(db.session.execute(
-        db.select(Assessment.id).where(Assessment.finding_id.in_(finding_ids))
-    ).scalars())
+        project = uuid.uuid4()
+        variant = _make_variant(project, "a")
+        openssl = _make_finding("CVE-2026-4001", "openssl")
+        zlib = _make_finding("CVE-2026-4001", "zlib")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
+            commit=True,
+        )
+
+        removed = remove_target(assessment.id, variant.id, zlib.id)
+
+        assert removed is True
+        assert db.session.get(Assessment, assessment.id) is not None
+        assert assessment.targets == [(variant.id, openssl.id)]
 
 
-# ---------------------------------------------------------------------------
-# Scenario: one variant whose openssl went stale, one whose openssl is current.
-# ---------------------------------------------------------------------------
+def test_reaping_the_last_target_deletes_the_assessment(app):
+    """remove_target deletes the assessment once it has no targets left."""
+    with app.app_context():
+        from src.extensions import db
+        from src.helpers.outdated_cleanup import remove_target
+        from src.models.assessment import Assessment
 
-def _staleness_scenario():
-    """Seed two variants of one project, only the first of which went stale.
+        project = uuid.uuid4()
+        variant = _make_variant(project, "a")
+        openssl = _make_finding("CVE-2026-4003", "openssl")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, openssl.id)],
+            commit=True,
+        )
+        assessment_id = assessment.id
 
-    ``stale`` runs openssl 2.0.0 — and is still affected by the same CVE
-    there, which is what makes 2.0.0 supersede the analyst's verdict on
-    1.0.0 — so its assessment is outdated.  ``current`` still runs openssl
-    1.0.0, so its assessment, on the very same finding, is not.  Dropping the
-    variant half of any join therefore changes the answer.
+        removed = remove_target(assessment_id, variant.id, openssl.id)
+
+        assert removed is True
+        assert db.session.get(Assessment, assessment_id) is None
+
+
+def test_remove_target_is_false_for_an_unknown_target(app):
+    """remove_target reports False instead of raising for a target that isn't there."""
+    with app.app_context():
+        from src.helpers.outdated_cleanup import remove_target
+        from src.models.assessment import Assessment
+
+        project = uuid.uuid4()
+        variant = _make_variant(project, "a")
+        openssl = _make_finding("CVE-2026-4004", "openssl")
+        zlib = _make_finding("CVE-2026-4004", "zlib")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, openssl.id)],
+            commit=True,
+        )
+
+        assert remove_target(assessment.id, variant.id, zlib.id) is False
+        assert remove_target(uuid.uuid4(), variant.id, openssl.id) is False
+
+
+def test_split_outdated_keeps_an_assessment_whose_other_targets_are_current(app):
+    """A partly-superseded assessment is stripped, not deleted.
+
+    ``annotate_assessments_outdated`` flags the whole assessment as soon as one
+    package name goes stale, but the record now covers several targets: the
+    ones that are still current must keep the analyst's verdict.
     """
-    from src.extensions import db
-    from src.models.finding import Finding
-    from src.models.observation import Observation
-    from src.models.package import Package
-    from src.models.project import Project
-
-    project = Project.create(name="cleanup")
-    stale_variant = _variant(project.id, "stale")
-    current_variant = _variant(project.id, "current")
-
-    old_finding = _finding("CVE-2026-8000", "openssl", "1.0.0")
-    new_package = Package.find_or_create("openssl", "2.0.0")
-    db.session.commit()
-    new_finding = Finding.get_or_create(new_package.id, "CVE-2026-8000")
-    db.session.commit()
-
-    stale_scan = _sbom_scan(stale_variant.id, [new_package], name="stale-sbom")
-    Observation.create(finding_id=new_finding.id, scan_id=stale_scan.id)
-    db.session.commit()
-    _sbom_scan(current_variant.id, [db.session.get(Package, old_finding.package_id)],
-               name="current-sbom")
-
-    stale_assessment = _custom_assessment(stale_variant.id, old_finding.id)
-    current_assessment = _custom_assessment(current_variant.id, old_finding.id)
-    return {
-        "stale_variant": stale_variant.id,
-        "current_variant": current_variant.id,
-        "finding": old_finding.id,
-        "new_finding": new_finding.id,
-        "stale_assessment": stale_assessment.id,
-        "current_assessment": current_assessment.id,
-    }
-
-
-class TestOutdatedAssessments:
-    """``_outdated_assessments`` reads variant and finding from the target row."""
-
-    def test_matches_the_scalar_query_on_mirrored_data(self, app):
-        with app.app_context():
-            from src.helpers.outdated_cleanup import _outdated_assessments
-
-            ids = _staleness_scenario()
-
-            oracle = _scalar_outdated_assessments()
-            migrated = _outdated_assessments()
-
-            assert [a["uuid"] for a in oracle] == [ids["stale_assessment"]]
-            assert [a["uuid"] for a in migrated] == [ids["stale_assessment"]]
-            assert [a["variant_id"] for a in migrated] == [str(ids["stale_variant"])]
-            assert [a["finding_id"] for a in migrated] == [ids["finding"]]
-            assert [a["packages"] for a in migrated] == [["openssl@1.0.0"]]
-
-    def test_reaches_an_assessment_held_only_by_its_target_row(self, app):
-        with app.app_context():
-            from src.helpers.outdated_cleanup import _outdated_assessments
-
-            ids = _staleness_scenario()
-            _strip_scalar_mirror(ids["stale_assessment"])
-
-            assert [a["uuid"] for a in _scalar_outdated_assessments()] == []
-            assert [a["uuid"] for a in _outdated_assessments()] == [ids["stale_assessment"]]
-
-    def test_skips_the_target_less_legacy_assessment(self, app):
-        """A variant-less custom-data import has no variant to be stale in."""
-        with app.app_context():
-            from src.helpers.outdated_cleanup import _outdated_assessments
-
-            ids = _staleness_scenario()
-            _drop_target_rows(ids["stale_assessment"])
-
-            assert [a["uuid"] for a in _scalar_outdated_assessments()] == []
-            assert [a["uuid"] for a in _outdated_assessments()] == []
-
-
-class TestDeleteOrphanedFindings:
-    """Reachability of a finding runs through targets *and* the scalar mirror."""
-
-    def test_reaps_a_finding_nothing_references(self, app):
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import _delete_orphaned_findings
-            from src.models.finding import Finding
-            from src.models.project import Project
-
-            _variant(Project.create(name="orphans").id, "a")
-            orphan = _finding("CVE-2026-8010", "curl")
-
-            assert _scalar_orphan_finding_ids({orphan.id}) == [orphan.id]
-            assert _delete_orphaned_findings({orphan.id}) == (1, {"CVE-2026-8010"})
-            assert _fetch(Finding, orphan.id) is None
-
-    def test_keeps_a_finding_reached_only_by_a_target_row(self, app):
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import _delete_orphaned_findings
-            from src.models.finding import Finding
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="orphans").id, "a")
-            held = _finding("CVE-2026-8011", "openssl")
-            assessment = _custom_assessment(variant.id, held.id)
-            _strip_scalar_mirror(assessment.id)
-
-            # The pre-PR-B query saw nothing holding it and would have deleted it.
-            assert _scalar_orphan_finding_ids({held.id}) == [held.id]
-            assert _delete_orphaned_findings({held.id}) == (0, set())
-            assert _fetch(Finding, held.id) is not None
-
-    def test_keeps_a_finding_reached_only_by_the_scalar_mirror(self, app):
-        """The target-less legacy shape still protects its finding."""
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import _delete_orphaned_findings
-            from src.models.finding import Finding
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="orphans").id, "a")
-            held = _finding("CVE-2026-8012", "zlib")
-            assessment = _custom_assessment(variant.id, held.id)
-            _drop_target_rows(assessment.id)
-
-            assert _scalar_orphan_finding_ids({held.id}) == []
-            assert _delete_orphaned_findings({held.id}) == (0, set())
-            assert _fetch(Finding, held.id) is not None
-
-    def test_reaps_a_finding_held_only_by_a_dangling_target_row(self, app):
-        """A target row whose assessment is gone must not hold a finding alive.
-
-        This is the shape an upgraded database carries: PR-A ran its bulk
-        assessment DELETE without reaping targets.  ``ba8c3978`` reaped such a
-        finding, so PR-B must too.
-        """
-        with app.app_context():
-            from src.helpers.outdated_cleanup import _delete_orphaned_findings
-            from src.models.finding import Finding
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="orphans").id, "a")
-            orphan = _finding("CVE-2026-8013", "busybox")
-            assessment = _custom_assessment(variant.id, orphan.id)
-            _dangle_target(assessment.id)
-
-            assert _target_rows() == [(assessment.id, variant.id, orphan.id)]
-            assert _scalar_orphan_finding_ids({orphan.id}) == [orphan.id]
-            assert _delete_orphaned_findings({orphan.id}) == (1, {"CVE-2026-8013"})
-            assert _fetch(Finding, orphan.id) is None
-            # The residue itself survives, exactly as it did at ba8c3978.
-            # Purging pre-existing dangling rows is a data repair, deferred to
-            # PR-D with the mirror columns.
-            assert _target_rows() == [(assessment.id, variant.id, orphan.id)]
-
-
-class TestDeleteOutdatedData:
-    """The bulk assessment delete takes the target rows with it."""
-
-    def test_deletes_the_outdated_assessment_and_its_target_row(self, app):
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import delete_outdated_data
-            from src.models.assessment import Assessment
-
-            ids = _staleness_scenario()
-
-            result = delete_outdated_data()
-
-            assert result["assessments_deleted"] == 1
-            assert _fetch(Assessment, ids["stale_assessment"]) is None
-            assert _fetch(Assessment, ids["current_assessment"]) is not None
-            # No target row may survive its assessment: a dangling one would
-            # keep the deleted assessment's finding looking referenced.
-            assert _target_rows() == [
-                (ids["current_assessment"], ids["current_variant"], ids["finding"]),
-            ]
-
-    def test_reaps_the_finding_the_deleted_assessment_held(self, app):
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import delete_outdated_data
-            from src.models.finding import Finding
-            from src.models.observation import Observation
-            from src.models.package import Package
-            from src.models.project import Project
-
-            project = Project.create(name="cleanup-solo")
-            variant = _variant(project.id, "stale")
-            old_finding_id = _finding("CVE-2026-8020", "openssl", "1.0.0").id
-            new_package = Package.find_or_create("openssl", "2.0.0")
-            db.session.commit()
-            new_finding = Finding.get_or_create(new_package.id, "CVE-2026-8020")
-            db.session.commit()
-            scan = _sbom_scan(variant.id, [new_package], name="stale-sbom")
-            Observation.create(finding_id=new_finding.id, scan_id=scan.id)
-            db.session.commit()
-            _custom_assessment(variant.id, old_finding_id)
-
-            result = delete_outdated_data()
-
-            assert result["assessments_deleted"] == 1
-            assert result["findings_deleted"] == 1
-            assert _fetch(Finding, old_finding_id) is None
-            assert _target_rows() == []
-
-
-class TestOrphanedVulnerabilitiesPreview:
-    """Assessment counts are aggregated through the target rows."""
-
-    def test_matches_the_scalar_count_on_mirrored_data(self, app):
-        with app.app_context():
-            from src.helpers.outdated_cleanup import orphaned_vulnerabilities_preview
-            from src.models.project import Project
-
-            project = Project.create(name="preview")
-            variant_a = _variant(project.id, "a")
-            variant_b = _variant(project.id, "b")
-            finding = _finding("CVE-2026-8030", "openssl")
-            other = _finding("CVE-2026-8031", "zlib")
-            _custom_assessment(variant_a.id, finding.id)
-            _custom_assessment(variant_b.id, finding.id)
-            _custom_assessment(variant_a.id, other.id)
-
-            assert _scalar_assessment_counts(["CVE-2026-8030", "CVE-2026-8031"]) == {
-                "CVE-2026-8030": 2, "CVE-2026-8031": 1,
-            }
-            assert orphaned_vulnerabilities_preview() == [
-                {"id": "CVE-2026-8030", "assessments": 2},
-                {"id": "CVE-2026-8031", "assessments": 1},
-            ]
-
-    def test_counts_an_assessment_held_only_by_its_target_row(self, app):
-        with app.app_context():
-            from src.helpers.outdated_cleanup import orphaned_vulnerabilities_preview
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="preview").id, "a")
-            finding = _finding("CVE-2026-8032", "openssl")
-            assessment = _custom_assessment(variant.id, finding.id)
-            _strip_scalar_mirror(assessment.id)
-
-            assert _scalar_assessment_counts(["CVE-2026-8032"]) == {}
-            assert orphaned_vulnerabilities_preview() == [
-                {"id": "CVE-2026-8032", "assessments": 1},
-            ]
-
-    def test_counts_the_target_less_legacy_assessment(self, app):
-        with app.app_context():
-            from src.helpers.outdated_cleanup import orphaned_vulnerabilities_preview
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="preview").id, "a")
-            finding = _finding("CVE-2026-8033", "openssl")
-            assessment = _custom_assessment(variant.id, finding.id)
-            _drop_target_rows(assessment.id)
-
-            assert _scalar_assessment_counts(["CVE-2026-8033"]) == {"CVE-2026-8033": 1}
-            assert orphaned_vulnerabilities_preview() == [
-                {"id": "CVE-2026-8033", "assessments": 1},
-            ]
-
-
-class TestDeleteOrphanedVulnerabilities:
-    """The assessments to delete are collected through the target rows."""
-
-    def test_matches_the_scalar_selection_on_mirrored_data(self, app):
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import delete_orphaned_vulnerabilities
-            from src.models.assessment import Assessment
-            from src.models.finding import Finding
-            from src.models.project import Project
-
-            project = Project.create(name="orphan-vulns")
-            variant = _variant(project.id, "a")
-            finding_id = _finding("CVE-2026-8040", "openssl").id
-            assessment_id = _custom_assessment(variant.id, finding_id).id
-
-            assert _scalar_assessment_ids_for_findings([finding_id]) == {assessment_id}
-
-            result = delete_orphaned_vulnerabilities()
-
-            assert result == {
-                "vulnerabilities_deleted": 1, "assessments_deleted": 1, "findings_deleted": 1,
-            }
-            assert _fetch(Assessment, assessment_id) is None
-            assert _fetch(Finding, finding_id) is None
-            assert _target_rows() == []
-
-    def test_deletes_an_assessment_held_only_by_its_target_row(self, app):
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import delete_orphaned_vulnerabilities
-            from src.models.assessment import Assessment
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="orphan-vulns").id, "a")
-            finding_id = _finding("CVE-2026-8041", "openssl").id
-            assessment_id = _custom_assessment(variant.id, finding_id).id
-            _strip_scalar_mirror(assessment_id)
-
-            # The pre-PR-B selection could not see it, and left it behind
-            # pointing at a deleted finding.
-            assert _scalar_assessment_ids_for_findings([finding_id]) == set()
-
-            result = delete_orphaned_vulnerabilities()
-
-            assert result == {
-                "vulnerabilities_deleted": 1, "assessments_deleted": 1, "findings_deleted": 1,
-            }
-            assert _fetch(Assessment, assessment_id) is None
-            assert _target_rows() == []
-
-    def test_deletes_the_target_less_legacy_assessment(self, app):
-        """The variant-less custom-data import shape is still collected."""
-        with app.app_context():
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import delete_orphaned_vulnerabilities
-            from src.models.assessment import Assessment
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="orphan-vulns").id, "a")
-            finding_id = _finding("CVE-2026-8042", "openssl").id
-            assessment_id = _custom_assessment(variant.id, finding_id).id
-            _drop_target_rows(assessment_id)
-
-            assert _scalar_assessment_ids_for_findings([finding_id]) == {assessment_id}
-
-            result = delete_orphaned_vulnerabilities()
-
-            assert result == {
-                "vulnerabilities_deleted": 1, "assessments_deleted": 1, "findings_deleted": 1,
-            }
-            assert _fetch(Assessment, assessment_id) is None
-
-    def test_does_not_count_a_dangling_target_row_as_an_assessment(self, app):
-        """A target row whose assessment is gone must not inflate the count."""
-        with app.app_context():
-            from src.helpers.outdated_cleanup import delete_orphaned_vulnerabilities
-            from src.models.assessment import Assessment
-            from src.models.finding import Finding
-            from src.models.project import Project
-
-            variant = _variant(Project.create(name="orphan-vulns").id, "a")
-            finding_id = _finding("CVE-2026-8045", "openssl").id
-            live_id = _custom_assessment(variant.id, finding_id).id
-            dead_id = _custom_assessment(variant.id, finding_id).id
-            _dangle_target(dead_id)
-
-            # ba8c3978 collected assessments by the scalar mirror, so the
-            # deleted assessment's residue contributed nothing.
-            assert _scalar_assessment_ids_for_findings([finding_id]) == {live_id}
-            assert _target_rows() == sorted([
-                (live_id, variant.id, finding_id),
-                (dead_id, variant.id, finding_id),
-            ])
-
-            result = delete_orphaned_vulnerabilities()
-
-            assert result == {
-                "vulnerabilities_deleted": 1, "assessments_deleted": 1, "findings_deleted": 1,
-            }
-            assert _fetch(Assessment, live_id) is None
-            assert _fetch(Finding, finding_id) is None
-            assert _target_rows() == []
-
-    def test_leaves_an_assessment_of_a_different_finding_alone(self, app):
-            from src.extensions import db
-            from src.helpers.outdated_cleanup import delete_orphaned_vulnerabilities
-            from src.models.assessment import Assessment
-            from src.models.observation import Observation
-            from src.models.project import Project
-            from src.models.scan import Scan
-
-            project = Project.create(name="orphan-vulns")
-            variant_id = _variant(project.id, "a").id
-            doomed_id = _finding("CVE-2026-8043", "openssl").id
-            kept_id = _finding("CVE-2026-8044", "zlib").id
-            doomed_assessment_id = _custom_assessment(variant_id, doomed_id).id
-            kept_assessment_id = _custom_assessment(variant_id, kept_id).id
-            scan = Scan.create("tool", variant_id, scan_type="tool")
-            Observation.create(finding_id=kept_id, scan_id=scan.id)
-            db.session.commit()
-
-            result = delete_orphaned_vulnerabilities()
-
-            assert result == {
-                "vulnerabilities_deleted": 1, "assessments_deleted": 1, "findings_deleted": 1,
-            }
-            assert _fetch(Assessment, doomed_assessment_id) is None
-            assert _fetch(Assessment, kept_assessment_id) is not None
-            assert _target_rows() == [(kept_assessment_id, variant_id, kept_id)]
+    with app.app_context():
+        from src.helpers.outdated_cleanup import _split_outdated_by_target
+        from src.models.assessment import Assessment
+
+        project = uuid.uuid4()
+        variant_a = _make_variant(project, "a")
+        variant_b = _make_variant(project, "b")
+        openssl = _make_finding("CVE-2026-4005", "openssl")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, openssl.id), (variant_b.id, openssl.id)],
+            commit=True,
+        )
+
+        # Only variant A's copy of openssl was superseded.
+        fully_stale, partial = _split_outdated_by_target([{
+            "uuid": assessment.id,
+            "stale_targets": [{"variant_id": str(variant_a.id), "package_name": "openssl"}],
+        }])
+
+        assert fully_stale == []
+        assert partial == [(assessment.id, variant_a.id, openssl.id)]
+
+
+def test_split_outdated_deletes_an_assessment_whose_targets_are_all_stale(app):
+    """Every target superseded → whole-record delete, as before multi-target."""
+    with app.app_context():
+        from src.helpers.outdated_cleanup import _split_outdated_by_target
+        from src.models.assessment import Assessment
+
+        project = uuid.uuid4()
+        variant_a = _make_variant(project, "a")
+        variant_b = _make_variant(project, "b")
+        openssl = _make_finding("CVE-2026-4006", "openssl")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, openssl.id), (variant_b.id, openssl.id)],
+            commit=True,
+        )
+
+        fully_stale, partial = _split_outdated_by_target([{
+            "uuid": assessment.id,
+            "stale_targets": [
+                {"variant_id": str(variant_a.id), "package_name": "openssl"},
+                {"variant_id": str(variant_b.id), "package_name": "openssl"},
+            ],
+        }])
+
+        assert fully_stale == [assessment.id]
+        assert partial == []
+
+
+def test_split_outdated_falls_back_to_whole_delete_without_target_detail(app):
+    """No per-target detail → pre-multi-target behaviour (delete the record)."""
+    with app.app_context():
+        from src.helpers.outdated_cleanup import _split_outdated_by_target
+        from src.models.assessment import Assessment
+
+        project = uuid.uuid4()
+        variant = _make_variant(project, "a")
+        openssl = _make_finding("CVE-2026-4007", "openssl")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant.id, openssl.id)],
+            commit=True,
+        )
+
+        fully_stale, partial = _split_outdated_by_target([
+            {"uuid": assessment.id, "stale_targets": []},
+        ])
+
+        assert fully_stale == [assessment.id]
+        assert partial == []
+
+
+def test_delete_outdated_data_strips_stale_targets_without_losing_the_verdict(app):
+    """The public entry point keeps a partly-stale assessment alive."""
+    with app.app_context():
+        from unittest.mock import patch
+
+        from src.extensions import db
+        from src.helpers import outdated_cleanup
+        from src.models.assessment import Assessment
+
+        project = uuid.uuid4()
+        variant_a = _make_variant(project, "a")
+        variant_b = _make_variant(project, "b")
+        openssl = _make_finding("CVE-2026-4008", "openssl")
+        assessment = Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(variant_a.id, openssl.id), (variant_b.id, openssl.id)],
+            commit=True,
+        )
+        assessment_id = assessment.id
+
+        outdated = [{
+            "id": str(assessment_id),
+            "uuid": assessment_id,
+            "finding_ids": [],
+            "stale_targets": [{"variant_id": str(variant_a.id), "package_name": "openssl"}],
+        }]
+        with patch.object(outdated_cleanup, "_outdated_assessments", return_value=outdated):
+            result = outdated_cleanup.delete_outdated_data()
+
+        assert result["assessments_deleted"] == 0
+        assert result["assessment_targets_removed"] == 1
+        survivor = db.session.get(Assessment, assessment_id)
+        assert survivor is not None
+        assert survivor.targets == [(variant_b.id, openssl.id)]
