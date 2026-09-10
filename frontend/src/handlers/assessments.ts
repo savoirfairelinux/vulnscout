@@ -15,11 +15,24 @@ type VulnText = {
     content: string;
 }
 
+/** One (variant, package) pair an assessment actually applies to. */
+type AssessmentTargetPair = {
+    variant_id: string | null;
+    package: string;
+};
+
 type Assessment = {
     id: string;
     vuln_id: string;
     packages: string[];
     variant_id?: string;
+    variant_ids?: string[];
+    /** The exact pairs this assessment covers.
+     *
+     *  ``packages`` and ``variant_ids`` are two independent flattened sets, so
+     *  crossing them describes pairs that were never assessed.  Absent on
+     *  payloads that predate the field. */
+    targets?: AssessmentTargetPair[];
     origin: string;
     status: string;
     simplified_status: string;
@@ -39,7 +52,68 @@ type Assessment = {
     details_loaded?: boolean;
 };
 
-export type { Assessment };
+export type { Assessment, AssessmentTargetPair };
+
+/** Every variant this assessment applies to.
+ *
+ *  ``variant_ids`` carries the full target set.  ``variant_id`` is only a
+ *  convenience shorthand the API fills in when every target shares one
+ *  variant, so it is ``null`` for a genuine cross-variant assessment and must
+ *  never be used on its own to decide which variants an assessment covers.
+ *  Falls back to ``variant_id`` for payloads that predate ``variant_ids``.
+ */
+const assessmentVariantIds = (assessment: Assessment): string[] => {
+    if (assessment.variant_ids && assessment.variant_ids.length > 0) return assessment.variant_ids;
+    return assessment.variant_id ? [assessment.variant_id] : [];
+};
+
+/** True when *assessment* targets *variantId*. */
+const appliesToVariant = (assessment: Assessment, variantId: string): boolean =>
+    assessmentVariantIds(assessment).includes(variantId);
+
+/** The packages this assessment covers *within* one variant.
+ *
+ *  Falls back to the whole package list for payloads with no target pairs,
+ *  which is what the flat schema's one-variant-per-record shape meant.
+ */
+const assessmentPackagesInVariant = (assessment: Assessment, variantId: string): string[] => {
+    if (assessment.targets && assessment.targets.length > 0) {
+        return assessment.targets
+            .filter(target => target.variant_id === variantId)
+            .map(target => target.package);
+    }
+    return appliesToVariant(assessment, variantId) ? assessment.packages : [];
+};
+
+/** True when *assessment* covers the exact (variantId, pkg) pair.
+ *
+ *  Never test variant membership and package membership separately: an
+ *  assessment covering (A, openssl) and (B, zlib) passes both tests for
+ *  (A, zlib), a pair nobody assessed.
+ */
+const coversTarget = (assessment: Assessment, variantId: string, pkg: string): boolean =>
+    assessmentPackagesInVariant(assessment, variantId).includes(pkg);
+
+/** Identity of the (variant, package) pairs an assessment covers.
+ *
+ *  Crossing `packages` with `variant_ids` cannot tell (A,openssl)+(B,zlib) apart
+ *  from (A,zlib)+(B,openssl), so two different assessments would share a key and
+ *  one would be dropped as a duplicate. Falls back to the flat sets for payloads
+ *  with no target pairs, which is what the one-variant-per-record shape meant.
+ */
+const assessmentCoverageKey = (assessment: Assessment): string => {
+    if (assessment.targets && assessment.targets.length > 0) {
+        return assessment.targets
+            .map(target => JSON.stringify([target.variant_id ?? '', target.package]))
+            .sort()
+            .join(',');
+    }
+    const packagesKey = [...assessment.packages].sort().join(',');
+    const variantsKey = assessmentVariantIds(assessment).slice().sort().join(',');
+    return `${packagesKey}::${variantsKey}`;
+};
+
+export { assessmentVariantIds, appliesToVariant, assessmentPackagesInVariant, coversTarget };
 
 type AssessmentTarget = {
     variant_id: string | null;
@@ -123,6 +197,13 @@ const asStringArray = (data: any): string[] => {
     return data.filter((item: any) => typeof item === "string");
 }
 
+const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
+    data
+        .filter((item: any) => item && typeof item === "object"
+            && typeof item.package === "string"
+            && (item.variant_id === null || typeof item.variant_id === "string"))
+        .map((item: any) => ({ variant_id: item.variant_id, package: item.package }));
+
 const asAssessment = (data: any): Assessment | [] => {
     if (Array.isArray(data)) {
         const [id, vuln_id, packageId, variant_id, timestamp, status] = data;
@@ -135,6 +216,8 @@ const asAssessment = (data: any): Assessment | [] => {
             vuln_id,
             packages: packageId ? [packageId] : [],
             variant_id,
+            variant_ids: variant_id ? [variant_id] : [],
+            targets: packageId && variant_id ? [{ variant_id, package: packageId }] : [],
             timestamp,
             status,
             details_loaded: false,
@@ -150,6 +233,7 @@ const asAssessment = (data: any): Assessment | [] => {
         vuln_id: data.vuln_id,
         packages: asStringArray(data?.packages),
         variant_id: undefined,
+        variant_ids: [],
         origin: typeof data?.origin === "string" ? data.origin : "sbom",
         status: data.status,
         simplified_status: `[invalid status] ${data.status}`,
@@ -165,6 +249,8 @@ const asAssessment = (data: any): Assessment | [] => {
     if (typeof STATUS_VEX_TO_GRAPH?.[data.status] === "string")
         item.simplified_status = STATUS_VEX_TO_GRAPH[data.status];
     if (typeof data?.variant_id === "string") item.variant_id = data.variant_id;
+    if (Array.isArray(data?.variant_ids)) item.variant_ids = asStringArray(data.variant_ids);
+    if (Array.isArray(data?.targets)) item.targets = asTargetPairs(data.targets);
     if (typeof data?.status_notes === "string") item.status_notes = data.status_notes;
     if (typeof data?.justification === "string") item.justification = data.justification;
     if (typeof data?.impact_statement === "string") item.impact_statement = data.impact_statement;
@@ -191,8 +277,7 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
     const uniqueAssessments: Assessment[] = [];
 
     for (const assessment of assessments) {
-        // Create a unique key using vuln_id, packages, status, and descriptions
-        const packagesKey = assessment.packages.sort().join(',');
+        // Create a unique key using vuln_id, target coverage, status, and descriptions
         const descriptionsKey = [
             assessment.status_notes || '',
             assessment.justification || '',
@@ -200,7 +285,7 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
             assessment.workaround || ''
         ].join('|');
 
-        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}::${assessment.variant_id ?? ''}`;
+        const duplicateKey = `${assessment.vuln_id}::${assessmentCoverageKey(assessment)}::${assessment.status}::${descriptionsKey}`;
 
         if (!seen.has(duplicateKey)) {
             seen.add(duplicateKey);
@@ -210,6 +295,10 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
 
     return uniqueAssessments;
 }
+
+/** A group is user-facing shorthand for "more than one (variant, package)
+ *  target under one assessment id" — a single target is just an assessment. */
+const isMultiTargetGroup = (targets: AssessmentTarget[]): boolean => targets.length > 1;
 
 class Assessments {
     /**
@@ -413,4 +502,4 @@ class Assessments {
 }
 
 export default Assessments;
-export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment, removeDuplicateAssessments };
+export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment, removeDuplicateAssessments, isMultiTargetGroup };
