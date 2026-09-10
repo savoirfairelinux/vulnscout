@@ -277,6 +277,16 @@ describe('removeDuplicateAssessments', () => {
     expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
   });
 
+  test('an empty targets array is treated as duplicate-equivalent to an absent one', () => {
+    // The dedup coverage key falls back to the flat packages/variant_ids sets
+    // whenever `targets` is missing OR empty -- both must produce the same
+    // key so two assessments differing only in that shape are still deduped.
+    const a1 = makeSparse({ id: 'a1', variant_id: 'v1', variant_ids: ['v1'], packages: ['pkg@1.0'], targets: [] });
+    const { targets, ...withoutTargets } = a1;
+    const a2 = makeSparse({ ...withoutTargets, id: 'a2' });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
+
   test('single-pair compact-shaped assessments still dedup', () => {
     const a1 = makeAssessment({
       id: 'a1',
@@ -543,6 +553,15 @@ describe('assessmentVariantIds / appliesToVariant', () => {
     expect(assessmentVariantIds(a)).toEqual([]);
     expect(appliesToVariant(a, 'v1')).toBe(false);
   });
+
+  test('falls back to variant_id when variant_ids is an empty array, not absent', () => {
+    // Every object-payload assessment gets `variant_ids: []` set unconditionally
+    // (see asAssessment), so a payload carrying only the legacy `variant_id`
+    // still has an (empty) `variant_ids` array alongside it. The guard must
+    // treat that empty array the same as "absent" and fall back.
+    const a = make({ variant_id: 'v1', variant_ids: [] });
+    expect(assessmentVariantIds(a)).toEqual(['v1']);
+  });
 });
 
 describe('target pairs', () => {
@@ -609,5 +628,28 @@ describe('target pairs', () => {
     expect(coversTarget(assessment, 'A', 'openssl@1.0')).toBe(true);
     expect(coversTarget(assessment, 'A', 'zlib@1.0')).toBe(true);
     expect(coversTarget(assessment, 'B', 'openssl@1.0')).toBe(false);
+  });
+
+  test('an empty targets array falls back to the flat packages list, not to []', () => {
+    // asAssessment never emits `targets: []` itself, but the guard is written
+    // against the shape, not the producer -- pin it directly.
+    const assessment = { ...sparse, variant_id: 'v1', variant_ids: ['v1'], packages: ['p'], targets: [] } as any;
+    expect(assessmentPackagesInVariant(assessment, 'v1')).toEqual(['p']);
+  });
+
+  test('a null-variant target pair matches no variant and suppresses the flat fallback', () => {
+    // The type permits `variant_id: null` on a target pair, and the backend
+    // never emits this shape today (a null variant paired with a real
+    // package) -- but the helper's behavior for it is worth pinning since the
+    // type allows it. A non-empty `targets` array always wins over the flat
+    // `packages` fallback, and no real variant id equals `null`, so this
+    // assessment covers nothing under any variant.
+    const assessment = {
+      ...sparse,
+      packages: ['p'],
+      targets: [{ variant_id: null, package: 'p' }],
+    } as any;
+    expect(assessmentPackagesInVariant(assessment, 'anyVariantId')).toEqual([]);
+    expect(coversTarget(assessment, 'anyVariantId', 'p')).toBe(false);
   });
 });
