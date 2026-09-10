@@ -1361,18 +1361,19 @@ def init_app(app: Flask) -> None:
                 + ", ".join(unobserved)
             }, 400
 
-        requested_group_id: UUID | None = None
         if payload_data.get("group_id"):
-            requested_group_id, err = parse_uuid_or_400(
-                payload_data["group_id"], "group_id")
-            if err:
-                return err
-            if requested_group_id is not None:
-                existing_group_rows = load_group(requested_group_id)
-                if not existing_group_rows:
-                    return {"error": "Group not found"}, 404
-                if (existing_group_rows[0].vuln_id or "").upper() != vuln_id.upper():
-                    return {"error": "vuln_id does not match this group's vulnerability"}, 400
+            # PK-based grouping makes "group" and "assessment" the same row,
+            # and this endpoint always creates a brand-new one -- it has no
+            # way to extend an existing group.  Silently ignoring group_id
+            # here used to create an unrelated new group per variant instead
+            # of the edit the caller asked for; reject loudly instead so the
+            # caller gets an actionable error rather than silent wrong
+            # behaviour.
+            return {
+                "error": "group_id is not supported on this endpoint; use "
+                "POST /api/assessment-groups/<group_id>/reconcile to modify "
+                "an existing group"
+            }, 400
 
         targets = [(variant_id, finding.id) for (_pkg, variant_id), finding in resolved.items()]
 
@@ -1508,6 +1509,15 @@ def init_app(app: Flask) -> None:
                 # group_id is the row's own id, so no preload step is needed
                 # to serialize it.
                 results = [row.to_dict() for row in created_rows]
+        except GroupInvariantError as e:
+            return {
+                "status": "error",
+                "assessments": [],
+                "count": 0,
+                "vuln_count": 0,
+                "errors": [{"error": str(e)}],
+                "error_count": 1,
+            }, 400
         except Exception as e:
             return {
                 "status": "error",

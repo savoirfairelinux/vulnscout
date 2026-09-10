@@ -1228,11 +1228,26 @@ def import_custom_data(
                     "vuln_id": vuln_name,
                     "error": (
                         f"Variant '{variant_token}' not found" if variant_token not in (None, "")
-                        else "No variant specified"
+                        else "No variant specified: every assessment must name a"
+                        " variant ('variant' or 'variant_id'). Records exported"
+                        " before assessments required an explicit variant can no"
+                        " longer be imported this way -- re-export the data in"
+                        " the current format if possible."
                     ),
                 })
                 continue
 
+            # Resolve every package first, accumulating a per-package error
+            # for any that fail, then create ONE assessment row covering
+            # every target this entry resolved.  DBAssessment.create already
+            # accepts a list of (variant_id, finding_id) pairs and creates a
+            # single fused row from it -- exactly how the version-2 branch
+            # above and the HTTP write paths in routes/assessments.py work --
+            # so a v1 entry naming several packages under one variant is not
+            # forced by the schema to fan out into several independent,
+            # ungrouped assessments.
+            resolved_pkg_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
+            seen_pkg_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
             for pkg_string_id in pkg_ids:
                 try:
                     if "::" in pkg_string_id:
@@ -1246,39 +1261,54 @@ def import_custom_data(
                     db_pkg = Package.find_or_create(name, version, supplier=_supplier)
                     DBVuln.get_or_create(vuln_name)
                     finding = Finding.get_or_create(db_pkg.id, vuln_name)
-
-                    existing = duplicate_multitarget_assessment_exists(
-                        [(target_variant_id, finding.id)],
-                        status=status,
-                        origin=origin,
-                        timestamp=imported_ts,
-                    )
-                    if existing:
-                        result[skipped_key] += 1
-                        continue
-
-                    DBAssessment.create(
-                        status=status,
-                        simplified_status=STATUS_TO_SIMPLIFIED.get(
-                            status, "Pending Assessment"
-                        ),
-                        targets=[(target_variant_id, finding.id)],
-                        origin=origin,
-                        status_notes=status_notes,
-                        justification=justification,
-                        impact_statement=impact_statement,
-                        workaround=workaround,
-                        responses=[],
-                        timestamp=imported_ts,
-                        commit=True,
-                    )
-                    result[imported_key] += 1
                 except Exception as e:
                     result["errors"].append({
                         "vuln_id": vuln_name,
                         "package": pkg_string_id,
                         "error": str(e),
                     })
+                    continue
+
+                pair = (target_variant_id, finding.id)
+                if pair in seen_pkg_pairs:
+                    continue
+                seen_pkg_pairs.add(pair)
+                resolved_pkg_targets.append(pair)
+
+            if not resolved_pkg_targets:
+                continue
+
+            # Duplicate detection works on the complete target set, matching
+            # the version-2 branch above: checking each package on its own
+            # would drop a target that happens to exist as its own
+            # single-target assessment, and import an assessment narrower
+            # than the one exported.
+            existing = duplicate_multitarget_assessment_exists(
+                resolved_pkg_targets, status=status, origin=origin, timestamp=imported_ts,
+            )
+            if existing:
+                result[skipped_key] += 1
+                continue
+
+            try:
+                DBAssessment.create(
+                    status=status,
+                    simplified_status=STATUS_TO_SIMPLIFIED.get(
+                        status, "Pending Assessment"
+                    ),
+                    targets=resolved_pkg_targets,
+                    origin=origin,
+                    status_notes=status_notes,
+                    justification=justification,
+                    impact_statement=impact_statement,
+                    workaround=workaround,
+                    responses=[],
+                    timestamp=imported_ts,
+                    commit=True,
+                )
+                result[imported_key] += 1
+            except Exception as e:
+                result["errors"].append({"vuln_id": vuln_name, "error": str(e)})
 
     # Import pending AI assessments separately so the Review page continues to
     # surface them in its AI Assessments tab for approval or rejection.

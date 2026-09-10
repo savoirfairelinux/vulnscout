@@ -357,7 +357,12 @@ def _delete_orphaned_findings(finding_ids: set[uuid.UUID]) -> tuple[int, set[str
                 .where(~Finding.observations.any())
                 # A finding held only by a multi-target assessment is still
                 # referenced, so reachability runs through assessment_targets.
-                .where(~Finding.assessment_targets.any())
+                # A target row whose assessment is gone (residue from a bulk
+                # Core DML delete that bypassed the ORM cascade -- sqlite
+                # foreign_keys stays off in this application) must not count
+                # as a reference: ``AssessmentTarget.assessment.has()`` keeps
+                # only target rows whose parent assessment still exists.
+                .where(~Finding.assessment_targets.any(AssessmentTarget.assessment.has()))
                 .where(~Finding.time_estimates.any())
             ).all()
         )
@@ -711,12 +716,20 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
                 .where(AssessmentTarget.finding_id.in_(finding_id_chunk))
             ).tuples().all())
         candidate_assessment_ids = {assessment_id for assessment_id, _, _ in target_triples}
+        # A target row whose assessment is already gone (residue from a bulk
+        # Core DML delete that bypassed the ORM cascade) must not inflate the
+        # count below: it was never "deleted" by this run.  Snapshot which
+        # candidates genuinely still exist before reaping.
+        pre_existing_assessment_ids = {
+            assessment_id for assessment_id in candidate_assessment_ids
+            if db.session.get(Assessment, assessment_id) is not None
+        }
         for assessment_id, variant_id, finding_id in target_triples:
             remove_target(assessment_id, variant_id, finding_id)
         # An assessment is deleted only once every one of its targets has been
         # reaped (remove_target keeps siblings alive), so count what's gone.
         assessments_deleted = sum(
-            1 for assessment_id in candidate_assessment_ids
+            1 for assessment_id in pre_existing_assessment_ids
             if db.session.get(Assessment, assessment_id) is None
         )
 

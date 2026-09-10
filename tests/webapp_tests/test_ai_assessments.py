@@ -223,48 +223,42 @@ def _add_variant(app, variant_id):
         db.session.commit()
 
 
-def test_group_id_payload_no_longer_merges_writes_across_variants(client, app):
+def test_group_id_payload_is_rejected_across_variants(client, app):
     """Joining an existing group at write time is out of scope for this
     phase (a group only grows through reconcile, once it already holds real
-    targets — see test_post_endpoints.py). Posting a second AI write with an
-    existing assessment's id as ``group_id`` simply creates its own,
-    independent row instead of merging into it."""
+    targets — see test_post_endpoints.py). PK-based grouping makes "group"
+    and "assessment" the same row, and this endpoint always creates a
+    brand-new one, so posting a second AI write with an existing
+    assessment's id as ``group_id`` is rejected outright with a 400 instead
+    of silently landing as its own, unrelated group."""
     other_variant = "22222222-2222-2222-2222-222222222223"
     _add_variant(app, other_variant)
 
     a1 = json.loads(_post_ai(client).data)["assessment"]["id"]
     group_id = _group_id_for(client, a1)
     a2_resp = _post_ai(client, variant_id=other_variant, group_id=group_id)
-    assert a2_resp.status_code == 200
-    a2_row = json.loads(a2_resp.data)["assessment"]
-    assert a2_row["group_id"] == a2_row["id"]
-    assert a2_row["group_id"] != group_id
+    assert a2_resp.status_code == 400
+    assert "reconcile" in json.loads(a2_resp.data)["error"]
 
+    # the first row remains untouched and still approvable
     resp = client.post(f"/api/assessment-groups/{group_id}/approve")
     assert resp.status_code == 200
     approved = {a["id"] for a in json.loads(resp.data)["assessments"]}
     assert approved == {a1}
 
-    # the sibling row remains pending, untouched by the first row's approval
-    still_pending = json.loads(client.get("/api/assessments/review/ai").data)
-    assert any(a["id"] == a2_row["id"] for a in still_pending)
 
-
-def test_joining_a_pending_ai_group_with_a_custom_row_no_longer_conflicts(client):
-    """Origin homogeneity is enforced per-row now (a group is one row, one
-    origin); the legacy ``group_id`` payload no longer fuses across writes,
-    so a mismatched-origin write is simply its own independent row rather
-    than being refused."""
+def test_group_id_payload_is_rejected_for_a_mismatched_origin_row(client):
+    """The legacy ``group_id`` payload is rejected outright regardless of
+    the target row's origin: this endpoint has no way to join an existing
+    group, custom or AI."""
     aid = _get_first_ai_id(client)
     group_id = _group_id_for(client, aid)
     r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
         "packages": [PKG2], "status": "affected", "variant_id": str(VARIANT_UUID),
         "group_id": group_id,
     })
-    assert r.status_code == 200
-    new_row = json.loads(r.data)["assessment"]
-    assert new_row["origin"] == "custom"
-    assert new_row["group_id"] == new_row["id"]
+    assert r.status_code == 400
+    assert "reconcile" in json.loads(r.data)["error"]
 
     # the pending AI row must remain untouched and still approvable
     listed = json.loads(client.get("/api/assessments/review/ai").data)

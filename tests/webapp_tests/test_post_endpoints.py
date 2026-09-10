@@ -619,11 +619,14 @@ def test_single_package_assessment_is_its_own_group(client, demo_ids):
     assert row["group_id"] == row["id"]
 
 
-def test_payload_group_id_no_longer_merges_writes_into_one_group(client, demo_ids):
+def test_payload_group_id_is_rejected_instead_of_silently_ignored(client, demo_ids):
     """Joining an existing group at write time is out of scope for this
-    phase: a group only grows through reconcile, once it already holds real
-    targets. The legacy ``group_id`` payload still validates the referenced
-    group exists, but the new row remains its own, separate group."""
+    phase: a group only grows through reconcile. PK-based grouping makes
+    "group" and "assessment" the same row, and this endpoint always creates
+    a brand-new one, so it has no way to extend an existing group. Sending a
+    ``group_id`` is rejected outright with a 400 pointing at the reconcile
+    endpoint, rather than being validated and then silently ignored (which
+    used to produce a surprising unrelated new group per variant)."""
     first = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -646,10 +649,8 @@ def test_payload_group_id_no_longer_merges_writes_into_one_group(client, demo_id
         },
     )
 
-    assert second.status_code == 200
-    second_row = second.get_json()["assessments"][0]
-    assert second_row["group_id"] == second_row["id"]
-    assert second_row["group_id"] != group_id
+    assert second.status_code == 400
+    assert "reconcile" in second.get_json()["error"]
 
 
 def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
@@ -678,6 +679,36 @@ def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
     for row in rows:
         assert row["group_id"] == row["id"]
         assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+
+
+def test_batch_reports_a_group_invariant_violation_as_400_not_500(client, demo_ids, monkeypatch):
+    """``add_assessment`` and the reconcile endpoint both special-case
+    ``GroupInvariantError`` as a 400; the batch endpoint must too, for
+    consistency, even though every item it builds today shares one variant
+    (and therefore one project) so the real validator cannot raise it here.
+    A stubbed ``create_assessment_record`` stands in for whatever future
+    caller could reach that branch."""
+    import src.routes.assessments as assessments_module
+    from src.models.assessment_target import GroupInvariantError
+
+    def _boom(*args, **kwargs):
+        raise GroupInvariantError("Targets cannot share an assessment: stub")
+
+    monkeypatch.setattr(assessments_module, "create_assessment_record", _boom)
+
+    response = client.post("/api/assessments/batch", json={"assessments": [
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ]})
+
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["errors"][0]["error"] == "Targets cannot share an assessment: stub"
 
 
 def test_batch_multi_variant_single_vuln_yields_two_groups(client, demo_ids):
