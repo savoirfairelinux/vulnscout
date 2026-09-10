@@ -431,12 +431,6 @@ class TestRenderMultiTargetAssessments:
             templates.render("test.jinja2", **render_kwargs)
         return captured
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_a_multi_target_assessment_renders_one_statement_per_target(self, app):
         from src.models.project import Project
         from src.models.assessment import Assessment as DBAssessment
@@ -466,12 +460,6 @@ class TestRenderMultiTargetAssessments:
             "openssl@1.0", "zlib@1.0",
         ]
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_a_cross_variant_target_is_not_leaked_into_a_scoped_report(self, app):
         """Scoping a report to one variant must not leak a sibling variant's
         target from the same multi-target assessment into that report."""
@@ -527,12 +515,6 @@ class TestRenderMultiTargetAssessments:
         assert len(vuln["assessments"]) == 1
         assert vuln["assessments"][0]["packages"] == ["openssl@1.0"]
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_ignore_before_does_not_drop_multi_target_assessments(self, app):
         """The ``ignore_before`` filter re-keys kwargs["assessments"] by the
         base assessment id, which every target of a multi-target assessment

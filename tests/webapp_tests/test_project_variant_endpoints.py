@@ -41,6 +41,7 @@ def setup_db_with_project_variant(app):
     from src.models.finding import Finding
     from src.models.observation import Observation
     from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
     from src.models.project import Project
     from src.models.variant import Variant
     from src.models.scan import Scan
@@ -96,10 +97,13 @@ def setup_db_with_project_variant(app):
             impact_statement="Fixed in version 1.17.4",
             responses=[],
             workaround="",
-            finding_id=finding_cairo.id,
-            variant_id=variant_a.id,
         )
         db.session.add(assessment_a)
+        # Direct construction bypasses Assessment.create()'s dual write, so
+        # the target row that makes this assessment reachable through the
+        # listing/filtering routes must be added explicitly.
+        db.session.add(AssessmentTarget(
+            assessment_id=assessment_a.id, variant_id=variant_a.id, finding_id=finding_cairo.id))
         db.session.commit()
 
         # --- ProjectB / VariantB -----------------------------------------

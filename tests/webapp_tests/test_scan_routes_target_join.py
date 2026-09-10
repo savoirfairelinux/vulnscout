@@ -1,21 +1,18 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for PR-B's target-join conversion of ``src/routes/scans.py``.
+"""Tests for ``src/routes/scans.py``'s tool-scan diff endpoint.
 
-Two sites there stopped reading the scalar ``Assessment.variant_id`` /
-``Assessment.finding_id`` columns and join ``assessment_targets`` instead: the
-import de-duplication (``_existing_assessment_identities``) and the
-newly-detected assessment list of a tool scan's diff.
-
-``uq_assessment_targets_assessment_id`` holds every assessment to exactly one
-target row mirroring those scalars, so the conversion has to be
-behaviour-neutral; stripping the mirror from a committed row is how a
-single-target world exhibits the PR-D shape the join must still reach.
+The import-deduplication coverage this file used to carry for
+``_existing_assessment_identities`` (a scalar-mirror vs. target-join
+equivalence check from the PR-B migration window) now lives in
+``test_scan_target_join.py``, which exercises it against a genuine
+multi-target assessment. What remains here is the one thing that file does
+not cover: the tool scan diff's ``newly_detected_assessments`` listing, at
+the HTTP level.
 """
 
 import os
-import uuid
 
 import pytest
 
@@ -49,107 +46,6 @@ def _finding(vuln_id: str, pkg_name: str, version: str = "1.0.0"):
     package = Package.find_or_create(pkg_name, version)
     db.session.commit()
     return Finding.get_or_create(package.id, vuln.id)
-
-
-def _strip_scalar_mirror(assessment_id: uuid.UUID) -> None:
-    """Clear the mirrored scalar columns, leaving only the target row."""
-    from src.extensions import db
-    from src.models.assessment import Assessment
-
-    db.session.execute(
-        db.update(Assessment)
-        .where(Assessment.id == assessment_id)
-        .values(variant_id=None, finding_id=None)
-    )
-    db.session.commit()
-    db.session.expire_all()
-
-
-def _scalar_existing_assessment_identities(variant_id, finding_ids):
-    """Pre-PR-B ``_existing_assessment_identities``, kept as the oracle."""
-    from src.extensions import db
-    from src.models.assessment import Assessment
-
-    identities: set[tuple] = set()
-    for assessment in db.session.execute(
-        db.select(Assessment).where(
-            Assessment.variant_id == variant_id,
-            Assessment.finding_id.in_(finding_ids),
-        )
-    ).scalars().all():
-        identities.add((
-            assessment.finding_id,
-            assessment.status or "",
-            assessment.simplified_status or "",
-            assessment.status_notes or "",
-            assessment.justification or "",
-            assessment.impact_statement or "",
-        ))
-    return identities
-
-
-class TestExistingAssessmentIdentities:
-    """The import de-duplication reads its (variant, finding) pair from targets."""
-
-    def _seed(self):
-        from src.extensions import db
-        from src.models.assessment import Assessment
-        from src.models.project import Project
-        from src.models.variant import Variant
-
-        project = Project.create(name="import")
-        mine = Variant.create(name="mine", project_id=project.id)
-        other = Variant.create(name="other", project_id=project.id)
-        openssl = _finding("CVE-2026-9000", "openssl")
-        zlib = _finding("CVE-2026-9001", "zlib")
-
-        wanted = Assessment.create(
-            status="not_affected", origin="custom", status_notes="mine",
-            targets=[(mine.id, openssl.id)],
-        )
-        # Same finding, a different variant: a dropped variant predicate
-        # would widen the identity set with this one.
-        Assessment.create(
-            status="affected", origin="custom", status_notes="theirs",
-            targets=[(other.id, openssl.id)],
-        )
-        # Same variant, a different finding: excluded by the finding filter.
-        Assessment.create(
-            status="affected", origin="custom", status_notes="elsewhere",
-            targets=[(mine.id, zlib.id)],
-        )
-        db.session.commit()
-        return {
-            "variant": mine.id, "other_variant": other.id,
-            "openssl": openssl.id, "zlib": zlib.id, "assessment": wanted.id,
-            "identity": (
-                openssl.id, "not_affected", wanted.simplified_status or "", "mine", "", "",
-            ),
-        }
-
-    def test_matches_the_scalar_query_on_mirrored_data(self, app):
-        with app.app_context():
-            from src.routes.scans import _existing_assessment_identities
-
-            ids = self._seed()
-
-            oracle = _scalar_existing_assessment_identities(ids["variant"], [ids["openssl"]])
-            migrated = _existing_assessment_identities(ids["variant"], [ids["openssl"]])
-
-            assert oracle == {ids["identity"]}
-            assert migrated == {ids["identity"]}
-
-    def test_reaches_an_assessment_held_only_by_its_target_row(self, app):
-        with app.app_context():
-            from src.routes.scans import _existing_assessment_identities
-
-            ids = self._seed()
-            _strip_scalar_mirror(ids["assessment"])
-
-            assert _scalar_existing_assessment_identities(
-                ids["variant"], [ids["openssl"]]) == set()
-            assert _existing_assessment_identities(
-                ids["variant"], [ids["openssl"]]) == {ids["identity"]}
 
 
 class TestNewlyDetectedAssessments:
@@ -211,20 +107,6 @@ class TestNewlyDetectedAssessments:
     def test_lists_the_new_assessment(self, app):
         with app.app_context():
             ids = self._seed(app)
-
-        response = app.test_client().get(f"/api/scans/{ids['tool_scan']}/export-diff")
-
-        assert response.status_code == 200
-        assert response.get_json()["newly_detected_assessments"] == [{
-            "vulnerability_id": "CVE-2026-9010", "status": "not_affected",
-            "simplified_status": "Pending Assessment", "justification": "",
-            "impact_statement": "", "status_notes": "note",
-        }]
-
-    def test_lists_an_assessment_held_only_by_its_target_row(self, app):
-        with app.app_context():
-            ids = self._seed(app)
-            _strip_scalar_mirror(ids["assessment"])
 
         response = app.test_client().get(f"/api/scans/{ids['tool_scan']}/export-diff")
 

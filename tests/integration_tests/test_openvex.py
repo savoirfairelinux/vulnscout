@@ -369,12 +369,6 @@ def _make_finding(vuln_id, pkg_name):
     return Finding.get_or_create(pkg.id, vuln_id)
 
 
-@pytest.mark.skip(
-    reason="Assessment.create raises GroupInvariantError for more than one target"
-    " pair (the ORM guard in Assessment.create fires before the DB is ever"
-    " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-    " constraint is never the thing that stops this -- PR-A's expand-phase"
-    " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
 def test_to_dict_multi_target_assessment_emits_non_empty_products():
     """A genuine multi-target assessment (NULL scalar variant_id/finding_id)
     must not export a statement with empty ``products`` — its packages come
@@ -402,12 +396,6 @@ def test_to_dict_multi_target_assessment_emits_non_empty_products():
     assert product_ids == {"pkg:generic/openssl@1.0", "pkg:generic/zlib@1.0"}
 
 
-@pytest.mark.skip(
-    reason="Assessment.create raises GroupInvariantError for more than one target"
-    " pair (the ORM guard in Assessment.create fires before the DB is ever"
-    " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-    " constraint is never the thing that stops this -- PR-A's expand-phase"
-    " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
 def test_to_dict_scoped_export_does_not_leak_out_of_scope_package():
     """Scoping the export to one variant must not disclose a sibling
     variant's package from the same multi-target assessment."""

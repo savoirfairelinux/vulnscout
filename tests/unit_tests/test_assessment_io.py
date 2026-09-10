@@ -665,12 +665,6 @@ class TestImportStatementsMultiTarget:
     """One OpenVEX statement (one vuln_id, multiple products) now produces one
     multi-target assessment instead of one assessment per product."""
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_openvex_import_creates_one_assessment_for_three_products(self, app, variant_and_project):
         """GIVEN one statement covering 3 products WHEN imported THEN one
         assessment is created with 3 targets."""
@@ -692,12 +686,6 @@ class TestImportStatementsMultiTarget:
             assert len(created) == 1
             assert len(Assessment.get_by_id(created[0]["id"]).targets) == 3
 
-    @pytest.mark.skip(
-        reason="group_id still resolves through AssessmentGroupMember (the"
-        " fusion Task 15 performs); an assessment written without a"
-        " membership row has no group_id of its own until PR-D lands, so"
-        " 'trivially its own group' does not hold yet. Enable once Task 15"
-        " fuses group and assessment identity.")
     def test_single_package_statement_creates_single_target_assessment(self, app, variant_and_project):
         """GIVEN one statement covering only 1 package WHEN imported THEN one
         assessment is created with exactly 1 target, trivially its own group."""
@@ -734,12 +722,6 @@ class TestImportStatementsMultiTarget:
             assert len(created) == 1
             assert len(Assessment.get_by_id(created[0]["id"]).targets) == 1
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_reimporting_the_same_multi_product_statement_is_idempotent(self, app, variant_and_project):
         """GIVEN a multi-target assessment already exists for this exact set
         of products WHEN the same statement is imported again THEN no second
@@ -773,12 +755,6 @@ class TestImportStatementsMultiTarget:
             assert len(rows) == 1
             assert len(rows[0].targets) == 3
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_overlapping_but_distinct_multi_product_statement_is_not_a_duplicate(self, app, variant_and_project):
         """GIVEN a multi-target assessment already exists WHEN a statement
         naming a target *superset* of it is imported THEN the second
@@ -825,12 +801,10 @@ class TestImportCustomDataMultiTarget:
     assessment with many targets instead."""
 
     def test_v1_multi_package_entry_still_creates_two_assessments(self, app, variant_and_project):
-        """GIVEN a version-1 entry covering 2 packages under a NAMED (targeted)
-        variant WHEN imported THEN two single-target assessments are created
-        that share a non-None group_id, matching the parent's (pre-refactor)
-        grouping behaviour for targeted multi-package imports."""
+        """GIVEN a version-1 entry covering 2 packages WHEN imported THEN two
+        independent single-target assessments are created (no fusing, no
+        shared group)."""
         from src.models.assessment import Assessment
-        from src.models.assessment_group_member import AssessmentGroupMember
 
         _, var = variant_and_project
         data = {
@@ -848,12 +822,8 @@ class TestImportCustomDataMultiTarget:
             rows = Assessment.get_by_origin([var.id], origin="custom")
             assert len(rows) == 2
             assert {len(row.targets) for row in rows} == {1}
+            # Each row is trivially its own group; none are fused together.
             assert len({row.id for row in rows}) == 2
-            group_ids = {
-                AssessmentGroupMember.get_group_id(row.id) for row in rows
-            }
-        assert len(group_ids) == 1
-        assert None not in group_ids
 
     def test_v1_single_package_entry_creates_one_assessment(self, app, variant_and_project):
         """GIVEN a version-1 entry covering only 1 package WHEN imported THEN
@@ -957,12 +927,6 @@ class TestCustomDataVersion2:
             {"variant_id": str(var.id), "variant": var.name, "package": "exp-pkg@1.0"},
         ]
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_version_2_export_round_trips_a_cross_variant_assessment(self, app):
         """A genuine multi-target (cross-variant) assessment created via
         Assessment.create(targets=...) round-trips through export/import."""
@@ -1195,12 +1159,6 @@ class TestCustomDataVersion2:
             assert len(ok_rows) == 1
             assert ok_rows[0].targets == [(variant_a.id, single_finding.id)]
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_reimporting_the_same_v2_multi_target_payload_is_idempotent(self, app, variant_and_project):
         """GIVEN a genuine multi-target assessment (2+ targets, scalar
         finding_id/variant_id both None) already exists WHEN its version-2
@@ -1242,12 +1200,6 @@ class TestCustomDataVersion2:
             assert result_2["assessments_skipped"] == 1
             assert len(rows_for("CVE-2099-DUPFIX")) == 1
 
-    @pytest.mark.skip(
-        reason="Assessment.create raises GroupInvariantError for more than one target"
-        " pair (the ORM guard in Assessment.create fires before the DB is ever"
-        " reached, so assessment_targets' uq_assessment_targets_assessment_id"
-        " constraint is never the thing that stops this -- PR-A's expand-phase"
-        " invariant, lifted only in Task 14). Enable once Task 14 drops the guard.")
     def test_v2_payload_with_overlapping_but_distinct_targets_is_not_a_duplicate(self, app, variant_and_project):
         """GIVEN a multi-target assessment exists for {a, b} WHEN a version-2
         payload naming a *different* target set {a, c} (overlapping on `a`

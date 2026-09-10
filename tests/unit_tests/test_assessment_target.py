@@ -52,34 +52,6 @@ def _variant(project_id: uuid.UUID, name: str):
 
 
 def test_assessment_exposes_its_targets_as_pairs(app):
-    """PR-A's ``uq_assessment_targets_assessment_id`` allows one row per
-    assessment, so ``targets`` reports exactly the pair that was stored.
-    PR-D drops the constraint and this becomes a list of several pairs."""
-    from src.extensions import db
-    from src.models.assessment import Assessment
-    from src.models.assessment_target import AssessmentTarget
-
-    project = uuid.uuid4()
-    variant_a = _variant(project, "a")
-    openssl = _finding("CVE-2026-0001", "openssl")
-
-    assessment = Assessment(id=uuid.uuid4(), status="not_affected", origin="custom")
-    db.session.add(assessment)
-    db.session.flush()
-    db.session.add(
-        AssessmentTarget(assessment_id=assessment.id,
-                         variant_id=variant_a.id, finding_id=openssl.id))
-    db.session.commit()
-
-    assert assessment.targets == [(variant_a.id, openssl.id)]
-
-
-def test_a_second_target_row_for_one_assessment_is_refused(app):
-    """The invariant that lets the scalar mirror stay unambiguous, asserted
-    against the real schema rather than assumed.  PR-D removes this test with
-    the constraint."""
-    from sqlalchemy.exc import IntegrityError
-
     from src.extensions import db
     from src.models.assessment import Assessment
     from src.models.assessment_target import AssessmentTarget
@@ -87,67 +59,24 @@ def test_a_second_target_row_for_one_assessment_is_refused(app):
     project = uuid.uuid4()
     variant_a = _variant(project, "a")
     variant_b = _variant(project, "b")
-    finding = _finding("CVE-2026-0018", "openssl")
+    openssl = _finding("CVE-2026-0001", "openssl")
+    zlib = _finding("CVE-2026-0001", "zlib")
 
     assessment = Assessment(id=uuid.uuid4(), status="not_affected", origin="custom")
     db.session.add(assessment)
     db.session.flush()
-    db.session.add(AssessmentTarget(assessment_id=assessment.id,
-                                    variant_id=variant_a.id, finding_id=finding.id))
+    db.session.add_all([
+        AssessmentTarget(assessment_id=assessment.id,
+                         variant_id=variant_a.id, finding_id=openssl.id),
+        AssessmentTarget(assessment_id=assessment.id,
+                         variant_id=variant_b.id, finding_id=zlib.id),
+    ])
     db.session.commit()
 
-    db.session.add(AssessmentTarget(assessment_id=assessment.id,
-                                    variant_id=variant_b.id, finding_id=finding.id))
-    with pytest.raises(IntegrityError):
-        db.session.commit()
-    db.session.rollback()
-
-
-def test_add_target_replaces_the_single_target_it_may_hold(app):
-    """``add_target`` overwrites instead of appending while the constraint
-    stands -- ``staging``'s last-write-wins on the scalar columns.  PR-D
-    restores appending."""
-    from src.extensions import db
-    from src.models.assessment import Assessment
-    from src.models.assessment_target import AssessmentTarget
-    from src.models.project import Project
-
-    project = Project.create("replace-proj")
-    variant_a = _variant(project.id, "a")
-    variant_b = _variant(project.id, "b")
-    finding = _finding("CVE-2026-0019", "openssl")
-    assessment = Assessment.create(
-        status="affected", origin="custom",
-        targets=[(variant_a.id, finding.id)], commit=True,
-    )
-
-    assert assessment.add_target(variant_b.id, finding.id) is True
-    db.session.commit()
-
-    assert assessment.targets == [(variant_b.id, finding.id)]
-    assert (assessment.variant_id, assessment.finding_id) == (variant_b.id, finding.id)
-    assert db.session.query(AssessmentTarget).count() == 1
-
-
-def test_create_refuses_more_than_one_target(app):
-    """PR-A cannot store a second target, so it must not pretend to: mirroring
-    only the first pair would leave the columns disagreeing with the request.
-    PR-D removes this restriction."""
-    from src.models.assessment import Assessment
-    from src.models.assessment_target import GroupInvariantError
-    from src.models.project import Project
-
-    project = Project.create("refuse-multi-proj")
-    variant_a = _variant(project.id, "a")
-    variant_b = _variant(project.id, "b")
-    finding = _finding("CVE-2026-0020", "openssl")
-
-    with pytest.raises(GroupInvariantError, match="only one target"):
-        Assessment.create(
-            status="affected", origin="custom",
-            targets=[(variant_a.id, finding.id), (variant_b.id, finding.id)],
-            commit=True,
-        )
+    assert sorted(assessment.targets) == sorted([
+        (variant_a.id, openssl.id),
+        (variant_b.id, zlib.id),
+    ])
 
 
 def test_deleting_an_assessment_deletes_its_targets(app):
@@ -273,14 +202,8 @@ def test_deleting_a_variant_reaps_its_targets_and_orphaned_assessments(app):
     assert db.session.get(Assessment, assessment_id) is None
 
 
-def test_deleting_a_variant_spares_assessments_targeting_another(app):
-    """The reaper is criterion-scoped: only the targets naming the deleted
-    variant go, and only the assessments those targets were the last reach to.
-
-    PR-A holds one target per assessment, so "still reachable" can only be
-    expressed across two assessments here; PR-D restores the single-assessment,
-    two-target version of this scenario when it drops the constraint.
-    """
+def test_deleting_a_variant_keeps_an_assessment_that_targets_another(app):
+    """A cross-variant assessment survives losing one of its variants."""
     from src.extensions import db
     from src.models.assessment import Assessment
     from src.models.assessment_target import AssessmentTarget
@@ -290,22 +213,18 @@ def test_deleting_a_variant_spares_assessments_targeting_another(app):
     variant_a = _variant(project.id, "a")
     variant_b = _variant(project.id, "b")
     finding = _finding("CVE-2026-0011", "openssl")
-    doomed = Assessment.create(
+    assessment = Assessment.create(
         status="affected", origin="custom",
-        targets=[(variant_a.id, finding.id)], commit=True,
+        targets=[(variant_a.id, finding.id), (variant_b.id, finding.id)],
+        commit=True,
     )
-    survivor = Assessment.create(
-        status="affected", origin="custom",
-        targets=[(variant_b.id, finding.id)], commit=True,
-    )
-    doomed_id, survivor_id = doomed.id, survivor.id
+    assessment_id = assessment.id
 
     variant_a.delete()
 
-    assert db.session.get(Assessment, doomed_id) is None
-    kept = db.session.get(Assessment, survivor_id)
-    assert kept is not None
-    assert kept.targets == [(variant_b.id, finding.id)]
+    survivor = db.session.get(Assessment, assessment_id)
+    assert survivor is not None
+    assert survivor.targets == [(variant_b.id, finding.id)]
     assert db.session.query(AssessmentTarget).count() == 1
 
 
@@ -354,10 +273,8 @@ def test_deleting_a_finding_reaps_its_targets_and_orphaned_assessments(app):
     assert db.session.get(Assessment, assessment_id) is None
 
 
-def test_deleting_a_finding_spares_assessments_targeting_another(app):
-    """Mirrors the variant case: only the targets naming the deleted finding
-    go.  See that test for why the still-reachable assessment is a second row
-    in PR-A rather than a second target on the same one."""
+def test_deleting_a_finding_keeps_an_assessment_that_targets_another(app):
+    """A multi-package assessment survives losing one of its findings."""
     from src.extensions import db
     from src.models.assessment import Assessment
     from src.models.assessment_target import AssessmentTarget
@@ -367,22 +284,18 @@ def test_deleting_a_finding_spares_assessments_targeting_another(app):
     variant = _variant(project.id, "a")
     openssl = _finding("CVE-2026-0014", "openssl")
     zlib = _finding("CVE-2026-0014", "zlib")
-    doomed = Assessment.create(
+    assessment = Assessment.create(
         status="affected", origin="custom",
-        targets=[(variant.id, openssl.id)], commit=True,
+        targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
+        commit=True,
     )
-    survivor = Assessment.create(
-        status="affected", origin="custom",
-        targets=[(variant.id, zlib.id)], commit=True,
-    )
-    doomed_id, survivor_id = doomed.id, survivor.id
+    assessment_id = assessment.id
 
     openssl.delete()
 
-    assert db.session.get(Assessment, doomed_id) is None
-    kept = db.session.get(Assessment, survivor_id)
-    assert kept is not None
-    assert kept.targets == [(variant.id, zlib.id)]
+    survivor = db.session.get(Assessment, assessment_id)
+    assert survivor is not None
+    assert survivor.targets == [(variant.id, zlib.id)]
     assert db.session.query(AssessmentTarget).count() == 1
 
 
@@ -408,52 +321,4 @@ def test_deleting_a_package_reaps_its_findings_assessments(app):
     package.delete()
 
     assert db.session.query(AssessmentTarget).count() == 0
-    assert db.session.get(Assessment, assessment_id) is None
-
-
-def test_deleting_a_variant_reaps_an_assessment_with_no_targets(app):
-    """PR-A still accepts one target-less shape -- the custom-data import of
-    an item naming no variant, which ``staging`` stored the same way.  Such a
-    row is reachable only through the scalar mirror, so the parent's deletion
-    must take it along, exactly as the ORM cascade used to.  (The bulk scan
-    ingestion is no longer such a path: it writes its own target rows.)"""
-    from src.extensions import db
-    from src.models.assessment import Assessment
-    from src.models.project import Project
-
-    project = Project.create("reap-scalar-proj")
-    variant = _variant(project.id, "a")
-    finding = _finding("CVE-2026-0016", "openssl")
-    assessment = Assessment(
-        id=uuid.uuid4(), status="affected", origin="scc",
-        variant_id=variant.id, finding_id=finding.id,
-    )
-    db.session.add(assessment)
-    db.session.commit()
-    assessment_id = assessment.id
-
-    variant.delete()
-
-    assert db.session.get(Assessment, assessment_id) is None
-
-
-def test_deleting_a_finding_reaps_an_assessment_with_no_targets(app):
-    """Mirrors the variant case for the other scalar mirror column."""
-    from src.extensions import db
-    from src.models.assessment import Assessment
-    from src.models.project import Project
-
-    project = Project.create("reap-scalar-finding-proj")
-    variant = _variant(project.id, "a")
-    finding = _finding("CVE-2026-0017", "openssl")
-    assessment = Assessment(
-        id=uuid.uuid4(), status="affected", origin="scc",
-        variant_id=variant.id, finding_id=finding.id,
-    )
-    db.session.add(assessment)
-    db.session.commit()
-    assessment_id = assessment.id
-
-    finding.delete()
-
     assert db.session.get(Assessment, assessment_id) is None

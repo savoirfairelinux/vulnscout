@@ -24,7 +24,6 @@ from src.helpers.assessment_io import (
     detect_review_export_format,
     reconcile_review_export,
     parse_imported_timestamp,
-    duplicate_assessment_query,
     duplicate_multitarget_assessment_exists,
 )
 
@@ -732,22 +731,6 @@ class TestParseImportedTimestampNaive:
         assert parsed.utcoffset().total_seconds() == 0
 
 
-class TestDuplicateAssessmentQueryWithTimestamp:
-    """Line 523: the timestamp clause is added when a timestamp is given."""
-
-    def test_query_includes_timestamp_clause_when_given(self):
-        from datetime import datetime, timezone
-
-        query = duplicate_assessment_query(
-            finding_id=_uuid.uuid4(),
-            variant_id=None,
-            status="affected",
-            origin="custom",
-            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        )
-        assert "timestamp" in str(query).lower()
-
-
 class TestDuplicateMultitargetEmptySet:
     """Line 556: an empty target set is never a duplicate."""
 
@@ -758,39 +741,3 @@ class TestDuplicateMultitargetEmptySet:
             ) is False
 
 
-class TestExportOmitsGenuinelyUntargetedAssessments:
-    """Line 828: an assessment with no AssessmentTarget row at all (the
-    legacy scalar-only shape allowed pre-PR-D via ``allow_untargeted``) is
-    omitted from the custom-data export.
-
-    This is not a Task-11 regression: ``Assessment.vuln_id``/``.packages``
-    already resolve purely from ``target_rows`` (a Task-3 decision -- see
-    ``src/routes/assessments.py``'s coalesced-column workaround for the one
-    read path that needs the scalar fallback), so an untargeted row's
-    ``to_dict()`` already carries an empty ``vuln_id``/``packages`` before
-    this task's changes. Exporting it would produce a record so empty that
-    ``import_custom_data`` rejects it on re-import ("Missing vuln_id or
-    status") -- omitting it here avoids manufacturing that dead record.
-    """
-
-    def test_untargeted_assessment_does_not_appear_in_export(self, app):
-        from src.models.package import Package
-        from src.models.finding import Finding
-        from src.models.vulnerability import Vulnerability
-        from src.models.assessment import Assessment
-        from src.extensions import db
-
-        with app.app_context():
-            pkg = Package.find_or_create("untargeted-export-pkg", "1.0")
-            Vulnerability.get_or_create("CVE-2099-UNTARGETEXP")
-            finding = Finding.get_or_create(pkg.id, "CVE-2099-UNTARGETEXP")
-            row = Assessment.create(
-                status="affected", origin="custom",
-                targets=None, allow_untargeted=True, commit=False,
-            )
-            row.finding_id = finding.id
-            db.session.commit()
-
-            result = build_custom_data_export()
-
-        assert result["assessments"] == []

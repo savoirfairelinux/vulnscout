@@ -104,15 +104,17 @@ def _build_source_db(app):
         # origin mirrors what a native SBOM scan records; assessments without
         # one are filtered out of every export.
         Assessment.create(
-            status="fixed",
+            status="fixed", targets=[(v_sbom.id, f_cairo_a.id)],
             origin="sbom", simplified_status="fixed",
             justification="patched upstream", status_notes="verified",
-            impact_statement="", commit=False, targets=[(v_sbom.id, f_cairo_a.id)])
+            impact_statement="", commit=False,
+        )
         Assessment.create(
-            status="not_affected",
+            status="not_affected", targets=[(v_sbom.id, f_libpng_b.id)],
             origin="sbom", simplified_status="not affected",
             justification="component not built", status_notes="",
-            impact_statement="not reachable", commit=False, targets=[(v_sbom.id, f_libpng_b.id)])
+            impact_statement="not reachable", commit=False,
+        )
         ids["sbom_first"] = str(s1.id)
         ids["sbom_second"] = str(s2.id)
         ids["v_sbom"] = str(v_sbom.id)
@@ -233,6 +235,7 @@ def _scan_packages(app, scan_id):
 def _variant_assessments(app, project_name, variant_name):
     """Return the assessment content attached to a variant."""
     from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
     from src.models.project import Project
     from src.models.variant import Variant
 
@@ -240,17 +243,21 @@ def _variant_assessments(app, project_name, variant_name):
         project = Project.get_by_name(project_name)
         variant = Variant.get_by_name_and_project(variant_name, project.id)
         rows = _db.session.execute(
-            _db.select(Assessment).where(Assessment.variant_id == variant.id)
-        ).scalars().all()
+            _db.select(Assessment)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .where(AssessmentTarget.variant_id == variant.id)
+        ).scalars().unique().all()
         return {
             (
-                a.finding.vulnerability_id,
+                target.finding.vulnerability_id,
                 a.status,
                 a.simplified_status,
                 a.justification or "",
                 a.impact_statement or "",
             )
             for a in rows
+            for target in a.target_rows
+            if target.variant_id == variant.id
         }
 
 
@@ -494,6 +501,7 @@ class TestAssessmentRoundTrip:
     def test_tool_scan_assessments_keep_their_source_as_origin(self, app, client, ids):
         """An imported tool-scan assessment is labelled with that tool."""
         from src.models.assessment import Assessment
+        from src.models.assessment_target import AssessmentTarget
         from src.models.project import Project
         from src.models.variant import Variant
 
@@ -513,8 +521,10 @@ class TestAssessmentRoundTrip:
             variant = Variant.get_by_name_and_project(variant_name, project.id)
             origins = {
                 a.origin for a in _db.session.execute(
-                    _db.select(Assessment).where(Assessment.variant_id == variant.id)
-                ).scalars().all()
+                    _db.select(Assessment)
+                    .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+                    .where(AssessmentTarget.variant_id == variant.id)
+                ).scalars().unique().all()
             }
         assert origins == {"nvd"}
 
