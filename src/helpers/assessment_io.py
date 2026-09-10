@@ -1100,7 +1100,7 @@ def import_custom_data(
         if not pkg_string:
             return None, None, "Target missing package"
         if variant_id is None and not variant_token and not raw_target.get("variant"):
-            return None, None, "Target missing variant_id or package"
+            return None, None, "Target missing variant_id or variant"
         resolved_variant_id = _resolve_variant(raw_target)
         if resolved_variant_id is None:
             label = raw_target.get("variant") or variant_token
@@ -1343,7 +1343,7 @@ def import_custom_data(
                         "error": str(e),
                     })
 
-            if untargeted and len(entry_created_ids) > 1:
+            if len(entry_created_ids) > 1:
                 from ..models.assessment_group_member import AssessmentGroupMember
                 AssessmentGroupMember.create_group(entry_created_ids, commit=True)
 

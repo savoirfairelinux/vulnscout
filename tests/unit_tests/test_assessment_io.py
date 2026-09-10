@@ -825,10 +825,12 @@ class TestImportCustomDataMultiTarget:
     assessment with many targets instead."""
 
     def test_v1_multi_package_entry_still_creates_two_assessments(self, app, variant_and_project):
-        """GIVEN a version-1 entry covering 2 packages WHEN imported THEN two
-        independent single-target assessments are created (no fusing, no
-        shared group)."""
+        """GIVEN a version-1 entry covering 2 packages under a NAMED (targeted)
+        variant WHEN imported THEN two single-target assessments are created
+        that share a non-None group_id, matching the parent's (pre-refactor)
+        grouping behaviour for targeted multi-package imports."""
         from src.models.assessment import Assessment
+        from src.models.assessment_group_member import AssessmentGroupMember
 
         _, var = variant_and_project
         data = {
@@ -846,8 +848,12 @@ class TestImportCustomDataMultiTarget:
             rows = Assessment.get_by_origin([var.id], origin="custom")
             assert len(rows) == 2
             assert {len(row.targets) for row in rows} == {1}
-            # Each row is trivially its own group; none are fused together.
             assert len({row.id for row in rows}) == 2
+            group_ids = {
+                AssessmentGroupMember.get_group_id(row.id) for row in rows
+            }
+        assert len(group_ids) == 1
+        assert None not in group_ids
 
     def test_v1_single_package_entry_creates_one_assessment(self, app, variant_and_project):
         """GIVEN a version-1 entry covering only 1 package WHEN imported THEN
