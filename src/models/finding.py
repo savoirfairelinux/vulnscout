@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
     from sqlalchemy.orm import Mapper
 
-    from ..models import TimeEstimate, Vulnerability, Observation, Assessment
+    from ..models import TimeEstimate, Vulnerability, Observation
     from .assessment_target import AssessmentTarget
 
 
@@ -38,15 +38,6 @@ class Finding(Base):
     vulnerability: Mapped["Vulnerability"] = relationship(back_populates="findings")
     observations: Mapped[list["Observation"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
-    assessments: Mapped[list["Assessment"]] = relationship(
-        back_populates="finding",
-        # PR-A only: this scalar mirror duplicates one target row, so letting
-        # it cascade would delete an assessment that other targets still
-        # reach.  ``passive_deletes="all"`` leaves the decision to the
-        # ``before_delete`` reaper below, which drops an assessment only once
-        # nothing targets it any more.
-        passive_deletes="all",
-    )
     assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(
         back_populates="finding",
         # finding_id is part of AssessmentTarget's primary key, so the ORM's
@@ -177,12 +168,6 @@ def _reap_assessment_targets(
     also fires when a finding is removed through the ORM cascade from its
     package or its vulnerability -- those parents reach the same hazard.
     """
-    from .assessment import Assessment
-    from .assessment_target import (
-        AssessmentTarget, reap_targets, reap_untargeted_assessments,
-    )
+    from .assessment_target import AssessmentTarget, reap_targets
 
     reap_targets(connection, AssessmentTarget.finding_id == finding.id)
-    # The scalar mirror outlives the target rows in PR-A, and an assessment
-    # written through it alone has none to reap.
-    reap_untargeted_assessments(connection, Assessment.finding_id == finding.id)

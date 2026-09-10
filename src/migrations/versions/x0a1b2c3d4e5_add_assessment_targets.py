@@ -16,34 +16,45 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        'assessment_targets',
-        sa.Column('assessment_id', sa.Uuid(), nullable=False),
-        sa.Column('variant_id', sa.Uuid(), nullable=False),
-        sa.Column('finding_id', sa.Uuid(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ['assessment_id'], ['assessments.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['variant_id'], ['variants.id']),
-        sa.ForeignKeyConstraint(['finding_id'], ['findings.id']),
-        sa.PrimaryKeyConstraint('assessment_id', 'variant_id', 'finding_id'),
-    )
-    op.create_index(
-        'ix_assessment_targets_variant_id', 'assessment_targets', ['variant_id'])
-    op.create_index(
-        'ix_assessment_targets_finding_id', 'assessment_targets', ['finding_id'])
-
     connection = op.get_bind()
-    backfill_targets(connection)
-    fuse_duplicates(connection)
+    inspector = sa.inspect(connection)
 
-    # SQLite refuses native DROP COLUMN here: both columns carry a foreign key
-    # and an index, and it fails with "unknown column ... in foreign key
-    # definition".  Batch mode does the create-copy-drop-rename rebuild.
-    with op.batch_alter_table('assessments') as batch:
-        batch.drop_index('ix_assessments_variant_id')
-        batch.drop_index('ix_assessments_finding_id')
-        batch.drop_column('variant_id')
-        batch.drop_column('finding_id')
+    # Reflection-guarded: a database already at this revision's physical
+    # shape (e.g. stamped back to the prior revision and re-upgraded,
+    # rather than genuinely downgraded) must not die re-creating what it
+    # already has.
+    target_table_exists = 'assessment_targets' in inspector.get_table_names()
+    if not target_table_exists:
+        op.create_table(
+            'assessment_targets',
+            sa.Column('assessment_id', sa.Uuid(), nullable=False),
+            sa.Column('variant_id', sa.Uuid(), nullable=False),
+            sa.Column('finding_id', sa.Uuid(), nullable=False),
+            sa.ForeignKeyConstraint(
+                ['assessment_id'], ['assessments.id'], ondelete='CASCADE'),
+            sa.ForeignKeyConstraint(['variant_id'], ['variants.id']),
+            sa.ForeignKeyConstraint(['finding_id'], ['findings.id']),
+            sa.PrimaryKeyConstraint('assessment_id', 'variant_id', 'finding_id'),
+        )
+        op.create_index(
+            'ix_assessment_targets_variant_id', 'assessment_targets', ['variant_id'])
+        op.create_index(
+            'ix_assessment_targets_finding_id', 'assessment_targets', ['finding_id'])
+
+    assessment_columns = {c['name'] for c in inspector.get_columns('assessments')}
+    if 'variant_id' in assessment_columns or 'finding_id' in assessment_columns:
+        backfill_targets(connection)
+        fuse_duplicates(connection)
+
+        # SQLite refuses native DROP COLUMN here: both columns carry a foreign
+        # key and an index, and it fails with "unknown column ... in foreign
+        # key definition".  Batch mode does the create-copy-drop-rename
+        # rebuild.
+        with op.batch_alter_table('assessments') as batch:
+            batch.drop_index('ix_assessments_variant_id')
+            batch.drop_index('ix_assessments_finding_id')
+            batch.drop_column('variant_id')
+            batch.drop_column('finding_id')
 
 
 def responses_key(raw):
