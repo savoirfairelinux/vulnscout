@@ -21,6 +21,7 @@ from sqlalchemy.engine import CursorResult
 
 from ..extensions import db, write_lock
 from ..models.assessment import Assessment
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.metrics import Metrics
 from ..models.observation import Observation
@@ -139,16 +140,23 @@ def _outdated_assessments() -> list[dict]:
         db.select(
             Assessment.id,
             Assessment.origin,
-            Assessment.variant_id,
-            Assessment.finding_id,
+            AssessmentTarget.variant_id,
+            AssessmentTarget.finding_id,
             Finding.vulnerability_id,
             Package.name,
             Package.version,
             Package.supplier,
         )
-        .outerjoin(Finding, Finding.id == Assessment.finding_id)
+        # The variant and finding an assessment applies to are read from its
+        # target rows.  The join is inner because a targeted assessment always
+        # has both -- they are part of the target's primary key -- which is
+        # what the scalar predicate ``variant_id IS NOT NULL`` selected for.
+        # A variant-less custom-data import has no target row and no variant,
+        # so it stays out of the staleness set exactly as it did before.
+        .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+        .outerjoin(Finding, Finding.id == AssessmentTarget.finding_id)
         .outerjoin(Package, Package.id == Finding.package_id)
-        .where(Assessment.origin == "custom", Assessment.variant_id.is_not(None))
+        .where(Assessment.origin == "custom")
     )
     assessments: list[dict] = []
     ids_by_string: dict[str, uuid.UUID] = {}
@@ -354,7 +362,20 @@ def _delete_orphaned_findings(finding_ids: set[uuid.UUID]) -> tuple[int, set[str
                 db.select(Finding.id, Finding.vulnerability_id)
                 .where(Finding.id.in_(finding_id_chunk))
                 .where(~Finding.observations.any())
+                # Reachability from an assessment runs through its target
+                # rows.  The scalar mirror is still checked beside them: PR-A
+                # keeps one shape that has no target row at all -- the
+                # variant-less custom-data import -- and this is a bulk
+                # DELETE, so nothing would reap such an assessment behind us.
+                # PR-D drops the mirror predicate with the column itself.
                 .where(~Finding.assessments.any())
+                # ``assessment.has()`` is required, not decoration: a PR-A
+                # deployment's bulk assessment DELETE fired no reaper, so a
+                # database upgraded mid-series carries target rows whose
+                # assessment is already gone.  A bare ``any()`` would let such
+                # residue hold a finding alive forever, where the pre-target
+                # code reaped it.
+                .where(~Finding.assessment_targets.any(AssessmentTarget.assessment.has()))
                 .where(~Finding.time_estimates.any())
             ).all()
         )
@@ -436,6 +457,11 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
             for assessment in outdated_assessments
             if assessment["finding_id"] is not None
         }
+        # Core bulk DELETE bypasses the mapper events that reap target rows,
+        # so the targets go first and explicitly -- otherwise they survive
+        # pointing at a deleted assessment and keep their finding looking
+        # referenced to ``_delete_orphaned_findings`` below.
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, outdated_assessment_ids)
         _delete_in_chunks(Assessment, Assessment.id, outdated_assessment_ids)
         _delete_in_chunks(Observation, Observation.id, stale_observation_ids)
         sbom_packages_deleted, sbom_observations_deleted = _delete_stale_sbom_records(stale_package_pairs)
@@ -521,8 +547,12 @@ def delete_empty_scans(candidate_ids: list[str] | None = None) -> dict[str, int]
 def orphaned_vulnerabilities_preview() -> list[dict[str, str | int]]:
     """Return vulnerabilities that have no evidence in any variant scan.
 
-    Two queries total: one selects the orphaned vulnerability IDs, the other
-    aggregates their assessment counts, avoiding a per-vulnerability lazy load.
+    Three queries total: one selects the orphaned vulnerability IDs, the other
+    two aggregate their assessment counts, avoiding a per-vulnerability lazy
+    load.  Assessments are counted through their target rows, plus the one
+    shape PR-A still writes without any -- the variant-less custom-data
+    import, reachable by the scalar mirror alone.  The two sets are disjoint
+    (the second excludes anything a target reaches), so the counts add.
     """
     orphan_ids = list(db.session.execute(
         db.select(Vulnerability.id)
@@ -536,15 +566,28 @@ def orphaned_vulnerabilities_preview() -> list[dict[str, str | int]]:
         return []
     assessment_counts: dict[str, int] = {}
     for orphan_id_chunk in _chunked(orphan_ids):
-        assessment_counts.update({
-            vulnerability_id: count
-            for vulnerability_id, count in db.session.execute(
-                db.select(Finding.vulnerability_id, db.func.count(Assessment.id))
-                .join(Assessment, Assessment.finding_id == Finding.id)
-                .where(Finding.vulnerability_id.in_(orphan_id_chunk))
-                .group_by(Finding.vulnerability_id)
-            ).all()
-        })
+        for vulnerability_id, count in db.session.execute(
+            # One target row per (assessment, finding) pair multiplies rows
+            # per assessment, so count distinct assessment ids.
+            db.select(Finding.vulnerability_id, db.func.count(db.func.distinct(Assessment.id)))
+            .select_from(Finding)
+            .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+            .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
+            .where(Finding.vulnerability_id.in_(orphan_id_chunk))
+            .group_by(Finding.vulnerability_id)
+        ).all():
+            assessment_counts[vulnerability_id] = assessment_counts.get(vulnerability_id, 0) + count
+        for vulnerability_id, count in db.session.execute(
+            # PR-A only: the target-less shape, held by the scalar mirror.
+            # PR-D deletes this query along with the mirror.
+            db.select(Finding.vulnerability_id, db.func.count(db.func.distinct(Assessment.id)))
+            .select_from(Finding)
+            .join(Finding.assessments)
+            .where(Finding.vulnerability_id.in_(orphan_id_chunk))
+            .where(~Assessment.target_rows.any())
+            .group_by(Finding.vulnerability_id)
+        ).all():
+            assessment_counts[vulnerability_id] = assessment_counts.get(vulnerability_id, 0) + count
     return [
         {"id": vulnerability_id, "assessments": assessment_counts.get(vulnerability_id, 0)}
         for vulnerability_id in orphan_ids
@@ -556,7 +599,10 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
 
     Bulk ``DELETE`` statements replace the ORM cascade: child rows (findings and
     their assessments / time-estimates / observations, plus per-CVE metrics and
-    refresh metadata) are cleared explicitly in foreign-key order.
+    refresh metadata) are cleared explicitly in foreign-key order.  The
+    assessments to delete are collected through the target rows pointing at the
+    doomed findings, plus the target-less shape PR-A still writes (the
+    variant-less custom-data import), which nothing else would reach.
     """
     with write_lock():
         vulnerability_ids = [str(item["id"]) for item in orphaned_vulnerabilities_preview()]
@@ -570,12 +616,37 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
             finding_ids.extend(db.session.execute(
                 db.select(Finding.id).where(Finding.vulnerability_id.in_(vulnerability_id_chunk))
             ).scalars())
-        assessments_deleted = 0
+        assessment_ids: set[uuid.UUID] = set()
         for finding_id_chunk in _chunked(finding_ids):
-            assessments_deleted += db.session.execute(
-                db.select(db.func.count(Assessment.id)).where(Assessment.finding_id.in_(finding_id_chunk))
-            ).scalar_one()
-        _delete_in_chunks(Assessment, Assessment.finding_id, finding_ids)
+            assessment_ids.update(db.session.execute(
+                db.select(AssessmentTarget.assessment_id)
+                .where(AssessmentTarget.finding_id.in_(finding_id_chunk))
+                # Same residue as in ``_delete_orphaned_findings``: a target
+                # row left behind by a PR-A deployment's bulk assessment
+                # DELETE names an assessment that no longer exists, and
+                # counting it would inflate ``assessments_deleted``.
+                .where(AssessmentTarget.assessment.has())
+            ).scalars())
+            # PR-A only: an assessment with no target row hangs off its
+            # finding by the scalar mirror alone.  Left behind it would point
+            # at a deleted finding, since a bulk DELETE reaps nothing.
+            # PR-D drops this query with the mirror.
+            assessment_ids.update(db.session.execute(
+                db.select(Assessment.id)
+                .select_from(Finding)
+                .join(Finding.assessments)
+                .where(Finding.id.in_(finding_id_chunk))
+                .where(~Assessment.target_rows.any())
+            ).scalars())
+        assessments_deleted = len(assessment_ids)
+        # Core bulk DELETE bypasses the mapper events that normally reap
+        # targets, so the target rows go explicitly and first -- otherwise
+        # they survive pointing at a deleted assessment and a deleted finding.
+        # Both criteria are needed: by finding for any target of a doomed
+        # finding, by assessment for the doomed assessments themselves.
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.finding_id, finding_ids)
+        _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, assessment_ids)
+        _delete_in_chunks(Assessment, Assessment.id, assessment_ids)
         _delete_in_chunks(TimeEstimate, TimeEstimate.finding_id, finding_ids)
         _delete_in_chunks(Observation, Observation.finding_id, finding_ids)
         _delete_in_chunks(Finding, Finding.id, finding_ids)

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment_group_member import AssessmentGroupMember, GroupInvariantError
+from ..models.assessment_target import AssessmentTarget
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -159,10 +160,12 @@ def init_app(app: Flask) -> None:
         instead of one query per variant.
         """
         if compact:
+            effective_finding_id = func.coalesce(AssessmentTarget.finding_id, DBAssessment.finding_id)
+            effective_variant_id = func.coalesce(AssessmentTarget.variant_id, DBAssessment.variant_id)
             ranked = (
                 db.select(
                     DBAssessment.id.label("id"),
-                    DBAssessment.variant_id.label("variant_id"),
+                    effective_variant_id.label("variant_id"),
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     Finding.vulnerability_id.label("vulnerability_id"),
@@ -172,20 +175,35 @@ def init_app(app: Flask) -> None:
                     func.row_number().over(
                         partition_by=(
                             Finding.vulnerability_id,
-                            DBAssessment.variant_id,
+                            effective_variant_id,
                             Finding.package_id,
                         ),
                         order_by=(DBAssessment.timestamp.desc(), DBAssessment.id.desc()),
                     ).label("assessment_rank"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                # Outer joins: a genuinely untargeted assessment (still legal
+                # pre-PR-D via allow_untargeted) must keep showing up here,
+                # same as before this query read variant_id off the target
+                # row instead of the assessment's own scalar column. Joining
+                # Finding through the coalesced finding_id (rather than the
+                # bare AssessmentTarget column) keeps an untargeted row's
+                # vulnerability/package data intact, and coalescing the
+                # partition key the same way keeps every untargeted
+                # assessment from collapsing into one window partition.
+                .outerjoin(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .outerjoin(Finding, effective_finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                ranked = ranked.where(DBAssessment.variant_id.in_(variant_ids))
+                # Filtered on the same coalesced expression as the
+                # projection above, so an untargeted row (scalar variant_id
+                # set, no AssessmentTarget row yet) is judged consistently
+                # by both the filter and the output column instead of the
+                # two silently disagreeing.
+                ranked = ranked.where(effective_variant_id.in_(variant_ids))
             ranked = ranked.subquery()
             query = (
                 db.select(
@@ -202,35 +220,58 @@ def init_app(app: Flask) -> None:
                 .order_by(ranked.c.timestamp)
             )
         else:
+            effective_finding_id = func.coalesce(AssessmentTarget.finding_id, DBAssessment.finding_id)
+            effective_variant_id = func.coalesce(AssessmentTarget.variant_id, DBAssessment.variant_id)
             query = (
                 db.select(
-                    DBAssessment.id,
-                    DBAssessment.source,
-                    DBAssessment.origin,
-                    DBAssessment.variant_id,
-                    DBAssessment.timestamp,
-                    DBAssessment.status,
-                    DBAssessment.status_notes,
-                    DBAssessment.justification,
-                    DBAssessment.impact_statement,
-                    DBAssessment.responses,
-                    DBAssessment.workaround,
-                    Finding.vulnerability_id,
-                    Package.name,
-                    Package.version,
-                    Package.supplier,
+                    DBAssessment.id.label("id"),
+                    DBAssessment.source.label("source"),
+                    DBAssessment.origin.label("origin"),
+                    effective_variant_id.label("variant_id"),
+                    DBAssessment.timestamp.label("timestamp"),
+                    DBAssessment.status.label("status"),
+                    DBAssessment.status_notes.label("status_notes"),
+                    DBAssessment.justification.label("justification"),
+                    DBAssessment.impact_statement.label("impact_statement"),
+                    DBAssessment.responses.label("responses"),
+                    DBAssessment.workaround.label("workaround"),
+                    Finding.vulnerability_id.label("vulnerability_id"),
+                    Package.name.label("name"),
+                    Package.version.label("version"),
+                    Package.supplier.label("supplier"),
                 )
-                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                # Outer joins, for the same reason as the compact branch above:
+                # a genuinely untargeted assessment must still be listed, and
+                # joining Finding through the coalesced finding_id keeps its
+                # vuln/package data from coming back empty.
+                .outerjoin(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                .outerjoin(Finding, effective_finding_id == Finding.id)
                 .outerjoin(Package, Finding.package_id == Package.id)
                 .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
-                .order_by(DBAssessment.timestamp)
             )
             if variant_ids is not None:
                 if not variant_ids:
                     return []
-                query = query.where(DBAssessment.variant_id.in_(variant_ids))
+                # See the compact branch above: filter on the same coalesced
+                # expression as the projection so the filter and the output
+                # column always agree, including for a row without a
+                # mirrored target row yet (a few legacy fixtures and write
+                # paths still build one that way).
+                query = query.where(effective_variant_id.in_(variant_ids))
+            # A multi-target assessment fans out to one row per target here.
+            # Unlike compact (one entry per target by design), this branch's
+            # consumers key by assessment id and expect exactly one record per
+            # assessment, so the targets are folded back together below rather
+            # than ranked: keeping a single representative would drop the
+            # other packages and variants from the response entirely.
+            query = query.order_by(
+                DBAssessment.timestamp,
+                DBAssessment.id,
+                effective_variant_id,
+                effective_finding_id,
+            )
 
-        full_result: list[AssessmentDict] = []
+        full_by_id: dict[str, AssessmentDict] = {}
         compact_result: list[CompactAssessment] = []
         for row in db.session.execute(query):
             package_id = ""
@@ -252,23 +293,54 @@ def init_app(app: Flask) -> None:
                     row.status or "",
                 ])
                 continue
-            full_result.append({
-                "id": str(row.id),
-                "source": row.source or "",
-                "origin": row.origin or "sbom",
-                "vuln_id": row.vulnerability_id or "",
-                "packages": [package_id] if package_id else [],
-                "variant_id": str(row.variant_id) if row.variant_id else None,
-                "timestamp": timestamp,
-                "last_update": timestamp or "",
-                "status": row.status or "",
-                "status_notes": row.status_notes or "",
-                "justification": row.justification or "",
-                "impact_statement": row.impact_statement or "",
-                "responses": list(row.responses or []),
-                "workaround": row.workaround or "",
-            })
-        return compact_result if compact else full_result
+            assessment_id = str(row.id)
+            entry = full_by_id.get(assessment_id)
+            if entry is None:
+                entry = {
+                    "id": assessment_id,
+                    "source": row.source or "",
+                    "origin": row.origin or "sbom",
+                    "vuln_id": row.vulnerability_id or "",
+                    "packages": [],
+                    "variant_id": None,
+                    "variant_ids": [],
+                    "targets": [],
+                    "timestamp": timestamp,
+                    "last_update": timestamp or "",
+                    "status": row.status or "",
+                    "status_notes": row.status_notes or "",
+                    "justification": row.justification or "",
+                    "impact_statement": row.impact_statement or "",
+                    "responses": list(row.responses or []),
+                    "workaround": row.workaround or "",
+                }
+                full_by_id[assessment_id] = entry
+            if package_id and package_id not in entry["packages"]:
+                entry["packages"].append(package_id)
+            variant_id = str(row.variant_id) if row.variant_id else None
+            if variant_id and variant_id not in entry["variant_ids"]:
+                entry["variant_ids"].append(variant_id)
+            # The pair, kept alongside the two flattened sets: those describe
+            # the cross-product, which a sparse target set is not.
+            if package_id and variant_id:
+                pair = {"variant_id": variant_id, "package": package_id}
+                if pair not in entry["targets"]:
+                    entry["targets"].append(pair)
+
+        if compact:
+            return compact_result
+
+        for entry in full_by_id.values():
+            entry["variant_ids"].sort()
+            entry["targets"].sort(key=lambda t: (t["variant_id"], t["package"]))
+            # ``variant_id`` stays for backward compatibility and keeps the
+            # meaning ``Assessment.to_dict`` gives it: the one variant every
+            # target shares, or None for a genuine cross-variant assessment.
+            # Consumers that need the full scope read ``variant_ids``.
+            entry["variant_id"] = (
+                entry["variant_ids"][0] if len(entry["variant_ids"]) == 1 else None
+            )
+        return list(full_by_id.values())
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
@@ -418,7 +490,8 @@ def init_app(app: Flask) -> None:
 
         author = request.args.get('author', 'Savoir-faire Linux')
         import json
-        json_data = json.dumps(build_openvex_doc(handmade, author), indent=2)
+        json_data = json.dumps(
+            build_openvex_doc(handmade, author, variant_ids=[variant_uuid]), indent=2)
         filename = re.sub(r"[^\w\-.]", "_", variant.name)
         return json_data, 200, {
             "Content-Type": "application/json",
@@ -807,6 +880,7 @@ def init_app(app: Flask) -> None:
             current = build_openvex_doc(
                 handmade,
                 request.form.get('author', existing.get('author', 'Savoir-faire Linux')),
+                variant_ids=variant_ids,
             )
         else:
             current = build_custom_data_export(variant_ids)
@@ -929,10 +1003,16 @@ def init_app(app: Flask) -> None:
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         rows = []
+        seen_ids: set[UUID] = set()
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
-                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                if a.id in seen_ids:
                     continue
+                if project_variant_ids is not None and not any(
+                    t.variant_id in project_variant_ids for t in a.target_rows
+                ):
+                    continue
+                seen_ids.add(a.id)
                 rows.append(a)
         DBAssessment.preload_group_ids(rows)
         assessments = [a.to_dict() for a in rows]
@@ -963,10 +1043,16 @@ def init_app(app: Flask) -> None:
             ).scalars())
 
         rows = []
+        seen_ids: set[UUID] = set()
         for finding in Finding.get_by_vulnerability(vuln_id):
             for a in DBAssessment.get_by_finding(finding.id):
-                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                if a.id in seen_ids:
                     continue
+                if project_variant_ids is not None and not any(
+                    t.variant_id in project_variant_ids for t in a.target_rows
+                ):
+                    continue
+                seen_ids.add(a.id)
                 rows.append(a)
         return build_groups(rows), 200
 
@@ -1064,13 +1150,21 @@ def init_app(app: Flask) -> None:
         response 200 JsonArray Assessment groups for review.
         """
         query = select(DBAssessment)
+        # The variant/project filters below match against the joined target
+        # rather than the assessment; joining once and adding .distinct()
+        # keeps the one-row-per-assessment shape build_groups() expects even
+        # though the join fans out to one row per matching target.
+        joined_targets = False
         variant_ids: list[UUID] | None = None
         variant_id = request.args.get('variant_id')
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            query = query.where(DBAssessment.variant_id == variant_uuid)
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id == variant_uuid)
             variant_ids = [variant_uuid] if variant_uuid else None
 
         project_id = request.args.get('project_id')
@@ -1079,12 +1173,18 @@ def init_app(app: Flask) -> None:
             if err:
                 return err
             project_variant_ids = [v.id for v in DBVariant.get_by_project(project_uuid)] if project_uuid else []
-            query = query.where(DBAssessment.variant_id.in_(project_variant_ids))
+            if not joined_targets:
+                query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
+                joined_targets = True
+            query = query.where(AssessmentTarget.variant_id.in_(project_variant_ids))
             variant_ids = project_variant_ids
 
         origin = request.args.get('origin')
         if origin:
             query = query.where(DBAssessment.origin == origin)
+
+        if joined_targets:
+            query = query.distinct()
 
         assessments = list(db.session.execute(query).scalars())
         groups = build_groups(assessments)

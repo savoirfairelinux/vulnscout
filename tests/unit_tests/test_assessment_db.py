@@ -15,13 +15,19 @@ def _make_two_assessments():
     from src.models.assessment import Assessment
     from src.models.finding import Finding
     from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
     from src.models.vulnerability import Vulnerability
 
     Vulnerability.create_record(id="CVE-2026-0001")
     pkg = Package.create(name="grouped-pkg", version="1.0.0")
     finding = Finding.create(package_id=pkg.id, vulnerability_id="CVE-2026-0001")
-    first = Assessment.create(status="not_affected", finding_id=finding.id)
-    second = Assessment.create(status="not_affected", finding_id=finding.id)
+    project = Project.create(name="grouped-project")
+    variant = Variant.create(name="grouped-variant", project_id=project.id)
+    first = Assessment.create(
+        status="not_affected", targets=[(variant.id, finding.id)])
+    second = Assessment.create(
+        status="not_affected", targets=[(variant.id, finding.id)])
     return first, second
 
 
@@ -66,9 +72,21 @@ def db_finding(app, db_package, db_vuln):
 
 
 @pytest.fixture()
-def db_assessment(app, db_finding):
-    """Persisted Assessment created via the ORM constructor (not new_dto)."""
+def db_variant(app):
+    from src.models.project import Project
+    from src.models.variant import Variant
+    project = Project.create(name="assess-project")
+    return Variant.create(name="assess-variant", project_id=project.id)
+
+
+@pytest.fixture()
+def db_assessment(app, db_finding, db_variant):
+    """Persisted Assessment created via the ORM constructor (not new_dto).
+
+    Writes the target row and the scalar column, as every PR-A write path does.
+    """
     from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
     from src.extensions import db
     a = Assessment(
         status="affected",
@@ -78,7 +96,10 @@ def db_assessment(app, db_finding):
         responses=[],
         workaround="",
         finding_id=db_finding.id,
+        variant_id=db_variant.id,
     )
+    a.target_rows.append(
+        AssessmentTarget(variant_id=db_variant.id, finding_id=db_finding.id))
     db.session.add(a)
     db.session.commit()
     return a
@@ -315,6 +336,37 @@ def _make_variant(project_name: str, variant_name: str):
     return Variant.create(name=variant_name, project_id=project.id)
 
 
+def test_group_and_target_invariants_raise_one_shared_class(app):
+    """The routes import ``GroupInvariantError`` from one module and the
+    assessment-creation path raises it from the other; two distinct classes of
+    the same name made ``except GroupInvariantError`` miss and return 500
+    instead of 400.  Both names must resolve to the same class, and both
+    invariants must really raise it.
+    """
+    with app.app_context():
+        import uuid as _uuid
+
+        from src.models.assessment import Assessment
+        from src.models.assessment_group_member import (
+            AssessmentGroupMember, GroupInvariantError as GroupError)
+        from src.models.assessment_target import GroupInvariantError as TargetError
+        from src.routes.assessments import GroupInvariantError as RouteError
+
+        assert GroupError is TargetError is RouteError
+
+        first, second = _make_two_assessments()
+        first.variant_id = _make_variant("shared-a", "variant-a").id
+        second.variant_id = _make_variant("shared-b", "variant-b").id
+        with pytest.raises(RouteError):
+            AssessmentGroupMember.create_group([first.id, second.id])
+
+        with pytest.raises(RouteError):
+            Assessment.create(
+                status="not_affected",
+                targets=[(_uuid.uuid4(), _uuid.uuid4())],
+            )
+
+
 def test_create_group_refuses_assessments_from_two_projects(app):
     """Group reads are project-filtered but writes hit every member."""
     with app.app_context():
@@ -340,7 +392,7 @@ def test_create_group_refuses_assessments_on_two_vulnerabilities(app):
         other_finding = Finding.create(
             package_id=second.finding.package_id, vulnerability_id="CVE-2026-9999")
         other = Assessment.create(
-            status="not_affected", finding_id=other_finding.id)
+            status="not_affected", targets=[(second.variant_id, other_finding.id)])
 
         with pytest.raises(GroupInvariantError):
             AssessmentGroupMember.create_group([first.id, other.id])
@@ -392,7 +444,7 @@ def test_create_group_refuses_joining_a_group_with_other_content(app):
         first, second = _make_two_assessments()
         group_id = AssessmentGroupMember.create_group([first.id, second.id])
         other = Assessment.create(
-            status="affected", finding_id=first.finding_id)
+            status="affected", targets=[(first.variant_id, first.finding_id)])
 
         with pytest.raises(GroupInvariantError):
             AssessmentGroupMember.create_group([other.id], group_id=group_id)

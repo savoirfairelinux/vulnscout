@@ -23,6 +23,7 @@ from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..models.observation import Observation
 from ..models.assessment import Assessment
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.package import Package, _normalize_supplier
 from ..models.project import Project
@@ -737,23 +738,37 @@ def _existing_assessment_identities(
     variant_id: uuid_module.UUID,
     finding_ids: Sequence[uuid_module.UUID],
 ) -> set[tuple]:
-    """Return identities of assessments already attached to these findings."""
+    """Return identities of assessments already attached to these findings.
+
+    Joins through ``assessment_targets`` rather than the assessment's scalar
+    ``finding_id``/``variant_id`` columns.  A variant-less custom-data import
+    has neither a target row nor a scalar variant, so it was outside the
+    scalar predicate and stays outside the join.
+    """
     identities: set[tuple] = set()
     for chunk in _chunked(finding_ids, _IMPORT_QUERY_CHUNK):
-        for assessment in db.session.execute(
-            db.select(Assessment).where(
-                Assessment.variant_id == variant_id,
-                Assessment.finding_id.in_(chunk),
+        for finding_id, status, simplified, notes, justification, impact in db.session.execute(
+            db.select(
+                AssessmentTarget.finding_id,
+                Assessment.status,
+                Assessment.simplified_status,
+                Assessment.status_notes,
+                Assessment.justification,
+                Assessment.impact_statement,
             )
-        ).scalars().all():
-            identities.add((
-                assessment.finding_id,
-                assessment.status or "",
-                assessment.simplified_status or "",
-                assessment.status_notes or "",
-                assessment.justification or "",
-                assessment.impact_statement or "",
-            ))
+            .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
+            .where(
+                AssessmentTarget.variant_id == variant_id,
+                AssessmentTarget.finding_id.in_(chunk),
+            )
+        ).all():
+            identities.add(_assessment_identity(finding_id, {
+                "status": status or "",
+                "simplified_status": simplified or "",
+                "status_notes": notes or "",
+                "justification": justification or "",
+                "impact_statement": impact or "",
+            }))
     return identities
 
 
@@ -904,8 +919,7 @@ def _persist_import_assessments(
             seen.add(identity)
             Assessment.create(
                 status=entry.values["status"],
-                finding_id=target.id,
-                variant_id=item.variant.id,
+                targets=[(item.variant.id, target.id)],
                 source=_IMPORT_SOURCE_LABEL,
                 origin=origin or "sbom",
                 simplified_status=entry.values["simplified_status"],
@@ -1568,11 +1582,13 @@ def init_app(app: Flask) -> None:
             _new_assess_ids = _after_assess_ids - _before_assess_ids
             if _new_assess_ids:
                 from ..models.finding import Finding as _Finding
+                from ..models.assessment_target import AssessmentTarget as _AssessmentTarget
                 _assess_rows = db.session.execute(
                     db.select(_Assessment.id, _Finding.vulnerability_id, _Assessment.status,
                               _Assessment.simplified_status, _Assessment.justification,
                               _Assessment.impact_statement, _Assessment.status_notes)
-                    .join(_Finding, _Finding.id == _Assessment.finding_id)
+                    .join(_AssessmentTarget, _AssessmentTarget.assessment_id == _Assessment.id)
+                    .join(_Finding, _Finding.id == _AssessmentTarget.finding_id)
                     .where(_Assessment.id.in_(_new_assess_ids))
                 ).all()
                 newly_detected_assessments_list = sorted([

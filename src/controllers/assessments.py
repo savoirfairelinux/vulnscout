@@ -5,12 +5,12 @@ import typing
 import uuid
 
 from ..models import Assessment, Package, Finding
-from ..helpers.verbose import verbose
+from ..helpers.verbose import verbose, warn
 from ..extensions import db
-from ._base import to_dict_with_fallback
 
 if typing.TYPE_CHECKING:
     from ..controllers import PackagesController
+    from ..helpers.export_scope import ExportScope
 
 
 def _persist_assessment_to_db(
@@ -34,6 +34,13 @@ def _persist_assessment_to_db(
         pkg_id_cache = {}
     if finding_cache is None:
         finding_cache = {}
+    # No early return on a missing variant_id here: Assessment.from_vuln_assessment
+    # has an existing-row branch that updates status/notes/justification/etc. on
+    # an assessment that already exists with no variant, and that update must
+    # still happen. A brand-new assessment with no variant has nothing to attach
+    # a target to and Assessment.create (called from the create branch, with no
+    # allow_untargeted) raises GroupInvariantError on its own -- caught below,
+    # same as any other persistence failure.
     try:
         ctx = db.session.begin_nested() if use_savepoint else db.session.no_autoflush
         with ctx:
@@ -58,7 +65,9 @@ def _persist_assessment_to_db(
 
                 Assessment.from_vuln_assessment(assessment, finding_id=finding.id, variant_id=variant_id)
     except Exception as e:
-        verbose(f"[_persist_assessment_to_db {assessment.vuln_id!r}] {e}")
+        # Losing an assessment is not a detail: report it on stderr rather
+        # than only under VERBOSE_MODE, where it left no trace at all.
+        warn(f"[_persist_assessment_to_db {assessment.vuln_id!r}] not stored: {e}")
 
 
 class AssessmentsController:
@@ -116,12 +125,30 @@ class AssessmentsController:
             verbose(f"[AssessmentsController.gets_by_vuln {vuln_str!r}] {e}")
         return self._apply_scope(list(results.values()))
 
+    @property
+    def scope(self) -> "ExportScope | None":
+        """The active export/report scope, or ``None`` for an unscoped controller."""
+        return self._scope
+
     def _apply_scope(self, assessments: list) -> list:
-        """Restrict *assessments* to the in-scope variants for a scoped export."""
+        """Restrict *assessments* to the in-scope variants for a scoped export.
+
+        An assessment is in scope if its scalar ``variant_id`` (populated for
+        single-target assessments) is allowed, or if any of its ``targets`` —
+        the full set of ``(variant_id, finding_id)`` pairs a multi-target
+        assessment applies to — falls in the allowed set. The scalar column
+        is ``NULL`` for a genuine multi-target assessment, so checking only
+        it would silently drop such assessments from every scoped
+        export/report even when one of their targets is in scope.
+        """
         if self._scope is None:
             return assessments
         allowed = self._scope.variant_ids
-        return [a for a in assessments if getattr(a, "variant_id", None) in allowed]
+        return [
+            a for a in assessments
+            if getattr(a, "variant_id", None) in allowed
+            or any(vid in allowed for vid, _ in getattr(a, "targets", []))
+        ]
 
     def get_all(self) -> list:
         """Return all assessments (in-memory + DB), de-duped, honouring export scope."""
@@ -157,15 +184,26 @@ class AssessmentsController:
         """Return True if *assessment* is compatible with the current ingestion variant.
 
         When ``current_variant_id`` is set (i.e. during a ``process`` run) we
-        only want assessments that belong to that specific variant or that
-        have no variant at all (legacy / API-created records).  This prevents
+        only want assessments that target that specific variant or that have
+        no target at all (legacy / API-created records).  This prevents
         deduplication logic in parsers (yocto, grype, …) from mistakenly
         treating another variant's assessment as an existing one and skipping
         creation of the correct variant-scoped record.
+
+        The check walks ``target_rows`` rather than ``single_variant_id``: that
+        shorthand collapses to ``None`` both for a genuinely unscoped record
+        *and* for a cross-variant one, so using it would make an assessment
+        targeting variants A and B match an ingestion for unrelated variant C.
         """
         if self.current_variant_id is None:
             return True
-        return assessment.variant_id is None or assessment.variant_id == self.current_variant_id
+        target_variant_ids = {t.variant_id for t in assessment.target_rows}
+        if not target_variant_ids:
+            # No targets at all: legacy / API-created record, applies anywhere.
+            # Deliberately diverges from Assessment.covers_variant here, which
+            # treats a NULL variant_id (not an empty target set) as "True".
+            return True
+        return self.current_variant_id in target_variant_ids
 
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
         """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
@@ -229,12 +267,11 @@ class AssessmentsController:
         :meth:`_index_existing`.  After this call, :meth:`gets_by_vuln_pkg`
         will serve results from the in-memory index without hitting the DB.
         """
-        _current_vid = self.current_variant_id
         for pkg_id in package_ids:
             if pkg_id in self._db_queried_pkgs:
                 continue
             for a in Assessment.get_by_package(pkg_id):
-                if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
+                if self._matches_current_variant(a):
                     self._index_existing(a)
             self._db_queried_pkgs.add(pkg_id)
 
@@ -292,21 +329,30 @@ class AssessmentsController:
             return True
         return False
 
-    def to_dict(self) -> dict:
-        """Return all assessments preferring in-memory data when available."""
+    def get_all_for_report(self) -> list[Assessment]:
+        """Return the exact assessment objects ``to_dict()`` would serialise.
+
+        Exposed separately from :meth:`to_dict` so callers that need the ORM
+        objects themselves (e.g. to reach ``target_rows`` when rendering one
+        entry per assessment target) can reuse the same cache-preferred /
+        scope-aware selection logic instead of duplicating it.
+        """
         if self._scope is not None:
             # Scoped export/report: restrict to the in-scope variants. get_all()
             # merges in-memory + DB and applies the scope filter, so a fallback
             # to the DB never leaks another project's/variant's assessments.
-            scoped = list(self.get_all())
-            # Resolve group membership once for the whole export instead of
-            # once per serialized row.
-            Assessment.preload_group_ids(scoped)
-            return {str(a.id): a.to_dict() for a in scoped}
-        return to_dict_with_fallback(
-            self.assessments, Assessment.get_all,
-            lambda a: str(a.id), "AssessmentsController",
-        )
+            return list(self.get_all())
+        if self.assessments:
+            return list(self.assessments.values())
+        try:
+            return list(Assessment.get_all())
+        except Exception as e:
+            verbose(f"[AssessmentsController.get_all_for_report] {e}")
+            return []
+
+    def to_dict(self) -> dict:
+        """Return all assessments preferring in-memory data when available."""
+        return {str(a.id): a.to_dict() for a in self.get_all_for_report()}
 
     def __contains__(self, item) -> bool:
         """Check if an item (str or Assessment) is in the list of assessments."""
