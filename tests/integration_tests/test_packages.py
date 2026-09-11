@@ -256,3 +256,45 @@ def test_preload_cache_with_finding():
     c2._preload_cache()
     assert "preload-pkg@1.0" in c2._cache
     assert len(c2._finding_cache) >= 1
+
+
+def test_remove_package_assessed_by_an_assessment():
+    """
+    GIVEN a persisted package whose finding an assessment targets
+    WHEN PackagesController.remove is called
+    THEN the package is removed and the orphaned assessment goes with it
+
+    The assessment target's finding_id is part of its primary key, so before
+    the Finding reaper existed this raised inside the nested transaction and
+    the broad except swallowed it -- the package silently stayed in the DB.
+    """
+    import uuid
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+    from src.models.package import Package as PackageModel
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability as VulnModel
+
+    ctrl = PackagesController()
+    ctrl.add(Package("assessed-pkg", "1.0"))
+    VulnModel.create_record("CVE-REMOVE-1")
+    pkg_db_id = ctrl.get_db_id("assessed-pkg@1.0")
+    finding = Finding.get_or_create(pkg_db_id, "CVE-REMOVE-1")
+    project = Project.create("remove-pkg-proj")
+    variant = Variant(id=uuid.uuid4(), project_id=project.id, name="v1")
+    db.session.add(variant)
+    db.session.commit()
+    assessment = Assessment.create(
+        status="affected", origin="custom",
+        targets=[(variant.id, finding.id)], commit=True,
+    )
+    assessment_id = assessment.id
+
+    assert ctrl.remove("assessed-pkg@1.0") is True
+
+    assert PackageModel.get_by_string_id("assessed-pkg@1.0") is None
+    assert db.session.query(AssessmentTarget).count() == 0
+    assert db.session.get(Assessment, assessment_id) is None
