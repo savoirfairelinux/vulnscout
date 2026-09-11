@@ -288,8 +288,8 @@ def _global_assessment_rows_by_scan(
     """Pre-fetch ``{scan_id: [(assessment_id, package_id), …]}`` for all scans.
 
     Mirrors the per-set query in :func:`_global_assessment_ids_for` but runs
-    once for the whole scan list.  Custom (manually-created) assessments are
-    excluded, matching the per-set query.
+    once for the whole scan list.  Custom (manually-created) and pending-AI
+    assessments are excluded, matching the per-set query.
     """
     from ..models.assessment import Assessment
     from ..models.assessment_target import AssessmentTarget
@@ -307,7 +307,7 @@ def _global_assessment_rows_by_scan(
         .where(
             Observation.scan_id.in_(scan_ids),
             AssessmentTarget.variant_id == Scan.variant_id,
-            Assessment.origin != "custom",
+            Assessment.origin.notin_(("custom", "ai")),
         )
     ).all()
     for aid, sid, pkg_id in rows:
