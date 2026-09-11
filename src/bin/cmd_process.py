@@ -327,7 +327,7 @@ def create_project_context(
 @click.option(
     "--refresh-vulnerability-data",
     is_flag=True,
-    help="Refresh EPSS, NVD, EUVD, and GHSA data for imported vulnerabilities.",
+    help="Refresh stored EPSS, NVD, EUVD, and GHSA data.",
 )
 @click.option("--project", "project_name", default=None, help="Evaluate conditions in this project.")
 @click.option("--variant", "variant_name", default=None, help="Evaluate conditions in this project variant.")
@@ -497,12 +497,14 @@ def _run_main(
     # ← single COMMIT happens here
     verbose("merger_ci: DB commit done")
 
+    match_condition = os.getenv("MATCH_CONDITION", "")
+
     # In interactive (serve) mode the webapp background thread handles all
     # enrichment after the loading screen clears.  Running it here too would
     # block the shell from writing the __END_OF_SCAN_SCRIPT__ marker, keeping
     # the frontend stuck at Step 1.
-    # In batch / CI mode (INTERACTIVE_MODE != "true") we run it here so that
-    # EPSS scores are available for --match-condition evaluation.
+    # Match-condition evaluates stored data; refreshing it requires the
+    # explicit --refresh-vulnerability-data option.
     interactive_mode = get_bool_env("INTERACTIVE_MODE", False)
     observations_populated = False
     if refresh_vulnerability_data:
@@ -521,6 +523,8 @@ def _run_main(
                 f"{', '.join(unique_failed)} vulnerability-data refresh failed."
             )
         click.echo("Vulnerability data refresh complete.")
+    elif match_condition:
+        verbose("merger_ci: Skipping automatic EPSS enrichment for match-condition")
     elif not interactive_mode:
         verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
         post_treatment(controllers)
@@ -528,7 +532,6 @@ def _run_main(
     else:
         verbose("merger_ci: Skipping CLI enrichment in interactive mode (webapp background thread will handle it)")
 
-    match_condition = os.getenv("MATCH_CONDITION", "")
     failed_vulns = []
     if match_condition:
         verbose("merger_ci: Start evaluating conditions")

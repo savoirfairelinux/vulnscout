@@ -72,7 +72,8 @@ Commands without --project or --variant:
     --delete-orphaned-vulns         Delete CVEs absent from every project and variant
 
     Refresh vulnerability data:
-    --refresh-vulnerability-data    Refresh all projects (optionally limited by --project and --variant)
+    --refresh-vulnerability-data    Refresh stored vulnerability data, including EPSS
+                                     (optionally limited by --project and --variant)
 
     Data listing:
     --list-projects                 List all projects and their variants (optionally in JSON format with --json)
@@ -113,7 +114,7 @@ Commands with optional --project and --variant (uses "default" project and varia
     --import-custom-openvex-assessments <path> Import custom OpenVEX assessments
 
     Test for vulnerabilities matching a condition:
-    --match-condition <expr>        Test for vulnerabilities matching a condition
+    --match-condition <expr>        Test stored vulnerability data
                                      --project without --variant tests all project variants
                                      No scope tests the default project/variant
 
