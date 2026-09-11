@@ -307,6 +307,213 @@ class TestCopyCustomAssessments:
                 "target_finding_id": str(target_finding.id),
             }
 
+
+    def _seed_multi_finding_assessment(self, app, exact=True):
+        """One assessment covering two packages of the source variant.
+
+        No other fixture builds this shape, and it is the one the flat schema
+        could not represent: it used to take two assessment rows, both of
+        which the copy flow processed.  Both packages carry the same CVE so
+        the targets may legally share an assessment (validate_targets).
+
+        With *exact* the target SBOM ships the very same package versions, so
+        exact mode has common packages; otherwise it ships newer ones, which
+        only the version-tolerant modes match.
+        """
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("MultiFindingProject")
+            source = Variant.create("MFSource", project.id)
+            target = Variant.create("MFTarget", project.id)
+
+            source_scan = Scan.create("mf source sbom", source.id, scan_type="sbom")
+            target_scan = Scan.create("mf target sbom", target.id, scan_type="sbom")
+
+            src_openssl = Package.find_or_create("mf-openssl", "1.1.1")
+            src_zlib = Package.find_or_create("mf-zlib", "1.2.11")
+            if exact:
+                tgt_openssl, tgt_zlib = src_openssl, src_zlib
+            else:
+                tgt_openssl = Package.find_or_create("mf-openssl", "3.0.0")
+                tgt_zlib = Package.find_or_create("mf-zlib", "1.3.1")
+            vuln = Vulnerability.create_record(id="CVE-MULTI-0001", description="Two packages")
+            db.session.commit()
+
+            findings = {
+                "src_openssl": Finding.get_or_create(src_openssl.id, vuln.id),
+                "src_zlib": Finding.get_or_create(src_zlib.id, vuln.id),
+                "tgt_openssl": Finding.get_or_create(tgt_openssl.id, vuln.id),
+                "tgt_zlib": Finding.get_or_create(tgt_zlib.id, vuln.id),
+            }
+
+            source_doc = SBOMDocument.create("/tmp/mf-source.spdx.json", "spdx", source_scan.id)
+            target_doc = SBOMDocument.create("/tmp/mf-target.spdx.json", "spdx", target_scan.id)
+            SBOMPackage.create(source_doc.id, src_openssl.id)
+            SBOMPackage.create(source_doc.id, src_zlib.id)
+            SBOMPackage.create(target_doc.id, tgt_openssl.id)
+            SBOMPackage.create(target_doc.id, tgt_zlib.id)
+
+            Observation.create(findings["src_openssl"].id, source_scan.id)
+            Observation.create(findings["src_zlib"].id, source_scan.id)
+            Observation.create(findings["tgt_openssl"].id, target_scan.id)
+            Observation.create(findings["tgt_zlib"].id, target_scan.id)
+
+            assessment = Assessment.create(
+                status="affected",
+                origin="custom",
+                source="manual",
+                targets=[
+                    (source.id, findings["src_openssl"].id),
+                    (source.id, findings["src_zlib"].id),
+                ],
+            )
+            db.session.commit()
+
+            return {
+                "source_variant_id": str(source.id),
+                "target_variant_id": str(target.id),
+                "assessment_id": str(assessment.id),
+                "source_finding_ids": {
+                    str(findings["src_openssl"].id), str(findings["src_zlib"].id)},
+                "target_finding_ids": {
+                    str(findings["tgt_openssl"].id), str(findings["tgt_zlib"].id)},
+            }
+
+    def _custom_assessment_count(self, app, variant_id, finding_id):
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            rows = Assessment.get_by_finding_and_variant(finding_id, variant_id)
+            return len([r for r in rows if r.origin == "custom"])
+
+    def test_copy_multi_finding_assessment_copies_every_finding_exact(self, app, client):
+        """The flat schema stored these as two rows and copied both."""
+        ids = self._seed_multi_finding_assessment(app, exact=True)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["copied"] == 2
+        for finding_id in ids["target_finding_ids"]:
+            assert self._custom_assessment_count(
+                app, ids["target_variant_id"], finding_id) == 1
+
+    def test_preview_multi_finding_assessment_lists_every_finding_exact(self, app, client):
+        ids = self._seed_multi_finding_assessment(app, exact=True)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 2
+        assert {e["source_finding_id"] for e in data["entries"]} == ids["source_finding_ids"]
+
+    def test_preview_multi_finding_assessment_groups_per_source_finding(self, app, client):
+        ids = self._seed_multi_finding_assessment(app, exact=False)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+
+        assert resp.status_code == 200
+        groups = resp.get_json()["groups"]
+        assert len(groups) == 2
+        # One assessment, but one group per source finding: the group carries a
+        # scalar source_finding_id, so it cannot stand for both.
+        assert {g["source_assessment_id"] for g in groups} == {ids["assessment_id"]}
+        assert {g["source_finding_id"] for g in groups} == ids["source_finding_ids"]
+        assert {g["source_package"] for g in groups} == {"mf-openssl@1.1.1", "mf-zlib@1.2.11"}
+
+    def test_copy_multi_finding_assessment_ignore_version(self, app, client):
+        ids = self._seed_multi_finding_assessment(app, exact=False)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["copied"] == 2
+        for finding_id in ids["target_finding_ids"]:
+            assert self._custom_assessment_count(
+                app, ids["target_variant_id"], finding_id) == 1
+
+    def test_preview_same_variant_excludes_every_covered_finding(self, app, client):
+        """The guard must reject all of the assessment's own targets, not just
+        whichever one target_rows happened to yield first."""
+        ids = self._seed_multi_finding_assessment(app, exact=True)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["source_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+
+        assert resp.status_code == 200
+        candidate_ids = {
+            candidate["target_finding_id"]
+            for group in resp.get_json()["groups"]
+            for candidate in group["candidates"]
+        }
+        assert candidate_ids & ids["source_finding_ids"] == set()
+
+    def test_copy_selections_rejects_a_finding_the_assessment_already_covers(self, app, client):
+        ids = self._seed_multi_finding_assessment(app, exact=True)
+        already_covered = sorted(ids["source_finding_ids"])[0]
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["source_variant_id"],
+                "selections": [{
+                    "source_assessment_id": ids["assessment_id"],
+                    "target_finding_id": already_covered,
+                }],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["copied"] == 0
+        # Still just the original assessment on that pair.
+        assert self._custom_assessment_count(
+            app, ids["source_variant_id"], already_covered) == 1
+
     def test_copy_assessments_default_requires_common_packages(self, app, client):
         ids = self._seed_copy_data(app)
 
