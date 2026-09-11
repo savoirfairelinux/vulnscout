@@ -118,9 +118,8 @@ class TestBuildCustomDataExport:
             vuln = Vulnerability.create_record("CVE-2099-TE01")
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
+                targets=[(var.id, finding.id)],
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
                 origin="custom",
             )
             db.session.commit()
@@ -146,9 +145,8 @@ class TestBuildCustomDataExport:
             vuln = Vulnerability.create_record("CVE-2099-AI01")
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
+                targets=[(var.id, finding.id)],
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=var.id,
                 origin="ai",
             )
 

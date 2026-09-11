@@ -450,8 +450,7 @@ def init_app(app: Flask) -> None:
         from ..models.assessment import Assessment as DBAssessment
         DBAssessment.create(
             status=src.status or "under_investigation",
-            finding_id=finding_id,
-            variant_id=variant_id,
+            targets=[(variant_id, finding_id)],
             source=src.source,
             origin="custom",
             simplified_status=src.simplified_status,

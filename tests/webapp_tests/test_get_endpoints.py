@@ -287,7 +287,43 @@ def test_get_assessments_compact(client):
     assert len(assessment) == 6
 
 
-def test_get_assessment_by_id(client):
+def _give_the_seed_assessment_its_target(app):
+    """Attach the target row the demo seed assessment is missing.
+
+    The seed in ``tests/webapp_tests/__init__.py`` is hand-built with neither
+    variant nor target -- the legacy unscoped shape.  Production has no such
+    row (the expand migration refuses to run when any assessment has a NULL
+    variant_id or finding_id), but the fixture predates variant tracking and
+    several other tests assert its NULL variant, so it is repaired here rather
+    than in the shared fixture.  Both halves are written together: a target
+    without the matching scalar mirror would leave the two disagreeing, which
+    is the failure mode PR-A exists to avoid.
+
+    This is *not* the SCC bulk-writer workaround -- that writer now emits its
+    own target rows (see ``test_scc_bulk_writer.py``).
+    """
+    import uuid
+
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+
+    variant_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    with app.app_context():
+        seed = Assessment.get_by_id("da4d18f0-d89e-4d54-819d-86fc884cc737")
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-35492")
+        ).scalars().one()
+        seed.target_rows.append(
+            AssessmentTarget(variant_id=variant_id, finding_id=finding.id))
+        seed.variant_id, seed.finding_id = variant_id, finding.id
+        db.session.commit()
+
+
+def test_get_assessment_by_id(client, app):
+    _give_the_seed_assessment_its_target(app)
+
     response = client.get("/api/assessments/da4d18f0-d89e-4d54-819d-86fc884cc737")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -299,7 +335,9 @@ def test_get_assessment_by_id(client):
     assert response.status_code == 404
 
 
-def test_get_assessments_by_vuln(client):
+def test_get_assessments_by_vuln(client, app):
+    _give_the_seed_assessment_its_target(app)
+
     response = client.get("/api/vulnerabilities/CVE-2020-35492/assessments")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -330,7 +368,9 @@ def test_get_documents_list(client):
     assert "built-in" in summary_item["category"]
 
 
-def test_render_document_adoc(client):
+def test_render_document_adoc(client, app):
+    _give_the_seed_assessment_its_target(app)
+
     response = client.get("/api/documents/summary.adoc")
     assert response.status_code == 200
     content = response.data.decode("utf-8")
@@ -563,7 +603,9 @@ def test_export_documents_archive_multiple_sboms(client):
         ]
 
 
-def test_render_document_with_options(client):
+def test_render_document_with_options(client, app):
+    _give_the_seed_assessment_its_target(app)
+
     response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
         "author=AUTHOR_NAME",
         "client_name=CLIENT_NAME",
@@ -577,7 +619,9 @@ def test_render_document_with_options(client):
     assert "CVE-2020-35492" in content
 
 
-def test_render_document_with_filter(client):
+def test_render_document_with_filter(client, app):
+    _give_the_seed_assessment_its_target(app)
+
     response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
         "ignore_before=2000-01-01T00:00",
         "only_epss_greater=45.67"
