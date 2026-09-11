@@ -1591,12 +1591,23 @@ def init_app(app: Flask) -> None:
                     .join(_Finding, _Finding.id == _AssessmentTarget.finding_id)
                     .where(_Assessment.id.in_(_new_assess_ids))
                 ).all()
-                newly_detected_assessments_list = sorted([
-                    {"vulnerability_id": vid, "status": status or "under_investigation",
-                     "simplified_status": simp or "Pending Assessment", "justification": just or "",
-                     "impact_statement": impact or "", "status_notes": notes or ""}
-                    for _aid, vid, status, simp, just, impact, notes in _assess_rows
-                ], key=lambda a: a["vulnerability_id"])
+                # A multi-target assessment produces one row per target, so
+                # dedupe by assessment id to keep the list one entry per
+                # assessment (matching the scalar-column query it replaces).
+                _seen_new_assess: set[uuid_module.UUID] = set()
+                _new_assess_entries = []
+                for aid, vid, status, simp, just, impact, notes in _assess_rows:
+                    if aid in _seen_new_assess:
+                        continue
+                    _seen_new_assess.add(aid)
+                    _new_assess_entries.append(
+                        {"vulnerability_id": vid, "status": status or "under_investigation",
+                         "simplified_status": simp or "Pending Assessment", "justification": just or "",
+                         "impact_statement": impact or "", "status_notes": notes or ""}
+                    )
+                newly_detected_assessments_list = sorted(
+                    _new_assess_entries, key=lambda a: a["vulnerability_id"]
+                )
             else:
                 newly_detected_assessments_list = []
 
