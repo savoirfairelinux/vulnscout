@@ -233,13 +233,15 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
     The query logic:
       - Start FROM observation
       - JOIN finding ON finding.id = observation.finding_id
-      - JOIN assessment ON assessment.finding_id = finding.id
+      - JOIN assessment_targets ON assessment_targets.finding_id = finding.id
+      - JOIN assessment ON assessment.id = assessment_targets.assessment_id
       - JOIN scan ON scan.id = observation.scan_id
       - JOIN package ON package.id = finding.package_id
       - WHERE observation.scan_id IN (scan_ids)
-            AND assessment.variant_id = scan.variant_id
+            AND assessment_targets.variant_id = scan.variant_id
     """
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     if not scan_ids:
         return []
@@ -262,12 +264,13 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
         )
         .select_from(Observation)
         .join(Finding, Finding.id == Observation.finding_id)
-        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+        .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
         .join(Scan, Scan.id == Observation.scan_id)
         .join(Package, Package.id == Finding.package_id)
         .where(
             Observation.scan_id.in_(scan_ids),
-            Assessment.variant_id == Scan.variant_id,
+            AssessmentTarget.variant_id == Scan.variant_id,
         )
     ).all()
 
@@ -276,8 +279,8 @@ def _assessments_by_scan(scans: list[Scan]) -> Dict[uuid_module.UUID, Dict[str, 
     """Return {scan_id: {"total": N, "added": N, "unchanged": N}} for each scan.
 
     An assessment is counted for a scan if:
-      - Its finding_id matches an observation in that scan
-      - Its variant_id matches the scan's variant_id
+      - One of its target rows names a finding observed in that scan
+      - That same target row's variant_id matches the scan's variant_id
 
     An assessment is "added" (new) if it was imported from the SBOM
     (origin == "sbom") and its timestamp >= the scan's timestamp AND

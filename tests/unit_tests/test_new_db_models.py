@@ -79,8 +79,7 @@ def finding(app, package, vuln):
 def assessment(app, finding, variant):
     return Assessment.create(
         status="under_investigation",
-        finding_id=finding.id,
-        variant_id=variant.id,
+        targets=[(variant.id, finding.id)],
     )
 
 
@@ -220,10 +219,6 @@ class TestAssessmentModel:
         results = Assessment.get_by_finding(finding.id)
         assert any(a.id == assessment.id for a in results)
 
-    def test_get_by_variant(self, assessment, variant):
-        results = Assessment.get_by_variant(variant.id)
-        assert any(a.id == assessment.id for a in results)
-
     def test_get_by_finding_and_variant(self, assessment, finding, variant):
         results = Assessment.get_by_finding_and_variant(finding.id, variant.id)
         assert any(a.id == assessment.id for a in results)
@@ -250,7 +245,7 @@ class TestAssessmentModel:
         assert assessment.timestamp is not None
 
     def test_delete(self, app, finding, variant):
-        a = Assessment.create("affected", finding_id=finding.id, variant_id=variant.id)
+        a = Assessment.create("affected", targets=[(variant.id, finding.id)])
         aid = a.id
         a.delete()
         assert Assessment.get_by_id(aid) is None
@@ -467,8 +462,8 @@ class TestAssessmentDBController:
     def test_serialize(self, assessment):
         # Field access on the model replaces the old controller serialize()
         assert assessment.status == "under_investigation"
-        assert assessment.finding_id is not None
-        assert assessment.variant_id is not None
+        assert assessment.target_rows[0].finding_id is not None
+        assert assessment.single_variant_id is not None
 
     def test_serialize_list(self, assessment):
         lst = [assessment]
@@ -481,15 +476,10 @@ class TestAssessmentDBController:
         results = Assessment.get_by_finding(finding.id)
         assert any(a.id == assessment.id for a in results)
 
-    def test_get_by_variant(self, assessment, variant):
-        results = Assessment.get_by_variant(variant.id)
-        assert any(a.id == assessment.id for a in results)
-
     def test_create(self, app, finding, variant):
         a = Assessment.create(
             "affected",
-            finding_id=finding.id,
-            variant_id=variant.id,
+            targets=[(variant.id, finding.id)],
         )
         assert a.status == "affected"
 
@@ -498,7 +488,7 @@ class TestAssessmentDBController:
         assert assessment.status == "fixed"
 
     def test_delete_by_instance(self, app, finding, variant):
-        a = Assessment.create("affected", finding_id=finding.id, variant_id=variant.id)
+        a = Assessment.create("affected", targets=[(variant.id, finding.id)])
         aid = a.id
         a.delete()
         assert Assessment.get_by_id(aid) is None
@@ -645,16 +635,6 @@ class TestMetricsController:
 class TestAssessmentModelExtra:
     """Cover Assessment model paths not exercised by the main TestAssessmentModel."""
 
-    def test_create_with_string_finding_and_variant_ids(self, app, finding, variant):
-        """Assessment.create() with string finding_id and variant_id (lines 522, 524)."""
-        a = Assessment.create(
-            status="affected",
-            finding_id=str(finding.id),
-            variant_id=str(variant.id),
-        )
-        assert a is not None
-        assert a.finding_id == finding.id
-
     def test_from_dict_invalid_uuid_id(self):
         """from_dict() with an unparseable id falls back gracefully (lines 362-363)."""
         a = Assessment.from_dict({"id": "not-a-valid-uuid", "vuln_id": "CVE-X", "packages": []})
@@ -674,11 +654,6 @@ class TestAssessmentModelExtra:
     def test_get_by_finding_with_string_id(self, app, assessment, finding):
         """get_by_finding() accepts a string UUID (line 608)."""
         results = Assessment.get_by_finding(str(finding.id))
-        assert any(a.id == assessment.id for a in results)
-
-    def test_get_by_variant_with_string_id(self, app, assessment, variant):
-        """get_by_variant() accepts a string UUID (line 617)."""
-        results = Assessment.get_by_variant(str(variant.id))
         assert any(a.id == assessment.id for a in results)
 
     def test_get_by_finding_and_variant_with_string_ids(self, app, assessment, finding, variant):

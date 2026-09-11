@@ -2,7 +2,8 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments } from '../../src/handlers/assessments';
+import Assessments, { asAssessment, asStringArray, removeDuplicateAssessments, isMultiTargetGroup, assessmentVariantIds, appliesToVariant, assessmentPackagesInVariant, coversTarget } from '../../src/handlers/assessments';
+import type { AssessmentTarget } from '../../src/handlers/assessments';
 
 describe('asStringArray', () => {
   test('non array returns empty array', () => {
@@ -127,6 +128,26 @@ describe('asAssessment optional fields', () => {
     const assessed = asAssessment(data as any) as any;
     expect(assessed.vuln_texts).toBeUndefined();
   });
+
+  test('parses variant_ids when present', () => {
+    const data = {
+      id: 'a1', vuln_id: 'CVE-2020-1', status: 'fixed',
+      timestamp: '2021-01-02T00:00:00Z',
+      packages: ['pkgA@1.0', 'pkgB@1.0'],
+      variant_ids: ['v1', 'v2'],
+    };
+    const parsed = asAssessment(data as any) as any;
+    expect(parsed.variant_ids).toEqual(['v1', 'v2']);
+  });
+
+  test('defaults variant_ids to an empty array when absent', () => {
+    const data = {
+      id: 'a1', vuln_id: 'CVE-2020-1', status: 'fixed',
+      timestamp: '2021-01-02T00:00:00Z', packages: [],
+    };
+    const parsed = asAssessment(data as any) as any;
+    expect(parsed.variant_ids).toEqual([]);
+  });
 });
 
 describe('removeDuplicateAssessments', () => {
@@ -179,6 +200,14 @@ describe('removeDuplicateAssessments', () => {
     expect(removeDuplicateAssessments([a1, a2])).toHaveLength(2);
   });
 
+  test('key distinguishes assessments covering different variant sets', () => {
+    // Both have variant_id === null (no single shared variant), so keying on
+    // variant_id alone would fuse two genuinely different assessments.
+    const a1 = makeAssessment({ variant_ids: ['v1', 'v2'] });
+    const a2 = makeAssessment({ variant_ids: ['v1', 'v3'] });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(2);
+  });
+
   test('sorts packages before building key so order does not matter', () => {
     const a1 = makeAssessment({ packages: ['pkg@1', 'pkg@2'] });
     const a2 = makeAssessment({ packages: ['pkg@2', 'pkg@1'] });
@@ -187,6 +216,115 @@ describe('removeDuplicateAssessments', () => {
 
   test('empty array returns empty array', () => {
     expect(removeDuplicateAssessments([])).toEqual([]);
+  });
+
+  const makeSparse = (overrides: any = {}) => ({
+    id: 'a1',
+    vuln_id: 'CVE-2024-1',
+    packages: ['openssl@1.0', 'zlib@1.0'],
+    variant_ids: ['A', 'B'],
+    origin: 'sbom',
+    status: 'fixed',
+    simplified_status: 'Fixed',
+    timestamp: '2024-01-01T00:00:00',
+    responses: [],
+    ...overrides,
+  });
+
+  test('does not fuse two assessments with the same sets but opposite pairings', () => {
+    const a1 = makeSparse({
+      id: 'a1',
+      targets: [
+        { variant_id: 'A', package: 'openssl@1.0' },
+        { variant_id: 'B', package: 'zlib@1.0' },
+      ],
+    });
+    const a2 = makeSparse({
+      id: 'a2',
+      targets: [
+        { variant_id: 'A', package: 'zlib@1.0' },
+        { variant_id: 'B', package: 'openssl@1.0' },
+      ],
+    });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(2);
+  });
+
+  test('still dedups identical target pairings', () => {
+    const pairing = [
+      { variant_id: 'A', package: 'openssl@1.0' },
+      { variant_id: 'B', package: 'zlib@1.0' },
+    ];
+    const a1 = makeSparse({ id: 'a1', targets: pairing });
+    const a2 = makeSparse({ id: 'a2', targets: pairing });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
+
+  test('target pair order does not affect the key', () => {
+    const a1 = makeSparse({
+      id: 'a1',
+      targets: [
+        { variant_id: 'A', package: 'openssl@1.0' },
+        { variant_id: 'B', package: 'zlib@1.0' },
+      ],
+    });
+    const a2 = makeSparse({
+      id: 'a2',
+      targets: [
+        { variant_id: 'B', package: 'zlib@1.0' },
+        { variant_id: 'A', package: 'openssl@1.0' },
+      ],
+    });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
+
+  test('an empty targets array is treated as duplicate-equivalent to an absent one', () => {
+    // The dedup coverage key falls back to the flat packages/variant_ids sets
+    // whenever `targets` is missing OR empty -- both must produce the same
+    // key so two assessments differing only in that shape are still deduped.
+    const a1 = makeSparse({ id: 'a1', variant_id: 'v1', variant_ids: ['v1'], packages: ['pkg@1.0'], targets: [] });
+    const { targets, ...withoutTargets } = a1;
+    const a2 = makeSparse({ ...withoutTargets, id: 'a2' });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
+
+  test('single-pair compact-shaped assessments still dedup', () => {
+    const a1 = makeAssessment({
+      id: 'a1',
+      packages: ['pkg@1.0'],
+      variant_id: 'v1',
+      variant_ids: ['v1'],
+      targets: [{ variant_id: 'v1', package: 'pkg@1.0' }],
+    });
+    const a2 = makeAssessment({
+      id: 'a2',
+      packages: ['pkg@1.0'],
+      variant_id: 'v1',
+      variant_ids: ['v1'],
+      targets: [{ variant_id: 'v1', package: 'pkg@1.0' }],
+    });
+    expect(removeDuplicateAssessments([a1, a2])).toHaveLength(1);
+  });
+});
+
+describe('isMultiTargetGroup', () => {
+  const makeTarget = (overrides: Partial<AssessmentTarget> = {}): AssessmentTarget => ({
+    variant_id: 'v1',
+    package: 'pkg@1.0',
+    outdated: false,
+    assessment_id: 'a1',
+    ...overrides,
+  });
+
+  test('single target is not a group', () => {
+    expect(isMultiTargetGroup([makeTarget()])).toBe(false);
+  });
+
+  test('two or more targets is a group', () => {
+    expect(isMultiTargetGroup([makeTarget({ assessment_id: 'a1' }), makeTarget({ assessment_id: 'a2' })])).toBe(true);
+  });
+
+  test('empty targets is not a group', () => {
+    expect(isMultiTargetGroup([])).toBe(false);
   });
 });
 
@@ -379,5 +517,139 @@ describe('asAssessment outdated flag', () => {
     };
     const result = asAssessment(data as any) as any;
     expect(result.superseded_map).toEqual({ 'firefox@1.0': ['firefox@2.0'] });
+  });
+});
+
+describe('assessmentVariantIds / appliesToVariant', () => {
+  const make = (overrides: any = {}) => ({
+    id: 'a1',
+    vuln_id: 'CVE-2024-1',
+    packages: [],
+    origin: 'custom',
+    status: 'fixed',
+    simplified_status: 'Fixed',
+    timestamp: '2024-01-01T00:00:00',
+    responses: [],
+    ...overrides,
+  });
+
+  test('prefers variant_ids over the variant_id shorthand', () => {
+    const a = make({ variant_id: undefined, variant_ids: ['v1', 'v2'] });
+    expect(assessmentVariantIds(a)).toEqual(['v1', 'v2']);
+    expect(appliesToVariant(a, 'v1')).toBe(true);
+    expect(appliesToVariant(a, 'v2')).toBe(true);
+    expect(appliesToVariant(a, 'v3')).toBe(false);
+  });
+
+  test('falls back to variant_id when variant_ids is absent', () => {
+    const a = make({ variant_id: 'v1' });
+    expect(assessmentVariantIds(a)).toEqual(['v1']);
+    expect(appliesToVariant(a, 'v1')).toBe(true);
+    expect(appliesToVariant(a, 'v2')).toBe(false);
+  });
+
+  test('an assessment with no variant at all matches nothing', () => {
+    const a = make({ variant_id: undefined, variant_ids: [] });
+    expect(assessmentVariantIds(a)).toEqual([]);
+    expect(appliesToVariant(a, 'v1')).toBe(false);
+  });
+
+  test('falls back to variant_id when variant_ids is an empty array, not absent', () => {
+    // Every object-payload assessment gets `variant_ids: []` set unconditionally
+    // (see asAssessment), so a payload carrying only the legacy `variant_id`
+    // still has an (empty) `variant_ids` array alongside it. The guard must
+    // treat that empty array the same as "absent" and fall back.
+    const a = make({ variant_id: 'v1', variant_ids: [] });
+    expect(assessmentVariantIds(a)).toEqual(['v1']);
+  });
+});
+
+describe('target pairs', () => {
+  const sparse = {
+    id: 'a1',
+    vuln_id: 'CVE-1',
+    status: 'fixed',
+    timestamp: '2024-01-01T00:00:00Z',
+    packages: ['openssl@1.0', 'zlib@1.0'],
+    variant_ids: ['A', 'B'],
+    targets: [
+      { variant_id: 'A', package: 'openssl@1.0' },
+      { variant_id: 'B', package: 'zlib@1.0' },
+    ],
+    responses: [],
+    origin: 'custom',
+  };
+
+  test('targets are parsed when present', () => {
+    const result = asAssessment(sparse as any) as any;
+    expect(result.targets).toEqual([
+      { variant_id: 'A', package: 'openssl@1.0' },
+      { variant_id: 'B', package: 'zlib@1.0' },
+    ]);
+  });
+
+  test('malformed target entries are filtered out', () => {
+    const data = { ...sparse, targets: [{ variant_id: 'A', package: 'openssl@1.0' }, { variant_id: 'A' }, 'nope', null, 42] };
+    const result = asAssessment(data as any) as any;
+    expect(result.targets).toEqual([{ variant_id: 'A', package: 'openssl@1.0' }]);
+  });
+
+  test('targets absent when the server omits them', () => {
+    const { targets, ...withoutTargets } = sparse;
+    const result = asAssessment(withoutTargets as any) as any;
+    expect(result.targets).toBeUndefined();
+  });
+
+  test('the compact tuple form synthesizes its single pair', () => {
+    const result = asAssessment(['a2', 'CVE-2', 'openssl@1.0', 'A', '2024-01-01T00:00:00Z', 'fixed'] as any) as any;
+    expect(result.targets).toEqual([{ variant_id: 'A', package: 'openssl@1.0' }]);
+  });
+
+  test('coversTarget matches only the pairs actually assessed', () => {
+    const assessment = asAssessment(sparse as any) as any;
+    expect(coversTarget(assessment, 'A', 'openssl@1.0')).toBe(true);
+    expect(coversTarget(assessment, 'B', 'zlib@1.0')).toBe(true);
+    // The cross-product pairs -- these are what crossing variant_ids with
+    // packages would wrongly report as assessed.
+    expect(coversTarget(assessment, 'A', 'zlib@1.0')).toBe(false);
+    expect(coversTarget(assessment, 'B', 'openssl@1.0')).toBe(false);
+  });
+
+  test('assessmentPackagesInVariant returns only that variant\'s packages', () => {
+    const assessment = asAssessment(sparse as any) as any;
+    expect(assessmentPackagesInVariant(assessment, 'A')).toEqual(['openssl@1.0']);
+    expect(assessmentPackagesInVariant(assessment, 'B')).toEqual(['zlib@1.0']);
+    expect(assessmentPackagesInVariant(assessment, 'C')).toEqual([]);
+  });
+
+  test('without targets it falls back to the flat variant/package test', () => {
+    const { targets, ...flat } = sparse;
+    const assessment = asAssessment({ ...flat, variant_ids: ['A'] } as any) as any;
+    expect(coversTarget(assessment, 'A', 'openssl@1.0')).toBe(true);
+    expect(coversTarget(assessment, 'A', 'zlib@1.0')).toBe(true);
+    expect(coversTarget(assessment, 'B', 'openssl@1.0')).toBe(false);
+  });
+
+  test('an empty targets array falls back to the flat packages list, not to []', () => {
+    // asAssessment never emits `targets: []` itself, but the guard is written
+    // against the shape, not the producer -- pin it directly.
+    const assessment = { ...sparse, variant_id: 'v1', variant_ids: ['v1'], packages: ['p'], targets: [] } as any;
+    expect(assessmentPackagesInVariant(assessment, 'v1')).toEqual(['p']);
+  });
+
+  test('a null-variant target pair matches no variant and suppresses the flat fallback', () => {
+    // The type permits `variant_id: null` on a target pair, and the backend
+    // never emits this shape today (a null variant paired with a real
+    // package) -- but the helper's behavior for it is worth pinning since the
+    // type allows it. A non-empty `targets` array always wins over the flat
+    // `packages` fallback, and no real variant id equals `null`, so this
+    // assessment covers nothing under any variant.
+    const assessment = {
+      ...sparse,
+      packages: ['p'],
+      targets: [{ variant_id: null, package: 'p' }],
+    } as any;
+    expect(assessmentPackagesInVariant(assessment, 'anyVariantId')).toEqual([]);
+    expect(coversTarget(assessment, 'anyVariantId', 'p')).toBe(false);
   });
 });

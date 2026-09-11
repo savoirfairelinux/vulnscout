@@ -42,9 +42,8 @@ class TestExportCustomOpenVexAssessments:
             vuln = Vulnerability.create_record("CVE-2099-1234")
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
+                targets=[(var.id, finding.id)],
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
                 origin="custom",
             )
             _db.session.commit()
@@ -80,9 +79,8 @@ class TestExportCustomVulnScoutData:
             vulnerability = Vulnerability.create_record("CVE-2099-5678")
             finding = Finding.create(package.id, vulnerability.id)
             Assessment.create(
+                targets=[(variant.id, finding.id)],
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=variant.id,
                 origin="ai",
             )
 
@@ -333,3 +331,248 @@ class TestImportCrossInstanceVariantId:
 
         assert result.exit_code != 0
         assert foreign_variant_id in result.output
+
+
+class TestLoadJsonFileValidation:
+    """Cover _load_json_file's non-dict-JSON guard (cmd_assessments.py:38)."""
+
+    def test_top_level_json_array_is_rejected(self, app, tmp_path):
+        from src.models.project import Project
+
+        with app.app_context():
+            project = Project.create("ArrayJsonProject")
+            project_name = project.name
+
+        import_file = tmp_path / "not-a-dict.json"
+        import_file.write_text(json.dumps(["not", "a", "dict"]))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code != 0
+        assert "Invalid JSON file" in result.output
+
+
+class TestImportPrintsWarningsOnPartialSuccess:
+    """Cover _print_custom_data_import_result's success-with-warnings branch
+    (cmd_assessments.py:48): some entries fail while others still import, so
+    the overall status stays 'success' but per-entry errors are echoed."""
+
+    def test_one_bad_entry_and_one_good_entry_both_reported(self, app, tmp_path):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("PartialSuccessProject")
+            variant = Variant.create("v1", project.id)
+            project_name = project.name
+            variant_id = variant.id
+
+        import_file = tmp_path / "partial.json"
+        import_file.write_text(json.dumps({
+            "version": 1,
+            "assessments": [
+                {
+                    "vuln_id": "CVE-2099-30001",
+                    "status": "affected",
+                    "packages": ["partial-ok@1.0"],
+                    "variant_id": str(variant_id),
+                },
+                {
+                    "vuln_id": "CVE-2099-30002",
+                    "status": "affected",
+                    "packages": [],
+                },
+            ],
+        }))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "Warning:" in result.output
+        assert "Imported 1 assessments" in result.output
+
+
+class TestExportNoDataToExport:
+    """Cover export-custom-vulnscout-data's empty-export guard (line 86)."""
+
+    def test_export_with_nothing_to_export_raises(self, app, tmp_path):
+        from src.models.project import Project
+
+        with app.app_context():
+            project = Project.create("EmptyExportProject")
+            project_name = project.name
+
+        result = app.test_cli_runner().invoke(args=[
+            "export-custom-vulnscout-data",
+            "--project", project_name,
+            "--output-dir", str(tmp_path),
+        ])
+
+        assert result.exit_code != 0
+        assert "No custom VulnScout data to export" in result.output
+
+
+class TestExportAmendReconciles:
+    """Cover the --amend reconcile branches (lines 90 and 148)."""
+
+    def test_vulnscout_export_amend_reconciles_existing_file(self, app, tmp_path):
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("AmendVulnscoutProject")
+            variant = Variant.create("v1", project.id)
+            package = Package.create("amend-pkg", "1.0.0")
+            vulnerability = Vulnerability.create_record("CVE-2099-40001")
+            finding = Finding.create(package.id, vulnerability.id)
+            Assessment.create(
+                targets=[(variant.id, finding.id)],
+                status="not_affected",
+                origin="custom",
+            )
+            _db.session.commit()
+            project_name = project.name
+            variant_name = variant.name
+
+        runner = app.test_cli_runner()
+        first = runner.invoke(args=[
+            "export-custom-vulnscout-data",
+            "--project", project_name,
+            "--variant", variant_name,
+            "--output-dir", str(tmp_path),
+        ])
+        assert first.exit_code == 0, first.output
+
+        second = runner.invoke(args=[
+            "export-custom-vulnscout-data",
+            "--project", project_name,
+            "--variant", variant_name,
+            "--output-dir", str(tmp_path),
+            "--amend",
+        ])
+        assert second.exit_code == 0, second.output
+        exported_path = tmp_path / f"custom_vulnscout_data_{variant_name}.json"
+        exported = json.loads(exported_path.read_text())
+        assert len(exported["assessments"]) == 1
+
+    def test_openvex_export_amend_reconciles_existing_file(self, app, tmp_path):
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("AmendOpenvexProject")
+            variant = Variant.create("v1", project.id)
+            package = Package.create("amend-openvex-pkg", "1.0.0")
+            vulnerability = Vulnerability.create_record("CVE-2099-40002")
+            finding = Finding.create(package.id, vulnerability.id)
+            Assessment.create(
+                targets=[(variant.id, finding.id)],
+                status="not_affected",
+                origin="custom",
+            )
+            _db.session.commit()
+            project_name = project.name
+            variant_name = variant.name
+
+        runner = app.test_cli_runner()
+        first = runner.invoke(args=[
+            "export-custom-openvex-assessments",
+            "--project", project_name,
+            "--variant", variant_name,
+            "--output-dir", str(tmp_path),
+        ])
+        assert first.exit_code == 0, first.output
+
+        second = runner.invoke(args=[
+            "export-custom-openvex-assessments",
+            "--project", project_name,
+            "--variant", variant_name,
+            "--output-dir", str(tmp_path),
+            "--amend",
+        ])
+        assert second.exit_code == 0, second.output
+
+
+class TestImportVulnscoutDataRejectsOpenvexDoc:
+    """Cover import-custom-vulnscout-data's format guard (line 114): a file
+    missing 'version' or that looks like an OpenVEX doc is rejected."""
+
+    def test_openvex_shaped_file_is_rejected(self, app, tmp_path):
+        from src.models.project import Project
+
+        with app.app_context():
+            project = Project.create("WrongFormatProject")
+            project_name = project.name
+
+        import_file = tmp_path / "wrong-format.json"
+        import_file.write_text(json.dumps({
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "statements": [],
+        }))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code != 0
+        assert "Not a valid VulnScout JSON data file" in result.output
+
+
+class TestOpenvexImportPrintsWarnings:
+    """Cover import-custom-openvex-assessments's error-echo branch (line 182)."""
+
+    def test_statement_error_is_echoed_as_warning(self, app, tmp_path):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("OpenvexWarningProject")
+            variant = Variant.create("v1", project.id)
+            project_name = project.name
+            variant_name = variant.name
+
+        import_file = tmp_path / "openvex-with-error.json"
+        import_file.write_text(json.dumps({
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "statements": [
+                {
+                    "vulnerability": {"name": "CVE-2099-50001"},
+                    "status": "affected",
+                    "products": [{"@id": "openvex-warn-pkg@1.0"}],
+                },
+                {
+                    "vulnerability": {"name": "CVE-2099-50002"},
+                    "status": "affected",
+                    "products": [],
+                },
+            ],
+        }))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-openvex-assessments",
+            "--project", project_name,
+            "--variant", variant_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "Warning:" in result.output
+        assert "Imported 1 OpenVEX assessments" in result.output

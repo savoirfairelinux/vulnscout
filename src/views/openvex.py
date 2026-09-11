@@ -129,7 +129,7 @@ class OpenVex:
                     stmt["scanners"] = list(filter(lambda x: x != "openvex", vuln.found_by))
 
             pkg_list = []
-            for pkg_id in assess.packages:
+            for pkg_id in self._in_scope_packages(assess):
                 pkg = self.packagesCtrl.get(pkg_id)
 
                 if pkg is not None:
@@ -155,3 +155,15 @@ class OpenVex:
 
             statements.append(stmt)
         return output
+
+    def _in_scope_packages(self, assess: Assessment) -> list:
+        """Return *assess*'s package ids, restricted to the export scope.
+
+        ``_apply_scope`` (in ``AssessmentsController``) admits an assessment
+        as soon as any one of its targets is in scope, so the packages of its
+        out-of-scope targets must be filtered out here.
+        """
+        from ..helpers.assessment_io import scoped_packages
+
+        scope = self.assessmentsCtrl.scope
+        return scoped_packages(assess, scope.variant_ids if scope is not None else None)

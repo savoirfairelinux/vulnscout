@@ -12,7 +12,7 @@ from .vulnerability import Vulnerability
 from .finding import Finding
 from .observation import Observation
 from .assessment import Assessment
-from .assessment_group_member import AssessmentGroupMember
+from .assessment_target import AssessmentTarget, GroupInvariantError
 from .time_estimate import TimeEstimate
 from .metrics import Metrics
 from .cvss import CVSS

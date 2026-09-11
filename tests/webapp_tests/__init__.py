@@ -8,12 +8,17 @@ import uuid
 from datetime import datetime, timezone
 
 
-def setup_demo_db(app, extra_packages=None):
+def setup_demo_db(app, extra_packages=None, create_schema=True):
     """Create all DB tables and insert demo data into the test in-memory DB.
 
     *extra_packages* is an optional list of ``"name@version"`` strings to seed as
     standalone packages. Assessment-write endpoints refuse to create packages,
     so tests that post assessments for arbitrary package names must seed them.
+
+    *create_schema* builds the schema from the model metadata, which is what
+    every test wants except the one that checks the migrations: a schema built
+    from metadata cannot show what the alembic chain forgot, so that test seeds
+    a database the migrations built and passes ``False`` here.
     """
     from src.extensions import db
     from src.models.package import Package
@@ -29,8 +34,9 @@ def setup_demo_db(app, extra_packages=None):
     from src.models import SBOMObservation
 
     with app.app_context():
-        db.drop_all()
-        db.create_all()
+        if create_schema:
+            db.drop_all()
+            db.create_all()
 
         for pkg_str in (extra_packages or []):
             _name, _sep, _version = pkg_str.partition("@")
@@ -70,7 +76,10 @@ def setup_demo_db(app, extra_packages=None):
         # Link package to vulnerability via Finding
         finding = Finding.get_or_create(pkg.id, "CVE-2020-35492")
 
-        # Demo assessment with known UUID (tests check for this exact ID)
+        # Demo assessment with known UUID (tests check for this exact ID).
+        # Intentionally has no target row: it exercises the "no variant"
+        # (variant_id is None) serialisation path, and is unreachable through
+        # variant-scoped or target-joined listings by design.
         assessment = Assessment(
             id=uuid.UUID("da4d18f0-d89e-4d54-819d-86fc884cc737"),
             status="fixed",
@@ -80,7 +89,6 @@ def setup_demo_db(app, extra_packages=None):
             impact_statement="Yocto reported vulnerability as Patched",
             responses=[],
             workaround="",
-            finding_id=finding.id,
         )
         db.session.add(assessment)
         db.session.commit()
