@@ -9,7 +9,7 @@ from unittest.mock import patch, mock_open
 from io import StringIO
 import sys
 
-from src.helpers.verbose import verbose
+from src.helpers.verbose import verbose, warn
 
 
 class TestVerbose:
@@ -140,3 +140,21 @@ class TestVerbose:
         captured = capsys.readouterr()
         expected = "Dict: {'key': 'value', 'number': 123}\n"
         assert captured.out == expected
+
+
+class TestWarn:
+    """warn() is the channel for problems that must not vanish."""
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_warn_prints_to_stderr_without_verbose_mode(self, capsys):
+        """Unlike verbose, warn does not require the user to have opted in."""
+        warn("something was dropped")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "something was dropped" in captured.err
+
+    @patch.dict(os.environ, {"VERBOSE_MODE": "true"})
+    def test_warn_still_prints_with_verbose_mode(self, capsys):
+        warn("still reported")
+        captured = capsys.readouterr()
+        assert "still reported" in captured.err

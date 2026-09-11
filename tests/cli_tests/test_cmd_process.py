@@ -444,6 +444,31 @@ class TestCmdProcessCoverage:
                 _run_main()
         mock_pt.assert_not_called()
 
+    def test_run_main_warns_when_no_scan_to_attach_assessments_to(self, tmp_path, monkeypatch, capsys):
+        """_run_main warns once when there is no scan to derive a variant from.
+
+        Assessments are stored against (variant, finding) targets; with no
+        scan there is no variant, so every parsed assessment is dropped.
+        Uses a fresh, scan-less database, unlike the shared ``app`` fixture
+        (which always seeds one).
+        """
+        scan_file = tmp_path / "scan_status.txt"
+        scan_file.write_text("__END_OF_SCAN_SCRIPT__")
+        monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+        empty_app = create_app()
+        empty_app.config.update({"TESTING": True, "SCAN_FILE": str(scan_file)})
+        with empty_app.app_context():
+            _db.create_all()
+
+            with patch("src.bin.cmd_process.read_inputs") as mock_ri, \
+                 patch("src.bin.cmd_process.post_treatment"), \
+                 patch("src.bin.cmd_process.populate_observations"):
+                mock_ri.return_value = {}
+                from src.bin.cmd_process import _run_main
+                _run_main()
+
+        assert "no scan found" in capsys.readouterr().err
+
     def test_run_main_json_cache_write_exception_swallowed(self, app, monkeypatch):
         """IO error writing JSON cache is silently swallowed (lines 360-361)."""
         import json as _json_mod
