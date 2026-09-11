@@ -127,14 +127,26 @@ def export_command(
               help="Directory where generated reports are written.")
 @click.option("--format", "output_format", default=None,
               help="Output format override: pdf or html (default: use template extension).")
+@click.option("--project", "-p", required=True,
+              help="Project name. The report includes all variants in this project.")
 @with_appcontext
-def report_command(template_name: str, output_dir: str, output_format: str | None) -> None:
+def report_command(
+    template_name: str,
+    output_dir: str,
+    output_format: str | None,
+    project: str,
+) -> None:
     """Render TEMPLATE_NAME and write the result to OUTPUT_DIR.
 
     Also honours the GENERATE_DOCUMENTS env var (comma-separated list) when
     invoked; TEMPLATE_NAME is always generated regardless.
     """
-    controllers = ControllersCache()
+    project_obj = ProjectController.get_by_name(project)
+    if project_obj is None:
+        raise click.ClickException(f"project '{project}' not found")
+    scope = compute_export_scope(project_id=project_obj.id)
+
+    controllers = ControllersCache(scope=scope)
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now

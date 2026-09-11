@@ -321,6 +321,7 @@ See the [Match Conditions](ci_conditions.md) page for the full syntax and token 
 ## Report Generation
 
 Reports are generated from templates. VulnScout ships with built-in templates and also supports custom ones.
+Reports include every variant in one project. Use `--project` to select it; when omitted, the `default` project is used.
 
 ```bash
 # Generate a report from a built-in template
