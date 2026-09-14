@@ -639,9 +639,10 @@ def import_statements(
 
         # Resolve every product to a (variant, finding) target first: one
         # statement becomes one multi-target assessment, so every product it
-        # names shares one judgement. Products already covered by an
-        # identical existing assessment are skipped, and a duplicate product
-        # within the same statement collapses to a single target.
+        # names shares one judgement. A duplicate product within the same
+        # statement collapses to a single target. Existing assessments are
+        # compared only after this complete set has been assembled: overlap
+        # with one target must not turn an A+B statement into a B-only row.
         resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
         seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
         for pkg_string_id in pkg_ids:
@@ -653,16 +654,6 @@ def import_statements(
                 db_pkg = Package.find_or_create(name, version)
                 DBVuln.get_or_create(vuln_name)
                 finding = Finding.get_or_create(db_pkg.id, vuln_name)
-
-                existing = duplicate_multitarget_assessment_exists(
-                    [(variant_id, finding.id)],
-                    status=status,
-                    origin="custom",
-                    timestamp=imported_ts,
-                )
-                if existing:
-                    skipped += 1
-                    continue
 
                 pair = (variant_id, finding.id)
                 if pair in seen_pairs:
@@ -679,13 +670,7 @@ def import_statements(
         if not resolved_targets:
             continue
 
-        # The per-product check above matches each individual (variant,
-        # finding) pair, which is exactly this statement's target set when
-        # it names one product. A statement naming several products checks
-        # each pair individually but never the *whole* set together, so
-        # confirm no existing assessment already covers this exact
-        # multi-target combination before creating a new one.
-        if len(resolved_targets) > 1 and duplicate_multitarget_assessment_exists(
+        if duplicate_multitarget_assessment_exists(
             resolved_targets, status=status, origin="custom", timestamp=imported_ts,
         ):
             skipped += 1
@@ -1167,16 +1152,6 @@ def import_custom_data(
                         continue
                     assert v_id is not None and f_id is not None
 
-                    existing = duplicate_multitarget_assessment_exists(
-                        [(v_id, f_id)],
-                        status=status,
-                        origin=origin,
-                        timestamp=imported_ts,
-                    )
-                    if existing:
-                        result[skipped_key] += 1
-                        continue
-
                     pair = (v_id, f_id)
                     if pair in seen_pairs:
                         continue
@@ -1186,11 +1161,7 @@ def import_custom_data(
                 if not resolved_targets:
                     continue
 
-                # The per-target check above matches each individual pair;
-                # a target list naming several products needs the *whole*
-                # set checked together too, so confirm no existing
-                # assessment already covers this exact combination.
-                if len(resolved_targets) > 1 and duplicate_multitarget_assessment_exists(
+                if duplicate_multitarget_assessment_exists(
                     resolved_targets, status=status, origin=origin, timestamp=imported_ts,
                 ):
                     result[skipped_key] += 1

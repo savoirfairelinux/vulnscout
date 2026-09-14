@@ -722,6 +722,40 @@ class TestImportStatementsMultiTarget:
             assert len(created) == 1
             assert len(Assessment.get_by_id(created[0]["id"]).targets) == 1
 
+    def test_existing_single_target_does_not_split_multi_product_statement(
+        self, app, variant_and_project,
+    ):
+        """An existing A assessment must not turn an imported A+B into B."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        finding_a = _make_finding("CVE-2099-PARTIAL", "partial-a", "1.0")
+        finding_b = _make_finding("CVE-2099-PARTIAL", "partial-b", "1.0")
+        stmt = {
+            "vulnerability": {"name": "CVE-2099-PARTIAL"},
+            "status": "affected",
+            "products": [
+                {"@id": "partial-a@1.0"},
+                {"@id": "partial-b@1.0"},
+            ],
+        }
+        with app.app_context():
+            Assessment.create(
+                status="affected", origin="custom",
+                targets=[(var.id, finding_a.id)],
+            )
+
+            created, errors, skipped = import_statements([stmt], var.id)
+
+            assert errors == []
+            assert skipped == 0
+            assert len(created) == 1
+            imported = Assessment.get_by_id(created[0]["id"])
+            assert imported is not None
+            assert set(imported.targets) == {
+                (var.id, finding_a.id), (var.id, finding_b.id),
+            }
+
     def test_reimporting_the_same_multi_product_statement_is_idempotent(self, app, variant_and_project):
         """GIVEN a multi-target assessment already exists for this exact set
         of products WHEN the same statement is imported again THEN no second
@@ -1241,4 +1275,42 @@ class TestCustomDataVersion2:
             assert {frozenset(row.targets) for row in rows} == {
                 frozenset({(var.id, finding_a.id), (var.id, finding_b.id)}),
                 frozenset({(var.id, finding_a.id), (var.id, finding_c.id)}),
+            }
+
+    def test_v2_existing_single_target_does_not_split_imported_set(
+        self, app, variant_and_project,
+    ):
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        finding_a = _make_finding("CVE-2099-PARTIAL2", "partial2-a", "1.0")
+        finding_b = _make_finding("CVE-2099-PARTIAL2", "partial2-b", "1.0")
+        with app.app_context():
+            Assessment.create(
+                status="affected", origin="custom",
+                targets=[(var.id, finding_a.id)],
+            )
+            payload = {
+                "version": 2,
+                "assessments": [{
+                    "vuln_id": "CVE-2099-PARTIAL2",
+                    "status": "affected",
+                    "targets": [
+                        {"variant_id": str(var.id), "package": "partial2-a@1.0"},
+                        {"variant_id": str(var.id), "package": "partial2-b@1.0"},
+                    ],
+                }],
+            }
+
+            result = import_custom_data(payload, {var.name: var})
+
+            assert result["errors"] == []
+            assert result["assessments_imported"] == 1
+            imported = [
+                row for row in Assessment.get_by_vulnerability("CVE-2099-PARTIAL2")
+                if len(row.targets) == 2
+            ]
+            assert len(imported) == 1
+            assert set(imported[0].targets) == {
+                (var.id, finding_a.id), (var.id, finding_b.id),
             }

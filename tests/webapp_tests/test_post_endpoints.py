@@ -299,6 +299,46 @@ def test_post_assessment_rejects_unobserved_finding(client):
     assert "Invalid package version" in response.get_data(as_text=True)
 
 
+def test_post_assessment_rejects_unknown_requested_variant(client):
+    import uuid as uuid_module
+
+    missing_variant = str(uuid_module.uuid4())
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        "packages": ["cairo@1.16.0"],
+        "status": "exploitable",
+        "variant_ids": [
+            "22222222-2222-2222-2222-222222222222",
+            missing_variant,
+        ],
+    })
+
+    assert response.status_code == 400
+    assert missing_variant in response.get_json()["error"]
+
+
+def test_post_assessment_rejects_cross_project_requested_variants(client):
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    with client.application.app_context():
+        foreign_project = Project.create("foreign-create-project")
+        foreign_variant = Variant.create("foreign-create-variant", foreign_project.id)
+        foreign_variant_id = str(foreign_variant.id)
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        "packages": ["cairo@1.16.0"],
+        "status": "exploitable",
+        "variant_ids": [
+            "22222222-2222-2222-2222-222222222222",
+            foreign_variant_id,
+        ],
+    })
+
+    assert response.status_code == 400
+    assert "different projects" in response.get_json()["error"]
+
+
 def test_batch_missing_package_cancels_whole_batch(client):
     # A missing package cancels the complete user action, including valid items.
     from src.models.assessment import Assessment
@@ -379,6 +419,38 @@ def test_resolve_target_set_flags_a_package_unobserved_in_every_variant(client, 
 
         assert unobserved == [stray.string_id]
         assert all(pkg_id != stray.string_id for pkg_id, _ in resolved.keys())
+
+
+def test_resolve_target_set_rejects_unknown_variant(client, demo_ids):
+    from src.routes._assessment_group import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        packages = [Package.get_by_string_id(demo_ids["two_packages"][0])]
+        with pytest.raises(ValueError, match="Variant not found"):
+            resolve_target_set(
+                packages, demo_ids["vuln_id"],
+                [uuid_module.UUID(demo_ids["variant_id"]), uuid_module.uuid4()],
+            )
+
+
+def test_resolve_target_set_rejects_variants_from_different_projects(client, demo_ids):
+    from src.routes._assessment_group import resolve_target_set
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        foreign_project = Project.create("foreign-target-project")
+        foreign_variant = Variant.create("foreign-target-variant", foreign_project.id)
+        packages = [Package.get_by_string_id(demo_ids["two_packages"][0])]
+        with pytest.raises(ValueError, match="different projects"):
+            resolve_target_set(
+                packages, demo_ids["vuln_id"],
+                [uuid_module.UUID(demo_ids["variant_id"]), foreign_variant.id],
+            )
 
 
 def test_patch_vulnerability_empty(client):

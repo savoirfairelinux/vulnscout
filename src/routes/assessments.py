@@ -1340,7 +1340,11 @@ def init_app(app: Flask) -> None:
                 + ". Assessments can only be written for existing packages."
             }, 400
 
-        resolved, unobserved = resolve_target_set(resolved_packages, vuln_id, variant_ids)
+        try:
+            resolved, unobserved = resolve_target_set(
+                resolved_packages, vuln_id, variant_ids)
+        except ValueError as exc:
+            return {"error": str(exc)}, 400
         if unobserved:
             return {
                 "error": "Invalid package version for vulnerability and variant: "

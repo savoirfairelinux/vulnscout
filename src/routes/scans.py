@@ -33,6 +33,7 @@ from ..models.sbom_package import SBOMPackage
 from ..models.variant import Variant
 from ..models.vulnerability import Vulnerability
 from ..extensions import db
+from ..helpers.assessment_io import duplicate_multitarget_assessment_exists
 
 from ._scan_queries import (
     _packages_by_scan_ids,
@@ -745,60 +746,6 @@ def _resolve_import_findings(
     return {pair: known[pair] for pair in pairs}
 
 
-def _assessment_identity(
-    finding_id: uuid_module.UUID, entry: dict[str, str]
-) -> tuple:
-    return (
-        finding_id,
-        entry["status"],
-        entry["simplified_status"],
-        entry["status_notes"],
-        entry["justification"],
-        entry["impact_statement"],
-    )
-
-
-def _existing_assessment_identities(
-    variant_id: uuid_module.UUID,
-    finding_ids: Sequence[uuid_module.UUID],
-) -> set[tuple]:
-    """Return identities of assessments already attached to these findings.
-
-    Joins through ``assessment_targets`` rather than the assessment's scalar
-    ``finding_id``/``variant_id`` columns, so a genuine multi-target
-    assessment (created with no scalar columns set) is still recognised as
-    already covering one of its targets — the scalar columns would read as
-    ``None`` for such a row and collapse every one of them into the same
-    false identity.
-    """
-    identities: set[tuple] = set()
-    for chunk in _chunked(finding_ids, _IMPORT_QUERY_CHUNK):
-        rows = db.session.execute(
-            db.select(
-                AssessmentTarget.finding_id,
-                Assessment.status,
-                Assessment.simplified_status,
-                Assessment.status_notes,
-                Assessment.justification,
-                Assessment.impact_statement,
-            )
-            .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
-            .where(
-                AssessmentTarget.variant_id == variant_id,
-                AssessmentTarget.finding_id.in_(chunk),
-            )
-        ).all()
-        for finding_id, status, simplified_status, status_notes, justification, impact_statement in rows:
-            identities.add(_assessment_identity(finding_id, {
-                "status": status or "",
-                "simplified_status": simplified_status or "",
-                "status_notes": status_notes or "",
-                "justification": justification or "",
-                "impact_statement": impact_statement or "",
-            }))
-    return identities
-
-
 def _utc_key(value: datetime) -> str:
     """Normalise a timestamp to a UTC string that compares reliably.
 
@@ -926,12 +873,6 @@ def _persist_import_assessments(
     # reads the same way on the destination as it did on the source.
     origin = item.scan_source if item.scan_type == "tool" else "sbom"
 
-    finding_ids = sorted(
-        {finding.id for findings in findings_by_vulnerability.values() for finding in findings},
-        key=str,
-    )
-    seen = _existing_assessment_identities(item.variant.id, finding_ids)
-
     created = 0
     for entry in item.assessments:
         if entry.package_keys is not None:
@@ -943,17 +884,17 @@ def _persist_import_assessments(
             ]
         else:
             targets = findings_by_vulnerability.get(entry.vulnerability_id, [])
-        new_targets = []
-        for target in targets:
-            identity = _assessment_identity(target.id, entry.values)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            new_targets.append(target)
-        if new_targets:
+        resolved_targets = [(item.variant.id, target.id) for target in targets]
+        if not resolved_targets or duplicate_multitarget_assessment_exists(
+            resolved_targets,
+            status=entry.values["status"],
+            origin=origin or "sbom",
+        ):
+            continue
+        if targets:
             Assessment.create(
                 status=entry.values["status"],
-                targets=[(item.variant.id, target.id) for target in new_targets],
+                targets=resolved_targets,
                 source=_IMPORT_SOURCE_LABEL,
                 origin=origin or "sbom",
                 simplified_status=entry.values["simplified_status"],

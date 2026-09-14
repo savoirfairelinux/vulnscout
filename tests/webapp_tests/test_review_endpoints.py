@@ -2624,6 +2624,19 @@ def test_reconcile_cross_project_variant_is_400_not_500(client, demo_ids):
     assert "different projects" in resp.get_json()["error"]
 
 
+def test_reconcile_rejects_unknown_requested_variant(client, demo_ids):
+    group_id, _ = _create_group(client, demo_ids)
+    missing_variant = str(uuid.uuid4())
+
+    response = _reconcile(
+        client, group_id, demo_ids,
+        variant_ids=[demo_ids["variant_id"], missing_variant],
+    )
+
+    assert response.status_code == 400
+    assert missing_variant in response.get_json()["error"]
+
+
 def test_reconcile_rejects_unknown_package(client, demo_ids):
     group_id, _ = _create_group(client, demo_ids)
 
