@@ -494,6 +494,14 @@ def duplicate_multitarget_assessment_exists(
     status: str,
     origin: str,
     timestamp: "_dt | None" = None,
+    *,
+    source: str | None = None,
+    simplified_status: str | None = None,
+    status_notes: str | None = None,
+    justification: str | None = None,
+    impact_statement: str | None = None,
+    workaround: str | None = None,
+    responses: "list[str] | None" = None,
 ) -> bool:
     """Return True when an assessment with exactly this target set already exists.
 
@@ -504,7 +512,11 @@ def duplicate_multitarget_assessment_exists(
     multi-pair set (a multi-target import) — there is no separate scalar
     column to check against anymore.
 
-    Runs exactly two queries regardless of how many targets are in
+    Candidate rows must also match every persisted content field. Otherwise an
+    import carrying new notes, justification, impact, or provenance would be
+    discarded merely because its target set and status overlap an older row.
+
+    Runs a bounded number of queries regardless of how many targets are in
     *resolved_targets*: one to find candidate assessment ids that match on
     status/origin/timestamp and overlap this exact target set, one to load
     the full target rows of those (typically few) candidates for the
@@ -542,12 +554,30 @@ def duplicate_multitarget_assessment_exists(
     if not candidate_ids:
         return False
 
+    candidates = db.session.execute(
+        db.select(DBAssessment).where(DBAssessment.id.in_(candidate_ids))
+    ).scalars().all()
+    expected_responses = sorted(str(value) for value in (responses or []))
+    matching_ids = {
+        assessment.id
+        for assessment in candidates
+        if (assessment.source or "") == (source or "")
+        and (assessment.simplified_status or "") == (simplified_status or "")
+        and (assessment.status_notes or "") == (status_notes or "")
+        and (assessment.justification or "") == (justification or "")
+        and (assessment.impact_statement or "") == (impact_statement or "")
+        and (assessment.workaround or "") == (workaround or "")
+        and sorted(str(value) for value in (assessment.responses or [])) == expected_responses
+    }
+    if not matching_ids:
+        return False
+
     rows = db.session.execute(
         db.select(
             AssessmentTarget.assessment_id,
             AssessmentTarget.variant_id,
             AssessmentTarget.finding_id,
-        ).where(AssessmentTarget.assessment_id.in_(candidate_ids))
+        ).where(AssessmentTarget.assessment_id.in_(matching_ids))
     ).all()
 
     by_assessment: "dict[_uuid.UUID, set[tuple[_uuid.UUID, _uuid.UUID]]]" = {}
@@ -672,6 +702,12 @@ def import_statements(
 
         if duplicate_multitarget_assessment_exists(
             resolved_targets, status=status, origin="custom", timestamp=imported_ts,
+            simplified_status=STATUS_TO_SIMPLIFIED.get(status, "Pending Assessment"),
+            status_notes=status_notes,
+            justification=justification,
+            impact_statement=impact_statement,
+            workaround=workaround,
+            responses=[],
         ):
             skipped += 1
             continue
@@ -1122,6 +1158,11 @@ def import_custom_data(
             impact_statement = a.get("impact_statement", "")
             status_notes = a.get("status_notes", "")
             workaround = a.get("workaround", "")
+            imported_simplified_status = (
+                a.get("simplified_status")
+                if isinstance(a.get("simplified_status"), str)
+                else STATUS_TO_SIMPLIFIED.get(status, "Pending Assessment")
+            )
             imported_ts = parse_imported_timestamp(
                 a.get("timestamp"), use_original_timestamps
             )
@@ -1163,6 +1204,12 @@ def import_custom_data(
 
                 if duplicate_multitarget_assessment_exists(
                     resolved_targets, status=status, origin=origin, timestamp=imported_ts,
+                    simplified_status=imported_simplified_status,
+                    status_notes=status_notes,
+                    justification=justification,
+                    impact_statement=impact_statement,
+                    workaround=workaround,
+                    responses=[],
                 ):
                     result[skipped_key] += 1
                     continue
@@ -1170,9 +1217,7 @@ def import_custom_data(
                 try:
                     create_kwargs: dict[str, Any] = dict(
                         status=status,
-                        simplified_status=STATUS_TO_SIMPLIFIED.get(
-                            status, "Pending Assessment"
-                        ),
+                        simplified_status=imported_simplified_status,
                         origin=origin,
                         status_notes=status_notes,
                         justification=justification,
@@ -1241,6 +1286,13 @@ def import_custom_data(
                         status=status,
                         origin=origin,
                         timestamp=imported_ts,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(
+                            status, "Pending Assessment"),
+                        status_notes=status_notes,
+                        justification=justification,
+                        impact_statement=impact_statement,
+                        workaround=workaround,
+                        responses=[],
                     )
                     if existing:
                         result[skipped_key] += 1

@@ -889,6 +889,13 @@ def _persist_import_assessments(
             resolved_targets,
             status=entry.values["status"],
             origin=origin or "sbom",
+            source=_IMPORT_SOURCE_LABEL,
+            simplified_status=entry.values["simplified_status"],
+            status_notes=entry.values["status_notes"],
+            justification=entry.values["justification"],
+            impact_statement=entry.values["impact_statement"],
+            workaround="",
+            responses=[],
         ):
             continue
         if targets:

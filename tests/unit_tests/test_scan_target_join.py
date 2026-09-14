@@ -133,9 +133,13 @@ def test_scan_import_duplicate_detection_compares_complete_target_set(app):
 
         assert duplicate_multitarget_assessment_exists(
             targets, status="not_affected", origin="custom",
+            simplified_status="", status_notes="n", justification="j",
+            impact_statement="i", responses=[],
         )
         assert not duplicate_multitarget_assessment_exists(
             [(variant.id, openssl.id)], status="not_affected", origin="custom",
+            simplified_status="", status_notes="n", justification="j",
+            impact_statement="i", responses=[],
         )
         assert set(assessment.targets) == set(targets)
 

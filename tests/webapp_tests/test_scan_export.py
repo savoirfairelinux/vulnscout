@@ -388,12 +388,19 @@ class TestImportScan:
                 payload["variant_name"], destination_project.id)
             assert destination_variant is not None
             cairo = Package.get_by_string_id("cairo@1.16.0")
-            assert cairo is not None
+            libpng = Package.get_by_string_id("libpng@1.6.37")
+            assert cairo is not None and libpng is not None
             cairo_finding = Finding.get_or_create(cairo.id, "CVE-2020-35492")
+            libpng_finding = Finding.get_or_create(libpng.id, "CVE-2020-35492")
             Assessment.create(
                 status="affected",
-                targets=[(destination_variant.id, cairo_finding.id)],
+                targets=[
+                    (destination_variant.id, cairo_finding.id),
+                    (destination_variant.id, libpng_finding.id),
+                ],
                 origin="sbom",
+                source="Imported VulnScout scan",
+                status_notes="older different details",
             )
 
         response = client.post("/api/scans/import", json=payload)
