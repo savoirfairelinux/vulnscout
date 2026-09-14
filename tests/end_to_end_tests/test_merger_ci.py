@@ -564,8 +564,7 @@ def test_report_custom_template_isolates_every_context_collection(app, tmp_path,
         selected_finding = Finding.create(selected_package.id, selected_vulnerability.id)
         Assessment.create(
             "affected",
-            finding_id=selected_finding.id,
-            variant_id=selected_variant.id,
+            targets=[(selected_variant.id, selected_finding.id)],
             origin="custom",
             status_notes="SELECTED_ASSESSMENT",
         )
@@ -582,8 +581,7 @@ def test_report_custom_template_isolates_every_context_collection(app, tmp_path,
         sibling_finding = Finding.create(sibling_package.id, sibling_vulnerability.id)
         Assessment.create(
             "affected",
-            finding_id=sibling_finding.id,
-            variant_id=sibling_variant.id,
+            targets=[(sibling_variant.id, sibling_finding.id)],
             origin="custom",
             status_notes="SIBLING_ASSESSMENT",
         )
@@ -601,8 +599,7 @@ def test_report_custom_template_isolates_every_context_collection(app, tmp_path,
         foreign_finding = Finding.create(foreign_package.id, foreign_vulnerability.id)
         Assessment.create(
             "affected",
-            finding_id=foreign_finding.id,
-            variant_id=foreign_variant.id,
+            targets=[(foreign_variant.id, foreign_finding.id)],
             origin="custom",
             status_notes="FOREIGN_ASSESSMENT",
         )
