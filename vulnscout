@@ -87,9 +87,6 @@ Commands without --project or --variant:
     --config-list                   Show current configuration
     --config-clear <key>            Remove a config key
 
-Report generation by project (uses "default" if --project is omitted):
-    --report <template|path>        Generate a report from a template
-                                    Includes all variants in the selected project
 
 Commands with optional --project and --variant (uses "default" project and variant if not specified):
 
@@ -115,6 +112,11 @@ Commands with optional --project and --variant (uses "default" project and varia
     Import or export custom OpenVEX custom assessments for a project/variant:
     --export-custom-openvex-assessments Export custom OpenVEX assessments
     --import-custom-openvex-assessments <path> Import custom OpenVEX assessments
+
+    Report generation by project or variant:
+        --report <template|path>    Generate a report from a template
+                                     --project includes all project variants;
+                                     add --variant to report on one variant only
 
     Test for vulnerabilities matching a condition:
     --match-condition <expr>        Test stored vulnerability data
@@ -147,6 +149,7 @@ Environment variables:
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
   vulnscout --project test --match-condition "cvss >= 9.0"
+  vulnscout --project test --variant x86 --report summary.adoc
   vulnscout --serve
   vulnscout --report summary.adoc
   vulnscout --config NVD_API_KEY abc123

@@ -123,6 +123,7 @@ def embed_image(name: str, width: Optional[int] = None, alt: str = "") -> str:
 
 class Templates:
     def __init__(self, controllers: ControllersCache):
+        self.scope = controllers.scope
         self.packagesCtrl: PackagesController = controllers.packages
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
@@ -169,19 +170,32 @@ class Templates:
         kwargs["assessments"] = {}
 
         if self.projectsCtrl is not None:
-            kwargs["projects"] = {p["id"]: p for p in self.projectsCtrl.serialize_list(self.projectsCtrl.get_all())}
+            projects = self.projectsCtrl.get_all()
+            if self.scope is not None:
+                projects = [project for project in projects if project.id in self.scope.project_ids]
+            kwargs["projects"] = {p["id"]: p for p in self.projectsCtrl.serialize_list(projects)}
         else:
             kwargs["projects"] = {}
         if self.variantsCtrl is not None:
-            kwargs["variants"] = {v["id"]: v for v in self.variantsCtrl.serialize_list(self.variantsCtrl.get_all())}
+            variants = self.variantsCtrl.get_all()
+            if self.scope is not None:
+                variants = [variant for variant in variants if variant.id in self.scope.variant_ids]
+            kwargs["variants"] = {v["id"]: v for v in self.variantsCtrl.serialize_list(variants)}
         else:
             kwargs["variants"] = {}
         if self.scansCtrl is not None:
-            kwargs["scans"] = {s["id"]: s for s in self.scansCtrl.serialize_list(self.scansCtrl.get_all())}
+            scans = self.scansCtrl.get_all()
+            if self.scope is not None:
+                scans = [scan for scan in scans if scan.id in self.scope.scan_ids]
+            kwargs["scans"] = {s["id"]: s for s in self.scansCtrl.serialize_list(scans)}
         else:
             kwargs["scans"] = {}
         if self.sbomDocumentsCtrl is not None:
-            all_docs = self.sbomDocumentsCtrl.serialize_list(self.sbomDocumentsCtrl.get_all())
+            documents = self.sbomDocumentsCtrl.get_all()
+            if self.scope is not None:
+                documents = [document for document in documents
+                             if document.id in self.scope.sbom_document_ids]
+            all_docs = self.sbomDocumentsCtrl.serialize_list(documents)
             kwargs["sbom_documents"] = {d["id"]: d for d in all_docs}
         else:
             kwargs["sbom_documents"] = {}

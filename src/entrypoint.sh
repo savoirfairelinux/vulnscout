@@ -568,8 +568,12 @@ cmd_report() {
     local template="$1"
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    local -a scope_args=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        scope_args+=(--variant "$VARIANT_NAME")
+    fi
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp report "$template" --output-dir "$output_dir" --project "$PROJECT_NAME"
+    flask --app src.bin.webapp report "$template" --output-dir "$output_dir" "${scope_args[@]}"
     setup_user
 }
 

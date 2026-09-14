@@ -73,6 +73,10 @@ grep -q -- '/scan/src/entrypoint.sh --project default --report summary.adoc' "$V
 grep -q -- '/scan/src/entrypoint.sh --project cli --report summary.adoc' "$VULNSCOUT_TEST_LOG"
 
 : > "$VULNSCOUT_TEST_LOG"
+"$ROOT_DIR/vulnscout" --project cli --variant release --report summary.adoc
+grep -q -- '/scan/src/entrypoint.sh --project cli --variant release --report summary.adoc' "$VULNSCOUT_TEST_LOG"
+
+: > "$VULNSCOUT_TEST_LOG"
 "$ROOT_DIR/vulnscout" --project cli --add-spdx "$SBOM" --match-condition affected
 grep -q -- '--project cli --add-spdx /tmp/vulnscout_stage_input.spdx.json --match-condition affected' \
     "$VULNSCOUT_TEST_LOG"
