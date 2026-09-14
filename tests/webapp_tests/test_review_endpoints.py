@@ -1736,12 +1736,15 @@ def _seed_assessment(app, *, vuln_id, pkg_name, pkg_version, status, origin):
     from src.models.vulnerability import Vulnerability
     from src.models.finding import Finding
     from src.models.assessment import Assessment
+    from src.models.assessment import STATUS_TO_SIMPLIFIED
     with app.app_context():
         pkg = Package.find_or_create(pkg_name, pkg_version, supplier="")
         Vulnerability.get_or_create(vuln_id)
         finding = Finding.get_or_create(pkg.id, vuln_id)
         Assessment.create(
             status=status,
+            simplified_status=STATUS_TO_SIMPLIFIED.get(
+                status, "Pending Assessment"),
             targets=[(VARIANT_UUID, finding.id)],
             origin=origin,
         )
@@ -1769,6 +1772,7 @@ def test_import_custom_data_duplicate_multiple_existing_rows(app, client):
         for _ in range(2):
             Assessment.create(
                 status="affected",
+                simplified_status="Exploitable",
                 targets=[(VARIANT_UUID, finding.id)],
                 origin="custom",
             )
@@ -1813,6 +1817,7 @@ def test_import_statements_duplicate_multiple_existing_rows(app):
         for _ in range(2):
             Assessment.create(
                 status="fixed",
+                simplified_status="Fixed",
                 targets=[(VARIANT_UUID, finding.id)],
                 origin="custom",
             )

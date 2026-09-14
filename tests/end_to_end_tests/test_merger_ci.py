@@ -1040,8 +1040,18 @@ def test_export_import_openvex_roundtrip(app, tmp_path):
 
 
 def test_import_custom_openvex_assessments_skips_duplicates(app, tmp_path):
-    """Importing the same OpenVEX data twice skips duplicates."""
-    _create_custom_assessment(app)
+    """Importing the same persisted OpenVEX content twice skips duplicates."""
+    assessment, _ = _create_custom_assessment(app)
+
+    # OpenVEX represents ``affected`` impact through its action statement and
+    # has no simplified-status field. Align the existing row with the exact
+    # content the importer will persist so this remains a true duplicate.
+    with app.app_context():
+        from src.extensions import db as _db
+        _db.session.add(assessment)
+        assessment.simplified_status = "Exploitable"
+        assessment.impact_statement = ""
+        _db.session.commit()
 
     with app.app_context():
         runner = app.test_cli_runner()

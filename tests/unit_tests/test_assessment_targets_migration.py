@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import importlib
+import inspect
 import json
+import os
 import uuid
 
 import pytest
@@ -365,6 +367,46 @@ def test_responses_key_falls_back_to_the_raw_text_when_unparsable():
 
 def test_responses_key_handles_a_non_list_json_value():
     assert migration.responses_key('{"b": 1, "a": 2}') == '{"a": 2, "b": 1}'
+
+
+def test_migration_contains_no_sqlite_only_conflict_dml():
+    source = inspect.getsource(migration)
+    assert "INSERT OR IGNORE" not in source
+    assert "UPDATE OR IGNORE" not in source
+
+
+@pytest.mark.skipif(
+    not os.getenv("VULNSCOUT_TEST_POSTGRES_URI"),
+    reason="VULNSCOUT_TEST_POSTGRES_URI is not configured",
+)
+def test_backfill_and_fusion_run_on_postgresql():
+    """Exercise the migration DML against a real isolated PostgreSQL schema."""
+    engine = sa.create_engine(os.environ["VULNSCOUT_TEST_POSTGRES_URI"])
+    schema = f"vulnscout_migration_{uuid.uuid4().hex}"
+    with engine.connect() as connection:
+        connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        connection.execute(sa.text(f'SET search_path TO "{schema}"'))
+        try:
+            _build_schema(connection)
+            project_id = _new_id()
+            finding_id = _add_finding(connection, "CVE-2026-PG01")
+            first = _add_assessment(
+                connection, finding_id, _add_variant(connection, project_id))
+            second = _add_assessment(
+                connection, finding_id, _add_variant(connection, project_id))
+
+            _run_backfill(connection)
+
+            remaining = _existing_assessments(connection)
+            counts = _target_counts(connection)
+            assert len(remaining) == 1
+            survivor = next(iter(remaining))
+            assert survivor in {first, second}
+            assert counts[survivor] == 2
+        finally:
+            connection.rollback()
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            connection.commit()
 
 
 def _build_pre_upgrade_schema(connection):

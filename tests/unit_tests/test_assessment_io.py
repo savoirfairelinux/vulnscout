@@ -756,6 +756,34 @@ class TestImportStatementsMultiTarget:
                 (var.id, finding_a.id), (var.id, finding_b.id),
             }
 
+    def test_same_targets_and_status_with_different_notes_are_not_duplicates(
+        self, app, variant_and_project,
+    ):
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        base = {
+            "vulnerability": {"name": "CVE-2099-DETAILS"},
+            "status": "affected",
+            "products": [{"@id": "details-pkg@1.0"}],
+        }
+        with app.app_context():
+            first, errors, skipped = import_statements(
+                [{**base, "status_notes": "first details"}], var.id)
+            second, errors2, skipped2 = import_statements(
+                [{**base, "status_notes": "second details"}], var.id)
+
+            assert errors == errors2 == []
+            assert skipped == skipped2 == 0
+            assert len(first) == len(second) == 1
+            rows = [
+                row for row in Assessment.get_by_vulnerability("CVE-2099-DETAILS")
+                if row.origin == "custom"
+            ]
+            assert {row.status_notes for row in rows} == {
+                "first details", "second details",
+            }
+
     def test_reimporting_the_same_multi_product_statement_is_idempotent(self, app, variant_and_project):
         """GIVEN a multi-target assessment already exists for this exact set
         of products WHEN the same statement is imported again THEN no second
@@ -1314,3 +1342,37 @@ class TestCustomDataVersion2:
             assert set(imported[0].targets) == {
                 (var.id, finding_a.id), (var.id, finding_b.id),
             }
+
+    def test_v2_same_targets_and_status_with_different_details_are_distinct(
+        self, app, variant_and_project,
+    ):
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        _make_finding("CVE-2099-DETAILS2", "details2-pkg", "1.0")
+        base = {
+            "vuln_id": "CVE-2099-DETAILS2",
+            "status": "affected",
+            "targets": [{
+                "variant_id": str(var.id),
+                "package": "details2-pkg@1.0",
+            }],
+        }
+        with app.app_context():
+            first = import_custom_data(
+                {"version": 2, "assessments": [{**base, "status_notes": "first"}]},
+                {var.name: var},
+            )
+            second = import_custom_data(
+                {"version": 2, "assessments": [{**base, "status_notes": "second"}]},
+                {var.name: var},
+            )
+
+            assert first["errors"] == second["errors"] == []
+            assert first["assessments_imported"] == 1
+            assert second["assessments_imported"] == 1
+            rows = [
+                row for row in Assessment.get_by_vulnerability("CVE-2099-DETAILS2")
+                if row.origin == "custom"
+            ]
+            assert {row.status_notes for row in rows} == {"first", "second"}

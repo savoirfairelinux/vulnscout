@@ -76,12 +76,8 @@ def backfill_targets(connection):
     targets, becoming invisible to every variant-filtered read, so the migration
     stops rather than creating it.
 
-    ``OR IGNORE`` keeps the backfill idempotent so it can be re-run against a
-    table that already holds some of these triples -- a retried or partially
-    applied upgrade, or a caller that seeded rows through the ORM before
-    invoking the backfill directly.  On a clean upgrade the target table is
-    created by this same revision, so every inserted triple is distinct and the
-    clause is a no-op.
+    Existing triples are loaded first so this stays idempotent without relying
+    on SQLite-specific conflict syntax.
     """
     orphans = connection.execute(sa.text(
         "SELECT COUNT(*) FROM assessments"
@@ -92,10 +88,28 @@ def backfill_targets(connection):
             f"{orphans} assessment(s) have no valid target: finding_id or"
             " variant_id is NULL.  Resolve or delete them before upgrading."
         )
-    connection.execute(sa.text(
-        "INSERT OR IGNORE INTO assessment_targets (assessment_id, variant_id, finding_id)"
-        " SELECT id, variant_id, finding_id FROM assessments"
-    ))
+    metadata = sa.MetaData()
+    assessments = sa.Table("assessments", metadata, autoload_with=connection)
+    targets = sa.Table("assessment_targets", metadata, autoload_with=connection)
+    existing = {
+        tuple(row)
+        for row in connection.execute(sa.select(
+            targets.c.assessment_id, targets.c.variant_id, targets.c.finding_id
+        ))
+    }
+    pending = [
+        {
+            "assessment_id": assessment_id,
+            "variant_id": variant_id,
+            "finding_id": finding_id,
+        }
+        for assessment_id, variant_id, finding_id in connection.execute(sa.select(
+            assessments.c.id, assessments.c.variant_id, assessments.c.finding_id
+        ))
+        if (assessment_id, variant_id, finding_id) not in existing
+    ]
+    if pending:
+        connection.execute(targets.insert(), pending)
 
 
 def fuse_duplicates(connection):
@@ -151,18 +165,27 @@ def fuse_duplicates(connection):
             moves.append({"survivor": survivor, "other": other})
             doomed.append({"other": other})
 
-    for start in range(0, len(moves), 500):
-        connection.execute(
-            sa.text(
-                "UPDATE OR IGNORE assessment_targets SET assessment_id = :survivor"
-                " WHERE assessment_id = :other"
-            ),
-            moves[start:start + 500],
-        )
-    # OR IGNORE above leaves behind any row whose (variant, finding) the
-    # survivor already covers -- two rows in one bucket may name the same
-    # target -- so the leftovers are dropped rather than colliding on the
-    # composite primary key.
+    metadata = sa.MetaData()
+    targets = sa.Table("assessment_targets", metadata, autoload_with=connection)
+    for move in moves:
+        other_targets = connection.execute(sa.select(
+            targets.c.variant_id, targets.c.finding_id
+        ).where(targets.c.assessment_id == move["other"])).all()
+        survivor_targets = set(connection.execute(sa.select(
+            targets.c.variant_id, targets.c.finding_id
+        ).where(targets.c.assessment_id == move["survivor"])).all())
+        missing = [
+            {
+                "assessment_id": move["survivor"],
+                "variant_id": variant_id,
+                "finding_id": finding_id,
+            }
+            for variant_id, finding_id in other_targets
+            if (variant_id, finding_id) not in survivor_targets
+        ]
+        if missing:
+            connection.execute(targets.insert(), missing)
+
     for start in range(0, len(doomed), 500):
         connection.execute(
             sa.text("DELETE FROM assessment_targets WHERE assessment_id = :other"),
