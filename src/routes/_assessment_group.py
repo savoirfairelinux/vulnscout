@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from ..extensions import db, batch_session
-from ..models import Assessment as DBAssessment, Finding, Package
+from ..models import Assessment as DBAssessment, Finding, Package, Variant
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 
 
@@ -215,6 +215,7 @@ def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], Any]
 
 def resolve_target_set(
     packages: list[Package], vuln_id: str, variant_ids: list[UUID],
+    expected_project_id: UUID | None = None,
 ) -> "tuple[dict[tuple[str, UUID], Finding], list[str]]":
     """Cross *packages* with *variant_ids*, keeping only observed combos.
 
@@ -228,6 +229,23 @@ def resolve_target_set(
     itself an error: the selection is a cross-product, but scan data is
     sparse, so a missing cell simply produces no target.
     """
+    variants = []
+    missing_variants = []
+    for variant_id in variant_ids:
+        variant = Variant.get_by_id(variant_id)
+        if variant is None:
+            missing_variants.append(str(variant_id))
+        else:
+            variants.append(variant)
+    if missing_variants:
+        raise ValueError("Variant not found: " + ", ".join(missing_variants))
+
+    project_ids = {variant.project_id for variant in variants}
+    if expected_project_id is not None:
+        project_ids.add(expected_project_id)
+    if len(project_ids) > 1:
+        raise ValueError("Assessment targets belong to different projects")
+
     resolved: dict[tuple[str, UUID], Finding] = {}
     covered: set[str] = set()
     for variant_id in variant_ids:
@@ -273,7 +291,18 @@ def resolve_targets(
             + ". Assessments can only be written for existing packages."
         }
 
-    resolved, unobserved_initial = resolve_target_set(packages, req.vuln_id, req.variant_ids)
+    expected_project_id: UUID | None = None
+    if existing_by_key:
+        existing_variant = Variant.get_by_id(next(iter(existing_by_key))[1])
+        if existing_variant is not None:
+            expected_project_id = existing_variant.project_id
+    try:
+        resolved, unobserved_initial = resolve_target_set(
+            packages, req.vuln_id, req.variant_ids,
+            expected_project_id=expected_project_id,
+        )
+    except ValueError as exc:
+        return {}, {"error": str(exc)}
     selected_packages = {package.string_id for package in packages}
     covered = selected_packages - set(unobserved_initial)
 

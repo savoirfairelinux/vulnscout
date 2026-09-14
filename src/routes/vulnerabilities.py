@@ -782,6 +782,7 @@ def init_app(app: Flask) -> None:
                     .join(_PkgVariant2, (
                         (_PkgVariant2.name == Package.name)
                         & (_PkgVariant2.version == Package.version)
+                        & (_PkgVariant2.supplier == Package.supplier)
                     ))
                     .join(Finding, Finding.package_id == _PkgVariant2.id)
                     .where(SBOMDocument.scan_id.in_(current_scan_ids))

@@ -835,6 +835,31 @@ def test_get_vulnerabilities_reports_current_packages_per_variant(client):
     }
 
 
+def test_current_packages_per_variant_keeps_supplier_identity(app, client):
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.package import Package
+
+    variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        other_supplier = Package.find_or_create(
+            "cairo", "1.16.0", supplier="Other Supplier")
+        Finding.get_or_create(other_supplier.id, "CVE-2020-35492")
+        db.session.commit()
+
+    response = client.get(f"/api/vulnerabilities?variant_id={variant_id}")
+
+    assert response.status_code == 200
+    vulnerability = next(
+        item for item in response.get_json()
+        if item["id"] == "CVE-2020-35492"
+    )
+    assert vulnerability["packages_current_by_variant"] == {
+        variant_id: ["cairo@1.16.0"],
+    }
+    assert "cairo@1.16.0::Other Supplier" not in vulnerability["packages_current"]
+
+
 def test_get_vulnerability_by_id_with_variant_scope(app, client):
     """GET /api/vulnerabilities/<id>?variant_id=... applies scoped effort/CVSS."""
     from src.extensions import db

@@ -113,13 +113,11 @@ def test_cmd_vuln_scan_existence_check_finds_a_multi_target_assessment(app):
         assert db.session.query(Assessment).count() == 1
 
 
-def test_existing_assessment_identities_keys_by_target_finding_id(app):
-    """A multi-target assessment has no single finding_id of its own; the
-    identity lookup must key off each target's own finding_id instead, or
-    every multi-target assessment collapses onto the same identity."""
+def test_scan_import_duplicate_detection_compares_complete_target_set(app):
+    """An overlapping single target is not equal to the full target set."""
     with app.app_context():
         from src.models.assessment import Assessment
-        from src.routes.scans import _existing_assessment_identities
+        from src.helpers.assessment_io import duplicate_multitarget_assessment_exists
 
         project = uuid.uuid4()
         variant = _make_variant(project, "a")
@@ -131,16 +129,15 @@ def test_existing_assessment_identities_keys_by_target_finding_id(app):
             targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
             commit=True,
         )
-        # Confirms this assessment exercises the multi-target gap being tested.
-        assert len(assessment.target_rows) == 2
+        targets = [(variant.id, openssl.id), (variant.id, zlib.id)]
 
-        identities = _existing_assessment_identities(
-            variant.id, [openssl.id, zlib.id],
+        assert duplicate_multitarget_assessment_exists(
+            targets, status="not_affected", origin="custom",
         )
-
-        assert (openssl.id, "not_affected", "", "n", "j", "i") in identities
-        assert (zlib.id, "not_affected", "", "n", "j", "i") in identities
-        assert len(identities) == 2
+        assert not duplicate_multitarget_assessment_exists(
+            [(variant.id, openssl.id)], status="not_affected", origin="custom",
+        )
+        assert set(assessment.targets) == set(targets)
 
 
 def test_global_assessment_rows_by_scan_surfaces_a_multi_target_assessment(app):

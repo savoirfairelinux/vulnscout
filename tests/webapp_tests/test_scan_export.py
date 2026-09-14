@@ -381,6 +381,21 @@ class TestImportScan:
         } == {("cairo", "1.16.0"), ("libpng", "1.6.37")}
 
         self._set_fresh_destination(app, payload)
+        with app.app_context():
+            destination_project = Project.get_by_name(payload["project_name"])
+            assert destination_project is not None
+            destination_variant = Variant.get_by_name_and_project(
+                payload["variant_name"], destination_project.id)
+            assert destination_variant is not None
+            cairo = Package.get_by_string_id("cairo@1.16.0")
+            assert cairo is not None
+            cairo_finding = Finding.get_or_create(cairo.id, "CVE-2020-35492")
+            Assessment.create(
+                status="affected",
+                targets=[(destination_variant.id, cairo_finding.id)],
+                origin="sbom",
+            )
+
         response = client.post("/api/scans/import", json=payload)
         assert response.status_code == 201
 
