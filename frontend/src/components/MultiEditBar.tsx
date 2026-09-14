@@ -203,7 +203,8 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     const vuln = vulnerabilities.find(v => v.id === vuln_id);
                     if (vuln) {
                         const updatedAssessments = [...vuln.assessments, ...newAssessments];
-                        const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                        const statusSummary = buildStatusSummary(
+                            updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
                         patchVuln(vuln_id, {
                             ...vuln,
                             assessments: updatedAssessments,

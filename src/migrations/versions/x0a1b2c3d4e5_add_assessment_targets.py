@@ -110,8 +110,9 @@ def fuse_duplicates(connection):
     variant.  Reads are project-filtered, so a bucket spanning two projects
     would let one project silently mutate the other's assessments.
 
-    ``responses`` is part of the key too: one response set now belongs to one
-    assessment, so fusing rows that differ there would discard one set.
+    ``source`` and ``responses`` are part of the key too: one provenance and
+    response set now belongs to one assessment, so fusing rows that differ in
+    either field would permanently discard data.
 
     Within a bucket the lowest ``id`` survives; timestamps are identical by
     construction, so ``id`` is the only deterministic tie-break.  The others'
@@ -121,7 +122,7 @@ def fuse_duplicates(connection):
         SELECT a.id AS assessment_id,
                f.vulnerability_id AS vuln_id,
                v.project_id AS project_id,
-               a.timestamp, a.status, a.simplified_status, a.status_notes,
+             a.timestamp, a.source, a.status, a.simplified_status, a.status_notes,
                a.justification, a.impact_statement, a.workaround, a.origin,
                a.responses
         FROM assessments a
@@ -133,7 +134,7 @@ def fuse_duplicates(connection):
     for row in rows:
         key = (
             row["project_id"],
-            row["vuln_id"], row["timestamp"], row["status"],
+            row["vuln_id"], row["timestamp"], row["source"], row["status"],
             row["simplified_status"], row["status_notes"], row["justification"],
             row["impact_statement"], row["workaround"], row["origin"],
             responses_key(row["responses"]),

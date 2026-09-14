@@ -2,7 +2,7 @@ import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
 import Packages from '../../src/handlers/packages';
-import Vulnerabilities from '../../src/handlers/vulnerabilities';
+import Vulnerabilities, { buildStatusSummary } from '../../src/handlers/vulnerabilities';
 import Assessments from '../../src/handlers/assessments';
 
 
@@ -225,6 +225,38 @@ describe('Packages', () => {
         );
         const packages = await Packages.list();
         expect(packages[0].supplier).toBe('');
+    });
+});
+
+describe('buildStatusSummary target scoping', () => {
+    test('counts a multi-target assessment only where its exact package is current', () => {
+        const assessment = {
+            id: 'multi-target',
+            vuln_id: 'CVE-2026-0001',
+            packages: ['oldpkg@1.0', 'currentpkg@2.0'],
+            variant_ids: ['variant-a', 'variant-b'],
+            targets: [
+                { variant_id: 'variant-a', package: 'oldpkg@1.0' },
+                { variant_id: 'variant-b', package: 'currentpkg@2.0' },
+            ],
+            origin: 'custom',
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            timestamp: '2026-01-01T00:00:00Z',
+            responses: [],
+        };
+
+        const summary = buildStatusSummary(
+            [assessment],
+            ['currentpkg@2.0'],
+            {
+                'variant-a': [],
+                'variant-b': ['currentpkg@2.0'],
+            },
+        );
+
+        expect(summary.counts).toEqual({ Exploitable: 1 });
+        expect(summary.total_assessments).toBe(1);
     });
 });
 

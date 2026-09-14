@@ -359,13 +359,31 @@ def test_to_dict_carries_the_exact_target_pairs(app):
 def test_vulnerability_assessments_endpoint_carries_target_pairs(app, client):
     """This endpoint feeds the vuln modal's per-variant status matrix."""
     with app.app_context():
-        _make_cross_variant_assessment()
+        assessment_id = str(_make_cross_variant_assessment().id)
 
     response = client.get(f"/api/vulnerabilities/{VULN_ID}/assessments")
 
     assert response.status_code == 200
-    record = next(a for a in response.json if a["origin"] == "custom")
+    records = [a for a in response.json if a["id"] == assessment_id]
+    assert len(records) == 1
+    record = records[0]
     assert {(t["variant_id"], t["package"]) for t in record["targets"]} == {
+        (str(VARIANT_A), PKG_A),
+        (str(VARIANT_B), PKG_B),
+    }
+
+
+def test_vulnerability_group_history_emits_one_group_per_assessment(app, client):
+    """One multi-target assessment remains one history entry."""
+    with app.app_context():
+        assessment_id = str(_make_cross_variant_assessment().id)
+
+    response = client.get(f"/api/vulnerabilities/{VULN_ID}/assessment-groups")
+
+    assert response.status_code == 200
+    groups = [group for group in response.json if group["group_id"] == assessment_id]
+    assert len(groups) == 1
+    assert {(target["variant_id"], target["package"]) for target in groups[0]["targets"]} == {
         (str(VARIANT_A), PKG_A),
         (str(VARIANT_B), PKG_B),
     }
