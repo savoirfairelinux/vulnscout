@@ -128,13 +128,16 @@ def export_command(
 @click.option("--format", "output_format", default=None,
               help="Output format override: pdf or html (default: use template extension).")
 @click.option("--project", "-p", required=True,
-              help="Project name. The report includes all variants in this project.")
+              help="Project name. The report includes all variants unless --variant is set.")
+@click.option("--variant", "-v", default=None,
+              help="Variant name. When set, the report is restricted to this variant.")
 @with_appcontext
 def report_command(
     template_name: str,
     output_dir: str,
     output_format: str | None,
     project: str,
+    variant: str | None,
 ) -> None:
     """Render TEMPLATE_NAME and write the result to OUTPUT_DIR.
 
@@ -144,9 +147,18 @@ def report_command(
     project_obj = ProjectController.get_by_name(project)
     if project_obj is None:
         raise click.ClickException(f"project '{project}' not found")
-    scope = compute_export_scope(project_id=project_obj.id)
+    if variant:
+        variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
+        if variant_obj is None:
+            raise click.ClickException(
+                f"variant '{variant}' not found in project '{project}'"
+            )
+        scope = compute_export_scope(variant_id=variant_obj.id)
+    else:
+        scope = compute_export_scope(project_id=project_obj.id)
 
     controllers = ControllersCache(scope=scope)
+    controllers.packages._preload_cache()
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now

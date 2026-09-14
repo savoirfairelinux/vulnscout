@@ -323,11 +323,14 @@ See the [Match Conditions](ci_conditions.md) page for the full syntax and token 
 ## Report Generation
 
 Reports are generated from templates. VulnScout ships with built-in templates and also supports custom ones.
-Reports include every variant in one project. Use `--project` to select it; when omitted, the `default` project is used.
+Use `--project` to select the report scope; when omitted, the `default` project is used. A project report includes all its variants. Add `--variant` to restrict the report to one variant in that project. Unknown project or variant names exit with **code 1** instead of broadening the report scope.
 
 ```bash
 # Generate a report from a built-in template
 ./vulnscout --project demo --report summary.adoc
+
+# Generate a report for one variant only
+./vulnscout --project demo --variant x86 --report summary.adoc
 
 # Generate a match-condition report
 ./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
