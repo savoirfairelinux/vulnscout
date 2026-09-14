@@ -733,7 +733,8 @@ type VariantScopedSnapshot = {
 
             if (!anyError) {
                 const updatedAssessments = [...vuln.assessments];
-                const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                const statusSummary = buildStatusSummary(
+                    updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
                 vuln.simplified_status = statusSummary.dominant_status;
                 vuln.status_summary = statusSummary;
 
@@ -803,7 +804,8 @@ type VariantScopedSnapshot = {
                 await refreshAssessmentGroups();
 
                 const updatedAssessments = [...(reconciledAssessments ?? vuln.assessments)];
-                const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                const statusSummary = buildStatusSummary(
+                    updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
                 vuln.simplified_status = statusSummary.dominant_status;
                 vuln.status_summary = statusSummary;
                 patchVuln(vuln.id, {
@@ -974,7 +976,8 @@ type VariantScopedSnapshot = {
 
         if (!anyError) {
             const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+            const statusSummary = buildStatusSummary(
+                updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
             vuln.simplified_status = statusSummary.dominant_status;
             vuln.status_summary = statusSummary;
             patchVuln(vuln.id, {
@@ -1328,7 +1331,8 @@ type VariantScopedSnapshot = {
                     await refreshAssessmentGroups();
 
                     const updatedAssessments = [...vuln.assessments];
-                    const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                    const statusSummary = buildStatusSummary(
+                        updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
                     patchVuln(vuln.id, {
                         ...vuln,
                         assessments: updatedAssessments,

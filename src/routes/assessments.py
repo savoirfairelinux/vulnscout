@@ -79,6 +79,21 @@ def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
     return False
 
 
+def _assessments_for_vulnerability(
+    vuln_id: str,
+    project_variant_ids: set[UUID] | None = None,
+) -> list[DBAssessment]:
+    """Return one row per assessment, optionally limited to project targets."""
+    rows = DBAssessment.get_by_vulnerability(vuln_id)
+    if project_variant_ids is None:
+        return rows
+    return [
+        assessment for assessment in rows
+        if any(target.variant_id in project_variant_ids
+               for target in assessment.target_rows)
+    ]
+
+
 def _resolve_pending_ai_rows(
     assessment_id: str,
 ) -> "tuple[list[DBAssessment], ResponseReturnValue | None]":
@@ -967,20 +982,7 @@ def init_app(app: Flask) -> None:
                 select(DBVariant.id).where(DBVariant.project_id == project_uuid)
             ).scalars())
 
-        # Get findings for this vulnerability then load their assessments
-        findings = Finding.get_by_vulnerability(vuln_id)
-        rows = []
-        seen_ids: set[UUID] = set()
-        for f in findings:
-            for a in DBAssessment.get_by_finding(f.id):
-                if a.id in seen_ids:
-                    continue
-                if project_variant_ids is not None and not any(
-                    t.variant_id in project_variant_ids for t in a.target_rows
-                ):
-                    continue
-                seen_ids.add(a.id)
-                rows.append(a)
+        rows = _assessments_for_vulnerability(vuln_id, project_variant_ids)
         assessments = [a.to_dict() for a in rows]
         annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
@@ -1008,18 +1010,7 @@ def init_app(app: Flask) -> None:
                 select(DBVariant.id).where(DBVariant.project_id == project_uuid)
             ).scalars())
 
-        rows = []
-        seen_ids: set[UUID] = set()
-        for finding in Finding.get_by_vulnerability(vuln_id):
-            for a in DBAssessment.get_by_finding(finding.id):
-                if a.id in seen_ids:
-                    continue
-                if project_variant_ids is not None and not any(
-                    t.variant_id in project_variant_ids for t in a.target_rows
-                ):
-                    continue
-                seen_ids.add(a.id)
-                rows.append(a)
+        rows = _assessments_for_vulnerability(vuln_id, project_variant_ids)
         return build_groups(rows), 200
 
     @app.route('/api/assessment-groups/<group_id>', methods=['GET'])

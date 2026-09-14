@@ -32,6 +32,7 @@ def _build_schema(connection):
         """
         CREATE TABLE assessments (
             id TEXT PRIMARY KEY,
+            source VARCHAR,
             origin VARCHAR,
             status VARCHAR,
             simplified_status VARCHAR,
@@ -84,6 +85,7 @@ def _add_assessment(
     variant_id: str | None,
     *,
     status: str = "not_affected",
+    source: str = "scanner-a",
     timestamp: str = SHARED_TIMESTAMP,
     responses: "list[str] | None" = None,
 ) -> str:
@@ -92,11 +94,11 @@ def _add_assessment(
         sa.text(
             """
             INSERT INTO assessments (
-                id, origin, status, simplified_status, status_notes,
+                id, source, origin, status, simplified_status, status_notes,
                 justification, impact_statement, workaround, timestamp,
                 finding_id, variant_id, responses
             ) VALUES (
-                :id, 'import', :status, 'fixed', 'notes',
+                :id, :source, 'import', :status, 'fixed', 'notes',
                 'code_not_reachable', 'no impact', 'none', :timestamp,
                 :finding_id, :variant_id, :responses
             )
@@ -104,6 +106,7 @@ def _add_assessment(
         ),
         {
             "id": assessment_id,
+            "source": source,
             "status": status,
             "timestamp": timestamp,
             "finding_id": finding_id,
@@ -247,6 +250,31 @@ def test_backfill_never_groups_assessments_with_different_responses():
         second = _add_assessment(
             connection, finding_id, _add_variant(connection, project_id),
             responses=["update"])
+
+        _run_backfill(connection)
+
+        remaining = _existing_assessments(connection)
+        counts = _target_counts(connection)
+
+    assert remaining == {first, second}
+    assert counts.get(first) == 1
+    assert counts.get(second) == 1
+
+
+def test_backfill_never_groups_assessments_with_different_sources():
+    """Otherwise-identical scanner rows retain their distinct provenance."""
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        _build_schema(connection)
+        finding_id = _add_finding(connection, "CVE-2026-0008")
+        project_id = _new_id()
+        first = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            source="scanner-a")
+        second = _add_assessment(
+            connection, finding_id, _add_variant(connection, project_id),
+            source="scanner-b")
 
         _run_backfill(connection)
 

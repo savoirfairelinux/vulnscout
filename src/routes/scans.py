@@ -199,6 +199,20 @@ def _strip_assessment(entry: dict) -> dict:
         supplier = _extract_supplier_name(entry.get("package_supplier", "") or "")
         if supplier:
             result["supplier"] = supplier
+    targets = []
+    for target in entry.get("targets", []):
+        if not isinstance(target, dict) or not target.get("package_name"):
+            continue
+        exported_target = {
+            "package_name": target["package_name"],
+            "package_version": target.get("package_version", ""),
+        }
+        supplier = _extract_supplier_name(target.get("package_supplier", "") or "")
+        if supplier:
+            exported_target["supplier"] = supplier
+        targets.append(exported_target)
+    if targets:
+        result["targets"] = targets
     return result
 
 
@@ -503,17 +517,27 @@ class _ImportAssessment(NamedTuple):
     #: The assessed package, when the export records one.  Exports written
     #: before assessments carried their package leave this ``None``, and the
     #: assessment then applies to every finding for its vulnerability.
-    package_key: PackageKey | None
+    package_keys: tuple[PackageKey, ...] | None
     values: dict[str, str]
 
 
 def _import_assessment_entry(entry: object) -> _ImportAssessment:
     if not isinstance(entry, dict):
         raise ValueError("Assessment entries must be JSON objects")
-    package_key = _import_package_key(entry) if entry.get("package_name") else None
+    raw_targets = entry.get("targets")
+    if raw_targets is not None:
+        if not isinstance(raw_targets, list):
+            raise ValueError("Assessment 'targets' must be an array")
+        package_keys = tuple(dict.fromkeys(
+            _import_package_key(target) for target in raw_targets
+        ))
+    elif entry.get("package_name"):
+        package_keys = (_import_package_key(entry),)
+    else:
+        package_keys = None
     return _ImportAssessment(
         vulnerability_id=_required_import_string(entry, "vulnerability_id").upper(),
-        package_key=package_key,
+        package_keys=package_keys,
         values={
             "status": _required_import_string(entry, "status"),
             "simplified_status": _optional_import_string(entry, "simplified_status"),
@@ -910,19 +934,26 @@ def _persist_import_assessments(
 
     created = 0
     for entry in item.assessments:
-        if entry.package_key is not None:
-            finding = findings_by_pair.get((entry.package_key, entry.vulnerability_id))
-            targets = [finding] if finding is not None else []
+        if entry.package_keys is not None:
+            targets = [
+                finding
+                for package_key in entry.package_keys
+                if (finding := findings_by_pair.get(
+                    (package_key, entry.vulnerability_id))) is not None
+            ]
         else:
             targets = findings_by_vulnerability.get(entry.vulnerability_id, [])
+        new_targets = []
         for target in targets:
             identity = _assessment_identity(target.id, entry.values)
             if identity in seen:
                 continue
             seen.add(identity)
+            new_targets.append(target)
+        if new_targets:
             Assessment.create(
                 status=entry.values["status"],
-                targets=[(item.variant.id, target.id)],
+                targets=[(item.variant.id, target.id) for target in new_targets],
                 source=_IMPORT_SOURCE_LABEL,
                 origin=origin or "sbom",
                 simplified_status=entry.values["simplified_status"],

@@ -1,5 +1,5 @@
 import type { Assessment } from "./assessments";
-import { asStringArray, assessmentVariantIds } from "./assessments";
+import { asStringArray, assessmentPackagesInVariant, assessmentVariantIds } from "./assessments";
 import Iso8601Duration from "./iso8601duration";
 import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 
@@ -33,6 +33,7 @@ type Vulnerability = {
     datasource: string;
     packages: string[];
     packages_current: string[];
+    packages_current_by_variant?: Record<string, string[]>;
     variants: string[];
     urls: string[];
     cpes?: string[];
@@ -113,15 +114,22 @@ const getStatusSummaryEntries = (counts: Record<string, number>): { status: stri
         });
 }
 
-const buildStatusSummary = (assessments: Assessment[], currentPackages?: string[]): StatusSummary => {
-    if (currentPackages && currentPackages.length > 0 && assessments.length > 0) {
+const buildStatusSummary = (
+    assessments: Assessment[],
+    currentPackages?: string[],
+    currentPackagesByVariant?: Record<string, string[]>,
+): StatusSummary => {
+    const hasVariantPackageScope = currentPackagesByVariant !== undefined;
+    if (!hasVariantPackageScope && currentPackages && currentPackages.length > 0
+        && assessments.length > 0) {
         const currentSet = new Set(currentPackages);
-        const filtered = assessments.filter(a =>
-            a.packages.length === 0 || a.packages.some(p => currentSet.has(p))
+        const filtered = assessments.filter(assessment =>
+            assessment.packages.length === 0
+            || assessment.packages.some(pkg => currentSet.has(pkg))
         );
-        if (filtered.length > 0) {
-            assessments = filtered;
-        }
+        // Preserve compatibility with payloads that lack exact per-variant
+        // package data: if nothing matches, retain the previous fallback.
+        if (filtered.length > 0) assessments = filtered;
     }
 
     if (assessments.length === 0) {
@@ -139,10 +147,21 @@ const buildStatusSummary = (assessments: Assessment[], currentPackages?: string[
     // dropped into the fallback bucket. Assessments with no target at all are
     // grouped together under a single fallback key so they contribute one slot.
     const byVariant = new Map<string, Assessment[]>();
+    const globalCurrentPackages = new Set(currentPackages ?? []);
     assessments.forEach((assessment) => {
         const variantIds = assessmentVariantIds(assessment);
         const keys = variantIds.length > 0 ? variantIds : ['__no_variant__'];
         keys.forEach((key) => {
+            if (hasVariantPackageScope) {
+                const currentForVariant = key !== '__no_variant__'
+                    ? new Set(currentPackagesByVariant?.[key] ?? [])
+                    : globalCurrentPackages;
+                const targetPackages = key === '__no_variant__'
+                    ? assessment.packages
+                    : assessmentPackagesInVariant(assessment, key);
+                if (targetPackages.length > 0
+                    && !targetPackages.some(pkg => currentForVariant.has(pkg))) return;
+            }
             if (!byVariant.has(key)) byVariant.set(key, []);
             byVariant.get(key)!.push(assessment);
         });
@@ -243,6 +262,12 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         datasource: "unknown",
         packages: asStringArray(data?.packages),
         packages_current: asStringArray(data?.packages_current),
+        packages_current_by_variant: data?.packages_current_by_variant
+            && typeof data.packages_current_by_variant === 'object'
+            && !Array.isArray(data.packages_current_by_variant)
+            ? Object.fromEntries(Object.entries(data.packages_current_by_variant)
+                .map(([variantId, packages]) => [variantId, asStringArray(packages)]))
+            : undefined,
         variants: asStringArray(data?.variants),
         urls: asStringArray(data?.urls),
         cpes: asStringArray(data?.cpes),
@@ -470,7 +495,11 @@ class Vulnerabilities {
                 return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
             });
             const vulnAssessments = assessments_per_vuln[vuln.id];
-            const statusSummary = buildStatusSummary(vulnAssessments, vuln.packages_current);
+            const statusSummary = buildStatusSummary(
+                vulnAssessments,
+                vuln.packages_current,
+                vuln.packages_current_by_variant,
+            );
             return {
                 ...vuln,
                 simplified_status: statusSummary.dominant_status,
@@ -486,7 +515,11 @@ class Vulnerabilities {
                 const assessments = [...vuln.assessments, assessment].sort((a, b) => {
                     return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
                 });
-                const statusSummary = buildStatusSummary(assessments, vuln.packages_current);
+                const statusSummary = buildStatusSummary(
+                    assessments,
+                    vuln.packages_current,
+                    vuln.packages_current_by_variant,
+                );
                 return {
                     ...vuln,
                     simplified_status: statusSummary.dominant_status,

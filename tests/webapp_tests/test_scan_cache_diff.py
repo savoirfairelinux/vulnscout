@@ -485,6 +485,54 @@ class TestAssessmentQueries:
             assert detail["total"] >= 1
             assert detail["added_count"] >= 1
 
+    def test_assessment_detail_preserves_all_multi_package_targets(self, app, ids):
+        """One assessment entry carries every package target in the scan."""
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.routes._scan_queries import _assessments_detail_for_scan
+
+        with app.app_context():
+            scan = _db.session.get(Scan, uuid.UUID(ids["sbom_a_id"]))
+            assert scan is not None
+            document = SBOMDocument.get_by_scan(scan.id)[0]
+            first_finding = Finding.get_by_package_and_vulnerability(
+                "openssl@1.1.0", "CVE-2020-0001")
+            assert first_finding is not None
+
+            second_package = Package.find_or_create("libcrypto", "1.1.0")
+            SBOMPackage.create(document.id, second_package.id)
+            second_finding = Finding.get_or_create(
+                second_package.id, "CVE-2020-0001")
+            Observation.create(second_finding.id, scan.id)
+            assessment = Assessment.create(
+                status="affected",
+                targets=[
+                    (scan.variant_id, first_finding.id),
+                    (scan.variant_id, second_finding.id),
+                ],
+                origin="sbom",
+            )
+            assessment.timestamp = scan.timestamp
+            _db.session.commit()
+
+            detail = _assessments_detail_for_scan(scan)
+
+        matching = [
+            entry for entry in detail["added"]
+            if entry["vulnerability_id"] == "CVE-2020-0001"
+            and entry["status"] == "affected"
+        ]
+        assert len(matching) == 1
+        assert {
+            (target["package_name"], target["package_version"])
+            for target in matching[0]["targets"]
+        } == {("openssl", "1.1.0"), ("libcrypto", "1.1.0")}
+
     def test_assessments_detail_with_prev_scan(self, app, ids):
         """_assessments_detail_for_scan computes removed when prev_scan given."""
         from src.routes._scan_queries import _assessments_detail_for_scan

@@ -763,6 +763,45 @@ def init_app(app: Flask) -> None:
                     pkgs_current_by_vuln.setdefault(str(vuln_id), []).append(sid)
                 for v in vulns.values():
                     v["packages_current"] = sorted(pkgs_current_by_vuln.get(v["id"], []))
+
+                # Preserve the variant dimension as well. A flattened package
+                # union cannot determine whether one exact assessment target
+                # is current in its own variant.
+                scoped_pkg_rows = db.session.execute(
+                    db.select(
+                        Finding.vulnerability_id,
+                        Scan.variant_id,
+                        _PkgVariant2.name,
+                        _PkgVariant2.version,
+                        _PkgVariant2.supplier,
+                    )
+                    .select_from(SBOMDocument)
+                    .join(Scan, Scan.id == SBOMDocument.scan_id)
+                    .join(SBOMPackage, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                    .join(Package, Package.id == SBOMPackage.package_id)
+                    .join(_PkgVariant2, (
+                        (_PkgVariant2.name == Package.name)
+                        & (_PkgVariant2.version == Package.version)
+                    ))
+                    .join(Finding, Finding.package_id == _PkgVariant2.id)
+                    .where(SBOMDocument.scan_id.in_(current_scan_ids))
+                    .where(Finding.vulnerability_id.in_(vuln_ids))
+                    .distinct()
+                ).all()
+                current_by_vuln_variant: dict[str, dict[str, list[str]]] = {}
+                for vuln_id, variant_id, pkg_name, pkg_version, pkg_supplier in scoped_pkg_rows:
+                    package_id = (
+                        f"{pkg_name}@{pkg_version}::{pkg_supplier}"
+                        if pkg_supplier else f"{pkg_name}@{pkg_version}"
+                    )
+                    current_by_vuln_variant.setdefault(str(vuln_id), {}).setdefault(
+                        str(variant_id), []).append(package_id)
+                for vuln in vulns.values():
+                    vuln["packages_current_by_variant"] = {
+                        variant_id: sorted(set(packages))
+                        for variant_id, packages in current_by_vuln_variant.get(
+                            vuln["id"], {}).items()
+                    }
             else:
                 for v in vulns.values():
                     v["packages_current"] = list(v["packages"])

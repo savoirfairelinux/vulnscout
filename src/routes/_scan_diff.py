@@ -655,7 +655,7 @@ def _global_result_full(
             next_scan_ts = s.timestamp
             break
 
-    assessments: list = []
+    assessments_by_id: dict[uuid.UUID, dict] = {}
     assess_q = (
         db.select(
             Assessment.id,
@@ -685,29 +685,36 @@ def _global_result_full(
         )
     assess_rows = db.session.execute(assess_q).all()
 
-    seen_assess: set[uuid.UUID] = set()
     for aid, vid, status, simp_status, justification, impact, notes, sid, pkg_id in assess_rows:
         # Skip tool-scan assessments whose finding's package is not in SBOM
         if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
             continue
-        if aid in seen_assess:
-            continue
-        seen_assess.add(aid)
-        # Carry the finding's package: an assessment applies to one
-        # (package, vulnerability) pair, and consumers that serialise the
-        # result need it to attach the assessment back to the right finding.
         package = pkg_map.get(pkg_id, {})
-        assessments.append({
+        target = {
+            "package_name": package.get("package_name", ""),
+            "package_version": package.get("package_version", ""),
+            "package_supplier": package.get("package_supplier", ""),
+        }
+        assessment = assessments_by_id.setdefault(aid, {
             "vulnerability_id": vid,
             "status": status or "under_investigation",
             "simplified_status": simp_status or "Pending Assessment",
             "justification": justification or "",
             "impact_statement": impact or "",
             "status_notes": notes or "",
-            "package_name": package.get("package_name", ""),
-            "package_version": package.get("package_version", ""),
-            "package_supplier": package.get("package_supplier", ""),
+            # Keep scalar package fields for backward-compatible consumers.
+            **target,
+            "targets": [],
         })
+        if target not in assessment["targets"]:
+            assessment["targets"].append(target)
+
+    assessments = list(assessments_by_id.values())
+    for assessment in assessments:
+        assessment["targets"].sort(key=lambda target: (
+            target["package_name"], target["package_version"],
+            target["package_supplier"],
+        ))
     assessments.sort(key=lambda a: a["vulnerability_id"])
 
     return {
