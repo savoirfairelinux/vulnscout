@@ -546,9 +546,10 @@ POST /api/assessment-groups/<group_id>/reconcile
 
 When present, `targets` is the authoritative exact list of package/variant
 pairs. This preserves sparse scopes without implicitly creating the
-cross-product of the flattened fields. Legacy clients may omit `targets` and
-provide non-empty `packages` and `variant_ids`; those fields retain their
-cross-product behavior. `vuln_id` must match the group's vulnerability.
+cross-product of the flattened fields. An explicitly empty `targets` list
+removes every target and deletes the now-empty assessment. Legacy clients may
+omit `targets` and provide non-empty `packages` and `variant_ids`; those fields
+retain their cross-product behavior. `vuln_id` must match the group's vulnerability.
 `responses` is only applied when the key is present, so omitting it preserves
 the stored VEX responses. `update_timestamp` defaults to `true`.
 

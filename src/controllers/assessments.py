@@ -207,6 +207,29 @@ class AssessmentsController:
             return True
         return self.current_variant_id in target_variant_ids
 
+    def _matches_current_target(self, assessment: Assessment, pkg_id) -> bool:
+        """Match the exact package/variant pair for variant-scoped ingestion."""
+        if self.current_variant_id is None:
+            return True
+        if not assessment.target_rows:
+            return True
+        pkg_string = pkg_id if isinstance(pkg_id, str) else None
+        pkg_uuid = pkg_id if isinstance(pkg_id, uuid.UUID) else None
+        if pkg_uuid is None and isinstance(pkg_id, str):
+            try:
+                pkg_uuid = uuid.UUID(pkg_id)
+            except ValueError:
+                pass
+        return any(
+            target.variant_id == self.current_variant_id
+            and target.finding is not None
+            and (
+                (pkg_uuid is not None and target.finding.package_id == pkg_uuid)
+                or (pkg_string is not None and target.finding.package.string_id == pkg_string)
+            )
+            for target in assessment.target_rows
+        )
+
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
         """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
@@ -216,7 +239,7 @@ class AssessmentsController:
         # When ingesting for a specific variant, skip cross-variant records.
         for key in self._by_vuln_pkg.get((vuln_str, pkg_str), []):
             a = self.assessments.get(key)
-            if a is not None and self._matches_current_variant(a):
+            if a is not None and self._matches_current_target(a, pkg_str):
                 results[key] = a
         # Only query DB once per (vuln, pkg) pair — subsequent calls are
         # served entirely from the in-memory _by_vuln_pkg index.
@@ -227,8 +250,14 @@ class AssessmentsController:
             try:
                 finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
                 if finding is not None:
-                    for a in Assessment.get_by_finding(finding.id):
-                        if not self._matches_current_variant(a):
+                    assessments = (
+                        Assessment.get_by_finding_and_variant(
+                            finding.id, self.current_variant_id)
+                        if self.current_variant_id is not None
+                        else Assessment.get_by_finding(finding.id)
+                    )
+                    for a in assessments:
+                        if not self._matches_current_target(a, pkg_str):
                             continue
                         a_key = str(a.id)
                         if a_key not in results:
@@ -273,7 +302,7 @@ class AssessmentsController:
             if pkg_id in self._db_queried_pkgs:
                 continue
             for a in Assessment.get_by_package(pkg_id):
-                if self._matches_current_variant(a):
+                if self._matches_current_target(a, pkg_id):
                     self._index_existing(a)
             self._db_queried_pkgs.add(pkg_id)
 

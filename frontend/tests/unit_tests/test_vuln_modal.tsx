@@ -1677,7 +1677,7 @@ describe('Vulnerability Modal', () => {
         deleteGroupSpy.mockRestore();
     });
 
-    test('editing a variant-scoped group calls reconcileGroup with the group id', async () => {
+    test('clearing a variant-scoped group reconciles an explicit empty target set', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'variant-1', name: 'Variant A', project_id: 'proj-1' }
@@ -1743,15 +1743,18 @@ describe('Vulnerability Modal', () => {
         await screen.findByText(/Exploitable/);
         const editBtn = screen.getByTitle(/edit assessment/i);
         await user.click(editBtn);
-
         const saveBtn = screen.getByText(/save changes/i);
+        const editPanel = saveBtn.closest('.bg-gray-800');
+        expect(editPanel).not.toBeNull();
+        await user.click(within(editPanel as HTMLElement).getByRole(
+            'checkbox', { name: 'Variant A' }));
         await user.click(saveBtn);
 
         await waitFor(() => {
             expect(reconcileSpy).toHaveBeenCalledWith('group-77', expect.objectContaining({
                 vuln_id: 'CVE-2010-1234',
-                variant_ids: ['variant-1'],
-                targets: [{ package: 'aaabbbccc@1.0.0', variant_id: 'variant-1' }],
+                variant_ids: [],
+                targets: [],
                 existing_ids: ['assessment-1'],
             }));
         });

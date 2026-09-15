@@ -67,11 +67,19 @@ def test_invalid_explicit_target_is_rejected():
     assert "variant_id" in err["error"]
 
 
-def test_explicit_targets_must_be_a_non_empty_list():
-    for targets in ([], "cairo@1.16.0"):
-        req, err = parse_reconcile_payload(_payload(targets=targets))
-        assert req is None
-        assert err == {"error": "targets must be a non-empty list"}
+def test_explicit_empty_targets_are_an_authoritative_empty_set():
+    req, err = parse_reconcile_payload(_payload(targets=[]))
+    assert err is None
+    assert req is not None
+    assert req.target_pairs == []
+    assert req.packages == []
+    assert req.variant_ids == []
+
+
+def test_explicit_targets_must_be_a_list():
+    req, err = parse_reconcile_payload(_payload(targets="cairo@1.16.0"))
+    assert req is None
+    assert err == {"error": "targets must be a list"}
 
 
 def test_explicit_target_must_be_an_object_with_a_package():

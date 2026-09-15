@@ -1615,6 +1615,48 @@ class TestAssessmentsControllerGetsByVulnPkgVariantFilter:
         ctrl_b.warm_packages([p.id])
         assert str(a.id) in ctrl_b.assessments
 
+    def test_package_lookups_match_exact_sparse_target_pair(self, app):
+        """Variant and package must match the same AssessmentTarget row."""
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment as DBAssessment
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+
+        vulnerability = Vulnerability.create_record("CVE-2099-SPARSE-PAIR")
+        openssl = Package.create("sparse-openssl", "1.0")
+        zlib = Package.create("sparse-zlib", "1.0")
+        openssl_finding = Finding.create(openssl.id, vulnerability.id)
+        zlib_finding = Finding.create(zlib.id, vulnerability.id)
+        project = Project.create("SparsePairProject")
+        variant_a = Variant.create("SparsePairA", project.id)
+        variant_b = Variant.create("SparsePairB", project.id)
+        assessment = DBAssessment.create(
+            status="affected",
+            targets=[
+                (variant_a.id, openssl_finding.id),
+                (variant_b.id, zlib_finding.id),
+            ],
+        )
+
+        lookup = AssessmentsController(PackagesController())
+        lookup.current_variant_id = variant_a.id
+        assert [row.id for row in lookup.gets_by_vuln_pkg(
+            vulnerability.id, openssl.string_id)] == [assessment.id]
+        # The valid lookup indexes both flattened package names; the invalid
+        # cross-pair must still be filtered from that warmed in-memory index.
+        assert lookup.gets_by_vuln_pkg(vulnerability.id, zlib.string_id) == []
+
+        warmed = AssessmentsController(PackagesController())
+        warmed.current_variant_id = variant_a.id
+        warmed.warm_packages([zlib.id])
+        assert str(assessment.id) not in warmed.assessments
+        warmed.warm_packages([openssl.id])
+        assert str(assessment.id) in warmed.assessments
+
     def test_gets_by_vuln_pkg_exception_is_caught(self, app):
         """Lines 197-198: exception in gets_by_vuln_pkg is caught silently."""
         from src.controllers.packages import PackagesController

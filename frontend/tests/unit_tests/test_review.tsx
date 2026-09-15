@@ -476,6 +476,22 @@ describe('Review — editing "Apply to variants"', () => {
         expect(deleteCalls()).toHaveLength(0);
     });
 
+    test('removing every variant reconciles with an explicit empty target set', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(variantCheckbox('Variant Alpha'));
+        await user.click(screen.getByText('Save Changes'));
+
+        await waitFor(() => expect(reconcileCalls()).toHaveLength(1));
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.variant_ids).toEqual([]);
+        expect(body.targets).toEqual([]);
+        expect(deleteCalls()).toHaveLength(0);
+    });
+
     test('a successful edit reports success and notifies the parent', async () => {
         const onChanged = jest.fn();
         mockNetwork([makeAssessment('a1', 'v1')]);
