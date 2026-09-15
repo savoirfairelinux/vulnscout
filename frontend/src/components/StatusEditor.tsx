@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import MessageBanner from './MessageBanner';
 import type { Variant } from '../handlers/variant';
+import type { AssessmentTargetPair } from '../handlers/assessments';
 import { formatPkgId } from '../helpers/pkgId';
+import TargetPairSelector from './TargetPairSelector';
 
 type PostAssessment = {
     vuln_id?: string,
@@ -11,7 +13,8 @@ type PostAssessment = {
     impact_statement?: string,
     status_notes?: string,
     workaround?: string,
-    variant_ids?: string[]
+    variant_ids?: string[],
+    targets?: AssessmentTargetPair[]
 }
 
 type Props = {
@@ -29,9 +32,10 @@ type Props = {
     /** variant_id -> historical findings that may be selected explicitly */
     variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
     findingsLoading?: boolean;
+    exactTargetSelection?: boolean;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap, variantFindingsMap, findingsLoading = false}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap, variantFindingsMap, findingsLoading = false, exactTargetSelection = false}: Readonly<Props>) {
     const outdatedPackages = useMemo(() => {
         const packages = new Set<string>();
         for (const finding of Object.values(variantFindingsMap ?? {}).flat()) {
@@ -67,6 +71,19 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         variants?.length === 1 ? [variants[0].id] : []
     );
     const [selectedPackages, setSelectedPackages] = useState<string[]>(initialPackages);
+    const exactTargetMode = Boolean(
+        exactTargetSelection && variants && availablePackages && variantPackageMap
+    );
+    const initialTargets = useMemo<AssessmentTargetPair[]>(() => {
+        if (!variantPackageMap) return [];
+        const initialVariantIds = variants?.length === 1 ? [variants[0].id] : [];
+        return initialVariantIds.flatMap(variantId => initialPackages.flatMap(pkg =>
+            (variantPackageMap[variantId] ?? []).includes(pkg)
+                ? [{variant_id: variantId, package: pkg}]
+                : []
+        ));
+    }, [initialPackages, variantPackageMap, variants]);
+    const [selectedTargets, setSelectedTargets] = useState<AssessmentTargetPair[]>(initialTargets);
     const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(false);
 
     const packageOptions = useMemo(() => {
@@ -134,7 +151,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     // Reset selected packages when the available list changes (e.g. navigating to a different vuln)
     useEffect(() => {
         setSelectedPackages(initialPackages);
-    }, [initialPackages]);
+        setSelectedTargets(initialTargets);
+    }, [initialPackages, initialTargets]);
 
     // Auto-select single variant when variants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -179,6 +197,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setIncludeOutdatedPackages(checked);
         setSelectedVariantIds([]);
         setSelectedPackages([]);
+        setSelectedTargets([]);
     };
 
     // Update status when defaultStatus prop changes
@@ -193,10 +212,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             justification !== "none" ||
             statusNotes !== "" ||
             workaround !== "" ||
-            impact !== ""
+            impact !== "" ||
+            selectedTargets.length > 0
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, onFieldsChange, defaultStatus]);
+    }, [status, justification, statusNotes, workaround, impact, selectedTargets, onFieldsChange, defaultStatus]);
 
     function addAssessment () {
         if (status == '' || justification == '')
@@ -217,7 +237,15 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
-        if (variants && variants.length > 0 && selectedVariantIds.length === 0) {
+        if (exactTargetMode && selectedTargets.length === 0) {
+            if (triggerBanner) {
+                triggerBanner("You must select at least one valid target", "error");
+            } else {
+                internalTriggerBanner("You must select at least one valid target", "error");
+            }
+            return;
+        }
+        if (!exactTargetMode && variants && variants.length > 0 && selectedVariantIds.length === 0) {
             if (triggerBanner) {
                 triggerBanner("You must select at least one variant", "error");
             } else {
@@ -225,7 +253,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
-        if (availablePackages && availablePackages.length > 0 && selectedPackages.length === 0) {
+        if (!exactTargetMode && availablePackages && availablePackages.length > 0 && selectedPackages.length === 0) {
             if (triggerBanner) {
                 triggerBanner("You must select at least one package", "error");
             } else {
@@ -233,14 +261,22 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
+        const exactVariantIds = [...new Set(selectedTargets.flatMap(target =>
+            target.variant_id ? [target.variant_id] : []))];
+        const exactPackages = [...new Set(selectedTargets.map(target => target.package))];
         onAddAssessment({
             status,
             justification: status == "not_affected" ? justification : undefined,
             status_notes: statusNotes,
             workaround,
             impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined,
-            variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
-            packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])
+            variant_ids: exactTargetMode
+                ? exactVariantIds
+                : (selectedVariantIds.length > 0 ? selectedVariantIds : undefined),
+            packages: exactTargetMode
+                ? exactPackages
+                : (selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])),
+            targets: exactTargetMode ? selectedTargets : undefined,
         });
     }
 
@@ -256,7 +292,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             (availablePackages?.length === 1 ? availablePackages :
             defaultSelectedPackages?.length === 1 ? defaultSelectedPackages : [])
         );
-    }, [defaultStatus, defaultSelectedPackages, availablePackages, variants]);
+        setSelectedTargets(initialTargets);
+    }, [defaultStatus, defaultSelectedPackages, availablePackages, variants, initialTargets]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -324,7 +361,16 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 />
             </label>
         )}
-        {variants && variants.length > 0 && (
+        {exactTargetMode && variants && (
+            <TargetPairSelector
+                variants={variants}
+                packages={packageOptions}
+                variantPackageMap={effectiveVariantPackageMap ?? {}}
+                selectedTargets={selectedTargets}
+                onChange={setSelectedTargets}
+            />
+        )}
+        {!exactTargetMode && variants && variants.length > 0 && (
             <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
                 <p className="mb-2 text-sm font-medium text-gray-200">Apply to variants:</p>
                 <span className="float-right -mt-7 text-xs text-gray-400">{selectedVariantIds.length} selected</span>
@@ -358,7 +404,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </div>
             </div>
         )}
-        {availablePackages && (availablePackages.length >= 1 || outdatedPackages.size > 0) && (
+        {!exactTargetMode && availablePackages && (availablePackages.length >= 1 || outdatedPackages.size > 0) && (
             <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
                 <p className="mb-2 text-sm font-medium text-gray-200">Apply to packages:</p>
                 <span className="float-right -mt-7 text-xs text-gray-400">{selectedPackages.length} selected</span>

@@ -559,6 +559,45 @@ describe('StatusEditor', () => {
         expect(checkboxes[2].disabled).toBe(false);
     });
 
+    test('exact target mode permits disjoint pairs and disables cross-pairs', async () => {
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                onAddAssessment={defaultProps.onAddAssessment}
+                variants={[
+                    {id: 'v1', name: 'Variant One', project_id: 'project'},
+                    {id: 'v2', name: 'Variant Two', project_id: 'project'},
+                ]}
+                availablePackages={['pkg1@1.0.0', 'pkg2@2.0.0']}
+                variantPackageMap={{
+                    v1: ['pkg1@1.0.0'],
+                    v2: ['pkg2@2.0.0'],
+                }}
+                exactTargetSelection={true}
+            />
+        );
+
+        const v1p1 = screen.getByRole('checkbox', {name: 'Variant One / pkg1@1.0.0'});
+        const v1p2 = screen.getByRole('checkbox', {name: 'Variant One / pkg2@2.0.0'});
+        const v2p1 = screen.getByRole('checkbox', {name: 'Variant Two / pkg1@1.0.0'});
+        const v2p2 = screen.getByRole('checkbox', {name: 'Variant Two / pkg2@2.0.0'});
+
+        expect(v1p2).toBeDisabled();
+        expect(v2p1).toBeDisabled();
+        await user.click(v1p1);
+        await user.click(v2p2);
+        await user.click(screen.getByText('Add assessment'));
+
+        expect(defaultProps.onAddAssessment).toHaveBeenCalledWith(expect.objectContaining({
+            variant_ids: ['v1', 'v2'],
+            packages: ['pkg1@1.0.0', 'pkg2@2.0.0'],
+            targets: [
+                {variant_id: 'v1', package: 'pkg1@1.0.0'},
+                {variant_id: 'v2', package: 'pkg2@2.0.0'},
+            ],
+        }));
+    });
+
     test('should disable a package that is not available in every selected variant', async () => {
         const user = userEvent.setup();
         const variants = [

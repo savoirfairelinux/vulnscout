@@ -936,7 +936,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 vuln_id: editingRow.vuln_id,
                 packages: targetPackages,
                 variant_ids: targetVariantIds,
-                targets: reconcileTargetPairs(
+                targets: data.targets ?? reconcileTargetPairs(
                     editingRow.targets, targetPackages, targetVariantIds),
                 status: data.status,
                 justification: data.justification,

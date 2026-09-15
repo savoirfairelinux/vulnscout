@@ -2673,6 +2673,80 @@ describe('Vulnerability Modal', () => {
         expect(rowFor('Staging', 'pkgA@1.0.0')).not.toHaveTextContent('Fixed');
     });
 
+    test('edits disjoint compatible targets without enabling cross-pairs', async () => {
+        const targets = [
+            { variant_id: 'var-1', package: 'pkgA@1.0.0', outdated: false, assessment_id: 'assess-sparse' },
+            { variant_id: 'var-2', package: 'pkgB@2.0.0', outdated: false, assessment_id: 'assess-sparse' },
+        ];
+        const sparseAssessment = {
+            id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            variant_ids: ['var-1', 'var-2'],
+            targets,
+            status: 'fixed', simplified_status: 'Fixed', justification: '',
+            impact_statement: '', status_notes: '', workaround: '',
+            timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [],
+            variant_id: null,
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/variant-active-packages')) {
+                return Promise.resolve(JSON.stringify([
+                    {
+                        variant_id: 'var-1', active_packages: ['pkgA@1.0.0'],
+                        findings: [{finding_id: 'f-a1', package: 'pkgA@1.0.0', outdated: false}],
+                    },
+                    {
+                        variant_id: 'var-2', active_packages: ['pkgB@2.0.0'],
+                        findings: [{finding_id: 'f-b2', package: 'pkgB@2.0.0', outdated: false}],
+                    },
+                ]));
+            }
+            if (url.includes('/assessment-groups')) {
+                return Promise.resolve(JSON.stringify([{
+                    group_id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+                    status: 'fixed', simplified_status: 'Fixed', justification: '',
+                    impact_statement: '', status_notes: '', workaround: '', responses: [],
+                    origin: 'custom', timestamp: '2025-06-01T00:00:00Z',
+                    targets, assessment_ids: ['assess-sparse'],
+                }]));
+            }
+            if (url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([sparseAssessment]));
+            }
+            if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'var-1', name: 'Production', project_id: 'proj1' },
+                    { id: 'var-2', name: 'Staging', project_id: 'proj1' },
+                ]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const sparseVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            packages_current: [],
+            assessments: [sparseAssessment as any],
+        };
+        render(<VulnModal vuln={sparseVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+
+        await screen.findByText('Assessment history');
+        await userEvent.setup().click(await screen.findByTitle('Edit assessment'));
+        const exactTargetSections = await screen.findAllByText('Apply to exact targets:');
+        const editSection = exactTargetSections
+            .map(element => element.closest('.rounded-lg') as HTMLElement | null)
+            .find(section => section && within(section).queryByRole<HTMLInputElement>(
+                'checkbox', {name: 'Production / pkgA@1.0.0'})?.checked);
+        expect(editSection).toBeDefined();
+
+        expect(within(editSection!).getByRole('checkbox', {name: 'Production / pkgA@1.0.0'})).toBeChecked();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Staging / pkgB@2.0.0'})).toBeChecked();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Production / pkgB@2.0.0'})).toBeDisabled();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Staging / pkgA@1.0.0'})).toBeDisabled();
+    });
+
     const pendingAiAssessment = {
         id: 'assessment-ai-1',
         vuln_id: 'CVE-2010-1234',
@@ -3655,7 +3729,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         expect(screen.queryByText(/NVD.*unavailable/i)).not.toBeInTheDocument();
     });
 
-    test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
+    test('builds variantPackageMap and disables incompatible exact target pairs', async () => {
         fetchMock.resetMocks();
         // Route fetches by URL so the single variant-active-packages lookup
         // resolves regardless of effect ordering.
@@ -3687,35 +3761,12 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
-        const user = userEvent.setup();
 
-        // Wait for the variants to render inside the StatusEditor.
-        await screen.findByText('Apply to variants:');
-
-        // Scope checkbox lookups to the StatusEditor sections so we do not match
-        // the TimeEstimateEditor / CVSS target-variant selectors that reuse the
-        // same variant names.
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
-
-        // Both packages are reachable before any variant is selected.
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
-        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
-
-        // Select Variant Alpha, which only contains pkgA.
-        await user.click(variantCheckbox('Variant Alpha'));
-
-        // pkgB is absent from Variant Alpha → its checkbox becomes disabled.
-        await waitFor(() => {
-            expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(true);
-        });
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
+        await screen.findByText('Apply to exact targets:');
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgA@1.0.0'})).not.toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgB@1.0.0'})).not.toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgB@1.0.0'})).toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgA@1.0.0'})).toBeDisabled();
     });
 
     test('omits variantPackageMap so all packages stay enabled when package lookups fail', async () => {
