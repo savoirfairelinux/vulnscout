@@ -694,16 +694,16 @@ POST /api/assessments/batch
 ```json
 {
   "assessments": [
-    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_id": "uuid", "status": "affected" },
+    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_ids": ["uuid-a", "uuid-b"], "status": "affected" },
     { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "variant_id": "uuid", "status": "not_affected", "justification": "code_not_reachable" }
   ]
 }
 ```
 
-`variant_id` is required on every item. The batch is one user action: if any
-item is invalid, nothing is written. Rows are grouped by the group invariant —
-project, vulnerability, content and responses — so one batch can produce several
-groups, and approving or deleting one never touches rows that differ from it.
+Each item requires either `variant_id` or a non-empty `variant_ids` array. The
+plural form takes precedence when both are present. One item creates one
+assessment row covering every observed package/variant target; separate items
+remain separate rows. If any item is invalid, nothing in the batch is written.
 
 **Response:**
 ```json

@@ -37,7 +37,6 @@ from ._assessment_group import (
     resolve_package,
     resolve_target_set,
     resolve_targets,
-    validate_assessment_findings,
     validate_deletions,
 )
 
@@ -1396,7 +1395,7 @@ def init_app(app: Flask) -> None:
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
 
         errors: list[dict[str, Any]] = []
-        prepared: list[tuple[DBAssessment, UUID, list[Package], dict[UUID, Finding]]] = []
+        prepared: list[tuple[DBAssessment, list[tuple[UUID, UUID]]]] = []
         pkg_cache: dict[str, Package] = {}
 
         # Validate the complete request before opening the write transaction.
@@ -1417,21 +1416,33 @@ def init_app(app: Flask) -> None:
                 continue
 
             vuln_id = assessment.vuln_id
-            variant_id_raw = item.get("variant_id") or None
-            if not variant_id_raw:
+            raw_variant_ids = item.get("variant_ids")
+            if not (isinstance(raw_variant_ids, list) and raw_variant_ids):
+                single = item.get("variant_id") or None
+                raw_variant_ids = [single] if single else []
+            if not raw_variant_ids:
                 errors.append({"vuln_id": vuln_id, "error": "variant_id is required"})
                 continue
-            variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-            if err:
-                errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
-                continue
-            if variant_id is None:
-                errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+
+            variant_ids: list[UUID] = []
+            invalid_variant = False
+            for raw_variant_id in raw_variant_ids:
+                parsed, err = parse_uuid_or_400(raw_variant_id, "variant_id")
+                if err or parsed is None:
+                    errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                    invalid_variant = True
+                    break
+                variant_ids.append(parsed)
+            if invalid_variant:
                 continue
 
             pkg_list = assessment.packages or []
             if not pkg_list:
-                errors.append({"vuln_id": vuln_id, "variant_id": str(variant_id), "error": "No valid package found"})
+                errors.append({
+                    "vuln_id": vuln_id,
+                    "variant_ids": [str(value) for value in variant_ids],
+                    "error": "No valid package found",
+                })
                 continue
 
             item_packages: list[Package] = []
@@ -1449,24 +1460,31 @@ def init_app(app: Flask) -> None:
             if item_missing:
                 errors.append({
                     "vuln_id": vuln_id,
-                    "variant_id": str(variant_id),
+                    "variant_ids": [str(value) for value in variant_ids],
                     "error": "Package not found: " + ", ".join(item_missing)
                     + ". Assessments can only be written for existing packages.",
                 })
                 continue
 
-            valid_findings, invalid_findings = validate_assessment_findings(
-                item_packages, vuln_id, variant_id
-            )
-            if invalid_findings:
+            try:
+                resolved, unobserved = resolve_target_set(
+                    item_packages, vuln_id, variant_ids)
+            except ValueError as exc:
+                errors.append({"vuln_id": vuln_id, "error": str(exc)})
+                continue
+            if unobserved:
                 errors.append({
                     "vuln_id": vuln_id,
-                    "variant_id": str(variant_id),
+                    "variant_ids": [str(value) for value in variant_ids],
                     "error": "Invalid package version for vulnerability and variant: "
-                    + ", ".join(invalid_findings),
+                    + ", ".join(unobserved),
                 })
                 continue
-            prepared.append((assessment, variant_id, item_packages, valid_findings))
+            item_targets = [
+                (variant_id, finding.id)
+                for (_package, variant_id), finding in resolved.items()
+            ]
+            prepared.append((assessment, item_targets))
 
         if errors:
             return {
@@ -1486,10 +1504,7 @@ def init_app(app: Flask) -> None:
                 # creates exactly one row covering every package in that
                 # item; batching never fuses separate items together.
                 created_rows: list[DBAssessment] = []
-                for assessment, variant_id, item_packages, valid_findings in prepared:
-                    item_targets = [
-                        (variant_id, valid_findings[db_pkg.id].id) for db_pkg in item_packages
-                    ]
+                for assessment, item_targets in prepared:
                     created_rows.append(create_assessment_record(
                         assessment, item_targets,
                         timestamp=getattr(assessment, "timestamp", None),

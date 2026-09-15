@@ -152,6 +152,8 @@ type BatchAssessmentItem = {
     status_notes?: string;
     workaround?: string;
     variant_id?: string;
+    /** Multiple variants covered by this one assessment row. */
+    variant_ids?: string[];
     /** Shared timestamp so all rows created by one batch action line up. */
     timestamp?: string;
 };

@@ -129,7 +129,12 @@ describe("Assessments group handlers", () => {
     }));
 
     const items = [
-      { vuln_id: "CVE-2026-0001", packages: ["pkg-a"], status: "not_affected" },
+      {
+        vuln_id: "CVE-2026-0001",
+        packages: ["pkg-a"],
+        status: "not_affected",
+        variant_ids: ["variant-a", "variant-b"],
+      },
       { vuln_id: "CVE-2026-0001", packages: ["pkg-b"], status: "not_affected" },
     ];
     const result = await Assessments.createBatch(items);
