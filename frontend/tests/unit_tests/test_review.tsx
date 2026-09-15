@@ -280,6 +280,7 @@ type NetworkOpts = {
     variants?: unknown[];
     projects?: unknown[];
     packages?: unknown[];
+    packagesByVariant?: Record<string, unknown[]>;
     mutationOk?: boolean;
     exportOk?: boolean;
     importResult?: Record<string, unknown>;
@@ -300,7 +301,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         variants = VARIANTS, projects = PROJECTS,
         // Every variant ships the shared package by default so the editor's
         // package/variant compatibility gate does not disable the checkboxes.
-        packages = [{ name: 'pkgA', version: '1.0.0' }],
+        packages = [{ name: 'pkgA', version: '1.0.0' }], packagesByVariant,
         mutationOk = true, exportOk = true,
         importResult = {
             status: 'success', assessments_imported: 2, assessments_skipped: 1,
@@ -339,7 +340,10 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
             if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) return JSON.stringify(variants);
-            if (url.includes('/api/packages')) return JSON.stringify(packages);
+            if (url.includes('/api/packages')) {
+                const variant = new URL(url).searchParams.get('variant_id');
+                return JSON.stringify((variant && packagesByVariant?.[variant]) ?? packages);
+            }
             if (url.includes('/api/vulnerabilities/')) {
                 return vulnOk
                     ? JSON.stringify(vulnDetail)
@@ -362,11 +366,11 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
 const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
     const editBtn = await screen.findByTitle('Edit assessment');
     await user.click(editBtn);
-    await screen.findByText('Apply to variants:');
+    await screen.findByText('Apply to exact targets:');
 };
 
 const variantCheckbox = (name: string): HTMLInputElement =>
-    screen.getByRole('checkbox', { name }) as HTMLInputElement;
+    screen.getByRole('checkbox', { name: `${name} / pkgA@1.0.0` }) as HTMLInputElement;
 
 const putCalls = () =>
     fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'PUT');
@@ -395,11 +399,11 @@ describe('Review — editing "Apply to variants"', () => {
         await user.keyboard('{Escape}');
 
         expect(screen.getByText('Discard assessment changes?')).toBeInTheDocument();
-        expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
+        expect(screen.getByText('Apply to exact targets:')).toBeInTheDocument();
 
         await user.click(screen.getByRole('button', { name: 'Keep editing' }));
         expect(screen.queryByText('Discard assessment changes?')).not.toBeInTheDocument();
-        expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
+        expect(screen.getByText('Apply to exact targets:')).toBeInTheDocument();
     });
 
     test('checking a new variant reconciles the complete target set once', async () => {
@@ -479,6 +483,38 @@ describe('Review — editing "Apply to variants"', () => {
         expect(deleteCalls()).toHaveLength(0);
     });
 
+    test('edits sparse disjoint targets with the exact compatibility matrix', async () => {
+        mockNetwork([
+            {...makeAssessment('a1', 'v1', 'a1'), packages: ['pkgA@1.0.0']},
+            {...makeAssessment('a1', 'v2', 'a1'), packages: ['pkgB@2.0.0']},
+        ], {
+            packages: [
+                {name: 'pkgA', version: '1.0.0'},
+                {name: 'pkgB', version: '2.0.0'},
+            ],
+            packagesByVariant: {
+                v1: [{name: 'pkgA', version: '1.0.0'}],
+                v2: [{name: 'pkgB', version: '2.0.0'}],
+            },
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgA@1.0.0'})).toBeChecked();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgB@2.0.0'})).toBeChecked();
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgB@2.0.0'})).toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgA@1.0.0'})).toBeDisabled();
+
+        await user.click(screen.getByText('Save Changes'));
+        await waitFor(() => expect(reconcileCalls()).toHaveLength(1));
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.targets).toEqual([
+            {variant_id: 'v1', package: 'pkgA@1.0.0'},
+            {variant_id: 'v2', package: 'pkgB@2.0.0'},
+        ]);
+    });
+
     test('removing every variant reconciles with an explicit empty target set', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
@@ -532,7 +568,7 @@ describe('Review — editing "Apply to variants"', () => {
         fireEvent.keyDown(document, { key: 'Escape' });
 
         await waitFor(() => {
-            expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+            expect(screen.queryByText('Apply to exact targets:')).not.toBeInTheDocument();
         });
     });
 
@@ -545,7 +581,7 @@ describe('Review — editing "Apply to variants"', () => {
         fireEvent.mouseDown(screen.getByTestId('modal-backdrop'));
 
         await waitFor(() => {
-            expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+            expect(screen.queryByText('Apply to exact targets:')).not.toBeInTheDocument();
         });
     });
 });

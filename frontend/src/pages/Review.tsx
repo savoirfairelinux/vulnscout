@@ -1902,6 +1902,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             defaultSelectedVariantIds={editingRow.variant_ids}
                             availablePackages={editingRow.packages}
                             defaultSelectedPackages={editingRow.packages}
+                            defaultSelectedTargets={editingRow.targets.map(target => ({
+                                variant_id: target.variant_id,
+                                package: target.package,
+                            }))}
                             variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
                         />
                     )}
