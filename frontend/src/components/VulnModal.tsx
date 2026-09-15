@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment, AssessmentGroup, AssessmentTarget } from "../handlers/assessments";
-import Assessments, { asAssessment, isMultiTargetGroup, appliesToVariant, assessmentPackagesInVariant, coversTarget } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTargetGroup, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -790,6 +790,8 @@ type VariantScopedSnapshot = {
                     vuln_id: vuln.id,
                     packages: targetPackages,
                     variant_ids: targetVariantIds,
+                    targets: reconcileTargetPairs(
+                        editingGroup.targets, targetPackages, targetVariantIds),
                     existing_ids: editingGroup.assessment_ids,
                     status: data.status,
                     justification: data.justification,

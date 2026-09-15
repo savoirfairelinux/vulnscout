@@ -19,6 +19,7 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     triggerBanner: (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => void;
     hideBanner: () => void;
+    projectId?: string;
     variantId?: string;
     /** Origin variant when compare mode is active */
     baseVariantId?: string;
@@ -26,7 +27,7 @@ type Props = {
     compareOperation?: string;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, projectId, variantId, baseVariantId, compareOperation} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -146,7 +147,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             await Promise.all(selectedVulns.map(async (vuln_id) => {
                 const variants = await Variants.listByVuln(vuln_id).catch(() => []);
                 const pkgs = pkg_vulns[vuln_id] ?? [];
-                const variant_ids = variants.map(v => v.id);
+                const variant_ids = variants
+                    .filter(variant => !projectId || variant.project_id === projectId)
+                    .map(variant => variant.id);
                 targets.push({
                     vuln_id,
                     packages: pkgs,
@@ -256,7 +259,8 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         } else {
             await Promise.all(selectedVulns.map(async (vuln_id) => {
                 const variants = await Variants.listByVuln(vuln_id).catch(() => []);
-                for (const variant of variants) {
+                for (const variant of variants.filter(
+                    item => !projectId || item.project_id === projectId)) {
                     vulnerabilityUpdates.push({
                         id: vuln_id,
                         variant_id: variant.id,

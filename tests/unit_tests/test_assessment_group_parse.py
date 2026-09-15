@@ -39,6 +39,51 @@ def test_valid_payload_parses():
     assert req.update_timestamp is True
 
 
+def test_explicit_targets_define_exact_pairs_and_derive_flat_sets():
+    other_variant = "33333333-3333-3333-3333-333333333333"
+    req, err = parse_reconcile_payload({
+        "vuln_id": "CVE-2020-35492",
+        "targets": [
+            {"package": "cairo@1.16.0", "variant_id": VARIANT},
+            {"package": "libpng@1.6.37", "variant_id": other_variant},
+        ],
+        "status": "affected",
+    })
+
+    assert err is None
+    assert req is not None
+    assert req.target_pairs == [
+        ("cairo@1.16.0", uuid.UUID(VARIANT)),
+        ("libpng@1.6.37", uuid.UUID(other_variant)),
+    ]
+    assert req.packages == ["cairo@1.16.0", "libpng@1.6.37"]
+    assert req.variant_ids == [uuid.UUID(VARIANT), uuid.UUID(other_variant)]
+
+
+def test_invalid_explicit_target_is_rejected():
+    req, err = parse_reconcile_payload(_payload(targets=[{"package": "cairo@1.16.0"}]))
+    assert req is None
+    assert err is not None
+    assert "variant_id" in err["error"]
+
+
+def test_explicit_targets_must_be_a_non_empty_list():
+    for targets in ([], "cairo@1.16.0"):
+        req, err = parse_reconcile_payload(_payload(targets=targets))
+        assert req is None
+        assert err == {"error": "targets must be a non-empty list"}
+
+
+def test_explicit_target_must_be_an_object_with_a_package():
+    req, err = parse_reconcile_payload(_payload(targets=["not-an-object"]))
+    assert req is None
+    assert err == {"error": "Invalid target"}
+
+    req, err = parse_reconcile_payload(_payload(targets=[{"variant_id": VARIANT}]))
+    assert req is None
+    assert err == {"error": "Target package is required"}
+
+
 def test_missing_vuln_id_is_rejected():
     req, err = parse_reconcile_payload(_payload(vuln_id=""))
     assert req is None

@@ -2629,6 +2629,83 @@ def test_reconcile_adds_targets_for_a_newly_selected_variant(client, demo_ids):
     assert group["assessment_ids"] == [group_id]
 
 
+def test_reconcile_explicit_targets_preserve_sparse_pairs(client, demo_ids):
+    """Content-only edits must not turn sparse targets into a cross-product."""
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+
+    package_a, package_b = demo_ids["two_packages"]
+    variant_a = uuid.UUID(demo_ids["variant_id"])
+    variant_b = uuid.UUID(demo_ids["other_variant_id"])
+    with client.application.app_context():
+        finding_a = Finding.get_or_create(
+            Package.get_by_string_id(package_a).id, demo_ids["vuln_id"])
+        finding_b = Finding.get_or_create(
+            Package.get_by_string_id(package_b).id, demo_ids["vuln_id"])
+        assessment = Assessment.create(
+            status="affected", origin="custom",
+            targets=[(variant_a, finding_a.id), (variant_b, finding_b.id)],
+        )
+        group_id = str(assessment.id)
+
+    response = _reconcile(
+        client, group_id, demo_ids,
+        # Conflicting flat sets would produce four cells under legacy rules;
+        # explicit pairs are authoritative and must retain only these two.
+        packages=[package_a, package_b],
+        variant_ids=[str(variant_a), str(variant_b)],
+        targets=[
+            {"package": package_a, "variant_id": str(variant_a)},
+            {"package": package_b, "variant_id": str(variant_b)},
+        ],
+        status="fixed",
+    )
+
+    assert response.status_code == 200, response.get_json()
+    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    assert {(target["package"], target["variant_id"]) for target in group["targets"]} == {
+        (package_a, str(variant_a)),
+        (package_b, str(variant_b)),
+    }
+
+
+def test_reconcile_explicit_targets_reject_unknown_variant(client, demo_ids):
+    group_id, _ = _create_group(client, demo_ids)
+    missing_variant = str(uuid.uuid4())
+
+    response = _reconcile(
+        client, group_id, demo_ids,
+        targets=[{
+            "package": demo_ids["two_packages"][0],
+            "variant_id": missing_variant,
+        }],
+    )
+
+    assert response.status_code == 400
+    assert missing_variant in response.get_json()["error"]
+
+
+def test_reconcile_explicit_targets_reject_unobserved_pair(client, demo_ids):
+    from src.models.package import Package
+
+    group_id, _ = _create_group(client, demo_ids)
+    with client.application.app_context():
+        unobserved = Package.find_or_create("explicit-unobserved", "1.0")
+        unobserved_id = unobserved.string_id
+
+    response = _reconcile(
+        client, group_id, demo_ids,
+        targets=[{
+            "package": unobserved_id,
+            "variant_id": demo_ids["variant_id"],
+        }],
+    )
+
+    assert response.status_code == 400
+    assert unobserved_id in response.get_json()["error"]
+
+
 def test_reconcile_cross_project_variant_is_400_not_500(client, demo_ids):
     """A reconcile that would target variants from two different projects
     must surface as HTTP 400 with the invariant's message, not fall through

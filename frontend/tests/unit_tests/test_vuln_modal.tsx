@@ -1751,6 +1751,7 @@ describe('Vulnerability Modal', () => {
             expect(reconcileSpy).toHaveBeenCalledWith('group-77', expect.objectContaining({
                 vuln_id: 'CVE-2010-1234',
                 variant_ids: ['variant-1'],
+                targets: [{ package: 'aaabbbccc@1.0.0', variant_id: 'variant-1' }],
                 existing_ids: ['assessment-1'],
             }));
         });

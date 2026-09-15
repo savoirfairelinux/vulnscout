@@ -420,6 +420,10 @@ describe('Review — editing "Apply to variants"', () => {
         const body = JSON.parse((reconcileCalls()[0][1] as any).body);
         expect(body.variant_ids).toEqual(['v1', 'v2']);
         expect(body.packages).toEqual(['pkgA@1.0.0']);
+        expect(body.targets).toEqual([
+            { package: 'pkgA@1.0.0', variant_id: 'v1' },
+            { package: 'pkgA@1.0.0', variant_id: 'v2' },
+        ]);
         expect(body.existing_ids).toEqual(['a1']);
         expect(body.update_timestamp).toBe(false);
         expect(body.timestamp).toBe('2024-01-01T00:00:00Z');
@@ -448,6 +452,9 @@ describe('Review — editing "Apply to variants"', () => {
 
         const body = JSON.parse((reconcileCalls()[0][1] as any).body);
         expect(body.variant_ids).toEqual(['v1']);
+        expect(body.targets).toEqual([
+            { package: 'pkgA@1.0.0', variant_id: 'v1' },
+        ]);
         expect(body.existing_ids).toEqual(['a1']);
         expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);

@@ -724,7 +724,8 @@ describe('MultiEditBar', () => {
         const mockPatchVuln = jest.fn();
         // listByVuln returns one variant → one item with variant_ids
         fetchMock.mockResponseOnce(JSON.stringify([
-            { id: 'v1', name: 'default', project_id: 'p1' }
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'foreign-v', name: 'foreign', project_id: 'p2' },
         ])); // Variants.listByVuln for vuln-1
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -744,6 +745,7 @@ describe('MultiEditBar', () => {
         const props = {
             ...mockProps,
             selectedVulns: ['vuln-1'],
+            projectId: 'p1',
             triggerBanner: mockTriggerBanner,
             appendAssessment: mockAppendAssessment,
             patchVuln: mockPatchVuln

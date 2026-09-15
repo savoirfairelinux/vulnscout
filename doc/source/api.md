@@ -529,6 +529,9 @@ POST /api/assessment-groups/<group_id>/reconcile
   "vuln_id": "CVE-2024-1234",
   "packages": ["pkg@1.0::supplier"],
   "variant_ids": ["uuid"],
+  "targets": [
+    { "package": "pkg@1.0::supplier", "variant_id": "uuid" }
+  ],
   "existing_ids": ["uuid"],
   "status": "not_affected",
   "status_notes": "",
@@ -541,10 +544,13 @@ POST /api/assessment-groups/<group_id>/reconcile
 }
 ```
 
-`packages` and `variant_ids` are required and must be non-empty; `vuln_id` must
-match the group's vulnerability. `responses` is only applied when the key is
-present, so omitting it preserves the stored VEX responses. `update_timestamp`
-defaults to `true`.
+When present, `targets` is the authoritative exact list of package/variant
+pairs. This preserves sparse scopes without implicitly creating the
+cross-product of the flattened fields. Legacy clients may omit `targets` and
+provide non-empty `packages` and `variant_ids`; those fields retain their
+cross-product behavior. `vuln_id` must match the group's vulnerability.
+`responses` is only applied when the key is present, so omitting it preserves
+the stored VEX responses. `update_timestamp` defaults to `true`.
 
 **Response:**
 ```json

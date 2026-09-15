@@ -1974,6 +1974,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             patchVuln={handlePatchVuln}
             triggerBanner={triggerBanner}
             hideBanner={closeBanner}
+            projectId={projectId}
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}

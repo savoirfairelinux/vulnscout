@@ -90,6 +90,7 @@ class ReconcileRequest:
     existing_ids: list[UUID]
     packages: list[str]
     variant_ids: list[UUID]
+    target_pairs: "list[tuple[str, UUID]] | None"
     dto: "DBAssessment"
     update_timestamp: bool
     timestamp: "datetime | None"
@@ -113,20 +114,43 @@ def parse_reconcile_payload(
     if not isinstance(vuln_id, str) or not vuln_id:
         return None, {"error": "vuln_id is required"}
 
-    packages = data.get("packages")
-    if (not isinstance(packages, list) or not packages
-            or not all(isinstance(p, str) and p for p in packages)):
-        return None, {"error": "packages must be a non-empty list of package ids"}
+    target_pairs: "list[tuple[str, UUID]] | None" = None
+    raw_targets = data.get("targets")
+    if raw_targets is not None:
+        if not isinstance(raw_targets, list) or not raw_targets:
+            return None, {"error": "targets must be a non-empty list"}
+        target_pairs = []
+        for target in raw_targets:
+            if not isinstance(target, dict):
+                return None, {"error": "Invalid target"}
+            package = target.get("package")
+            if not isinstance(package, str) or not package:
+                return None, {"error": "Target package is required"}
+            try:
+                target_variant_id = UUID(str(target.get("variant_id")))
+            except (ValueError, AttributeError, TypeError):
+                return None, {"error": f"Invalid variant_id: {target.get('variant_id')}"}
+            pair = (package, target_variant_id)
+            if pair not in target_pairs:
+                target_pairs.append(pair)
 
+    packages = data.get("packages")
     raw_variants = data.get("variant_ids")
-    if not isinstance(raw_variants, list) or not raw_variants:
-        return None, {"error": "variant_ids must be a non-empty list"}
-    variant_ids: list[UUID] = []
-    for raw in raw_variants:
-        try:
-            variant_ids.append(UUID(str(raw)))
-        except (ValueError, AttributeError, TypeError):
-            return None, {"error": f"Invalid variant_id: {raw}"}
+    if target_pairs is not None:
+        packages = list(dict.fromkeys(package for package, _variant in target_pairs))
+        variant_ids = list(dict.fromkeys(variant for _package, variant in target_pairs))
+    else:
+        if (not isinstance(packages, list) or not packages
+                or not all(isinstance(p, str) and p for p in packages)):
+            return None, {"error": "packages must be a non-empty list of package ids"}
+        if not isinstance(raw_variants, list) or not raw_variants:
+            return None, {"error": "variant_ids must be a non-empty list"}
+        variant_ids = []
+        for raw in raw_variants:
+            try:
+                variant_ids.append(UUID(str(raw)))
+            except (ValueError, AttributeError, TypeError):
+                return None, {"error": f"Invalid variant_id: {raw}"}
 
     raw_existing = data.get("existing_ids", [])
     if not isinstance(raw_existing, list):
@@ -160,6 +184,7 @@ def parse_reconcile_payload(
         existing_ids=existing_ids,
         packages=packages,
         variant_ids=variant_ids,
+        target_pairs=target_pairs,
         dto=dto,
         update_timestamp=update_timestamp,
         timestamp=timestamp,
@@ -277,6 +302,48 @@ def resolve_targets(
             "error": "Package not found: " + ", ".join(missing)
             + ". Assessments can only be written for existing packages."
         }
+
+    if req.target_pairs is not None:
+        package_by_id = {package.string_id: package for package in packages}
+        variants: dict[UUID, Variant] = {}
+        missing_variants: list[str] = []
+        for variant_id in req.variant_ids:
+            variant = Variant.get_by_id(variant_id)
+            if variant is None:
+                missing_variants.append(str(variant_id))
+            else:
+                variants[variant_id] = variant
+        if missing_variants:
+            return {}, {"error": "Variant not found: " + ", ".join(missing_variants)}
+
+        project_ids = {variant.project_id for variant in variants.values()}
+        if existing_by_key:
+            existing_variant = Variant.get_by_id(next(iter(existing_by_key))[1])
+            if existing_variant is not None:
+                project_ids.add(existing_variant.project_id)
+        if len(project_ids) > 1:
+            return {}, {"error": "Assessment targets belong to different projects"}
+
+        resolved_pairs: dict[tuple[str, UUID], Finding] = {}
+        invalid_pairs: list[str] = []
+        for package_id, variant_id in req.target_pairs:
+            key = (package_id, variant_id)
+            existing = (existing_by_key or {}).get(key)
+            if existing is not None and existing.finding is not None:
+                resolved_pairs[key] = existing.finding
+                continue
+            package = package_by_id[package_id]
+            finding = find_valid_finding(package.id, req.vuln_id, variant_id)
+            if finding is None:
+                invalid_pairs.append(f"{package_id} in {variant_id}")
+            else:
+                resolved_pairs[key] = finding
+        if invalid_pairs:
+            return {}, {
+                "error": "Invalid package version for vulnerability and variant: "
+                + ", ".join(invalid_pairs)
+            }
+        return resolved_pairs, None
 
     expected_project_id: UUID | None = None
     if existing_by_key:
