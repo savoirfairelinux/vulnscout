@@ -169,7 +169,7 @@ function toAssessmentGroups(list: any[], vulnTextsMap: Record<string, unknown[]>
             origin: head.origin ?? 'custom',
             timestamp: head.timestamp,
             targets,
-            assessment_ids: members.map((m: any) => m.id),
+            assessment_ids: [...new Set(members.map((m: any) => m.id))],
             vuln_texts: vulnTextsMap[head.vuln_id] ?? [],
         });
     }
@@ -371,6 +371,8 @@ const deleteCalls = () =>
     fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'DELETE');
 const postCalls = () =>
     fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'POST');
+const reconcileCalls = () =>
+    postCalls().filter(c => String(c[0]).includes('/api/assessment-groups/') && String(c[0]).endsWith('/reconcile'));
 
 const fileInput = (): HTMLInputElement =>
     document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -397,7 +399,7 @@ describe('Review — editing "Apply to variants"', () => {
         expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
     });
 
-    test('checking a new variant creates an assessment for it (POST) and keeps the existing one (PUT)', async () => {
+    test('checking a new variant reconciles the complete target set once', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -412,29 +414,22 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(postCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls()).toHaveLength(1);
         });
 
-        // Existing v1 assessment is updated in place.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
-
-        // A new assessment is created for the newly-selected variant v2.
-        const post = postCalls().find(c => String(c[0]).includes('/api/vulnerabilities/CVE-2020-1111/assessments'));
-        expect(post).toBeDefined();
-        const body = JSON.parse((post![1] as any).body);
-        expect(body.variant_id).toBe('v2');
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.variant_ids).toEqual(['v1', 'v2']);
         expect(body.packages).toEqual(['pkgA@1.0.0']);
-
-        // No assessments were removed.
+        expect(body.existing_ids).toEqual(['a1']);
+        expect(body.update_timestamp).toBe(false);
+        expect(body.timestamp).toBe('2024-01-01T00:00:00Z');
+        expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('unchecking a variant deletes its assessment (DELETE) and keeps the other (PUT)', async () => {
-        // Two assessments sharing a group id are merged into one row.
-        mockNetwork([makeAssessment('a1', 'v1', 'g-editvar'), makeAssessment('a2', 'v2', 'g-editvar')]);
+    test('unchecking one target of a multi-target assessment reconciles without deleting its row', async () => {
+        // Both targets belong to the same underlying assessment ID.
+        mockNetwork([makeAssessment('a1', 'v1', 'a1'), makeAssessment('a1', 'v2', 'a1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
@@ -448,24 +443,17 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(deleteCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls()).toHaveLength(1);
         });
 
-        // v2 assessment is deleted, v1 assessment is updated.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a2'),
-            expect.objectContaining({ method: 'DELETE' })
-        );
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
-
-        // Nothing new was created.
-        expect(postCalls()).toHaveLength(0);
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.variant_ids).toEqual(['v1']);
+        expect(body.existing_ids).toEqual(['a1']);
+        expect(putCalls()).toHaveLength(0);
+        expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('editing without changing the variant selection neither creates nor deletes assessments', async () => {
+    test('editing without changing variants reconciles exactly once', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -474,15 +462,11 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(putCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls()).toHaveLength(1);
         });
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
+        expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
-        expect(postCalls()).toHaveLength(0);
     });
 
     test('a successful edit reports success and notifies the parent', async () => {
