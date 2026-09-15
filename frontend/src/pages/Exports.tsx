@@ -64,14 +64,14 @@ function Exports({ projectId }: Readonly<Props>) {
 
     const project = projects.find(current => current.id === projectId);
 
-    return <div className="w-full space-y-6">
-        <div className="space-y-6">
+    return <div className="w-full space-y-4">
+        <div className="space-y-4">
             <div>
-                <h1 className="text-3xl font-bold text-white">Export</h1>
-                <p className="mt-2 text-base text-neutral-400">Generate reports and SBOM files for the selected project.</p>
+                <h1 className="text-2xl font-bold text-white">Export</h1>
+                <p className="mt-1 text-sm text-neutral-400">Generate reports and SBOM files for the selected project.</p>
             </div>
 
-            <div className="flex items-center gap-4 rounded-lg border border-sky-800/70 bg-sky-950/30 px-6 py-5 text-lg text-sky-100">
+            <div className="flex items-center gap-3 rounded-lg border border-sky-800/70 bg-sky-950/30 px-4 py-3 text-sm text-sky-100">
                 <FontAwesomeIcon icon={faGear} className="shrink-0 text-sky-400" aria-hidden="true" />
                 <p>Custom report templates and their image assets can be managed from <span className="font-semibold text-white">Settings &gt; Custom reports &amp; assets</span>.</p>
             </div>

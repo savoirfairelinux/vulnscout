@@ -147,6 +147,19 @@ describe("ModalShell", () => {
         expect(screen.getByRole("dialog")).toHaveClass("h-[calc(100vh-2rem)]", "max-w-[calc(100vw-2rem)]");
     });
 
+    test("renders compact embedded density without global text upscaling", () => {
+        render(
+            <ModalShell {...defaultProps} embedded={true} compactEmbedded={true} footer={<button>Next</button>}>
+                <span className="text-sm">Content</span>
+            </ModalShell>
+        );
+
+        const region = screen.getByRole("region");
+        expect(region).toHaveClass("max-w-none", "border-neutral-700", "bg-neutral-900");
+        expect(region).not.toHaveClass("[&_.text-sm]:!text-lg", "[&_input]:h-5");
+        expect(screen.getByRole("contentinfo")).toHaveClass("px-6", "py-3");
+    });
+
     test("renders standardized modal actions", () => {
         render(
             <ModalActions align="between">

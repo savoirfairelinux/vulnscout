@@ -131,6 +131,7 @@ export type ModalShellProps = {
     closeOnBackdrop?: boolean;
     closeOnPanel?: boolean;
     embedded?: boolean;
+    compactEmbedded?: boolean;
     testId?: string;
     titleId?: string;
     descriptionId?: string;
@@ -160,6 +161,7 @@ export default function ModalShell({
     closeOnBackdrop = true,
     closeOnPanel = false,
     embedded = false,
+    compactEmbedded = false,
     testId = "modal-backdrop",
     titleId,
     descriptionId,
@@ -247,7 +249,7 @@ export default function ModalShell({
                 onMouseDown={event => {
                     if (closeOnPanel && event.target === event.currentTarget) onClose();
                 }}
-                className={`relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 text-neutral-100 shadow-2xl outline-none ${sizeClasses[size]} ${embedded ? "max-w-none [&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_h3]:!text-2xl [&_h4]:!text-xl [&_input]:h-5 [&_input]:w-5" : ""} ${surfaceClassName} ${panelClassName}`.trim()}
+                className={`relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 text-neutral-100 shadow-2xl outline-none ${sizeClasses[size]} ${embedded ? compactEmbedded ? "max-w-none" : "max-w-none [&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_h3]:!text-2xl [&_h4]:!text-xl [&_input]:h-5 [&_input]:w-5" : ""} ${surfaceClassName} ${panelClassName}`.trim()}
             >
                 <ModalHeader
                     title={title}
@@ -259,12 +261,12 @@ export default function ModalShell({
                     closeLabel={closeLabel}
                     showCloseButton={showCloseButton}
                     closeDisabled={closeDisabled}
-                    className={`${embedded ? "px-10 py-8" : ""} ${surfaceClassName}`.trim()}
+                    className={`${embedded ? compactEmbedded ? "px-6 py-4" : "px-10 py-8" : ""} ${surfaceClassName}`.trim()}
                 >
                     {headerContent}
                 </ModalHeader>
                 <div className={`min-h-0 overflow-y-auto bg-neutral-900 p-5 text-left ${surfaceClassName} ${contentClassName}`.trim()}>{children}</div>
-                {footer && <footer className={`border-t border-neutral-700 bg-neutral-950/60 px-5 py-4 ${embedded ? "px-10 py-7 [&_button]:px-6 [&_button]:py-3" : ""} ${surfaceClassName}`.trim()}>{footer}</footer>}
+                {footer && <footer className={`border-t border-neutral-700 bg-neutral-950/60 px-5 py-4 ${embedded ? compactEmbedded ? "px-6 py-3" : "px-10 py-7 [&_button]:px-6 [&_button]:py-3" : ""} ${surfaceClassName}`.trim()}>{footer}</footer>}
             </div>
         </div>
     );

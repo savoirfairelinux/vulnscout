@@ -218,7 +218,8 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         <ModalShell
             isOpen={isOpen}
             embedded={embedded}
-            title="Create export"
+            compactEmbedded={embedded}
+            title="Generate export"
             subtitle={`Step ${stepIndex + 1} of ${activeSteps.length}`}
             titleId="export-wizard-title"
             onClose={() => onClose?.()}
@@ -230,10 +231,10 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             size="large"
             panelRef={dialogRef}
             panelTabIndex={-1}
-            contentClassName={embedded ? "min-h-[38rem] px-10 py-9 md:px-10 md:py-9" : "min-h-80 px-6 py-5 md:px-6 md:py-5"}
+            contentClassName={embedded ? "min-h-0 px-6 py-5 md:px-6 md:py-5" : "min-h-80 px-6 py-5 md:px-6 md:py-5"}
             footer={footer}
             headerContent={
-                <ol className={`${embedded ? "mt-6" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
+                <ol className={`${embedded ? "mt-3" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
                     {activeSteps.map((currentStep, index) => (
                         <li key={currentStep} className={index <= stepIndex ? "text-cyan-300" : "text-neutral-500"}>
                             <span aria-hidden="true" className="mr-1 font-semibold">{index + 1}.</span>{stepLabels[currentStep]}
@@ -247,7 +248,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                 {project ? <>
                     <p className="mt-1 text-sm text-neutral-400">Choose the variants to export from <span className="font-semibold text-white">{project.name}</span>.</p>
                     <p className="mt-1 text-xs text-neutral-500">Use the project selector in the navigation bar to export another project.</p>
-                    <div className={`mt-5 rounded-lg border border-slate-600 bg-slate-900/40 ${embedded ? "p-6" : "p-4"}`}>
+                    <div className="mt-4 rounded-lg border border-slate-600 bg-slate-900/40 p-4">
                         <div className="flex items-center justify-between gap-3">
                             <h4 className="text-sm font-semibold text-white">Variants ({selectedVariantIds.size} of {variants.length} selected)</h4>
                             {variants.length > 1 && <div className="flex gap-3 text-xs">
@@ -255,8 +256,8 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                                 <button type="button" onClick={() => setSelectedVariantIds(new Set())} className="rounded border border-neutral-600 px-2.5 py-1 font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white">Clear</button>
                             </div>}
                         </div>
-                        <div className="mt-3 grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1">
-                            {variants.map(variant => <label key={variant.id} className={`flex cursor-pointer items-center gap-4 rounded-lg border transition-colors ${embedded ? "px-5 py-4" : "px-3 py-2"} text-sm ${selectedVariantIds.has(variant.id) ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500"}`}>
+                        <div data-testid="export-variant-grid" className="mt-3 grid max-h-56 grid-cols-1 gap-2 overflow-y-auto pr-1">
+                            {variants.map(variant => <label key={variant.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${selectedVariantIds.has(variant.id) ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500"}`}>
                                 <input type="checkbox" checked={selectedVariantIds.has(variant.id)} onChange={() => toggleVariant(variant.id)} className="accent-cyan-500" />
                                 <span className="truncate font-medium">{variant.name}</span>
                             </label>)}
@@ -269,31 +270,31 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             {step === "type" && <>
                 <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">What do you want to export?</h3>
                 <p className="mt-1 text-sm text-neutral-400">Choose one export family. You will select its individual files in the final step.</p>
-                <div className={`mt-6 grid grid-cols-1 ${embedded ? "gap-5 xl:grid-cols-2" : "grid-cols-2 gap-3"}`}>
-                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${exportType === "reports" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "reports" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
                         <input type="radio" name="export-type" checked={exportType === "reports"} onChange={() => { setExportType("reports"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
                         <FontAwesomeIcon icon={faFileLines} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                        <span><span className="block font-medium text-white">Reports</span><span className="mt-1 block text-xs text-zinc-400">Built-in and custom reports, consolidated or separated by variant.</span></span>
+                        <span><span className="block font-medium text-white">Reports</span><span className="mt-1 block text-xs text-gray-300">Built-in and custom reports, combined or generated separately for each variant.</span></span>
                     </label>
-                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${exportType === "sbom" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                    <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "sbom" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
                         <input type="radio" name="export-type" checked={exportType === "sbom"} onChange={() => { setExportType("sbom"); setMode("per_variant"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
                         <FontAwesomeIcon icon={faShieldHalved} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                        <span><span className="block font-medium text-white">SBOM files</span><span className="mt-1 block text-xs text-zinc-400">Generated per variant and downloaded together as a ZIP archive.</span></span>
+                        <span><span className="block font-medium text-white">SBOM files</span><span className="mt-1 block text-xs text-gray-300">Generated per variant and downloaded together as a ZIP archive.</span></span>
                     </label>
                 </div>
-                {exportType === "reports" && <section className="mt-6 border-t border-neutral-700 pt-5" aria-labelledby="output-layout-heading">
+                {exportType === "reports" && <section className="mt-4 border-t border-neutral-700 pt-4" aria-labelledby="output-layout-heading">
                     <h4 id="output-layout-heading" className="text-sm font-semibold text-white">Output layout</h4>
                     <p className="mt-1 text-xs text-neutral-400">Choose how project variants are represented in the archive.</p>
-                    <div className={`mt-4 grid grid-cols-1 ${embedded ? "gap-5 xl:grid-cols-2" : "grid-cols-2 gap-3"}`}>
-                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${mode === "consolidated" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${mode === "consolidated" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
                         <input type="radio" name="export-mode" checked={mode === "consolidated"} onChange={() => setMode("consolidated")} className="mt-1 accent-cyan-500" />
                         <FontAwesomeIcon icon={faLayerGroup} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                        <span><span className="block font-medium text-white">Consolidated</span><span className="mt-1 block text-xs text-zinc-400">Each selected document combines all project variants.</span></span>
+                        <span><span className="block font-medium text-white">One combined report per template</span><span className="mt-1 block text-xs text-zinc-400">Each selected template generates one report combining data from all selected variants.</span></span>
                     </label>
-                    <label className={`flex cursor-pointer items-start rounded-lg border ${embedded ? "gap-5 p-7" : "gap-3 p-4"} ${mode === "per_variant" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                    <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${mode === "per_variant" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
                         <input type="radio" name="export-mode" checked={mode === "per_variant"} onChange={() => setMode("per_variant")} className="mt-1 accent-cyan-500" />
                         <FontAwesomeIcon icon={faBoxArchive} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                        <span><span className="block font-medium text-white">One set per variant</span><span className="mt-1 block text-xs text-zinc-400">The ZIP contains a folder and selected files for each variant.</span></span>
+                        <span><span className="block font-medium text-white">One report per variant and template</span><span className="mt-1 block text-xs text-zinc-400">Each selected template generates a separate report for every selected variant.</span></span>
                     </label>
                     </div>
                 </section>}
