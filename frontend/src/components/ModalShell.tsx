@@ -135,6 +135,9 @@ export type ModalShellProps = {
     titleId?: string;
     descriptionId?: string;
     contentClassName?: string;
+    backdropClassName?: string;
+    panelClassName?: string;
+    surfaceClassName?: string;
     panelRef?: MutableRefObject<HTMLDivElement | null>;
     panelTabIndex?: number;
 };
@@ -161,6 +164,9 @@ export default function ModalShell({
     titleId,
     descriptionId,
     contentClassName = "",
+    backdropClassName = "",
+    panelClassName = "",
+    surfaceClassName = "",
     panelRef,
     panelTabIndex,
 }: Readonly<ModalShellProps>) {
@@ -225,7 +231,7 @@ export default function ModalShell({
         <div
             data-testid={testId}
             tabIndex={-1}
-            className={embedded ? "w-full" : "fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4"}
+            className={`${embedded ? "w-full" : "fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4"} ${backdropClassName}`.trim()}
             onMouseDown={handleBackdropMouseDown}
         >
             <div
@@ -241,7 +247,7 @@ export default function ModalShell({
                 onMouseDown={event => {
                     if (closeOnPanel && event.target === event.currentTarget) onClose();
                 }}
-                className={`relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 text-neutral-100 shadow-2xl outline-none ${sizeClasses[size]} ${embedded ? "max-w-none [&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_h3]:!text-2xl [&_h4]:!text-xl [&_input]:h-5 [&_input]:w-5" : ""}`.trim()}
+                className={`relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 text-neutral-100 shadow-2xl outline-none ${sizeClasses[size]} ${embedded ? "max-w-none [&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_h3]:!text-2xl [&_h4]:!text-xl [&_input]:h-5 [&_input]:w-5" : ""} ${surfaceClassName} ${panelClassName}`.trim()}
             >
                 <ModalHeader
                     title={title}
@@ -253,12 +259,12 @@ export default function ModalShell({
                     closeLabel={closeLabel}
                     showCloseButton={showCloseButton}
                     closeDisabled={closeDisabled}
-                    className={embedded ? "px-10 py-8" : ""}
+                    className={`${embedded ? "px-10 py-8" : ""} ${surfaceClassName}`.trim()}
                 >
                     {headerContent}
                 </ModalHeader>
-                <div className={`min-h-0 overflow-y-auto bg-neutral-900 p-5 text-left ${contentClassName}`.trim()}>{children}</div>
-                {footer && <footer className={`border-t border-neutral-700 bg-neutral-950/60 px-5 py-4 ${embedded ? "px-10 py-7 [&_button]:px-6 [&_button]:py-3" : ""}`.trim()}>{footer}</footer>}
+                <div className={`min-h-0 overflow-y-auto bg-neutral-900 p-5 text-left ${surfaceClassName} ${contentClassName}`.trim()}>{children}</div>
+                {footer && <footer className={`border-t border-neutral-700 bg-neutral-950/60 px-5 py-4 ${embedded ? "px-10 py-7 [&_button]:px-6 [&_button]:py-3" : ""} ${surfaceClassName}`.trim()}>{footer}</footer>}
             </div>
         </div>
     );
