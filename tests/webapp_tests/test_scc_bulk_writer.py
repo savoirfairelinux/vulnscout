@@ -131,8 +131,7 @@ class TestSccBulkWriter:
 
     def test_kernel_explosion_persists_once_per_package_cve(self, app):
         """Many sibling packages sharing the same CVE set each get their own
-        finding/observation, while pending assessments are only created once per
-        new CVE in the variant."""
+        finding, observation, and exact-target pending assessment."""
         with app.app_context():
             project = Project.create("P")
             variant = Variant.create("V", project.id)
@@ -161,8 +160,9 @@ class TestSccBulkWriter:
             # 5 packages x 2 CVEs = 10 findings / observations.
             assert _db.session.query(Finding).count() == 10
             assert _db.session.query(Observation).count() == 10
-            # Only two assessments: one pending row for each new CVE.
-            assert _db.session.query(Assessment).count() == 2
+            # Every discovered package/CVE target starts pending, otherwise the
+            # unassessed package rows would remain unknown in this variant.
+            assert _db.session.query(Assessment).count() == 10
 
             # Every observation belongs to this scan; every assessment to variant.
             assert all(o.scan_id == scan.id
@@ -232,9 +232,9 @@ class TestSccBulkWriter:
             assert _db.session.query(Finding).filter_by(
                 package_id=pkg.id, vulnerability_id="CVE-2023-0001").count() == 1
 
-    def test_existing_variant_cve_gets_no_pending_on_new_package_finding(self, app):
-        """When a CVE already exists in the variant, new findings for that same
-        CVE on other packages must not get a fresh pending assessment."""
+    def test_existing_variant_cve_gets_pending_on_new_package_finding(self, app):
+        """A new package finding gets pending even when its CVE is already known
+        in the variant through another package."""
         with app.app_context():
             project = Project.create("P")
             variant = Variant.create("V", project.id)
@@ -267,8 +267,10 @@ class TestSccBulkWriter:
                 vulnerability_id="CVE-2023-0001",
             ).one()
 
-            # No assessment was added for the existing-variant CVE.
-            assert _assessments_for(new_finding.id, variant.id).count() == 0
+            assessment = _assessments_for(new_finding.id, variant.id).one()
+            assert assessment.status == "under_investigation"
+            assert assessment.simplified_status == "Pending Assessment"
+            assert assessment.origin == "scc"
 
     def test_not_affected_and_fixed_are_persisted_as_pending_for_new_cves(self, app):
         """For new CVEs, one pending assessment is created per new vulnerability
@@ -329,9 +331,8 @@ class TestSccBulkWriter:
             assert _db.session.query(Observation).filter_by(
                 finding_id=existing.id, scan_id=scan.id).count() == 1
 
-    def test_existing_finding_without_assessment_not_given_pending(self, app):
-        """A pre-existing finding that has no assessment must not receive a new
-        'Pending Assessment' from the sbom-cve-check-scan (only brand-new findings should)."""
+    def test_existing_finding_without_assessment_gets_pending(self, app):
+        """A reused global finding gets pending when this variant has no status."""
         with app.app_context():
             project = Project.create("P")
             variant = Variant.create("V", project.id)
@@ -353,12 +354,54 @@ class TestSccBulkWriter:
             assert len(findings) == 1
             assert findings[0].id == existing_fid
 
-            # No assessment added — the pre-existing finding had none and the
-            # sbom-cve-check-scan must not inject a "Pending Assessment" for it.
-            assert _assessments_for(existing_fid, variant.id).count() == 0
+            assessment = _assessments_for(existing_fid, variant.id).one()
+            assert assessment.status == "under_investigation"
+            assert assessment.simplified_status == "Pending Assessment"
+            assert assessment.origin == "scc"
             # The scan still recorded the observation.
             assert _db.session.query(Observation).filter_by(
                 finding_id=existing_fid, scan_id=scan.id).count() == 1
+
+    def test_finding_assessed_in_another_variant_gets_pending(self, app):
+        """A globally reused finding still gets a target assessment in a newly
+        scanned variant.
+
+        Findings are shared by package/CVE. Assessment targets are not: an
+        assessment for v1 must never suppress the fallback status for v2.
+        """
+        with app.app_context():
+            project = Project.create("P")
+            variant_1 = Variant.create("V1", project.id)
+            variant_2 = Variant.create("V2", project.id)
+            old_scan = Scan.create("scc", variant_1.id, scan_type="tool")
+            new_scan = Scan.create("scc", variant_2.id, scan_type="tool")
+            pkg = _make_packages([("curl", "8.0")])[0]
+
+            finding = Finding.create(pkg.id, "CVE-2023-0001", commit=False)
+            Observation.create(
+                finding_id=finding.id, scan_id=old_scan.id, commit=False)
+            Assessment.create(
+                status="under_investigation",
+                simplified_status="Pending Assessment",
+                targets=[(variant_1.id, finding.id)],
+                origin="scc",
+                commit=False,
+            )
+            _db.session.commit()
+
+            writer = _SccBulkWriter(new_scan.id, variant_2.id, [pkg])
+            _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+            writer.flush()
+
+            assert _assessments_for(finding.id, variant_1.id).count() == 1
+            assessment_v2 = _assessments_for(finding.id, variant_2.id).one()
+            assert assessment_v2.status == "under_investigation"
+            assert assessment_v2.simplified_status == "Pending Assessment"
+            assert assessment_v2.origin == "scc"
+            assert [(target.variant_id, target.finding_id)
+                    for target in assessment_v2.target_rows] == [
+                        (variant_2.id, finding.id)
+                    ]
 
     def test_changed_status_writes_no_new_assessment_if_one_exists(self, app):
         """When a finding already has an assessment the sbom-cve-check-scan leaves it

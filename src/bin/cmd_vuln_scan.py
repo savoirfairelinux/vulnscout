@@ -387,13 +387,10 @@ class _SccBulkWriter:
       in-memory index to bound memory on the kernel explosion);
     * metrics are inserted only alongside a newly created vulnerability, deduped
       by ``(version, score)``;
-    * an assessment is recorded only when the engine verdict changes a finding's
-      most recent state: every finding's latest assessment (for this variant) is
-      pre-loaded as a simplified label, and a new assessment is appended only
-      when the engine's verdict maps to a different label (a finding with no
-      prior assessment always counts as a change).  Every verdict the engine
-      emits is considered — ``affected``, ``under_investigation``,
-      ``not_affected`` and ``fixed`` — so the full VEX state is captured;
+        * every exact ``(variant, finding)`` target without an assessment receives
+            an initial pending assessment. Findings are global package/CVE records and
+            may already exist because another variant observed them, so finding or CVE
+            novelty cannot be used to decide whether this variant has been triaged;
     * ``found_by`` is a transient (non-persisted) attribute, so dropping the
       per-vuln ``add_found_by``/enrichment updates changes nothing on disk.
     """
@@ -405,11 +402,6 @@ class _SccBulkWriter:
         self._scan_id = scan_id
         self._variant_uuid = variant_uuid
         self.cves_found: set[str] = set()
-
-        # CVE ids already observed in this variant across any previous scan.
-        self._variant_existing_cves: set[str] = set()
-        # CVE ids first seen in this run for this variant.
-        self._variant_new_cves: set[str] = set()
 
         # Confirmed-present (existing or already-inserted) vulnerability ids.
         self._known_vuln_ids: set[str] = set()
@@ -453,20 +445,6 @@ class _SccBulkWriter:
             ).all()
             for fid, package_id, vuln_id in rows:
                 self._finding_index[(package_id, vuln_id.upper())] = fid
-
-        # CVEs already present in this variant (via any finding observed by any
-        # scan tied to the variant). Pending assessment must only be added for
-        # truly new CVEs, not for existing CVEs appearing on additional packages.
-        existing_variant_cves = _db.session.execute(
-            _db.select(FindingModel.vulnerability_id)
-            .join(Observation, Observation.finding_id == FindingModel.id)
-            .join(ScanModel, ScanModel.id == Observation.scan_id)
-            .where(ScanModel.variant_id == self._variant_uuid)
-            .distinct()
-        ).all()
-        self._variant_existing_cves = {
-            vuln_id.upper() for (vuln_id,) in existing_variant_cves if vuln_id
-        }
 
         # For every pre-existing finding remember the simplified status of its
         # most recent assessment for this variant, so the writer only records a
@@ -575,12 +553,13 @@ class _SccBulkWriter:
             "scan_id": self._scan_id,
         })
 
-        # Only record an initial "Pending Assessment" for brand-new CVEs in the
-        # variant. Existing CVEs must not be modified, even if this scan creates
-        # a new finding for a different package.
+        # A finding is shared globally by package/CVE, while assessment state is
+        # scoped to an exact finding/variant target.  Therefore an existing
+        # finding (for example one first observed in another variant) still needs
+        # a pending assessment when this variant discovers it.  Mark the target
+        # in memory immediately so duplicate scanner output cannot queue twice.
         assert finding_id is not None
-        if is_new_finding and cve_id not in self._variant_existing_cves and cve_id not in self._variant_new_cves:
-            self._variant_new_cves.add(cve_id)
+        if finding_id not in self._last_simplified:
             self._last_simplified[finding_id] = "Pending Assessment"
             assess_id = uuid.uuid4()
             self._assess_rows.append({
