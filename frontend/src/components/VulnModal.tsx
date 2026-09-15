@@ -1595,7 +1595,12 @@ type VariantScopedSnapshot = {
                     {navigationInfo && <span className="px-3 text-sm text-gray-400" id="navigation-info">{navigationInfo}</span>}
                 </div>
             ) : <div />}
-            <ModalButton onClick={handleClose}>Close</ModalButton>
+            <ModalButton
+                onClick={handleClose}
+                className="!border-gray-600 !bg-gray-800 !text-gray-400 hover:!bg-gray-700 hover:!text-white"
+            >
+                Close
+            </ModalButton>
         </ModalActions>
     );
 
@@ -1615,6 +1620,9 @@ type VariantScopedSnapshot = {
             panelRef={modalRef}
             panelTabIndex={-1}
             headerActions={headerActions}
+            backdropClassName="!bg-gray-900/90"
+            panelClassName="!h-[calc(100vh-6rem)] !max-w-[calc(100vw-6rem)]"
+            surfaceClassName="!border-gray-600 !bg-gray-700"
             contentClassName="relative flex min-h-0 flex-1 flex-col p-0 md:p-0"
             footer={footer}
         >

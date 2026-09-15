@@ -2301,6 +2301,22 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Edit Assessment')).not.toBeInTheDocument();
     });
 
+    test('keeps the upstream-main VulnModal background colors', () => {
+        render(<VulnModal vuln={vulnerability} isEditing={false} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(screen.getByTestId('vuln-modal-backdrop')).toHaveClass('!bg-gray-900/90');
+        expect(screen.getByRole('dialog')).toHaveClass(
+            '!border-gray-600', '!bg-gray-700',
+            '!h-[calc(100vh-6rem)]', '!max-w-[calc(100vw-6rem)]',
+        );
+        expect(screen.getByRole('heading', { name: vulnerability.id }).closest('.border-b')).toHaveClass('!border-gray-600');
+        expect(document.getElementById('vulnerability_modal_body')?.parentElement?.parentElement).toHaveClass('!bg-gray-700');
+        expect(screen.getByRole('button', { name: 'Close' })).toHaveClass(
+            '!border-gray-600', '!bg-gray-800', '!text-gray-400',
+            'hover:!bg-gray-700', 'hover:!text-white',
+        );
+    });
+
     test('renders yocto description when available', () => {
         // To avoid breaking other tests, we create a new vulnerability object with the yocto description added to the texts array
         let vulnWithYoctoDesc = {
