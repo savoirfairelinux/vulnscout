@@ -661,6 +661,15 @@ def _make_finding(vuln_id, pkg_name, pkg_version=""):
     return Finding.get_or_create(pkg.id, vuln_id)
 
 
+def _observe_finding(finding, variant_id):
+    """Record that *finding* was historically observed for *variant_id*."""
+    from src.models.observation import Observation
+    from src.models.scan import Scan
+
+    scan = Scan.create("assessment import fixture", variant_id)
+    Observation.create(finding.id, scan.id)
+
+
 class TestImportStatementsMultiTarget:
     """One OpenVEX statement (one vuln_id, multiple products) now produces one
     multi-target assessment instead of one assessment per product."""
@@ -1001,6 +1010,8 @@ class TestCustomDataVersion2:
             variant_b = _make_variant(project.id, "b")
             openssl = _make_finding("CVE-2099-XV01", "openssl", "1.0")
             zlib = _make_finding("CVE-2099-XV01", "zlib", "1.0")
+            _observe_finding(openssl, variant_a.id)
+            _observe_finding(zlib, variant_b.id)
 
             original = Assessment.create(
                 status="not_affected", origin="custom",
@@ -1045,7 +1056,8 @@ class TestCustomDataVersion2:
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
-        _make_finding("CVE-2099-FOREIGNVAR", "openssl", "1.0")
+        finding = _make_finding("CVE-2099-FOREIGNVAR", "openssl", "1.0")
+        _observe_finding(finding, var.id)
         foreign_variant_id = str(_uuid_mod.uuid4())
         data = {
             "version": 2,
@@ -1075,7 +1087,8 @@ class TestCustomDataVersion2:
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
-        _make_finding("CVE-2099-OVERRIDEVAR", "openssl", "1.0")
+        finding = _make_finding("CVE-2099-OVERRIDEVAR", "openssl", "1.0")
+        _observe_finding(finding, var.id)
         data = {
             "version": 2,
             "assessments": [{
@@ -1120,13 +1133,47 @@ class TestCustomDataVersion2:
         assert result["assessments_imported"] == 0
         assert len(result["errors"]) >= 1
 
+    def test_v2_import_rejects_finding_observed_only_in_another_project(self, app):
+        """A global finding cannot be attached to an unrelated variant."""
+        from src.models.assessment import Assessment
+        from src.models.project import Project
+
+        with app.app_context():
+            source_project = Project.create("io-v2-observed-source")
+            target_project = Project.create("io-v2-observed-target")
+            source_variant = _make_variant(source_project.id, "observed-source")
+            target_variant = _make_variant(target_project.id, "observed-target")
+            finding = _make_finding(
+                "CVE-2099-WRONGPROJECT", "cross-project-pkg", "1.0")
+            _observe_finding(finding, source_variant.id)
+
+            data = {
+                "version": 2,
+                "assessments": [{
+                    "vuln_id": "CVE-2099-WRONGPROJECT",
+                    "status": "affected",
+                    "targets": [{
+                        "variant_id": str(target_variant.id),
+                        "package": "cross-project-pkg@1.0",
+                    }],
+                }],
+            }
+            result = import_custom_data(
+                data, {target_variant.name: target_variant})
+
+            assert result["assessments_imported"] == 0
+            assert len(result["errors"]) == 1
+            assert "observed for the selected variant" in result["errors"][0]["error"]
+            assert Assessment.get_by_vulnerability("CVE-2099-WRONGPROJECT") == []
+
     def test_a_package_that_fails_to_resolve_is_reported_not_silently_dropped(self, app, variant_and_project):
         """A version-2 target naming an unknown package is reported as an
         error while the resolvable targets on the same entry still import."""
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
-        _make_finding("CVE-2099-BADPKG", "openssl", "")
+        finding = _make_finding("CVE-2099-BADPKG", "openssl", "")
+        _observe_finding(finding, var.id)
         data = {
             "version": 2,
             "assessments": [{
@@ -1187,9 +1234,12 @@ class TestCustomDataVersion2:
             project_b = Project.create("io-v2-cross-proj-b")
             variant_a = _make_variant(project_a.id, "cp-a")
             variant_b = _make_variant(project_b.id, "cp-b")
-            _make_finding("CVE-2099-XPROJ", "cross-pkg-a", "1.0")
-            _make_finding("CVE-2099-XPROJ", "cross-pkg-b", "1.0")
+            cross_a = _make_finding("CVE-2099-XPROJ", "cross-pkg-a", "1.0")
+            cross_b = _make_finding("CVE-2099-XPROJ", "cross-pkg-b", "1.0")
             single_finding = _make_finding("CVE-2099-OK", "ok-pkg", "1.0")
+            _observe_finding(cross_a, variant_a.id)
+            _observe_finding(cross_b, variant_b.id)
+            _observe_finding(single_finding, variant_a.id)
 
             data = {
                 "version": 2,
@@ -1234,6 +1284,8 @@ class TestCustomDataVersion2:
         _, var = variant_and_project
         finding_a = _make_finding("CVE-2099-DUPFIX", "dupfix-pkg-a", "1.0")
         finding_b = _make_finding("CVE-2099-DUPFIX", "dupfix-pkg-b", "1.0")
+        _observe_finding(finding_a, var.id)
+        _observe_finding(finding_b, var.id)
         with app.app_context():
             Assessment.create(
                 status="not_affected", origin="custom",
@@ -1274,6 +1326,9 @@ class TestCustomDataVersion2:
         finding_a = _make_finding("CVE-2099-OVERLAP2", "overlap2-pkg-a", "1.0")
         finding_b = _make_finding("CVE-2099-OVERLAP2", "overlap2-pkg-b", "1.0")
         finding_c = _make_finding("CVE-2099-OVERLAP2", "overlap2-pkg-c", "1.0")
+        _observe_finding(finding_a, var.id)
+        _observe_finding(finding_b, var.id)
+        _observe_finding(finding_c, var.id)
         with app.app_context():
             Assessment.create(
                 status="not_affected", origin="custom",
@@ -1313,6 +1368,8 @@ class TestCustomDataVersion2:
         _, var = variant_and_project
         finding_a = _make_finding("CVE-2099-PARTIAL2", "partial2-a", "1.0")
         finding_b = _make_finding("CVE-2099-PARTIAL2", "partial2-b", "1.0")
+        _observe_finding(finding_a, var.id)
+        _observe_finding(finding_b, var.id)
         with app.app_context():
             Assessment.create(
                 status="affected", origin="custom",
@@ -1349,7 +1406,8 @@ class TestCustomDataVersion2:
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
-        _make_finding("CVE-2099-DETAILS2", "details2-pkg", "1.0")
+        finding = _make_finding("CVE-2099-DETAILS2", "details2-pkg", "1.0")
+        _observe_finding(finding, var.id)
         base = {
             "vuln_id": "CVE-2099-DETAILS2",
             "status": "affected",
