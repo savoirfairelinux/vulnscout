@@ -331,7 +331,7 @@ describe('EditAssessment Component', () => {
             // The impact statement (reasoning) must be preserved for false_positive,
             // not wiped, since the impact textarea is shown and editable for it.
             impact_statement: 'test impact',
-            packages: [],
+            packages: undefined,
             variant_ids: undefined,
             update_timestamp: false,
         });
@@ -565,7 +565,7 @@ describe('EditAssessment Component', () => {
             status_notes: 'test notes',
             workaround: 'test workaround',
             impact_statement: 'test impact',
-            packages: [],
+            packages: undefined,
             variant_ids: undefined,
             update_timestamp: false,
         });
@@ -746,7 +746,7 @@ describe('EditAssessment Component', () => {
         expect(screen.getByText('release')).toBeInTheDocument();
     });
 
-    test('shows external error when no variant selected and variants are available', async () => {
+    test('passes an explicit empty variant selection to the save handler', async () => {
         const variants = [
             { id: 'v1', name: 'default', project_id: 'p1' },
             { id: 'v2', name: 'release', project_id: 'p1' },
@@ -765,11 +765,12 @@ describe('EditAssessment Component', () => {
         const saveButton = screen.getByText('Save Changes');
         await user.click(saveButton);
 
-        expect(mockTriggerBanner).toHaveBeenCalledWith('You must select at least one variant', 'error');
-        expect(mockOnSave).not.toHaveBeenCalled();
+        expect(mockOnSave).toHaveBeenCalledWith(
+            expect.objectContaining({ variant_ids: [] })
+        );
     });
 
-    test('shows internal error when no variant selected', async () => {
+    test('does not replace an empty variant selection with defaults', async () => {
         const variants = [
             { id: 'v1', name: 'default', project_id: 'p1' },
             { id: 'v2', name: 'release', project_id: 'p1' },
@@ -787,8 +788,9 @@ describe('EditAssessment Component', () => {
         const saveButton = screen.getByText('Save Changes');
         await user.click(saveButton);
 
-        expect(screen.getByText('You must select at least one variant')).toBeInTheDocument();
-        expect(mockOnSave).not.toHaveBeenCalled();
+        expect(mockOnSave).toHaveBeenCalledWith(
+            expect.objectContaining({ variant_ids: [] })
+        );
     });
 
     test('includes selected variant_ids when variant checkbox is checked', async () => {
@@ -857,7 +859,7 @@ describe('EditAssessment Component', () => {
         expect(screen.getByText('pkg2@2.0.0')).toBeInTheDocument();
     });
 
-    test('shows external error when no package selected', async () => {
+    test('passes an explicit empty package selection to the save handler', async () => {
         const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
         const user = userEvent.setup();
         render(
@@ -874,11 +876,12 @@ describe('EditAssessment Component', () => {
         const saveButton = screen.getByText('Save Changes');
         await user.click(saveButton);
 
-        expect(mockTriggerBanner).toHaveBeenCalledWith('You must select at least one package', 'error');
-        expect(mockOnSave).not.toHaveBeenCalled();
+        expect(mockOnSave).toHaveBeenCalledWith(
+            expect.objectContaining({ packages: [] })
+        );
     });
 
-    test('shows internal error when no package selected and no external triggerBanner', async () => {
+    test('does not replace an empty package selection with available packages', async () => {
         const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
         const user = userEvent.setup();
         render(
@@ -894,8 +897,9 @@ describe('EditAssessment Component', () => {
         const saveButton = screen.getByText('Save Changes');
         await user.click(saveButton);
 
-        expect(screen.getByText('You must select at least one package')).toBeInTheDocument();
-        expect(mockOnSave).not.toHaveBeenCalled();
+        expect(mockOnSave).toHaveBeenCalledWith(
+            expect.objectContaining({ packages: [] })
+        );
     });
 
     test('toggles package checkboxes and saves with selected packages', async () => {

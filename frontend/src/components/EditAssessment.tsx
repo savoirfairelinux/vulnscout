@@ -234,23 +234,6 @@ function EditAssessment({
             return;
         }
 
-        if (availableVariants && availableVariants.length > 0 && selectedVariantIds.length === 0) {
-            if (triggerBanner) {
-                triggerBanner("You must select at least one variant", "error");
-            } else {
-                internalTriggerBanner("You must select at least one variant", "error");
-            }
-            return;
-        }
-        if (availablePackages && availablePackages.length > 0 && selectedPackages.length === 0) {
-            if (triggerBanner) {
-                triggerBanner("You must select at least one package", "error");
-            } else {
-                internalTriggerBanner("You must select at least one package", "error");
-            }
-            return;
-        }
-
         // Justification only applies to not_affected; the impact statement
         // applies to both not_affected and false_positive (mirrors StatusEditor).
         const includeJustification = status == "not_affected";
@@ -264,8 +247,8 @@ function EditAssessment({
             workaround,
             // For non-impact statuses the value was folded into status_notes; clear impact_statement.
             impact_statement: includeImpact ? impact : "",
-            variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
-            packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? []),
+            variant_ids: availableVariants ? selectedVariantIds : undefined,
+            packages: availablePackages ? selectedPackages : undefined,
             update_timestamp: !keepCurrentTimestamp,
         });
     }

@@ -911,16 +911,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setEditSubmitting(true);
 
         const targetVariantIds: string[] =
-            data.variant_ids && data.variant_ids.length > 0
-                ? data.variant_ids
-                : editingRow.variant_ids;
+            data.variant_ids ?? editingRow.variant_ids;
         const targetPackages: string[] =
-            data.packages && data.packages.length > 0 ? data.packages : editingRow.packages;
+            data.packages ?? editingRow.packages;
 
         try {
-            if (targetVariantIds.length === 0) {
-                throw new Error('Assessment has no variant targets');
-            }
             const groupId = editingRow.group_id
                 ?? await Assessments.promoteToGroup(editingRow.assessment_ids[0]);
             const editSharedTimestamp = data.update_timestamp === false

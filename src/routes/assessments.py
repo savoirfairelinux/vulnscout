@@ -1776,12 +1776,15 @@ def init_app(app: Flask) -> None:
         return {"group_id": str(row.id)}, 200
 
 
-def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":
+def payload_to_assessment(
+    data: dict, *, allow_empty_packages: bool = False,
+) -> "tuple[DBAssessment | dict[str, str], int]":
     """
     Take an object in input and try to convert it to an Assessment DTO.
     Return either (Assessment, 200) or (error_dict, http_code).
     """
-    if "packages" not in data or not isinstance(data["packages"], list) or len(data["packages"]) < 1:
+    if ("packages" not in data or not isinstance(data["packages"], list)
+            or (not allow_empty_packages and len(data["packages"]) < 1)):
         return {"error": "Invalid request data"}, 400
 
     assessment = DBAssessment.new_dto(data["vuln_id"], data["packages"])

@@ -769,9 +769,7 @@ type VariantScopedSnapshot = {
             : new Date().toISOString();
 
         const targetPackages: string[] =
-            data.packages && data.packages.length > 0
-                ? data.packages
-                : [...new Set(editingGroup.targets.map(t => t.package))];
+            data.packages ?? [...new Set(editingGroup.targets.map(t => t.package))];
 
         // A group-reconcile call needs at least one variant target — the
         // backend rejects an empty ``variant_ids`` list. When the user has a
@@ -780,9 +778,9 @@ type VariantScopedSnapshot = {
         // to the legacy per-row PUT/POST/DELETE flow below, which is the only
         // way to edit an assessment that isn't scoped to any variant.
         const targetVariantIds: string[] =
-            data.variant_ids && data.variant_ids.length > 0 ? data.variant_ids : [];
+            data.variant_ids ?? [];
 
-        if (targetVariantIds.length > 0) {
+        if (editingGroup.group_id && data.variant_ids !== undefined) {
             try {
                 const groupId = editingGroup.group_id
                     ?? await Assessments.promoteToGroup(editingGroup.assessment_ids[0]);

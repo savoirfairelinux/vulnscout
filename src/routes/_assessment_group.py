@@ -117,8 +117,8 @@ def parse_reconcile_payload(
     target_pairs: "list[tuple[str, UUID]] | None" = None
     raw_targets = data.get("targets")
     if raw_targets is not None:
-        if not isinstance(raw_targets, list) or not raw_targets:
-            return None, {"error": "targets must be a non-empty list"}
+        if not isinstance(raw_targets, list):
+            return None, {"error": "targets must be a list"}
         target_pairs = []
         for target in raw_targets:
             if not isinstance(target, dict):
@@ -162,7 +162,10 @@ def parse_reconcile_payload(
         except (ValueError, AttributeError, TypeError):
             return None, {"error": f"Invalid assessment id: {raw}"}
 
-    dto, code = payload_to_assessment({**data, "vuln_id": vuln_id, "packages": packages})
+    dto, code = payload_to_assessment(
+        {**data, "vuln_id": vuln_id, "packages": packages},
+        allow_empty_packages=target_pairs is not None,
+    )
     if code != 200 or not isinstance(dto, DBAssessment):
         message = dto.get("error", "Invalid assessment content") if isinstance(dto, dict) else "Invalid content"
         return None, {"error": message}

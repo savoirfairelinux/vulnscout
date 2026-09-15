@@ -2600,6 +2600,19 @@ def test_reconcile_removing_a_target_keeps_the_group_alive(client, demo_ids):
     assert len(group["targets"]) == 1
 
 
+def test_reconcile_explicit_empty_targets_deletes_the_group(client, demo_ids):
+    group_id, _ = _create_group(client, demo_ids)
+
+    response = _reconcile(
+        client, group_id, demo_ids,
+        targets=[], packages=[], variant_ids=[],
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json()["deleted"] == [group_id]
+    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 404
+
+
 def test_reconcile_on_unknown_group_is_404(client):
     resp = client.post(
         f"/api/assessment-groups/{uuid.uuid4()}/reconcile",
