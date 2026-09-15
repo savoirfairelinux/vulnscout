@@ -1,4 +1,4 @@
-import Assessments from "../../src/handlers/assessments";
+import Assessments, { reconcileTargetPairs } from "../../src/handlers/assessments";
 
 const fetchSpy = jest.fn();
 global.fetch = fetchSpy as typeof fetch;
@@ -14,6 +14,36 @@ beforeEach(() => {
 });
 
 describe("Assessments group handlers", () => {
+  test("reconcileTargetPairs preserves sparse existing coverage", () => {
+    const existing = [
+      { variant_id: "variant-a", package: "openssl@1", outdated: false, assessment_id: "a1" },
+      { variant_id: "variant-b", package: "zlib@1", outdated: false, assessment_id: "a1" },
+    ];
+
+    expect(reconcileTargetPairs(
+      existing, ["openssl@1", "zlib@1"], ["variant-a", "variant-b"],
+    )).toEqual([
+      { package: "openssl@1", variant_id: "variant-a" },
+      { package: "zlib@1", variant_id: "variant-b" },
+    ]);
+  });
+
+  test("reconcileTargetPairs expands a newly selected variant", () => {
+    const existing = [
+      { variant_id: "variant-a", package: "openssl@1", outdated: false, assessment_id: "a1" },
+      { variant_id: "variant-b", package: "zlib@1", outdated: false, assessment_id: "a1" },
+    ];
+
+    expect(reconcileTargetPairs(
+      existing, ["openssl@1", "zlib@1"], ["variant-a", "variant-b", "variant-c"],
+    )).toEqual([
+      { package: "openssl@1", variant_id: "variant-a" },
+      { package: "openssl@1", variant_id: "variant-c" },
+      { package: "zlib@1", variant_id: "variant-b" },
+      { package: "zlib@1", variant_id: "variant-c" },
+    ]);
+  });
+
   test("listGroups requests the grouped endpoint for the vulnerability", async () => {
     fetchSpy.mockResolvedValueOnce(response([{ group_id: "g1", targets: [], assessment_ids: ["a1"] }]));
 

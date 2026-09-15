@@ -3,7 +3,7 @@ import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { AssessmentGroup, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
-import { asAssessment, isMultiTargetGroup } from "../handlers/assessments";
+import { asAssessment, isMultiTargetGroup, reconcileTargetPairs } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
@@ -930,6 +930,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 vuln_id: editingRow.vuln_id,
                 packages: targetPackages,
                 variant_ids: targetVariantIds,
+                targets: reconcileTargetPairs(
+                    editingRow.targets, targetPackages, targetVariantIds),
                 existing_ids: editingRow.assessment_ids,
                 status: data.status,
                 justification: data.justification,

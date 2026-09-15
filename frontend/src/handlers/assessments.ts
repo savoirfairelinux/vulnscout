@@ -124,6 +124,29 @@ type AssessmentTarget = {
     assessment_id: string;
 };
 
+/** Build exact desired pairs while preserving sparse existing coverage.
+ * Newly selected package or variant dimensions are expanded as requested,
+ * while absent cells between existing dimensions remain absent. */
+function reconcileTargetPairs(
+    existing: AssessmentTarget[], packages: string[], variantIds: string[],
+): Array<{ package: string; variant_id: string }> {
+    const existingKeys = new Set(existing.map(target =>
+        `${target.package}\0${target.variant_id ?? ''}`));
+    const existingPackages = new Set(existing.map(target => target.package));
+    const existingVariants = new Set(existing.flatMap(target =>
+        target.variant_id === null ? [] : [target.variant_id]));
+
+    return packages.flatMap(packageId => variantIds.flatMap(variantId => {
+        const key = `${packageId}\0${variantId}`;
+        if (existingKeys.has(key)
+                || !existingPackages.has(packageId)
+                || !existingVariants.has(variantId)) {
+            return [{ package: packageId, variant_id: variantId }];
+        }
+        return [];
+    }));
+}
+
 type AssessmentGroup = {
     group_id: string | null;
     vuln_id: string;
@@ -166,6 +189,7 @@ type BatchResult = {
 };
 
 export type { AssessmentGroup, AssessmentTarget, BatchAssessmentItem, BatchResult };
+export { reconcileTargetPairs };
 
 type ReviewTimeEstimate = {
     id: string;
