@@ -762,12 +762,16 @@ def _create_custom_assessment(app):
         from src.models.package import Package
         from src.models.vulnerability import Vulnerability
         from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.scan import Scan
         from src.models.assessment import Assessment
 
         variant = Variant.get_all()[0]
         pkg = Package.find_or_create("cairo", "1.16.0")
         vuln = Vulnerability.get_or_create("CVE-2020-35492")
         finding = Finding.get_or_create(pkg.id, "CVE-2020-35492")
+        scan = Scan.create("custom assessment fixture", variant.id)
+        Observation.create(finding.id, scan.id)
 
         db_a = Assessment.create(
             status="affected",

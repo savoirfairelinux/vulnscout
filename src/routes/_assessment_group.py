@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from ..extensions import db, batch_session
+from ..extensions import batch_session
 from ..models import Assessment as DBAssessment, Finding, Package, Variant
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 
@@ -31,20 +31,7 @@ def find_valid_finding(package_id: UUID, vuln_id: str, variant_id: UUID) -> "Fin
     they must never invent a package/vulnerability/variant relationship that
     was not produced by a scan.
     """
-    from ..models.observation import Observation
-    from ..models.scan import Scan
-
-    return db.session.execute(
-        db.select(Finding)
-        .join(Observation, Observation.finding_id == Finding.id)
-        .join(Scan, Scan.id == Observation.scan_id)
-        .where(
-            Finding.package_id == package_id,
-            Finding.vulnerability_id == vuln_id.upper(),
-            Scan.variant_id == variant_id,
-        )
-        .distinct()
-    ).scalar_one_or_none()
+    return Finding.get_observed_by_variant(package_id, vuln_id, variant_id)
 
 
 def validate_assessment_findings(

@@ -140,6 +140,36 @@ class Finding(Base):
         ).scalar_one_or_none()
 
     @staticmethod
+    def get_observed_by_variant(
+        package_id: uuid.UUID | str,
+        vulnerability_id: str,
+        variant_id: uuid.UUID | str,
+    ) -> Optional["Finding"]:
+        """Return a finding only when a scan observed it for *variant_id*.
+
+        Historical observations remain valid: assessment targets may refer to
+        package versions no longer present in the latest scan, but may not
+        invent a finding/variant relationship that no scan ever produced.
+        """
+        from .observation import Observation
+        from .scan import Scan
+
+        package_id = Finding._resolve_package_id(package_id)
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        return db.session.execute(
+            db.select(Finding)
+            .join(Observation, Observation.finding_id == Finding.id)
+            .join(Scan, Scan.id == Observation.scan_id)
+            .where(
+                Finding.package_id == package_id,
+                Finding.vulnerability_id == vulnerability_id.upper(),
+                Scan.variant_id == variant_id,
+            )
+            .distinct()
+        ).scalar_one_or_none()
+
+    @staticmethod
     def get_or_create(package_id: uuid.UUID | str, vulnerability_id: str) -> "Finding":
         """Return an existing finding or create a new one."""
         existing = Finding.get_by_package_and_vulnerability(package_id, vulnerability_id)

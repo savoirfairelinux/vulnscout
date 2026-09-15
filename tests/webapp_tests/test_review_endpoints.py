@@ -1368,6 +1368,55 @@ def test_import_custom_data_assessments(client):
     assert result["assessments_imported"] >= 1
 
 
+def test_import_custom_data_v2_rejects_cross_project_observation(app, client):
+    """A v2 target must have been observed for its declared variant."""
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+
+    vuln_id = "CVE-2099-CROSSPROJECT-IMPORT"
+    with app.app_context():
+        source_project = Project.create("custom-data-v2-source-project")
+        source_variant = Variant.create(
+            "custom-data-v2-source-variant", source_project.id)
+        package = Package.find_or_create("cross-project-import", "1.0")
+        Vulnerability.get_or_create(vuln_id)
+        finding = Finding.get_or_create(package.id, vuln_id)
+        scan = Scan.create("source project observation", source_variant.id)
+        Observation.create(finding.id, scan.id)
+
+    payload = {
+        "version": 2,
+        "project_id": str(PROJECT_UUID),
+        "assessments": [{
+            "vuln_id": vuln_id,
+            "status": "affected",
+            "targets": [{
+                "variant_id": str(VARIANT_UUID),
+                "package": "cross-project-import@1.0",
+            }],
+        }],
+    }
+    response = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    result = json.loads(response.data)
+    assert result["assessments_imported"] == 0
+    assert len(result["errors"]) == 1
+    assert "observed for the selected variant" in result["errors"][0]["error"]
+    with app.app_context():
+        assert Assessment.get_by_vulnerability(vuln_id) == []
+
+
 def test_import_custom_data_multipart_accepts_unmodified_export(client):
     """A custom-data export can be uploaded with its destination as form data."""
     _create_handmade_assessment(client)

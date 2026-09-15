@@ -1121,15 +1121,12 @@ def import_custom_data(
         ).scalar_one_or_none()
         if pkg is None:
             return None, None, f"Package '{pkg_string}' not found"
-        finding = db.session.execute(
-            db.select(Finding).where(
-                Finding.package_id == pkg.id,
-                Finding.vulnerability_id == vuln_name.upper(),
-            )
-        ).scalar_one_or_none()
+        finding = Finding.get_observed_by_variant(
+            pkg.id, vuln_name, resolved_variant_id)
         if finding is None:
             return None, None, (
                 f"No finding for package '{pkg_string}' and vulnerability '{vuln_name}'"
+                " was observed for the selected variant"
             )
         return resolved_variant_id, finding.id, None
 
