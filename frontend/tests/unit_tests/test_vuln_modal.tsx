@@ -1771,7 +1771,7 @@ describe('Vulnerability Modal', () => {
         const editPanel = saveBtn.closest('.bg-gray-800');
         expect(editPanel).not.toBeNull();
         await user.click(within(editPanel as HTMLElement).getByRole(
-            'checkbox', { name: 'Variant A' }));
+            'checkbox', { name: 'Variant A / aaabbbccc@1.0.0' }));
         await user.click(saveBtn);
 
         await waitFor(() => {
@@ -3100,7 +3100,10 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
-        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-active-packages (single request for variantPackageMap)
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {variant_id: 'v1', active_packages: ['aaabbbccc@1.0.0']},
+            {variant_id: 'v2', active_packages: ['aaabbbccc@1.0.0']},
+        ])); // variant-active-packages (single request for variantPackageMap)
         // Single fused POST returns one row covering both variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -3147,14 +3150,13 @@ describe('Vulnerability Modal', () => {
 
         // Wait for variants to load, then select both
         expect((await screen.findAllByText('Variant Alpha')).length).toBeGreaterThan(0);
-        const variantCheckboxes = screen.getAllByRole('checkbox');
-        // Select both variants
-        for (const cb of variantCheckboxes) {
-            const label = cb.closest('label');
-            if (label?.textContent?.includes('Variant Alpha') || label?.textContent?.includes('Variant Beta')) {
-                await user.click(cb);
-            }
-        }
+        await screen.findByText('Apply to exact targets:');
+        await user.click(screen.getByRole('checkbox', {
+            name: 'Variant Alpha / aaabbbccc@1.0.0',
+        }));
+        await user.click(screen.getByRole('checkbox', {
+            name: 'Variant Beta / aaabbbccc@1.0.0',
+        }));
 
         const selectSource = screen.getAllByRole('combobox').find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
         await user.selectOptions(selectSource, 'affected');
@@ -3769,7 +3771,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgA@1.0.0'})).toBeDisabled();
     });
 
-    test('omits variantPackageMap so all packages stay enabled when package lookups fail', async () => {
+    test('keeps exact target mode blocked when package compatibility lookup fails', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             const url = req.url;
@@ -3794,25 +3796,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
-        const user = userEvent.setup();
-
-        await screen.findByText('Apply to variants:');
-
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
-
-        // With an empty map (all lookups failed), no incompatibility filtering
-        // applies: selecting a variant leaves every package enabled.
-        await user.click(variantCheckbox('Variant Alpha'));
-
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
-        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
+        expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load target compatibility. Try again.');
+        expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to packages:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to exact targets:')).not.toBeInTheDocument();
     });
 
     test('navigating between vulns fetches each variant endpoint once per vuln', async () => {

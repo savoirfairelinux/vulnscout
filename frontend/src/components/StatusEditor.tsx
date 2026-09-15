@@ -36,10 +36,11 @@ type Props = {
     /** variant_id -> historical findings that may be selected explicitly */
     variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
     findingsLoading?: boolean;
+    findingsError?: string;
     exactTargetSelection?: boolean;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap, variantFindingsMap, findingsLoading = false, exactTargetSelection = false}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap, variantFindingsMap, findingsLoading = false, findingsError, exactTargetSelection = false}: Readonly<Props>) {
     const outdatedPackages = useMemo(() => {
         const packages = new Set<string>();
         for (const finding of Object.values(variantFindingsMap ?? {}).flat()) {
@@ -75,8 +76,12 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         variants?.length === 1 ? [variants[0].id] : []
     );
     const [selectedPackages, setSelectedPackages] = useState<string[]>(initialPackages);
-    const exactTargetMode = Boolean(
-        exactTargetSelection && variants && availablePackages && variantPackageMap
+    const exactTargetMode = Boolean(exactTargetSelection && variants?.length && availablePackages);
+    const compatibilityReady = !findingsLoading && !findingsError && variantPackageMap !== undefined;
+    const compatibilityError = findingsError ?? (
+        exactTargetMode && !findingsLoading && variantPackageMap === undefined
+            ? "Target compatibility is unavailable. Try again."
+            : undefined
     );
     const initialTargets = useMemo<AssessmentTargetPair[]>(() => {
         if (!variantPackageMap) return [];
@@ -246,6 +251,14 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
+        if (exactTargetMode && !compatibilityReady) {
+            const message = findingsLoading
+                ? "Target compatibility is still loading"
+                : (compatibilityError ?? "Target compatibility is unavailable. Try again.");
+            if (triggerBanner) triggerBanner(message, "error");
+            else internalTriggerBanner(message, "error");
+            return;
+        }
         if (exactTargetMode && selectedTargets.length === 0) {
             if (triggerBanner) {
                 triggerBanner("You must select at least one valid target", "error");
@@ -355,6 +368,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         {findingsLoading && (
             <p className="mt-3 text-xs text-gray-400 animate-pulse">Checking for previous package versions…</p>
         )}
+        {exactTargetMode && compatibilityError && (
+            <p role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+                {compatibilityError}
+            </p>
+        )}
         {!findingsLoading && outdatedPackages.size > 0 && (
             <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 cursor-pointer select-none">
                 <span>
@@ -370,7 +388,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 />
             </label>
         )}
-        {exactTargetMode && variants && (
+        {exactTargetMode && compatibilityReady && variants && (
             <TargetPairSelector
                 variants={variants}
                 packages={packageOptions}

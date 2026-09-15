@@ -980,6 +980,34 @@ describe('EditAssessment Component', () => {
         }));
     });
 
+    test.each([
+        {findingsLoading: true, expected: 'Target compatibility is still loading'},
+        {findingsError: 'Unable to load target compatibility. Try again.', expected: 'Unable to load target compatibility. Try again.'},
+    ])('blocks exact target edits while compatibility is unavailable', async ({expected, ...state}) => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                triggerBanner={mockTriggerBanner}
+                availableVariants={[{id: 'v1', name: 'Variant One', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@1.0.0']}
+                defaultSelectedPackages={['package@1.0.0']}
+                defaultSelectedTargets={[{variant_id: 'v1', package: 'package@1.0.0'}]}
+                {...state}
+            />
+        );
+
+        expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to packages:')).not.toBeInTheDocument();
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockTriggerBanner).toHaveBeenCalledWith(expected, 'error');
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
     test('allows adding an outdated package only after enabling the option', async () => {
         const user = userEvent.setup();
         render(

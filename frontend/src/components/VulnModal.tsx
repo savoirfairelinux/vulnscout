@@ -162,6 +162,7 @@ type VariantScopedSnapshot = {
     // True once the active-SBOM package list has been fetched for every variant,
     // so deprecated packages can reliably be split into their own table.
     const [variantPackageMapLoaded, setVariantPackageMapLoaded] = useState(false);
+    const [variantPackageMapError, setVariantPackageMapError] = useState<string | null>(null);
     const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
@@ -405,6 +406,8 @@ type VariantScopedSnapshot = {
         const controller = new AbortController();
         const signal = controller.signal;
         setVariantPackageMapLoaded(false);
+        setVariantPackageMapError(null);
+        setVariantPackageMap({});
         setVariantFindingsMap({});
         if (availableVariants.length === 0) {
             // Only mark as loaded once we know variants have been resolved.
@@ -431,35 +434,37 @@ type VariantScopedSnapshot = {
                     url.searchParams.set('project_id', projectId);
                 }
                 const response = await fetch(url.toString(), { mode: 'cors', signal });
-                const data = response.ok ? await response.json() : [];
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (!Array.isArray(data)) throw new Error("Invalid compatibility response");
                 const map: Record<string, string[]> = {};
                 const findingsMap: Record<string, VariantFinding[]> = {};
-                if (Array.isArray(data)) {
-                    for (const entry of data) {
-                        if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
-                            map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
-                            if (Array.isArray(entry.findings)) {
-                                findingsMap[entry.variant_id] = entry.findings.flatMap((finding: any): VariantFinding[] => {
-                                    if (typeof finding?.finding_id !== 'string' || typeof finding?.package !== 'string') return [];
-                                    return [{
-                                        findingId: finding.finding_id,
-                                        pkg: finding.package,
-                                        outdated: finding.outdated === true,
-                                    }];
-                                });
-                            }
+                for (const entry of data) {
+                    if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
+                        map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
+                        if (Array.isArray(entry.findings)) {
+                            findingsMap[entry.variant_id] = entry.findings.flatMap((finding: any): VariantFinding[] => {
+                                if (typeof finding?.finding_id !== 'string' || typeof finding?.package !== 'string') return [];
+                                return [{
+                                    findingId: finding.finding_id,
+                                    pkg: finding.package,
+                                    outdated: finding.outdated === true,
+                                }];
+                            });
                         }
                     }
                 }
                 if (!signal.aborted) {
                     setVariantPackageMap(map);
                     setVariantFindingsMap(findingsMap);
+                    setVariantPackageMapError(null);
                     setVariantPackageMapLoaded(true);
                 }
             } catch {
                 if (!signal.aborted) {
                     setVariantPackageMap({});
                     setVariantFindingsMap({});
+                    setVariantPackageMapError("Unable to load target compatibility. Try again.");
                     setVariantPackageMapLoaded(true);
                 }
             }
@@ -1912,9 +1917,10 @@ type VariantScopedSnapshot = {
                                             variants={availableVariants}
                                             availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
-                                            variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                            variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
                                             variantFindingsMap={variantFindingsMap}
                                             findingsLoading={!variantPackageMapLoaded}
+                                            findingsError={variantPackageMapError ?? undefined}
                                             exactTargetSelection={true}
                                         />
                                     </li>
@@ -2199,9 +2205,10 @@ type VariantScopedSnapshot = {
                                                             variant_id: target.variant_id,
                                                             package: target.package,
                                                         }))}
-                                                        variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                                        variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
                                                         variantFindingsMap={variantFindingsMap}
                                                         findingsLoading={!variantPackageMapLoaded}
+                                                        findingsError={variantPackageMapError ?? undefined}
                                                     />
                                                 </div>
                                             )}

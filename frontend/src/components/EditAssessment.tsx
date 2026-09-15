@@ -33,6 +33,7 @@ type Props = {
     variantPackageMap?: Record<string, string[]>;
     variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
     findingsLoading?: boolean;
+    findingsError?: string;
 }
 
 function EditAssessment({
@@ -49,7 +50,8 @@ function EditAssessment({
     defaultSelectedTargets,
     variantPackageMap,
     variantFindingsMap,
-    findingsLoading = false
+    findingsLoading = false,
+    findingsError,
 }: Readonly<Props>) {
     const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
     const hasSelectedOutdatedFinding = useMemo(() => {
@@ -77,7 +79,13 @@ function EditAssessment({
         defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : [])
     );
     const exactTargetMode = Boolean(
-        defaultSelectedTargets && availableVariants && availablePackages && variantPackageMap
+        defaultSelectedTargets && availableVariants?.length && availablePackages
+    );
+    const compatibilityReady = !findingsLoading && !findingsError && variantPackageMap !== undefined;
+    const compatibilityError = findingsError ?? (
+        exactTargetMode && !findingsLoading && variantPackageMap === undefined
+            ? "Target compatibility is unavailable. Try again."
+            : undefined
     );
     const targetKey = useCallback(
         (variantId: string, pkg: string) => JSON.stringify([variantId, pkg]), []);
@@ -263,6 +271,14 @@ function EditAssessment({
             }
             return;
         }
+        if (exactTargetMode && !compatibilityReady) {
+            const message = findingsLoading
+                ? "Target compatibility is still loading"
+                : (compatibilityError ?? "Target compatibility is unavailable. Try again.");
+            if (triggerBanner) triggerBanner(message, "error");
+            else internalTriggerBanner(message, "error");
+            return;
+        }
 
         // Justification only applies to not_affected; the impact statement
         // applies to both not_affected and false_positive (mirrors StatusEditor).
@@ -361,6 +377,11 @@ function EditAssessment({
             {findingsLoading && (
                 <p className="mt-3 text-xs text-gray-400 animate-pulse">Checking for previous package versions…</p>
             )}
+            {exactTargetMode && compatibilityError && (
+                <p role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+                    {compatibilityError}
+                </p>
+            )}
             {!findingsLoading && outdatedPackages.size > 0 && (
                 <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 cursor-pointer select-none">
                     <span>
@@ -376,7 +397,7 @@ function EditAssessment({
                     />
                 </label>
             )}
-            {exactTargetMode && availableVariants && (
+            {exactTargetMode && compatibilityReady && availableVariants && (
                 <TargetPairSelector
                     variants={availableVariants}
                     packages={packageOptions}

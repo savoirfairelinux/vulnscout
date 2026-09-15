@@ -855,6 +855,31 @@ describe('StatusEditor', () => {
         expect(screen.getByText('Checking for previous package versions…')).toBeInTheDocument();
     });
 
+    test.each([
+        {findingsLoading: true, expected: 'Target compatibility is still loading'},
+        {findingsError: 'Unable to load target compatibility. Try again.', expected: 'Unable to load target compatibility. Try again.'},
+    ])('blocks exact target submission while compatibility is unavailable', async ({expected, ...state}) => {
+        const triggerBanner = jest.fn();
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                triggerBanner={triggerBanner}
+                exactTargetSelection={true}
+                variants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                availablePackages={['pkg@1.0.0']}
+                {...state}
+            />
+        );
+
+        expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to packages:')).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', {name: 'Add assessment'}));
+
+        expect(triggerBanner).toHaveBeenCalledWith(expected, 'error');
+        expect(defaultProps.onAddAssessment).not.toHaveBeenCalled();
+    });
+
     test('prunes selected packages by the intersection after scope data changes', async () => {
         const user = userEvent.setup();
         const variants = [
