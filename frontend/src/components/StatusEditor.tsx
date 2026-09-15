@@ -5,6 +5,10 @@ import type { AssessmentTargetPair } from '../handlers/assessments';
 import { formatPkgId } from '../helpers/pkgId';
 import TargetPairSelector from './TargetPairSelector';
 
+const targetKeys = (targets: AssessmentTargetPair[]) => targets
+    .map(target => JSON.stringify([target.variant_id ?? '', target.package]))
+    .sort();
+
 type PostAssessment = {
     vuln_id?: string,
     packages?: string[],
@@ -84,6 +88,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         ));
     }, [initialPackages, variantPackageMap, variants]);
     const [selectedTargets, setSelectedTargets] = useState<AssessmentTargetPair[]>(initialTargets);
+    const initialTargetKeys = useMemo(() => targetKeys(initialTargets), [initialTargets]);
     const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(false);
 
     const packageOptions = useMemo(() => {
@@ -207,16 +212,20 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
 
     // Check if fields have changes
     useEffect(() => {
+        const selectedTargetKeys = targetKeys(selectedTargets);
         const hasChanges = (
             status !== defaultStatus ||
             justification !== "none" ||
             statusNotes !== "" ||
             workaround !== "" ||
             impact !== "" ||
-            selectedTargets.length > 0
+            (exactTargetMode && (
+                selectedTargetKeys.length !== initialTargetKeys.length
+                || selectedTargetKeys.some((key, index) => key !== initialTargetKeys[index])
+            ))
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, selectedTargets, onFieldsChange, defaultStatus]);
+    }, [status, justification, statusNotes, workaround, impact, selectedTargets, initialTargetKeys, exactTargetMode, onFieldsChange, defaultStatus]);
 
     function addAssessment () {
         if (status == '' || justification == '')

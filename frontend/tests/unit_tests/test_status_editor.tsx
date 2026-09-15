@@ -157,6 +157,32 @@ describe('StatusEditor', () => {
         });
     });
 
+    test('exact target defaults and reset do not report unsaved changes', async () => {
+        const onFieldsChange = jest.fn();
+        const user = userEvent.setup();
+        const props = {
+            ...defaultProps,
+            onFieldsChange,
+            variants: [{id: 'v1', name: 'default', project_id: 'project'}],
+            availablePackages: ['pkg@1.0.0'],
+            defaultSelectedPackages: ['pkg@1.0.0'],
+            variantPackageMap: {v1: ['pkg@1.0.0']},
+            exactTargetSelection: true,
+        };
+        const { rerender } = render(<StatusEditor {...props} clearFields={false} />);
+
+        await waitFor(() => expect(onFieldsChange).toHaveBeenLastCalledWith(false));
+
+        await user.click(screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'}));
+        await waitFor(() => expect(onFieldsChange).toHaveBeenLastCalledWith(true));
+
+        rerender(<StatusEditor {...props} clearFields={true} />);
+        await waitFor(() => {
+            expect(screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'})).toBeChecked();
+            expect(onFieldsChange).toHaveBeenLastCalledWith(false);
+        });
+    });
+
     test('should clear fields when clearFields prop changes to true', async () => {
         const user = userEvent.setup();
         const { rerender } = render(<StatusEditor {...defaultProps} clearFields={false} />);
