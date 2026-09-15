@@ -752,9 +752,29 @@ def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
         assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
 
 
-def test_batch_multi_variant_single_vuln_yields_two_groups(client, demo_ids):
-    """Two rows created by one batch request, for the same vulnerability
-    across two variants, remain two independent groups."""
+def test_batch_item_with_multiple_variants_creates_one_row(client, demo_ids):
+    """One batch item is one assessment across its complete target set."""
+    response = client.post("/api/assessments/batch", json={"assessments": [{
+        "vuln_id": demo_ids["vuln_id"],
+        "status": "fixed",
+        "packages": demo_ids["two_packages"],
+        "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+    }]})
+
+    assert response.status_code == 200
+    rows = response.get_json()["assessments"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["variant_id"] is None
+    assert sorted(row["variant_ids"]) == sorted([
+        demo_ids["variant_id"], demo_ids["other_variant_id"],
+    ])
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+    assert len(row["targets"]) == 4
+
+
+def test_batch_two_items_remain_two_independent_groups(client, demo_ids):
+    """Separate items remain separate actions even when their content matches."""
     response = client.post("/api/assessments/batch", json={"assessments": [
         {
             "vuln_id": demo_ids["vuln_id"],
@@ -775,6 +795,30 @@ def test_batch_multi_variant_single_vuln_yields_two_groups(client, demo_ids):
     group_ids = {row["group_id"] for row in rows}
     assert len(group_ids) == 2
     assert group_ids == {row["id"] for row in rows}
+
+
+def test_batch_multi_variant_item_rejects_cross_project_variants(client, demo_ids):
+    from src.models.assessment import Assessment
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    with client.application.app_context():
+        before = len(Assessment.get_by_vulnerability(demo_ids["vuln_id"]))
+        foreign_project = Project.create("foreign-batch-project")
+        foreign_variant = Variant.create("foreign-batch-variant", foreign_project.id)
+        foreign_variant_id = str(foreign_variant.id)
+
+    response = client.post("/api/assessments/batch", json={"assessments": [{
+        "vuln_id": demo_ids["vuln_id"],
+        "status": "fixed",
+        "packages": [demo_ids["two_packages"][0]],
+        "variant_ids": [demo_ids["variant_id"], foreign_variant_id],
+    }]})
+
+    assert response.status_code == 400
+    assert "different projects" in response.get_data(as_text=True)
+    with client.application.app_context():
+        assert len(Assessment.get_by_vulnerability(demo_ids["vuln_id"])) == before
 
 
 def test_batch_single_row_vulnerability_is_its_own_group(client, demo_ids):

@@ -125,43 +125,38 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         const pkg_vulns = pkg_for_vulns();
         setIsLoading(true);
 
-        // Build (vuln_id, variant_id | undefined, packages[]) triples.
-        // - variantId set  → use that single variant for every vuln
-        // - variantId unset → fetch all variants per vuln and fan out
-        type Triple = { vuln_id: string; variant_id?: string; packages: string[] };
-        const triples: Triple[] = [];
+        // Build one request item per vulnerability. A multi-variant selection
+        // stays one item so the backend can persist its complete target set on
+        // one Assessment row rather than splitting the user action by variant.
+        type RequestTarget = { vuln_id: string; variant_ids?: string[]; packages: string[] };
+        const targets: RequestTarget[] = [];
 
         if (variantId) {
-            // Compare or specific variant — one item per vuln for the compared variant
+            const selectedVariantIds = [variantId];
+            if (compareOperation === 'intersection' && baseVariantId && baseVariantId !== variantId) {
+                selectedVariantIds.push(baseVariantId);
+            }
             for (const vuln_id of selectedVulns) {
                 const pkgs = pkg_vulns[vuln_id] ?? [];
-                triples.push({ vuln_id, variant_id: variantId, packages: pkgs });
-            }
-            // Intersection mode: also create triples for the base (origin) variant
-            if (compareOperation === 'intersection' && baseVariantId) {
-                for (const vuln_id of selectedVulns) {
-                    const pkgs = pkg_vulns[vuln_id] ?? [];
-                    triples.push({ vuln_id, variant_id: baseVariantId, packages: pkgs });
-                }
+                targets.push({ vuln_id, variant_ids: selectedVariantIds, packages: pkgs });
             }
         } else {
-            // All-variants context — one item per (vuln, variant, pkg)
+            // All-variants context — one item per vulnerability, covering all
+            // variants where its selected packages were historically observed.
             await Promise.all(selectedVulns.map(async (vuln_id) => {
                 const variants = await Variants.listByVuln(vuln_id).catch(() => []);
                 const pkgs = pkg_vulns[vuln_id] ?? [];
-                if (variants.length === 0) {
-                    // No variant data — create without variant_id
-                    triples.push({ vuln_id, packages: pkgs });
-                } else {
-                    for (const v of variants) {
-                        triples.push({ vuln_id, variant_id: v.id, packages: pkgs });
-                    }
-                }
+                const variant_ids = variants.map(v => v.id);
+                targets.push({
+                    vuln_id,
+                    packages: pkgs,
+                    ...(variant_ids.length > 0 ? { variant_ids } : {}),
+                });
             }));
         }
 
         // Build batch request payload
-        const assessmentRequests = triples.map(({ vuln_id, variant_id, packages }) => ({
+        const assessmentRequests = targets.map(({ vuln_id, variant_ids, packages }) => ({
             vuln_id,
             packages,
             status: content.status,
@@ -169,7 +164,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             justification: content.justification,
             impact_statement: content.impact_statement,
             workaround: content.workaround,
-            ...(variant_id ? { variant_id } : {})
+            ...(variant_ids ? { variant_ids } : {})
         }));
 
         try {
