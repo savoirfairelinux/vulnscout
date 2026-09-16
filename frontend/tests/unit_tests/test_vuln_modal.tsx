@@ -208,12 +208,14 @@ describe('Vulnerability Modal', () => {
             ...vulnerability.assessments[0],
             id: 'same-day-first',
             packages: ['first@1.0.0'],
+            targets: [{ variant_id: null, package: 'first@1.0.0', outdated: false }],
             timestamp: '2026-07-28T09:00:00Z',
         };
         const second = {
             ...vulnerability.assessments[0],
             id: 'same-day-second',
             packages: ['second@1.0.0'],
+            targets: [{ variant_id: null, package: 'second@1.0.0', outdated: false }],
             timestamp: '2026-07-28T15:00:00Z',
         };
         fetchMock.resetMocks();
