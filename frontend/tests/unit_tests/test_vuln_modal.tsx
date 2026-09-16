@@ -267,7 +267,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
@@ -309,7 +309,7 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // ASSERT: 4 mount fetches (adds the reviews fetch) + the create POST +
-        // the groups refresh that makes the new assessment appear in history
+        // the rows refresh that makes the new assessment appear in history
         // immediately.
         expect(thisFetch).toHaveBeenCalledTimes(6);
         expect(updateCb).toHaveBeenCalledTimes(1);
@@ -325,7 +325,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify(postResponse)); // POST assessment
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -377,7 +377,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             error: 'Invalid package version for vulnerability and variant: pkgB@1.0',
         }), {status: 400});
@@ -473,7 +473,7 @@ describe('Vulnerability Modal', () => {
             }
         ])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch (variantPackageMap effect)
         fetchMock.mockResponseOnce(JSON.stringify({
             id: vulnerability.id,
@@ -515,7 +515,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
 
@@ -548,7 +548,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -591,7 +591,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -645,7 +645,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -809,7 +809,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             message: 'Database connection failed'
@@ -838,9 +838,9 @@ describe('Vulnerability Modal', () => {
         expect(errorBanner).toBeInTheDocument();
     });
 
-    test('a newly added assessment shows in history right away when server groups already exist', async () => {
+    test('a newly added assessment shows in history right away when server rows already exist', async () => {
         fetchMock.resetMocks();
-        const existingGroup = {
+        const existingRow = {
             id: 'assessment-1',
             vuln_id: 'CVE-2010-1234',
             status: 'affected',
@@ -854,8 +854,8 @@ describe('Vulnerability Modal', () => {
             timestamp: '2021-01-01T00:00:00Z',
             targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
         };
-        const newGroup = {
-            ...existingGroup,
+        const newRow = {
+            ...existingRow,
             id: 'assessment-2',
             status: 'fixed',
             simplified_status: 'fixed',
@@ -869,7 +869,7 @@ describe('Vulnerability Modal', () => {
         let posted = false;
         fetchMock.mockResponse(async req => {
             if (req.method !== 'POST' && req.url.includes('/api/vulnerabilities/') && req.url.includes('/assessments')) {
-                return JSON.stringify(posted ? [newGroup, existingGroup] : [existingGroup]);
+                return JSON.stringify(posted ? [newRow, existingRow] : [existingRow]);
             }
             if (req.method === 'POST' && req.url.includes('/assessments') && !req.url.includes('/batch')) {
                 posted = true;
@@ -897,7 +897,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={{...vulnerability, assessments: [...vulnerability.assessments]}} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        // Wait for the server-built groups to land before submitting.
+        // Wait for the server-built rows to land before submitting.
         expect(await screen.findByText(/this is a fictive status note/i)).toBeInTheDocument();
 
         const selects = screen.getAllByRole('combobox');
@@ -987,7 +987,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 status: 500,
@@ -1535,7 +1535,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Server error', { status: 500 });
 
         const vulnWithAssessment = {
@@ -1579,7 +1579,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockRejectOnce(new Error('Network error'));
 
         const vulnWithAssessment = {
@@ -1652,7 +1652,7 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Delete Assessment')).not.toBeInTheDocument();
     });
 
-    test('deleting a grouped assessment calls remove with the assessment id', async () => {
+    test('deleting an assessment calls remove with the assessment id', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
@@ -1670,7 +1670,7 @@ describe('Vulnerability Modal', () => {
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
             targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
-        }])); // assessment groups mount fetch
+        }])); // assessment rows mount fetch
 
         const removeSpy = jest.spyOn(Assessments, 'remove').mockResolvedValue(undefined);
         const patchVuln = jest.fn();
@@ -1681,7 +1681,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={{ ...vulnerability, assessments: [vulnerability.assessments[0]] }} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        // Wait for the real assessment-groups response (assessment-1, rendered
+        // Wait for the real assessment-rows response (assessment-1, rendered
         // status "Exploitable") to replace the initial client-side fallback
         // (rendered status "active") before deleting.
         await screen.findByText(/Exploitable/);
@@ -1697,7 +1697,7 @@ describe('Vulnerability Modal', () => {
         removeSpy.mockRestore();
     });
 
-    test('clearing a variant-scoped group reconciles an explicit empty target set', async () => {
+    test('clearing a variant-scoped assessment reconciles an explicit empty target set', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -1717,7 +1717,7 @@ describe('Vulnerability Modal', () => {
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
             targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
-        }])); // assessment groups mount fetch
+        }])); // assessment rows mount fetch
 
         const reconcileSpy = jest.spyOn(Assessments, 'reconcile').mockResolvedValue({
             status: 'success',
@@ -1761,7 +1761,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithVariantAssessment} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        // Wait for the real assessment-groups response (assessment-1, rendered
+        // Wait for the real assessment-rows response (assessment-1, rendered
         // status "Exploitable") to replace the initial client-side fallback
         // (rendered status "active") before editing.
         await screen.findByText(/Exploitable/);
@@ -1790,7 +1790,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: {
@@ -1864,7 +1864,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Server error', { status: 500 });
 
         const vulnWithAssessment = {
@@ -1908,7 +1908,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             message: 'Invalid data'
@@ -1955,7 +1955,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockRejectOnce(new Error('Network failure'));
 
         const vulnWithAssessment = {
@@ -2219,7 +2219,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: ['invalid', 'array', 'instead', 'of', 'object']
@@ -2266,7 +2266,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: {
@@ -2398,7 +2398,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
 
         const patchVuln = jest.fn();
@@ -2458,7 +2458,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
 
         const patchVuln = jest.fn();
@@ -2504,7 +2504,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithTwoVariants} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        // The most recent group (var-2 / Exploitable) sorts first in the history.
+        // The most recent assessment (var-2 / Exploitable) sorts first in the history.
         const deleteBtns = screen.getAllByTitle(/delete assessment/i);
         await user.click(deleteBtns[0]);
         await user.click(screen.getByText(/yes, delete/i));
@@ -2545,7 +2545,7 @@ describe('Vulnerability Modal', () => {
                 timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
             }
         ]));
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
         // Finding rows carry their own package/variant outdated state.
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -2933,12 +2933,12 @@ describe('Vulnerability Modal', () => {
         rejectAiSpy.mockRestore();
     });
 
-    test('copy assessment id button copies "assessment:<id>" for an ungrouped history entry', async () => {
+    test('copy assessment id button copies the plain assessment id for a single-target history entry', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch (empty -> fallback)
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch (empty -> fallback)
 
         const vulnWithAssessment = {
             ...vulnerability,
@@ -2969,13 +2969,13 @@ describe('Vulnerability Modal', () => {
         const copyBtn = await screen.findByLabelText('Copy assessment id');
         await user.click(copyBtn);
 
-        expect(writeText).toHaveBeenCalledWith('assessment:assessment-1');
+        expect(writeText).toHaveBeenCalledWith('assessment-1');
         // The clipboard itself gives no visible feedback, so the button must.
         expect(await screen.findByText('Copied')).toBeInTheDocument();
         writeText.mockRestore();
     });
 
-    test('copy multi-target id button copies "group:<id>" when the assessment endpoint returns a multi-target assessment', async () => {
+    test('copy multi-target id button copies the plain assessment id when the assessment endpoint returns a multi-target assessment', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
@@ -2992,13 +2992,13 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            // Two targets makes this a "group" in the user-facing sense; a
-            // single target is just an assessment.
+            // Two targets makes this a "multi-target" assessment in the
+            // user-facing sense; a single target is just an assessment.
             targets: [
                 { variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false },
                 { variant_id: null, package: 'dddeeefff@2.0.0', outdated: false },
             ],
-        }])); // assessment groups mount fetch
+        }])); // assessment rows mount fetch
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
@@ -3008,10 +3008,10 @@ describe('Vulnerability Modal', () => {
         const copyBtn = await screen.findByLabelText('Copy multi-target id');
         await user.click(copyBtn);
 
-        expect(writeText).toHaveBeenCalledWith('group:assessment-42');
+        expect(writeText).toHaveBeenCalledWith('assessment-42');
 
-        const groupItem = copyBtn.closest('li[data-group-id]');
-        expect(groupItem).toHaveAttribute('data-group-id', 'assessment-42');
+        const rowItem = copyBtn.closest('li[data-assessment-id]');
+        expect(rowItem).toHaveAttribute('data-assessment-id', 'assessment-42');
         writeText.mockRestore();
     });
 
@@ -3024,7 +3024,7 @@ describe('Vulnerability Modal', () => {
             { id: 'v2', name: 'Variant Beta', project_id: 'proj1' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
         fetchMock.mockResponseOnce(JSON.stringify([])); // variant-active-packages (single request for variantPackageMap)
         // Single fused POST returns one row covering both variants
@@ -3163,7 +3163,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
 
         const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
-        // The variant name shows up on each group's package badge row.
+        // The variant name shows up on each row's package badge row.
         await waitFor(() => {
             expect(within(history).getAllByText(/Production/).length).toBeGreaterThan(0);
             expect(within(history).getAllByText(/Staging/).length).toBeGreaterThan(0);
@@ -3266,7 +3266,7 @@ describe('Vulnerability Modal', () => {
             { id: 'v3', name: 'Variant Other', project_id: 'proj-beta' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         render(<VulnModal
             vuln={{...vulnerability, assessments: []}}
@@ -3294,7 +3294,7 @@ describe('Vulnerability Modal', () => {
             { id: 'v2', name: 'Variant Other', project_id: 'proj-beta' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         render(<VulnModal
             vuln={{...vulnerability, assessments: []}}
@@ -3315,7 +3315,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         // vuln.packages has all packages (cross-project), packages_current has only project-scoped
         const vulnMultiProject = {
@@ -3346,7 +3346,7 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         const vulnEmptyCurrent = {
             ...vulnerability,
@@ -3432,7 +3432,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -3467,7 +3467,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -3496,7 +3496,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -3515,7 +3515,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
         fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
 
@@ -3534,7 +3534,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(
             JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
             { status: 429 }
@@ -3556,7 +3556,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(
             JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: true }),
             { status: 429 }
@@ -3578,7 +3578,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -3605,7 +3605,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(
             JSON.stringify({ error: 'unauthorized', error_code: 'unauthorized' }),
             { status: 401 }
@@ -3627,7 +3627,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -3882,7 +3882,7 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // NVD refresh
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: true, status: 200,
@@ -3913,7 +3913,7 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // NVD refresh → rate limited
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: false, status: 429,
@@ -3940,7 +3940,7 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // NVD refresh → 503
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: false, status: 503,
@@ -3974,7 +3974,7 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // GHSA refresh
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: true, status: 200,
@@ -4008,7 +4008,7 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // GHSA refresh → not ok → returns null → triggers error
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: false, status: 503,

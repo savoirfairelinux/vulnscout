@@ -79,30 +79,30 @@ type ReviewRow = {
 /** Adapt a server-returned Assessment into the flattened shape the table
  *  columns and edit/delete/approve flows consume. */
 function toReviewRow(
-    group: Assessment,
+    assessment: Assessment,
     vulnDescriptions: Record<string, { title: string; content: string }[]>,
 ): ReviewRow {
-    const targets = group.targets ?? [];
+    const targets = assessment.targets ?? [];
     const packages = [...new Set(targets.map(t => t.package))];
     const variant_ids = [...new Set(
         targets.map(t => t.variant_id).filter((v): v is string => v !== null)
     )];
     return {
-        id: group.id,
-        vuln_id: group.vuln_id,
-        status: group.status,
-        simplified_status: group.simplified_status,
-        justification: group.justification ?? '',
-        impact_statement: group.impact_statement ?? '',
-        status_notes: group.status_notes ?? '',
-        workaround: group.workaround ?? '',
-        responses: group.responses,
-        origin: group.origin,
-        timestamp: group.timestamp,
+        id: assessment.id,
+        vuln_id: assessment.vuln_id,
+        status: assessment.status,
+        simplified_status: assessment.simplified_status,
+        justification: assessment.justification ?? '',
+        impact_statement: assessment.impact_statement ?? '',
+        status_notes: assessment.status_notes ?? '',
+        workaround: assessment.workaround ?? '',
+        responses: assessment.responses,
+        origin: assessment.origin,
+        timestamp: assessment.timestamp,
         targets,
         packages,
         variant_ids,
-        texts: vulnDescriptions[group.vuln_id] ?? [],
+        texts: vulnDescriptions[assessment.vuln_id] ?? [],
         extractedSuppliers: [...new Set(
             packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
         )],
@@ -111,13 +111,6 @@ function toReviewRow(
 
 // How long the copy button shows its "copied" confirmation before reverting.
 const COPIED_FEEDBACK_MS = 2000;
-
-/** The clipboard payload for a row: prefixed by whether the row spans more
- *  than one (variant, package) target, since that's the user-facing
- *  distinction between "a group" and "a single assessment". Mirrors
- *  VulnModal's copy buttons. */
-const rowCopyKey = (row: ReviewRow) =>
-    `${isMultiTarget(row.targets) ? 'group' : 'assessment'}:${row.id}`;
 
 /** The AI review filter's options: one label per verdict an assessment can
  *  carry. */
@@ -148,7 +141,7 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
     copiedKey: string | null;
     onCopy: (row: ReviewRow) => void;
 }) {
-    const copied = copiedKey === rowCopyKey(row);
+    const copied = copiedKey === row.id;
     const label = isMultiTarget(row.targets) ? 'Copy multi-target id' : 'Copy assessment id';
     return (
         <>
@@ -382,13 +375,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             Assessments.listReviewTimeEstimates(variantId, projectId),
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
-            .then(([reviewGroups, aiGroups, teData, cvssData]) => {
+            .then(([reviewRows, aiRows, teData, cvssData]) => {
                 // Build tooltip descriptions from vuln_texts included in the response.
                 const descMap: Record<string, { title: string; content: string }[]> = {};
-                for (const g of [...reviewGroups, ...aiGroups]) {
-                    if (g.vuln_id && !descMap[g.vuln_id] && g.vuln_texts) {
-                        descMap[g.vuln_id] = g.vuln_texts.length > 0
-                            ? g.vuln_texts
+                for (const a of [...reviewRows, ...aiRows]) {
+                    if (a.vuln_id && !descMap[a.vuln_id] && a.vuln_texts) {
+                        descMap[a.vuln_id] = a.vuln_texts.length > 0
+                            ? a.vuln_texts
                             : [{ title: "description", content: "No description available" }];
                     }
                 }
@@ -402,8 +395,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         descMap[c.vuln_id] = c.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
-                setAssessments(reviewGroups.map(g => toReviewRow(g, descMap)));
-                setAiAssessments(aiGroups.map(g => toReviewRow(g, descMap)));
+                setAssessments(reviewRows.map(a => toReviewRow(a, descMap)));
+                setAiAssessments(aiRows.map(a => toReviewRow(a, descMap)));
                 setTimeEstimates(teData);
                 setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
@@ -675,7 +668,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 .then(result => {
                     if (result.status === 'success') {
                         Assessments.listForReview(variantId, projectId, 'custom')
-                            .then(groups => setAssessments(groups.map(g => toReviewRow(g, vulnDescriptions))));
+                            .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
                         showMessage('Assessments imported successfully!', 'success');
                     } else {
                         showMessage(`Import error: ${result.error || 'Unknown error'}`, 'error');
@@ -722,7 +715,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
                 if (data.status === 'success') {
                     Assessments.listForReview(variantId, projectId, 'custom')
-                        .then(groups => setAssessments(groups.map(g => toReviewRow(g, vulnDescriptions))));
+                        .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
                     const assessmentsImported = data.assessments_imported ?? 0;
                     const assessmentsSkipped = data.assessments_skipped ?? 0;
                     const cvssImported = data.cvss_imported ?? 0;
@@ -755,20 +748,20 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     /** Refetch just the handmade-assessments list (used after edits/deletes
      * that don't touch the AI-pending list). */
     const refreshAssessments = useCallback(async () => {
-        const groups = await Assessments.listForReview(variantId, projectId, 'custom');
-        setAssessments(groups.map(g => toReviewRow(g, vulnDescriptions)));
+        const rows = await Assessments.listForReview(variantId, projectId, 'custom');
+        setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions)));
     }, [variantId, projectId, vulnDescriptions]);
 
     /** Refetch both the handmade and AI-pending assessment lists (used after
      * approving/rejecting a pending AI assessment from the AI Assessments
      * table, since approving moves a row from one list to the other). */
     const refreshAssessmentLists = useCallback(async () => {
-        const [reviewGroups, aiGroups] = await Promise.all([
+        const [reviewRows, aiRows] = await Promise.all([
             Assessments.listForReview(variantId, projectId, 'custom'),
             Assessments.listForReview(variantId, projectId, 'ai'),
         ]);
-        setAssessments(reviewGroups.map(g => toReviewRow(g, vulnDescriptions)));
-        setAiAssessments(aiGroups.map(g => toReviewRow(g, vulnDescriptions)));
+        setAssessments(reviewRows.map(a => toReviewRow(a, vulnDescriptions)));
+        setAiAssessments(aiRows.map(a => toReviewRow(a, vulnDescriptions)));
     }, [variantId, projectId, vulnDescriptions]);
 
     const handleDeleteRow = useCallback(async () => {
@@ -791,12 +784,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     }, [rowToDelete, refreshAssessments, onAssessmentChanged, showMessage]);
 
     const copyRowId = useCallback(async (row: ReviewRow) => {
-        const text = rowCopyKey(row);
         try {
-            await navigator.clipboard.writeText(text);
+            await navigator.clipboard.writeText(row.id);
             // Confirm the copy on the button itself: the clipboard gives no
             // visible feedback of its own, so without this it looks inert.
-            setCopiedRowKey(text);
+            setCopiedRowKey(row.id);
             if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
             copiedResetTimer.current = setTimeout(() => setCopiedRowKey(null), COPIED_FEEDBACK_MS);
         } catch {
