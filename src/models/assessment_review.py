@@ -5,14 +5,22 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import Text, DateTime, JSON, ForeignKey, UniqueConstraint
-from sqlalchemy.orm import Mapped, relationship, mapped_column, contains_eager
+from sqlalchemy import Text, DateTime, JSON, ForeignKey, UniqueConstraint, Table
+from sqlalchemy.orm import Mapped, relationship, mapped_column, contains_eager, joinedload
 
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
 from .assessment import Assessment
 from .assessment_target import AssessmentTarget
+from .finding import Finding
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.sql.elements import ColumnElement
+
+    from .variant import Variant
 
 
 # Fields compared to decide whether a review agrees with its assessment.
@@ -51,20 +59,31 @@ def fingerprint_assessment(assessment: "Assessment | None") -> str | None:
 
 
 class AssessmentReview(Base):
-    """An AI-generated second opinion on a single custom :class:`Assessment`.
+    """An AI-generated second opinion on one target of a custom :class:`Assessment`.
 
     Carries the same VEX fields as the assessment it reviews, so a future
     "accept" action can copy them across unchanged, plus a ``rationale``
-    explaining the review itself. Exactly one review may exist per assessment;
-    writes overwrite.
+    explaining the review itself. Keyed like :class:`AssessmentTarget` — one
+    review may exist per ``(assessment, variant, finding)`` target; writes to
+    the same target overwrite.
     """
 
     __tablename__ = "assessment_reviews"
-    __table_args__ = (UniqueConstraint("assessment_id", name="uq_assessment_review_assessment"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "assessment_id", "variant_id", "finding_id", name="uq_assessment_review_target"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     assessment_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    variant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("variants.id"), nullable=False, index=True
+    )
+    finding_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("findings.id"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(nullable=False)
     status_notes: Mapped[str | None] = mapped_column(Text)
@@ -78,7 +97,9 @@ class AssessmentReview(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    assessment: Mapped["Assessment"] = relationship(back_populates="review")
+    assessment: Mapped["Assessment"] = relationship(back_populates="reviews")
+    finding: Mapped["Finding"] = relationship()
+    variant: Mapped["Variant"] = relationship()
 
     def __repr__(self) -> str:
         return (
@@ -128,6 +149,8 @@ class AssessmentReview(Base):
         return {
             "id": str(self.id),
             "assessment_id": str(self.assessment_id),
+            "variant_id": str(self.variant_id),
+            "package": self.finding.package.string_id if self.finding and self.finding.package else "",
             "status": self.status or "",
             "status_notes": self.status_notes or "",
             "justification": self.justification or "",
@@ -145,16 +168,31 @@ class AssessmentReview(Base):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_by_assessment(assessment_id: uuid.UUID) -> "AssessmentReview | None":
+    def get_for_target(
+        assessment_id: uuid.UUID, variant_id: uuid.UUID, finding_id: uuid.UUID
+    ) -> "AssessmentReview | None":
         return db.session.execute(
-            db.select(AssessmentReview).where(AssessmentReview.assessment_id == assessment_id)
+            db.select(AssessmentReview).where(
+                AssessmentReview.assessment_id == assessment_id,
+                AssessmentReview.variant_id == variant_id,
+                AssessmentReview.finding_id == finding_id,
+            )
         ).scalars().one_or_none()
+
+    @staticmethod
+    def get_all_for_assessment(assessment_id: uuid.UUID) -> list["AssessmentReview"]:
+        return list(db.session.execute(
+            db.select(AssessmentReview).where(AssessmentReview.assessment_id == assessment_id)
+        ).scalars().all())
 
     @staticmethod
     def get_for_variants(variant_ids: list[uuid.UUID] | None = None) -> list["AssessmentReview"]:
         query = db.select(AssessmentReview).join(
             Assessment, AssessmentReview.assessment_id == Assessment.id
-        ).options(contains_eager(AssessmentReview.assessment))
+        ).options(
+            contains_eager(AssessmentReview.assessment),
+            joinedload(AssessmentReview.finding).joinedload(Finding.package),
+        )
         if variant_ids:
             query = query.where(
                 Assessment.target_rows.any(AssessmentTarget.variant_id.in_(variant_ids))
@@ -164,6 +202,8 @@ class AssessmentReview(Base):
     @staticmethod
     def upsert(
         assessment_id: uuid.UUID,
+        variant_id: uuid.UUID,
+        finding_id: uuid.UUID,
         status: str,
         rationale: str,
         status_notes: str | None = None,
@@ -172,10 +212,15 @@ class AssessmentReview(Base):
         workaround: str | None = None,
         responses: list[str] | None = None,
     ) -> "AssessmentReview":
-        """Create the review, or overwrite the existing one for this assessment."""
-        review = AssessmentReview.get_by_assessment(assessment_id)
+        """Create the review, or overwrite the existing one, for this target."""
+        review = AssessmentReview.get_for_target(assessment_id, variant_id, finding_id)
         if review is None:
-            review = AssessmentReview(id=uuid.uuid4(), assessment_id=assessment_id)
+            review = AssessmentReview(
+                id=uuid.uuid4(),
+                assessment_id=assessment_id,
+                variant_id=variant_id,
+                finding_id=finding_id,
+            )
             db.session.add(review)
         review.status = status
         review.rationale = rationale
@@ -194,3 +239,19 @@ class AssessmentReview(Base):
     def delete(self) -> None:
         db.session.delete(self)
         db.session.commit()
+
+
+def reap_reviews(connection: "Connection", criterion: "ColumnElement[bool]") -> None:
+    """Delete the review rows matching *criterion*.
+
+    Mirrors :func:`assessment_target.reap_targets`: neither
+    ``assessment_reviews.variant_id`` nor ``.finding_id`` carries an
+    ``ondelete`` clause, and this application keeps sqlite's ``foreign_keys``
+    pragma off, so nothing removes these rows on its own when a variant or
+    finding is deleted directly. Registered mapper events on those parents
+    call this before the parent row goes, alongside ``reap_targets`` — a
+    review only ever exists for a target that still exists, so reaping the
+    same criterion here keeps reviews from outliving the target they judged.
+    """
+    reviews = cast(Table, AssessmentReview.__table__)
+    connection.execute(reviews.delete().where(criterion))

@@ -62,7 +62,7 @@ def _delete_assessment_reviews(assessment_ids: Iterable[uuid.UUID]) -> None:
     """Delete ``assessment_reviews`` rows for the given assessment ids.
 
     Bulk ``DELETE`` on ``Assessment`` bypasses the ORM's ``delete-orphan``
-    cascade wired on ``Assessment.review``, so reviews must be removed
+    cascade wired on ``Assessment.reviews``, so reviews must be removed
     explicitly before (or alongside) removing their parent assessments —
     the same pattern used for ``Metrics``/``VulnRefresh`` in
     ``_delete_orphaned_vulnerabilities``.
@@ -405,6 +405,9 @@ def remove_target(assessment_id: uuid.UUID, variant_id: uuid.UUID, finding_id: u
     )
     if target_row is None:
         return False
+    review = AssessmentReview.get_for_target(assessment_id, variant_id, finding_id)
+    if review is not None:
+        db.session.delete(review)
     assessment.target_rows.remove(target_row)
     if not assessment.target_rows:
         db.session.delete(assessment)
@@ -726,9 +729,10 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
                 .where(AssessmentTarget.finding_id.in_(finding_id_chunk))
             ).tuples().all())
         candidate_assessment_ids = {assessment_id for assessment_id, _, _ in target_triples}
-        # remove_target deletes an emptied assessment through the ORM, so
-        # cascade="all, delete-orphan" on Assessment.review already removes
-        # its review; no explicit cleanup needed here.
+        # remove_target deletes the target's own review directly and, once an
+        # assessment is emptied, deletes it through the ORM so
+        # cascade="all, delete-orphan" on Assessment.reviews removes any
+        # review left; no explicit cleanup needed here.
         for assessment_id, variant_id, finding_id in target_triples:
             remove_target(assessment_id, variant_id, finding_id)
         # An assessment is deleted only once every one of its targets has been

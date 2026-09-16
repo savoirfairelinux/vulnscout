@@ -199,5 +199,7 @@ def _reap_assessment_targets(
     package or its vulnerability -- those parents reach the same hazard.
     """
     from .assessment_target import AssessmentTarget, reap_targets
+    from .assessment_review import AssessmentReview, reap_reviews
 
     reap_targets(connection, AssessmentTarget.finding_id == finding.id)
+    reap_reviews(connection, AssessmentReview.finding_id == finding.id)

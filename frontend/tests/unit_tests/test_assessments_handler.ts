@@ -617,6 +617,8 @@ import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
 const makeReview = (over: Partial<AssessmentReview> = {}): AssessmentReview => ({
     id: "r1",
     assessment_id: "a1",
+    variant_id: "v1",
+    package: "openssl@3.0.8",
     status: "affected",
     status_notes: "",
     justification: "",
@@ -652,14 +654,14 @@ describe("assessmentReviews handler", () => {
         // Arrange
         jest.spyOn(global, "fetch").mockResolvedValue({
             ok: true,
-            json: async () => ({ a1: makeReview() }),
+            json: async () => ({ a1: [makeReview()] }),
         } as Response);
 
         // Act
         const result = await AssessmentReviews.fetchForScope("v1");
 
         // Assert
-        expect(result.a1.rationale).toBe("openssl is in the rootfs");
+        expect(result.a1[0].rationale).toBe("openssl is in the rootfs");
         expect(String((global.fetch as jest.Mock).mock.calls[0][0])).toContain("variant_id=v1");
     });
 
@@ -675,7 +677,7 @@ describe("assessmentReviews handler", () => {
         await expect(AssessmentReviews.fetchForScope("v1")).resolves.toEqual({});
     });
 
-    test("remove issues a DELETE for the assessment", async () => {
+    test("remove issues a DELETE for the assessment's target", async () => {
         // Arrange
         jest.spyOn(global, "fetch").mockResolvedValue({
             ok: true,
@@ -683,11 +685,13 @@ describe("assessmentReviews handler", () => {
         } as Response);
 
         // Act
-        await AssessmentReviews.remove("a1");
+        await AssessmentReviews.remove("a1", "v1", "openssl@3.0.8");
 
         // Assert
         const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
         expect(String(url)).toContain("/api/assessments/a1/review");
+        expect(String(url)).toContain("variant_id=v1");
+        expect(String(url)).toContain(`package=${encodeURIComponent("openssl@3.0.8")}`);
         expect(init.method).toBe("DELETE");
     });
 
@@ -697,6 +701,6 @@ describe("assessmentReviews handler", () => {
             json: async () => ({ error: "Review not found" }),
         } as Response);
 
-        await expect(AssessmentReviews.remove("a1")).rejects.toThrow("Review not found");
+        await expect(AssessmentReviews.remove("a1", "v1", "openssl@3.0.8")).rejects.toThrow("Review not found");
     });
 });
