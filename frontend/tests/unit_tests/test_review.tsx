@@ -485,8 +485,10 @@ describe('Review — editing "Apply to variants"', () => {
 
     test('edits sparse disjoint targets with the exact compatibility matrix', async () => {
         mockNetwork([
-            {...makeAssessment('a1', 'v1', 'a1'), packages: ['pkgA@1.0.0']},
-            {...makeAssessment('a1', 'v2', 'a1'), packages: ['pkgB@2.0.0']},
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                {variantId: 'v1', pkg: 'pkgA@1.0.0'},
+                {variantId: 'v2', pkg: 'pkgB@2.0.0'},
+            ]),
         ], {
             packages: [
                 {name: 'pkgA', version: '1.0.0'},
