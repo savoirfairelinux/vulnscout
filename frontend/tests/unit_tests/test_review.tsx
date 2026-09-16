@@ -1614,7 +1614,7 @@ describe('Review — copying assessment ids', () => {
         expect(writeText).toHaveBeenCalledWith('assessment:a1');
     });
 
-    test('copies the group id when the row is a group', async () => {
+    test('copies the multi-target id when the row is a group', async () => {
         mockNetwork([makeMultiTargetAssessment('g1', 'CVE-2020-1111', [
             { variantId: 'v1', pkg: 'pkgA@1.0.0' },
             { variantId: 'v2', pkg: 'pkgA@1.0.0' },
@@ -1624,7 +1624,7 @@ describe('Review — copying assessment ids', () => {
         const writeText = jest.fn().mockResolvedValue(undefined);
         stubClipboard(writeText);
 
-        await user.click(await screen.findByTitle('Copy group id'));
+        await user.click(await screen.findByTitle('Copy multi-target id'));
 
         expect(writeText).toHaveBeenCalledWith('group:g1');
     });
@@ -2012,7 +2012,7 @@ describe('Review — AI review filter', () => {
     /** One custom assessment on its own row, keyed by its own vuln id so each
      *  verdict is identifiable in the table. */
     const assessment = (id: string, vulnId: string) => ({
-        id, vuln_id: vulnId, status: 'not_affected', group_id: null,
+        id, vuln_id: vulnId, status: 'not_affected',
         origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
     });
 
