@@ -3,13 +3,13 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Unit tests for group-reconcile payload parsing (no DB access)."""
+"""Unit tests for reconcile payload parsing (no DB access)."""
 
 import uuid
 
-from src.routes._assessment_group import (
+from src.routes._assessment_write import (
     apply_reconcile,
-    index_group_rows,
+    index_targets,
     parse_reconcile_payload,
 )
 
@@ -21,7 +21,6 @@ def _payload(**overrides):
         "vuln_id": "CVE-2020-35492",
         "packages": ["cairo@1.16.0"],
         "variant_ids": [VARIANT],
-        "existing_ids": [],
         "status": "affected",
     }
     base.update(overrides)
@@ -35,7 +34,6 @@ def test_valid_payload_parses():
     assert req.vuln_id == "CVE-2020-35492"
     assert req.variant_ids == [uuid.UUID(VARIANT)]
     assert req.packages == ["cairo@1.16.0"]
-    assert req.existing_ids == []
     assert req.update_timestamp is True
 
 
@@ -116,12 +114,6 @@ def test_non_uuid_variant_id_is_rejected():
     req, err = parse_reconcile_payload(_payload(variant_ids=["not-a-uuid"]))
     assert req is None
     assert err == {"error": "Invalid variant_id: not-a-uuid"}
-
-
-def test_non_uuid_existing_id_is_rejected():
-    req, err = parse_reconcile_payload(_payload(existing_ids=["nope"]))
-    assert req is None
-    assert err == {"error": "Invalid assessment id: nope"}
 
 
 def test_invalid_status_is_rejected():
@@ -208,12 +200,12 @@ class _FakeAssessment:
         self.target_rows = target_rows
 
 
-def test_index_group_rows_is_empty_without_a_row():
-    """An empty group has no targets to index — and must not touch rows[0]."""
-    assert index_group_rows([]) == {}
+def test_index_targets_is_empty_without_an_assessment():
+    """No assessment has no targets to index."""
+    assert index_targets(None) == {}
 
 
-def test_index_group_rows_skips_a_target_it_cannot_name():
+def test_index_targets_skips_a_target_it_cannot_name():
     """A key needs a package string id; a target lacking one is unindexable.
 
     Such a target is left out rather than keyed on ``None``, which would
@@ -224,17 +216,17 @@ def test_index_group_rows_skips_a_target_it_cannot_name():
     no_package = _FakeTarget(_FakeFinding(None), variant)
     no_finding = _FakeTarget(None, variant)
 
-    indexed = index_group_rows([_FakeAssessment([named, no_package, no_finding])])
+    indexed = index_targets(_FakeAssessment([named, no_package, no_finding]))
 
     assert list(indexed) == [("cairo@1.16.0", variant)]
 
 
-def test_apply_reconcile_on_an_empty_group_changes_nothing():
+def test_apply_reconcile_on_no_assessment_changes_nothing():
     """No assessment means nothing to update, create or delete."""
     req, err = parse_reconcile_payload(_payload())
     assert err is None
 
-    result = apply_reconcile(req, [], {})
+    result = apply_reconcile(req, None, {})
 
     assert result == {
         "updated": [], "created": [], "deleted": [],

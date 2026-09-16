@@ -1,8 +1,8 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
-import type { Assessment, AssessmentGroup, AssessmentTarget } from "../handlers/assessments";
-import Assessments, { asAssessment, isMultiTargetGroup, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
+import type { Assessment, AssessmentTargetPair } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -145,14 +145,14 @@ type VariantScopedSnapshot = {
     const [pendingNavigation, setPendingNavigation] = useState<number | null>(null);
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
+    const [groupToDelete, setGroupToDelete] = useState<Assessment | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showCpeHint, setShowCpeHint] = useState(false);
     const [showCpeList, setShowCpeList] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [variantsLoadedForVulnId, setVariantsLoadedForVulnId] = useState<string | null>(null);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
-    const [assessmentGroups, setAssessmentGroups] = useState<AssessmentGroup[]>([]);
+    const [assessmentGroups, setAssessmentGroups] = useState<Assessment[]>([]);
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
     const [variantPackageMap, setVariantPackageMap] = useState<Record<string, string[]>>({});
@@ -163,7 +163,14 @@ type VariantScopedSnapshot = {
     const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
-    const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
+    const [editingGroup, setEditingGroup] = useState<Assessment | null>(null);
+    // Whether editingGroup came from the server's assessment listing (whose
+    // targets are real AssessmentTarget rows, always variant-scoped) rather
+    // than the client-side fallback used before that response lands (whose
+    // targets are synthesized and may have no variant at all). Reconcile only
+    // applies to a real variant scope; an assessment with none must still go
+    // through the legacy per-row PUT below.
+    const [editingGroupIsServerConfirmed, setEditingGroupIsServerConfirmed] = useState(false);
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
@@ -256,7 +263,7 @@ type VariantScopedSnapshot = {
     // allVulnAssessments/vuln.assessments locally so history still renders.
     const refreshAssessmentGroups = useCallback(async () => {
         try {
-            const groups = await Assessments.listGroups(vuln.id, projectId);
+            const groups = await Assessments.listByVuln(vuln.id, projectId);
             setAssessmentGroups(Array.isArray(groups) ? groups : []);
         } catch {
             // Keep whatever was previously loaded; the render's fallback path
@@ -267,7 +274,7 @@ type VariantScopedSnapshot = {
     useEffect(() => {
         const controller = new AbortController();
         setAssessmentGroups([]);
-        Assessments.listGroups(vuln.id, projectId)
+        Assessments.listByVuln(vuln.id, projectId)
             .then(groups => {
                 if (!controller.signal.aborted) setAssessmentGroups(Array.isArray(groups) ? groups : []);
             })
@@ -607,10 +614,10 @@ type VariantScopedSnapshot = {
         }
     }, [vuln, patchVuln]);
 
-    const groupCopyKey = (group: AssessmentGroup) =>
-        `${isMultiTargetGroup(group.targets) ? 'group' : 'assessment'}:${group.group_id ?? group.assessment_ids[0]}`;
+    const groupCopyKey = (group: Assessment) =>
+        `${isMultiTarget(group.targets ?? []) ? 'group' : 'assessment'}:${group.id}`;
 
-    const copyGroupId = async (group: AssessmentGroup) => {
+    const copyGroupId = async (group: Assessment) => {
         const text = groupCopyKey(group);
         try {
             await navigator.clipboard.writeText(text);
@@ -629,26 +636,27 @@ type VariantScopedSnapshot = {
         if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
     }, []);
 
-    const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
+    const handleEditAssessment = (assessmentId: string, group: Assessment, isServerConfirmed: boolean) => {
         setEditingAssessmentId(assessmentId);
         setEditingGroup(group);
+        setEditingGroupIsServerConfirmed(isServerConfirmed);
     };
 
     const handleCancelEdit = () => {
         setEditingAssessmentId(null);
         setEditingGroup(null);
+        setEditingGroupIsServerConfirmed(false);
     };
 
-    const handleDeleteAssessment = (group: AssessmentGroup) => {
+    const handleDeleteAssessment = (group: Assessment) => {
         setGroupToDelete(group);
         setShowDeleteConfirm(true);
     };
 
-    const handleApproveAiAssessment = async (group: AssessmentGroup) => {
+    const handleApproveAiAssessment = async (group: Assessment) => {
         try {
-            const groupId = group.group_id ?? await Assessments.promoteToGroup(group.assessment_ids[0]);
-            const approved = await Assessments.approveAiGroup(groupId);
-            const approvedIds = new Set(group.assessment_ids);
+            const approved = await Assessments.approveAi(group.id);
+            const approvedIds = new Set([group.id]);
             const approvedById = new Map(approved.map(a => [a.id, a]));
 
             setAllVulnAssessments(prev => prev.map(a => {
@@ -677,12 +685,10 @@ type VariantScopedSnapshot = {
         }
     };
 
-    const handleRejectAiAssessment = async (group: AssessmentGroup) => {
+    const handleRejectAiAssessment = async (group: Assessment) => {
         try {
-            const groupId = group.group_id ?? await Assessments.promoteToGroup(group.assessment_ids[0]);
-            await Assessments.rejectAiGroup(groupId);
-            const rejectedIds = new Set(group.assessment_ids);
-            setAllVulnAssessments(prev => prev.filter(a => !rejectedIds.has(a.id)));
+            await Assessments.rejectAi(group.id);
+            setAllVulnAssessments(prev => prev.filter(a => a.id !== group.id));
             refreshAssessmentGroups();
             showMessage("AI assessment rejected.", "success");
         } catch (e) {
@@ -692,43 +698,15 @@ type VariantScopedSnapshot = {
 
     const handleConfirmDelete = async () => {
         if (groupToDelete) {
-            const idsToDelete = groupToDelete.assessment_ids;
             let anyError = false;
 
-            if (groupToDelete.group_id) {
-                try {
-                    await Assessments.deleteGroup(groupToDelete.group_id);
-                    const deletedIds = new Set(idsToDelete);
-                    vuln.assessments = vuln.assessments.filter(a => !deletedIds.has(a.id));
-                    setAllVulnAssessments(prev => prev.filter(a => !deletedIds.has(a.id)));
-                } catch (error) {
-                    anyError = true;
-                    showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
-                }
-            } else {
-                for (const id of idsToDelete) {
-                    try {
-                        const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`, {
-                            method: 'DELETE',
-                            mode: 'cors',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            }
-                        });
-
-                        if (response.ok) {
-                            vuln.assessments = vuln.assessments.filter(a => a.id !== id);
-                            setAllVulnAssessments(prev => prev.filter(a => a.id !== id));
-                        } else {
-                            anyError = true;
-                            const errorData = await response.text();
-                            showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
-                        }
-                    } catch (error) {
-                        anyError = true;
-                        showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
-                    }
-                }
+            try {
+                await Assessments.remove(groupToDelete.id);
+                vuln.assessments = vuln.assessments.filter(a => a.id !== groupToDelete.id);
+                setAllVulnAssessments(prev => prev.filter(a => a.id !== groupToDelete.id));
+            } catch (error) {
+                anyError = true;
+                showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
             }
 
             if (!anyError) {
@@ -769,28 +747,24 @@ type VariantScopedSnapshot = {
             : new Date().toISOString();
 
         const targetPackages: string[] =
-            data.packages ?? [...new Set(editingGroup.targets.map(t => t.package))];
+            data.packages ?? [...new Set((editingGroup.targets ?? []).map(t => t.package))];
 
-        // A group-reconcile call needs at least one variant target — the
-        // backend rejects an empty ``variant_ids`` list. When the user has a
-        // variant to target, reconcile the whole group (creating one on the
-        // fly for an ungrouped entry) in a single request. Otherwise fall back
-        // to the legacy per-row PUT/POST/DELETE flow below, which is the only
-        // way to edit an assessment that isn't scoped to any variant.
+        // A reconcile call needs at least one variant target — the backend
+        // rejects an empty ``variant_ids`` list. When the user has a variant
+        // to target, reconcile the assessment in a single request. Otherwise
+        // fall back to the legacy per-row PUT/POST/DELETE flow below, which is
+        // the only way to edit an assessment that isn't scoped to any variant.
         const targetVariantIds: string[] =
             data.variant_ids ?? [];
 
-        if (editingGroup.group_id && data.variant_ids !== undefined) {
+        if (editingGroupIsServerConfirmed && data.variant_ids !== undefined) {
             try {
-                const groupId = editingGroup.group_id
-                    ?? await Assessments.promoteToGroup(editingGroup.assessment_ids[0]);
                 const body: Record<string, unknown> = {
                     vuln_id: vuln.id,
                     packages: targetPackages,
                     variant_ids: targetVariantIds,
                     targets: reconcileTargetPairs(
-                        editingGroup.targets, targetPackages, targetVariantIds),
-                    existing_ids: editingGroup.assessment_ids,
+                        editingGroup.targets ?? [], targetPackages, targetVariantIds),
                     status: data.status,
                     justification: data.justification,
                     impact_statement: data.impact_statement,
@@ -799,7 +773,7 @@ type VariantScopedSnapshot = {
                     update_timestamp: data.update_timestamp !== false,
                     timestamp: editSharedTimestamp,
                 };
-                await Assessments.reconcileGroup(groupId, body);
+                await Assessments.reconcile(editingGroup.id, body);
                 const reconciledAssessments = await refreshAllVulnAssessments();
                 await refreshAssessmentGroups();
 
@@ -825,12 +799,12 @@ type VariantScopedSnapshot = {
             return;
         }
 
-        // Legacy per-row path (no variant target selected). Index the group's
-        // underlying Assessment records — sourced from allVulnAssessments/
+        // Legacy per-row path (no variant target selected). Index the
+        // underlying Assessment record — sourced from allVulnAssessments/
         // vuln.assessments, the same data the group itself was built from —
         // by (pkg, vid) key.
         const groupAssessmentRecords = (allVulnAssessments.length > 0 ? allVulnAssessments : vuln.assessments)
-            .filter(a => editingGroup.assessment_ids.includes(a.id));
+            .filter(a => a.id === editingGroup.id);
         const existingByKey = new Map<string, Assessment>();
         for (const a of groupAssessmentRecords) {
             const pkg = a.packages[0] ?? '';
@@ -1028,80 +1002,39 @@ type VariantScopedSnapshot = {
         };
     }, [hasUnsavedChanges, onClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex]);
 
-    // Build AssessmentGroup-shaped entries from raw assessments, mirroring the
-    // server's grouping shape (src/controllers/assessment_groups.py). Used as
-    // a fallback whenever assessmentGroups has no entry for a given bucket
-    // (non-ai / ai) — most commonly because Assessments.listGroups is still
-    // in flight on mount (assessmentGroups starts at [] and this fallback
-    // fills the gap using vuln.assessments/allVulnAssessments, which render
-    // synchronously), and it self-corrects on the next render once the real
-    // response lands. It also engages if the request errors, or if the
-    // server genuinely returns zero groups for a vulnerability with zero
-    // assessments — both cases where the fallback's own computation is also
-    // empty, so nothing is shown either way. This is a best-effort client-side
-    // guess for "we don't have the server's answer yet," not a proven
-    // equivalence with it: every write path below (delete/approve/reject/
-    // reconcile) guards on group_id being non-null before calling a
-    // group-scoped endpoint, so a stale/guessed fallback group can't corrupt
-    // a write — but if listGroups has already resolved and genuinely returned
-    // fewer/different groups than this heuristic would compute from the same
-    // assessments (e.g. a backend grouping bug), this fallback would silently
-    // paper over that mismatch rather than surface it, since there is no
-    // separate "loading" flag distinguishing "not fetched yet" from "fetched
-    // and empty."
-    const buildFallbackGroups = (assessments: Assessment[]): AssessmentGroup[] => {
-        const buckets: { [key: string]: Assessment[] } = {};
-
-        assessments.forEach(assess => {
-            // Rows created by one user action share the exact timestamp. Keep
-            // separate actions distinct even when their content is identical.
-            const contentKey = `${assess.simplified_status}|${assess.justification || ''}|${assess.impact_statement || ''}|${assess.status_notes || ''}|${assess.workaround || ''}`;
-            const groupKey = `${assess.timestamp}::${contentKey}`;
-
-            if (!buckets[groupKey]) {
-                buckets[groupKey] = [];
-            }
-            buckets[groupKey].push(assess);
-        });
-
-        return Object.values(buckets)
-            .map((members): AssessmentGroup => {
-                const head = members[0];
+    // Decorate raw assessments with per-target ``outdated``, mirroring what
+    // the server's annotated listing returns (src/controllers/assessment_targets.py).
+    // Used as a fallback whenever assessmentGroups has no entry yet — most
+    // commonly because Assessments.listByVuln is still in flight on mount
+    // (assessmentGroups starts at [] and this fallback fills the gap using
+    // vuln.assessments/allVulnAssessments, which render synchronously), and
+    // it self-corrects on the next render once the real response lands. It
+    // also engages if the request errors, or if the server genuinely returns
+    // zero assessments — both cases where the fallback's own computation is
+    // also empty, so nothing is shown either way.
+    const buildFallbackGroups = (assessments: Assessment[]): Assessment[] => {
+        return assessments
+            .map((assess): Assessment => {
                 // Build from the stored pairs, not from packages x variant_id:
                 // that scalar is null for a genuine cross-variant assessment,
                 // which would pair every package with no variant at all.
-                const targets: AssessmentTarget[] = members.flatMap(member => {
-                    const pairs = member.targets && member.targets.length > 0
-                        ? member.targets
-                        : member.packages.map(pkg => ({ variant_id: member.variant_id ?? null, package: pkg }));
-                    return pairs.map(({ variant_id, package: pkg }) => {
-                        const finding = variant_id
-                            ? variantFindingsMap[variant_id]?.find(item => item.pkg === pkg)
-                            : undefined;
-                        const outdated = finding?.outdated ?? (
-                            variantPackageMapLoaded
-                            && !!variant_id
-                            && variantPackageMap[variant_id] !== undefined
-                            && !variantPackageMap[variant_id].includes(pkg)
-                        );
-                        return { variant_id, package: pkg, outdated, assessment_id: member.id };
-                    });
+                const pairs: AssessmentTargetPair[] = assess.targets && assess.targets.length > 0
+                    ? assess.targets
+                    : assess.packages.map(pkg => ({ variant_id: assess.variant_id ?? null, package: pkg }));
+                const targets: AssessmentTargetPair[] = pairs.map(({ variant_id, package: pkg, outdated: knownOutdated }) => {
+                    if (typeof knownOutdated === "boolean") return { variant_id, package: pkg, outdated: knownOutdated };
+                    const finding = variant_id
+                        ? variantFindingsMap[variant_id]?.find(item => item.pkg === pkg)
+                        : undefined;
+                    const outdated = finding?.outdated ?? (
+                        variantPackageMapLoaded
+                        && !!variant_id
+                        && variantPackageMap[variant_id] !== undefined
+                        && !variantPackageMap[variant_id].includes(pkg)
+                    );
+                    return { variant_id, package: pkg, outdated };
                 });
-                return {
-                    group_id: null,
-                    vuln_id: head.vuln_id,
-                    status: head.status,
-                    simplified_status: head.simplified_status,
-                    justification: head.justification ?? '',
-                    impact_statement: head.impact_statement ?? '',
-                    status_notes: head.status_notes ?? '',
-                    workaround: head.workaround ?? '',
-                    responses: head.responses ?? [],
-                    origin: head.origin,
-                    timestamp: head.timestamp,
-                    targets,
-                    assessment_ids: members.map(m => m.id),
-                };
+                return { ...assess, targets };
             })
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     };
@@ -1119,7 +1052,7 @@ type VariantScopedSnapshot = {
     const pendingAiAssessments = allVulnAssessments.filter(a =>
         a.origin === "ai" && (!variantId || appliesToVariant(a, variantId)));
     const aiRealGroups = assessmentGroups.filter(g =>
-        g.origin === 'ai' && (!variantId || g.targets.some(t => t.variant_id === variantId)));
+        g.origin === 'ai' && (!variantId || (g.targets ?? []).some(t => t.variant_id === variantId)));
     const aiGroups = aiRealGroups.length > 0
         ? aiRealGroups
         : buildFallbackGroups(pendingAiAssessments);
@@ -1942,14 +1875,15 @@ type VariantScopedSnapshot = {
                                 )}
 
                                 {aiGroups.map(group => {
-                                    const groupKey = group.group_id ?? group.assessment_ids[0];
-                                    const firstTarget = group.targets[0];
+                                    const groupKey = group.id;
+                                    const targets = group.targets ?? [];
+                                    const firstTarget = targets[0];
                                     const hasStatusNotes = hasAssessmentText(group.status_notes);
                                     const hasWorkaround = hasAssessmentText(group.workaround);
                                     return (
                                         <div
                                             key={`ai-${encodeURIComponent(groupKey)}`}
-                                            data-group-id={group.group_id ?? undefined}
+                                            data-group-id={group.id}
                                             className="mb-6 p-4 rounded-lg border-2 border-amber-500 bg-amber-950/30"
                                         >
                                             <div className="flex items-center justify-between mb-2">
@@ -1983,8 +1917,8 @@ type VariantScopedSnapshot = {
                                                     <button
                                                         type="button"
                                                         onClick={() => copyGroupId(group)}
-                                                        aria-label={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
-                                                        title={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
+                                                        aria-label={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
+                                                        title={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
                                                         className="text-amber-300 hover:text-amber-100 transition-colors"
                                                     >
                                                         <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
@@ -1998,7 +1932,7 @@ type VariantScopedSnapshot = {
                                                 </div>
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                {group.targets.map(target => {
+                                                {targets.map(target => {
                                                     const { nameVersion, supplier } = splitPkgId(target.package);
                                                     const supplierName = extractSupplierName(supplier);
                                                     const variant = availableVariants.find(v => v.id === target.variant_id);
@@ -2034,20 +1968,21 @@ type VariantScopedSnapshot = {
 
                                 {nonAiGroups.map(group => {
                                     const dt = new Date(group.timestamp);
-                                    const groupKey = group.group_id ?? group.assessment_ids[0];
-                                    const firstId = group.assessment_ids[0];
-                                    const isNewlyAdded = group.assessment_ids.some(id => newAssessmentIds.has(id));
+                                    const groupKey = group.id;
+                                    const targets = group.targets ?? [];
+                                    const firstId = group.id;
+                                    const isNewlyAdded = newAssessmentIds.has(group.id);
                                     const isBeingEdited = editingAssessmentId === firstId;
                                     const hasStatusNotes = hasAssessmentText(group.status_notes);
                                     const hasWorkaround = hasAssessmentText(group.workaround);
-                                    const groupPackages = [...new Set(group.targets.map(t => t.package))];
+                                    const groupPackages = [...new Set(targets.map(t => t.package))];
                                     // Build a synthetic Assessment for EditAssessment, which still expects
                                     // one Assessment object rather than a group.
                                     const groupAsAssessment: Assessment = {
                                         id: firstId,
                                         vuln_id: vuln.id,
                                         packages: groupPackages,
-                                        variant_id: group.targets[0]?.variant_id ?? undefined,
+                                        variant_id: targets[0]?.variant_id ?? undefined,
                                         origin: group.origin,
                                         status: group.status,
                                         simplified_status: group.simplified_status,
@@ -2060,7 +1995,7 @@ type VariantScopedSnapshot = {
                                     };
 
                                     return (
-                                        <li key={groupKey} data-group-id={group.group_id ?? undefined} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
+                                        <li key={groupKey} data-group-id={group.id} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
                                             <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                             <div className="mb-2 flex flex-wrap items-center gap-2">
                                                 <time className="text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
@@ -2071,7 +2006,7 @@ type VariantScopedSnapshot = {
                                                 )}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                {group.targets.map(target => {
+                                                {targets.map(target => {
                                                     const { nameVersion, supplier } = splitPkgId(target.package);
                                                     const supplierName = extractSupplierName(supplier);
                                                     const variant = availableVariants.find(v => v.id === target.variant_id);
@@ -2098,7 +2033,7 @@ type VariantScopedSnapshot = {
                                                             {isEditing && (
                                                                 <>
                                                                     <button
-                                                                        onClick={() => handleEditAssessment(firstId, group)}
+                                                                        onClick={() => handleEditAssessment(firstId, group, nonAiRealGroups.length > 0)}
                                                                         className="text-blue-400 hover:text-blue-300 transition-colors"
                                                                         title="Edit assessment"
                                                                     >
@@ -2116,8 +2051,8 @@ type VariantScopedSnapshot = {
                                                             <button
                                                                 type="button"
                                                                 onClick={() => copyGroupId(group)}
-                                                                aria-label={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
-                                                                title={isMultiTargetGroup(group.targets) ? "Copy group id" : "Copy assessment id"}
+                                                                aria-label={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
+                                                                title={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
                                                                 className="text-gray-400 hover:text-gray-200 transition-colors"
                                                             >
                                                                 <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
@@ -2149,7 +2084,7 @@ type VariantScopedSnapshot = {
                                                         triggerBanner={showMessage}
                                                         availableVariants={availableVariants}
                                                         defaultSelectedVariantIds={[...new Set(
-                                                            group.targets
+                                                            targets
                                                                 .map(t => t.variant_id)
                                                                 .filter((v): v is string => !!v)
                                                         )]}

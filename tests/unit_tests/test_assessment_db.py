@@ -215,21 +215,13 @@ class TestAssessmentPropertyExceptions:
         assert result is False
 
 
-def test_load_group_is_empty_for_unknown_id(app):
-    with app.app_context():
-        import uuid
-        from src.controllers.assessment_groups import load_group
-
-        assert load_group(uuid.uuid4()) == []
-
-
 def _make_variant(project, variant_name: str):
     """Create a variant under *project*.
 
     *project* is either a project name (``str``) — a brand new
-    :class:`Project` is created for it, as the group-invariant tests below
-    expect — or an existing project id (``uuid.UUID``) to attach the variant
-    to directly, as the multi-target tests further down expect.
+    :class:`Project` is created for it, as the invariant tests below expect —
+    or an existing project id (``uuid.UUID``) to attach the variant to
+    directly, as the multi-target tests further down expect.
     """
     from src.models.project import Project
     from src.models.variant import Variant
@@ -259,7 +251,7 @@ def _count_queries_matching(table_name: str, app_ctx_callable):
     return len(seen)
 
 
-def test_build_groups_resolves_targets_without_a_query_per_row(app):
+def test_annotate_targets_resolves_targets_without_a_query_per_row(app):
     """Serializing many assessments must not add one targets/finding query per
     assessment: target_rows and AssessmentTarget.finding are both configured
     lazy="selectin", so a page of N assessments issues a small, bounded number
@@ -268,7 +260,7 @@ def test_build_groups_resolves_targets_without_a_query_per_row(app):
     brief allows leaving for the routes that build these lists to fix with a
     joinedload, since no test previously enforced a budget on it.)"""
     with app.app_context():
-        from src.controllers.assessment_groups import build_groups
+        from src.controllers.assessment_targets import annotate_targets
         from src.models.assessment import Assessment
         from src.models.finding import Finding
         from src.models.package import Package
@@ -291,7 +283,7 @@ def test_build_groups_resolves_targets_without_a_query_per_row(app):
         ).scalars().all())
 
         queries = _count_queries_matching(
-            "assessment_targets", lambda: build_groups(assessments))
+            "assessment_targets", lambda: annotate_targets(assessments))
 
         assert queries <= 1
 

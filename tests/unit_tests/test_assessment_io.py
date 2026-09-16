@@ -697,7 +697,7 @@ class TestImportStatementsMultiTarget:
 
     def test_single_package_statement_creates_single_target_assessment(self, app, variant_and_project):
         """GIVEN one statement covering only 1 package WHEN imported THEN one
-        assessment is created with exactly 1 target, trivially its own group."""
+        assessment is created with exactly 1 target."""
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
@@ -712,7 +712,6 @@ class TestImportStatementsMultiTarget:
             assert len(created) == 1
             row = Assessment.get_by_id(created[0]["id"])
             assert len(row.targets) == 1
-            assert row.group_id == row.id
 
     def test_duplicate_product_in_one_statement_is_deduplicated(self, app, variant_and_project):
         """GIVEN a statement listing the same product twice WHEN imported THEN

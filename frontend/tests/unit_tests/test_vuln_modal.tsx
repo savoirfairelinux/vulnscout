@@ -826,7 +826,7 @@ describe('Vulnerability Modal', () => {
     test('a newly added assessment shows in history right away when server groups already exist', async () => {
         fetchMock.resetMocks();
         const existingGroup = {
-            group_id: 'group-1',
+            id: 'assessment-1',
             vuln_id: 'CVE-2010-1234',
             status: 'affected',
             simplified_status: 'active',
@@ -837,12 +837,11 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
-            assessment_ids: ['assessment-1'],
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
         };
         const newGroup = {
             ...existingGroup,
-            group_id: 'group-2',
+            id: 'assessment-2',
             status: 'fixed',
             simplified_status: 'fixed',
             justification: '',
@@ -850,12 +849,11 @@ describe('Vulnerability Modal', () => {
             status_notes: 'freshly written note',
             workaround: '',
             timestamp: '2026-01-01T00:00:00Z',
-            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-2' }],
-            assessment_ids: ['assessment-2'],
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
         };
         let posted = false;
         fetchMock.mockResponse(async req => {
-            if (req.url.includes('/assessment-groups')) {
+            if (req.method !== 'POST' && req.url.includes('/api/vulnerabilities/') && req.url.includes('/assessments')) {
                 return JSON.stringify(posted ? [newGroup, existingGroup] : [existingGroup]);
             }
             if (req.method === 'POST' && req.url.includes('/assessments') && !req.url.includes('/batch')) {
@@ -1636,70 +1634,12 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Delete Assessment')).not.toBeInTheDocument();
     });
 
-    test('deleting a grouped assessment calls deleteGroup with the group id', async () => {
+    test('deleting a grouped assessment calls remove with the assessment id', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([{
-            group_id: 'group-99',
-            status: 'affected',
-            simplified_status: 'Exploitable',
-            justification: 'because 42',
-            impact_statement: 'may impact or not',
-            status_notes: 'this is a fictive status note',
-            workaround: 'update dependency',
-            responses: [],
-            origin: 'custom',
-            timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
-            assessment_ids: ['assessment-1'],
-        }])); // assessment groups mount fetch
-
-        const deleteGroupSpy = jest.spyOn(Assessments, 'deleteGroup').mockResolvedValue(['assessment-1']);
-        const patchVuln = jest.fn();
-
-        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
-
-        const user = userEvent.setup();
-        // Wait for the real assessment-groups response (group-99, rendered
-        // status "Exploitable") to replace the initial client-side fallback
-        // (rendered status "active") before deleting.
-        await screen.findByText(/Exploitable/);
-        const deleteBtn = screen.getByTitle(/delete assessment/i);
-        await user.click(deleteBtn);
-        await user.click(screen.getByText(/yes, delete/i));
-
-        await waitFor(() => {
-            expect(deleteGroupSpy).toHaveBeenCalledWith('group-99');
-        });
-        expect(patchVuln).toHaveBeenCalled();
-
-        deleteGroupSpy.mockRestore();
-    });
-
-    test('clearing a variant-scoped group reconciles an explicit empty target set', async () => {
-        fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: 'variant-1', name: 'Variant A', project_id: 'proj-1' }
-        ])); // variants mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([{
-            group_id: 'group-77',
-            status: 'affected',
-            simplified_status: 'Exploitable',
-            justification: 'because 42',
-            impact_statement: 'may impact or not',
-            status_notes: 'this is a fictive status note',
-            workaround: 'update dependency',
-            responses: [],
-            origin: 'custom',
-            timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
-            assessment_ids: ['assessment-1'],
-        }])); // assessment groups mount fetch
-
-        const reconcileSpy = jest.spyOn(Assessments, 'reconcileGroup').mockResolvedValue({
-            group_id: 'group-77',
+            id: 'assessment-1',
             vuln_id: 'CVE-2010-1234',
             status: 'affected',
             simplified_status: 'Exploitable',
@@ -1710,10 +1650,74 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' }],
-            assessment_ids: ['assessment-1'],
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
+        }])); // assessment groups mount fetch
+
+        const removeSpy = jest.spyOn(Assessments, 'remove').mockResolvedValue(undefined);
+        const patchVuln = jest.fn();
+
+        // A fresh assessments array, isolated from whatever prior tests left
+        // mutated on the shared `vulnerability` fixture (VulnModal writes
+        // vuln.assessments in place), so this test sees exactly one entry.
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [vulnerability.assessments[0]] }} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        // Wait for the real assessment-groups response (assessment-1, rendered
+        // status "Exploitable") to replace the initial client-side fallback
+        // (rendered status "active") before deleting.
+        await screen.findByText(/Exploitable/);
+        const deleteBtn = screen.getByTitle(/delete assessment/i);
+        await user.click(deleteBtn);
+        await user.click(screen.getByText(/yes, delete/i));
+
+        await waitFor(() => {
+            expect(removeSpy).toHaveBeenCalledWith('assessment-1');
         });
-        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup');
+        expect(patchVuln).toHaveBeenCalled();
+
+        removeSpy.mockRestore();
+    });
+
+    test('clearing a variant-scoped group reconciles an explicit empty target set', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'variant-1', name: 'Variant A', project_id: 'proj-1' }
+        ])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            responses: [],
+            origin: 'custom',
+            timestamp: '2021-01-01T00:00:00Z',
+            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+        }])); // assessment groups mount fetch
+
+        const reconcileSpy = jest.spyOn(Assessments, 'reconcile').mockResolvedValue({
+            status: 'success',
+            updated: [{
+                id: 'assessment-1',
+                vuln_id: 'CVE-2010-1234',
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: 'because 42',
+                impact_statement: 'may impact or not',
+                status_notes: 'this is a fictive status note',
+                workaround: 'update dependency',
+                responses: [],
+                origin: 'custom',
+                timestamp: '2021-01-01T00:00:00Z',
+                targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+            }],
+            created: [],
+            deleted: [],
+        });
 
         const vulnWithVariantAssessment = {
             ...vulnerability,
@@ -1737,7 +1741,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithVariantAssessment} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        // Wait for the real assessment-groups response (group-77, rendered
+        // Wait for the real assessment-groups response (assessment-1, rendered
         // status "Exploitable") to replace the initial client-side fallback
         // (rendered status "active") before editing.
         await screen.findByText(/Exploitable/);
@@ -1751,17 +1755,14 @@ describe('Vulnerability Modal', () => {
         await user.click(saveBtn);
 
         await waitFor(() => {
-            expect(reconcileSpy).toHaveBeenCalledWith('group-77', expect.objectContaining({
+            expect(reconcileSpy).toHaveBeenCalledWith('assessment-1', expect.objectContaining({
                 vuln_id: 'CVE-2010-1234',
                 variant_ids: [],
                 targets: [],
-                existing_ids: ['assessment-1'],
             }));
         });
-        expect(promoteSpy).not.toHaveBeenCalled();
 
         reconcileSpy.mockRestore();
-        promoteSpy.mockRestore();
     });
 
     test('edit assessment success', async () => {
@@ -2738,12 +2739,17 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('ai workaround')).not.toBeInTheDocument();
     });
 
-    test('approving an ungrouped pending AI review promotes it to a group, then calls approveAiGroup', async () => {
+    test('approving a pending AI review calls approveAi with the assessment id', async () => {
         const patchVuln = jest.fn();
-        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup').mockResolvedValue('group-promoted-1');
-        const approveGroupSpy = jest.spyOn(Assessments, 'approveAiGroup').mockResolvedValue([
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
             { ...pendingAiAssessment, origin: 'custom' }
         ]);
+        // The panel's disappearance also depends on the post-approve refresh
+        // of the server-built listing; reflect the approval there too so the
+        // real (non-fallback) path is exercised, not just allVulnAssessments.
+        const listByVulnSpy = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment])
+            .mockResolvedValue([]);
 
         renderWithPendingAiAssessment({ patchVuln, isEditing: true });
         const user = userEvent.setup();
@@ -2751,31 +2757,23 @@ describe('Vulnerability Modal', () => {
         await screen.findByText(/AI-generated/i);
         await user.click(screen.getByRole('button', { name: /Approve/i }));
 
-        // The real fix under test: an ungrouped AI assessment has no
-        // per-row approve route anymore, so the frontend must mint a real
-        // group id first (promoteToGroup) and only then call the
-        // group-scoped approve endpoint (approveAiGroup) — never the
-        // deleted per-assessment approve route.
         await waitFor(() => {
-            expect(promoteSpy).toHaveBeenCalledWith('assessment-ai-1');
+            expect(approveAiSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
-        await waitFor(() => {
-            expect(approveGroupSpy).toHaveBeenCalledWith('group-promoted-1');
-        });
-        expect(promoteSpy.mock.invocationCallOrder[0])
-            .toBeLessThan(approveGroupSpy.mock.invocationCallOrder[0]);
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         });
         expect(patchVuln).toHaveBeenCalled();
 
-        promoteSpy.mockRestore();
-        approveGroupSpy.mockRestore();
+        approveAiSpy.mockRestore();
+        listByVulnSpy.mockRestore();
     });
 
-    test('rejecting an ungrouped pending AI review promotes it to a group, then calls rejectAiGroup', async () => {
-        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup').mockResolvedValue('group-promoted-2');
-        const rejectGroupSpy = jest.spyOn(Assessments, 'rejectAiGroup').mockResolvedValue(['assessment-ai-1']);
+    test('rejecting a pending AI review calls rejectAi with the assessment id', async () => {
+        const rejectAiSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
+        const listByVulnSpy = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment])
+            .mockResolvedValue([]);
 
         renderWithPendingAiAssessment({ isEditing: true });
         const user = userEvent.setup();
@@ -2784,19 +2782,14 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Reject/i }));
 
         await waitFor(() => {
-            expect(promoteSpy).toHaveBeenCalledWith('assessment-ai-1');
+            expect(rejectAiSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
-        await waitFor(() => {
-            expect(rejectGroupSpy).toHaveBeenCalledWith('group-promoted-2');
-        });
-        expect(promoteSpy.mock.invocationCallOrder[0])
-            .toBeLessThan(rejectGroupSpy.mock.invocationCallOrder[0]);
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         });
 
-        promoteSpy.mockRestore();
-        rejectGroupSpy.mockRestore();
+        rejectAiSpy.mockRestore();
+        listByVulnSpy.mockRestore();
     });
 
     test('readOnly mode still shows the pending AI review panel but without approve/reject actions', async () => {
@@ -2807,7 +2800,7 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
 
-    test('approving a grouped pending AI review calls approveAiGroup with the group id', async () => {
+    test('approving a pending AI review fetched from the server calls approveAi with its id', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             if (req.url.includes('/variants')) {
@@ -2815,9 +2808,10 @@ describe('Vulnerability Modal', () => {
                     { id: 'variant-1', name: 'Variant Alpha', project_id: 'proj-1' }
                 ]));
             }
-            if (req.url.includes('/assessment-groups')) {
+            if (req.url.includes('/assessments') && req.url.includes(encodeURIComponent(vulnerability.id))) {
                 return Promise.resolve(JSON.stringify([{
-                    group_id: 'group-ai-1',
+                    id: 'assessment-ai-1',
+                    vuln_id: 'CVE-2010-1234',
                     status: pendingAiAssessment.status,
                     simplified_status: pendingAiAssessment.simplified_status,
                     justification: pendingAiAssessment.justification,
@@ -2827,20 +2821,15 @@ describe('Vulnerability Modal', () => {
                     responses: [],
                     origin: 'ai',
                     timestamp: pendingAiAssessment.timestamp,
-                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-ai-1' }],
-                    assessment_ids: ['assessment-ai-1'],
+                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
                 }]));
-            }
-            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
-                return Promise.resolve(JSON.stringify([pendingAiAssessment]));
             }
             return Promise.resolve(JSON.stringify([]));
         });
 
-        const approveGroupSpy = jest.spyOn(Assessments, 'approveAiGroup').mockResolvedValue([
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
             { ...pendingAiAssessment, origin: 'custom' }
         ]);
-        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup');
 
         render(
             <VulnModal
@@ -2858,15 +2847,13 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Approve/i }));
 
         await waitFor(() => {
-            expect(approveGroupSpy).toHaveBeenCalledWith('group-ai-1');
+            expect(approveAiSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
-        expect(promoteSpy).not.toHaveBeenCalled();
 
-        approveGroupSpy.mockRestore();
-        promoteSpy.mockRestore();
+        approveAiSpy.mockRestore();
     });
 
-    test('rejecting a grouped pending AI review calls rejectAiGroup with the group id', async () => {
+    test('rejecting a pending AI review fetched from the server calls rejectAi with its id', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             if (req.url.includes('/variants')) {
@@ -2874,9 +2861,10 @@ describe('Vulnerability Modal', () => {
                     { id: 'variant-1', name: 'Variant Alpha', project_id: 'proj-1' }
                 ]));
             }
-            if (req.url.includes('/assessment-groups')) {
+            if (req.url.includes('/assessments') && req.url.includes(encodeURIComponent(vulnerability.id))) {
                 return Promise.resolve(JSON.stringify([{
-                    group_id: 'group-ai-2',
+                    id: 'assessment-ai-1',
+                    vuln_id: 'CVE-2010-1234',
                     status: pendingAiAssessment.status,
                     simplified_status: pendingAiAssessment.simplified_status,
                     justification: pendingAiAssessment.justification,
@@ -2886,18 +2874,13 @@ describe('Vulnerability Modal', () => {
                     responses: [],
                     origin: 'ai',
                     timestamp: pendingAiAssessment.timestamp,
-                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-ai-1' }],
-                    assessment_ids: ['assessment-ai-1'],
+                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
                 }]));
-            }
-            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
-                return Promise.resolve(JSON.stringify([pendingAiAssessment]));
             }
             return Promise.resolve(JSON.stringify([]));
         });
 
-        const rejectGroupSpy = jest.spyOn(Assessments, 'rejectAiGroup').mockResolvedValue(['assessment-ai-1']);
-        const promoteSpy = jest.spyOn(Assessments, 'promoteToGroup');
+        const rejectAiSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
 
         render(
             <VulnModal
@@ -2915,12 +2898,10 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Reject/i }));
 
         await waitFor(() => {
-            expect(rejectGroupSpy).toHaveBeenCalledWith('group-ai-2');
+            expect(rejectAiSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
-        expect(promoteSpy).not.toHaveBeenCalled();
 
-        rejectGroupSpy.mockRestore();
-        promoteSpy.mockRestore();
+        rejectAiSpy.mockRestore();
     });
 
     test('copy assessment id button copies "assessment:<id>" for an ungrouped history entry', async () => {
@@ -2964,12 +2945,13 @@ describe('Vulnerability Modal', () => {
         writeText.mockRestore();
     });
 
-    test('copy group id button copies "group:<id>" when the assessment-groups endpoint returns a multi-target group', async () => {
+    test('copy group id button copies "group:<id>" when the assessment endpoint returns a multi-target assessment', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([{
-            group_id: 'group-42',
+            id: 'assessment-42',
+            vuln_id: 'CVE-2010-1234',
             status: 'affected',
             simplified_status: 'Exploitable',
             justification: 'because 42',
@@ -2979,13 +2961,12 @@ describe('Vulnerability Modal', () => {
             responses: [],
             origin: 'custom',
             timestamp: '2021-01-01T00:00:00Z',
-            // Two targets makes this a group in the user-facing sense; a
-            // single target is just an assessment, whatever its group_id.
+            // Two targets makes this a "group" in the user-facing sense; a
+            // single target is just an assessment.
             targets: [
-                { variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false, assessment_id: 'assessment-1' },
-                { variant_id: null, package: 'dddeeefff@2.0.0', outdated: false, assessment_id: 'assessment-2' },
+                { variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false },
+                { variant_id: null, package: 'dddeeefff@2.0.0', outdated: false },
             ],
-            assessment_ids: ['assessment-1', 'assessment-2'],
         }])); // assessment groups mount fetch
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -2996,10 +2977,10 @@ describe('Vulnerability Modal', () => {
         const copyBtn = await screen.findByLabelText('Copy group id');
         await user.click(copyBtn);
 
-        expect(writeText).toHaveBeenCalledWith('group:group-42');
+        expect(writeText).toHaveBeenCalledWith('group:assessment-42');
 
         const groupItem = copyBtn.closest('li[data-group-id]');
-        expect(groupItem).toHaveAttribute('data-group-id', 'group-42');
+        expect(groupItem).toHaveAttribute('data-group-id', 'assessment-42');
         writeText.mockRestore();
     });
 

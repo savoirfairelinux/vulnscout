@@ -130,23 +130,12 @@ def _get_first_ai_id(client):
     return body["assessment"]["id"]
 
 
-def _group_id_for(client, assessment_id):
-    """Resolve (creating if needed) the group an assessment belongs to."""
-    resp = client.post(f"/api/assessments/{assessment_id}/group")
-    return json.loads(resp.data)["group_id"]
-
-
 def _approve(client, assessment_id):
-    """Promote a single assessment to a group (or reuse its existing one),
-    then approve that group. Mirrors the lazy-promotion flow the front-end
-    uses for a single-target AI review row."""
-    group_id = _group_id_for(client, assessment_id)
-    return client.post(f"/api/assessment-groups/{group_id}/approve")
+    return client.post(f"/api/assessments/{assessment_id}/approve")
 
 
 def _reject(client, assessment_id):
-    group_id = _group_id_for(client, assessment_id)
-    return client.post(f"/api/assessment-groups/{group_id}/reject")
+    return client.post(f"/api/assessments/{assessment_id}/reject")
 
 
 def test_approve_promotes_group_to_custom(client):
@@ -162,8 +151,8 @@ def test_approve_promotes_group_to_custom(client):
 
 def test_approve_promotes_only_the_addressed_row(client, app):
     """Two separate AI writes (different variants) are two separate user
-    actions and stay two separate rows; approving one's group must not
-    promote the other."""
+    actions and stay two separate rows; approving one must not promote the
+    other."""
     other_variant = "22222222-2222-2222-2222-222222222224"
     _add_variant(app, other_variant)
 
@@ -171,11 +160,9 @@ def test_approve_promotes_only_the_addressed_row(client, app):
     second = json.loads(
         _post_ai(client, packages=[PKG2], variant_id=other_variant).data
     )["assessment"]
-    assert first["group_id"] == first["id"]
-    assert second["group_id"] == second["id"]
     assert first["id"] != second["id"]
 
-    resp = client.post(f"/api/assessment-groups/{first['group_id']}/approve")
+    resp = _approve(client, first["id"])
 
     assert resp.status_code == 200
     approved = json.loads(resp.data)["assessments"]
@@ -191,7 +178,7 @@ def test_approve_promotes_only_the_addressed_row(client, app):
 
 
 def test_approve_missing_returns_404(client):
-    resp = client.post(f"/api/assessment-groups/{uuid.uuid4()}/approve")
+    resp = _approve(client, str(uuid.uuid4()))
     assert resp.status_code == 404
 
 
@@ -223,58 +210,9 @@ def _add_variant(app, variant_id):
         db.session.commit()
 
 
-def test_group_id_payload_no_longer_merges_writes_across_variants(client, app):
-    """Joining an existing group at write time is out of scope for this
-    phase (a group only grows through reconcile, once it already holds real
-    targets — see test_post_endpoints.py). Posting a second AI write with an
-    existing assessment's id as ``group_id`` simply creates its own,
-    independent row instead of merging into it."""
-    other_variant = "22222222-2222-2222-2222-222222222223"
-    _add_variant(app, other_variant)
-
-    a1 = json.loads(_post_ai(client).data)["assessment"]["id"]
-    group_id = _group_id_for(client, a1)
-    a2_resp = _post_ai(client, variant_id=other_variant, group_id=group_id)
-    assert a2_resp.status_code == 200
-    a2_row = json.loads(a2_resp.data)["assessment"]
-    assert a2_row["group_id"] == a2_row["id"]
-    assert a2_row["group_id"] != group_id
-
-    resp = client.post(f"/api/assessment-groups/{group_id}/approve")
-    assert resp.status_code == 200
-    approved = {a["id"] for a in json.loads(resp.data)["assessments"]}
-    assert approved == {a1}
-
-    # the sibling row remains pending, untouched by the first row's approval
-    still_pending = json.loads(client.get("/api/assessments/review/ai").data)
-    assert any(a["id"] == a2_row["id"] for a in still_pending)
-
-
-def test_joining_a_pending_ai_group_with_a_custom_row_no_longer_conflicts(client):
-    """Origin homogeneity is enforced per-row now (a group is one row, one
-    origin); the legacy ``group_id`` payload no longer fuses across writes,
-    so a mismatched-origin write is simply its own independent row rather
-    than being refused."""
-    aid = _get_first_ai_id(client)
-    group_id = _group_id_for(client, aid)
-    r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
-        "packages": [PKG2], "status": "affected", "variant_id": str(VARIANT_UUID),
-        "group_id": group_id,
-    })
-    assert r.status_code == 200
-    new_row = json.loads(r.data)["assessment"]
-    assert new_row["origin"] == "custom"
-    assert new_row["group_id"] == new_row["id"]
-
-    # the pending AI row must remain untouched and still approvable
-    listed = json.loads(client.get("/api/assessments/review/ai").data)
-    assert any(a["id"] == aid for a in listed)
-    assert client.post(f"/api/assessment-groups/{group_id}/approve").status_code == 200
-
-
 def test_reject_deletes_only_the_addressed_row(client, app):
     """Two separate AI writes (different variants) stay two separate rows;
-    rejecting one's group must not delete the other."""
+    rejecting one must not delete the other."""
     other_variant = "22222222-2222-2222-2222-222222222225"
     _add_variant(app, other_variant)
 
@@ -283,7 +221,7 @@ def test_reject_deletes_only_the_addressed_row(client, app):
         _post_ai(client, packages=[PKG2], variant_id=other_variant).data
     )["assessment"]
 
-    resp = client.post(f"/api/assessment-groups/{first['group_id']}/reject")
+    resp = _reject(client, first["id"])
 
     assert resp.status_code == 200
     assert set(json.loads(resp.data)["deleted"]) == {first["id"]}
@@ -294,9 +232,7 @@ def test_reject_deletes_only_the_addressed_row(client, app):
 
 
 def test_reject_missing_returns_404(client):
-    assert client.post(
-        f"/api/assessment-groups/{uuid.uuid4()}/reject"
-    ).status_code == 404
+    assert _reject(client, str(uuid.uuid4())).status_code == 404
 
 
 def test_reject_non_ai_returns_400(client):

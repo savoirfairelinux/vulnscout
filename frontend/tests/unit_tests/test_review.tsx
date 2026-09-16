@@ -128,52 +128,39 @@ const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJs
 // ---------------------------------------------------------------------------
 
 /**
- * Simulate the server's `/api/reviews/assessment-groups` endpoint (backed by
- * `build_groups()`): assessments sharing an explicit `group_id` collapse into
- * one group; everything else becomes its own singleton group (bucketed by
- * array index, not `id`, since a couple of fixtures below intentionally reuse
- * the same literal id for two unrelated rows), and its `group_id` in the
- * response is the singleton member's own assessment id, matching how the
- * real endpoint always sets `group_id` to `assessment.id`. `vuln_texts` is
- * looked up from whichever fixture (across both the custom and AI lists)
- * carries it for that vuln_id, mirroring how the real route enriches groups
- * from the Vulnerability model rather than from any one assessment row.
+ * Simulate the server's `/api/reviews/assessments` endpoint (backed by
+ * `annotate_targets()`): one assessment in, one entry out — a "group" is now
+ * just an assessment, so there is no bucketing left to do. Each entry's
+ * `targets` are taken from the fixture's own `targets` array when it
+ * provides one (multi-target fixtures), else derived from its flat
+ * `packages`/`variant_id`. `vuln_texts` is looked up from whichever fixture
+ * (across both the custom and AI lists) carries it for that vuln_id,
+ * mirroring how the real route enriches assessments from the Vulnerability
+ * model rather than from the assessment row itself.
  */
-function toAssessmentGroups(list: any[], vulnTextsMap: Record<string, unknown[]>): any[] {
-    const buckets = new Map<string, any[]>();
-    list.forEach((a, idx) => {
-        const key = a.group_id ? `g:${a.group_id}` : `u:${idx}`;
-        const bucket = buckets.get(key);
-        if (bucket) bucket.push(a);
-        else buckets.set(key, [a]);
-    });
-    const groups: any[] = [];
-    for (const [key, members] of buckets) {
-        const head = members[0];
-        const targets = members.flatMap((m: any) => (m.packages ?? []).map((pkg: string) => ({
-            variant_id: m.variant_id ?? null,
+function toAssessments(list: any[], vulnTextsMap: Record<string, unknown[]>): any[] {
+    return list.map((a: any) => {
+        const targets = a.targets ?? (a.packages ?? []).map((pkg: string) => ({
+            variant_id: a.variant_id ?? null,
             package: pkg,
-            outdated: Boolean(m.outdated) || Boolean((m.superseded_map?.[pkg] ?? []).length),
-            assessment_id: m.id,
-        })));
-        groups.push({
-            group_id: key.startsWith('g:') ? head.group_id : head.id,
-            vuln_id: head.vuln_id,
-            status: head.status,
-            simplified_status: STATUS_VEX_TO_GRAPH[head.status] ?? `[invalid status] ${head.status}`,
-            justification: head.justification ?? '',
-            impact_statement: head.impact_statement ?? '',
-            status_notes: head.status_notes ?? '',
-            workaround: head.workaround ?? '',
-            responses: head.responses ?? [],
-            origin: head.origin ?? 'custom',
-            timestamp: head.timestamp,
+            outdated: Boolean(a.outdated) || Boolean((a.superseded_map?.[pkg] ?? []).length),
+        }));
+        return {
+            id: a.id,
+            vuln_id: a.vuln_id,
+            status: a.status,
+            simplified_status: STATUS_VEX_TO_GRAPH[a.status] ?? `[invalid status] ${a.status}`,
+            justification: a.justification ?? '',
+            impact_statement: a.impact_statement ?? '',
+            status_notes: a.status_notes ?? '',
+            workaround: a.workaround ?? '',
+            responses: a.responses ?? [],
+            origin: a.origin ?? 'custom',
+            timestamp: a.timestamp,
             targets,
-            assessment_ids: [...new Set(members.map((m: any) => m.id))],
-            vuln_texts: vulnTextsMap[head.vuln_id] ?? [],
-        });
-    }
-    return groups.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+            vuln_texts: a.vuln_texts ?? vulnTextsMap[a.vuln_id] ?? [],
+        };
+    }).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
 }
 
 function buildVulnTextsMap(allItems: any[]): Record<string, unknown[]> {
@@ -195,14 +182,9 @@ const PROJECTS = [{ id: 'proj1', name: 'Project One' }];
 
 const RICH_PKG = 'pkgA@1.0.0::Organization: ACME Corp (info@acme.com)';
 
-/** One custom assessment on a single package/variant. Pass `groupId` to make
- *  two calls share the same assessment id, mirroring a server-built group of
- *  ``AssessmentTarget`` rows on one assessment, the same way
- *  `RICH_ASSESSMENT`-style multi-variant rows are produced by the real
- *  `/reviews/assessment-groups` endpoint. */
-const makeAssessment = (id: string, variantId: string, groupId?: string) => ({
+/** One custom assessment on a single package/variant. */
+const makeAssessment = (id: string, variantId: string) => ({
     id,
-    group_id: groupId ?? null,
     vuln_id: 'CVE-2020-1111',
     packages: ['pkgA@1.0.0'],
     variant_id: variantId,
@@ -211,6 +193,29 @@ const makeAssessment = (id: string, variantId: string, groupId?: string) => ({
     timestamp: '2024-01-01T00:00:00Z',
     origin: 'custom',
     responses: [],
+});
+
+/** One assessment covering several (variant, package) targets directly —
+ *  what a real multi-target assessment row looks like, since a "group" is
+ *  now just an assessment with more than one target. */
+const makeMultiTargetAssessment = (
+    id: string,
+    vulnId: string,
+    targets: Array<{ variantId: string; pkg: string; outdated?: boolean }>,
+    extra: Record<string, unknown> = {},
+) => ({
+    id,
+    vuln_id: vulnId,
+    packages: [...new Set(targets.map(t => t.pkg))],
+    status: 'affected',
+    status_notes: 'shared note',
+    timestamp: '2024-01-01T00:00:00Z',
+    origin: 'custom',
+    responses: [],
+    targets: targets.map(t => ({
+        variant_id: t.variantId, package: t.pkg, outdated: Boolean(t.outdated),
+    })),
+    ...extra,
 });
 
 /** A fully-populated assessment exercising every column's "value present" branch. */
@@ -308,11 +313,11 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         const url = req.url;
         const method = req.method;
         if (method === 'GET') {
-            if (url.includes('/api/reviews/assessment-groups')) {
+            if (url.includes('/api/reviews/assessments')) {
                 const origin = new URL(url).searchParams.get('origin');
                 const source = origin === 'ai' ? aiReviewList : reviewList;
                 const vulnTextsMap = buildVulnTextsMap([...reviewList, ...aiReviewList]);
-                return JSON.stringify(toAssessmentGroups(source, vulnTextsMap));
+                return JSON.stringify(toAssessments(source, vulnTextsMap));
             }
             if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify(te);
             if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify(cvss);
@@ -346,12 +351,6 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         if (url.includes('/api/assessments/review/import')) return JSON.stringify({ status: 'success' });
         if (url.includes('/api/assessments/review/export-update')) return JSON.stringify({ version: 1, assessments: [] });
         if (!mutationOk) return { status: 500, body: JSON.stringify({ status: 'error' }) };
-        // Lazy promotion: mint a group id for an ungrouped assessment id so
-        // callers that then hit the group-scoped approve/reject endpoints
-        // have a real group id to target.
-        if (/\/api\/assessments\/[^/]+\/group$/.test(url)) {
-            return JSON.stringify({ status: 'success', group_id: 'promoted-group-id' });
-        }
         return JSON.stringify({ status: 'success' });
     });
 }
@@ -372,7 +371,7 @@ const deleteCalls = () =>
 const postCalls = () =>
     fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'POST');
 const reconcileCalls = () =>
-    postCalls().filter(c => String(c[0]).includes('/api/assessment-groups/') && String(c[0]).endsWith('/reconcile'));
+    postCalls().filter(c => String(c[0]).includes('/api/assessments/') && String(c[0]).endsWith('/reconcile'));
 
 const fileInput = (): HTMLInputElement =>
     document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -424,7 +423,6 @@ describe('Review — editing "Apply to variants"', () => {
             { package: 'pkgA@1.0.0', variant_id: 'v1' },
             { package: 'pkgA@1.0.0', variant_id: 'v2' },
         ]);
-        expect(body.existing_ids).toEqual(['a1']);
         expect(body.update_timestamp).toBe(false);
         expect(body.timestamp).toBe('2024-01-01T00:00:00Z');
         expect(putCalls()).toHaveLength(0);
@@ -432,8 +430,10 @@ describe('Review — editing "Apply to variants"', () => {
     });
 
     test('unchecking one target of a multi-target assessment reconciles without deleting its row', async () => {
-        // Both targets belong to the same underlying assessment ID.
-        mockNetwork([makeAssessment('a1', 'v1', 'a1'), makeAssessment('a1', 'v2', 'a1')]);
+        mockNetwork([makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+            { variantId: 'v2', pkg: 'pkgA@1.0.0' },
+        ])]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
@@ -455,7 +455,6 @@ describe('Review — editing "Apply to variants"', () => {
         expect(body.targets).toEqual([
             { package: 'pkgA@1.0.0', variant_id: 'v1' },
         ]);
-        expect(body.existing_ids).toEqual(['a1']);
         expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
     });
@@ -561,7 +560,7 @@ describe('Review — loading and error states', () => {
             const url = req.url;
             if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify([]);
             if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify([]);
-            if (url.includes('/api/reviews/assessment-groups')) return { status: 500, body: 'boom' };
+            if (url.includes('/api/reviews/assessments')) return { status: 500, body: 'boom' };
             if (url.includes('/api/variants')) return JSON.stringify(VARIANTS);
             if (url.includes('/api/projects')) return JSON.stringify(PROJECTS);
             return JSON.stringify([]);
@@ -593,14 +592,10 @@ describe('Review — rendering columns and tabs', () => {
     });
 
     test('shows outdated on the affected variant instead of the status', async () => {
-        mockNetwork([
-            {
-                ...makeAssessment('a1', 'v1', 'g-outdated'),
-                outdated: true,
-                superseded_map: {'pkgA@1.0.0': ['pkgA@2.0.0']},
-            },
-            makeAssessment('a2', 'v2', 'g-outdated'),
-        ]);
+        mockNetwork([makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v2', pkg: 'pkgA@1.0.0', outdated: false },
+        ])]);
         render(<Review projectId="proj1" />);
 
         const outdatedBadges = await screen.findAllByText('Outdated');
@@ -706,12 +701,7 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Approve AI suggestion'));
 
         await screen.findByText('AI assessment approved!');
-        // group_id is always the assessment's own id, so approving never
-        // needs the lazy-promotion route — it can call the group-scoped
-        // endpoint directly.
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(false);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/ai1/approve'))).toBe(true);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(false);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
     });
 
     test('rejecting a pending AI row calls the group reject endpoint with its own id', async () => {
@@ -724,9 +714,7 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByTitle('Reject AI suggestion'));
 
         await screen.findByText('AI assessment rejected.');
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/group'))).toBe(false);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessment-groups/ai1/reject'))).toBe(true);
-        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(false);
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(true);
     });
 
     test('reports an error when approving a pending AI row fails', async () => {
@@ -844,7 +832,7 @@ describe('Review — vulnerability modal', () => {
 // groupAssessments keeps them as two distinct rows — exercising the vuln_id
 // dedup in the display-order navigation list. A third row uses a different
 // vuln_id entirely.
-// Timestamps are ordered newest-first to match `toAssessmentGroups`' sort
+// Timestamps are ordered newest-first to match `toAssessments`' sort
 // (mirroring the real `build_groups`, which returns groups newest first), so
 // the raw array order above already equals the rendered table order.
 const NAV_DUP_A = {
@@ -876,10 +864,10 @@ function mockNetworkWithVulnById(
     fetchMock.resetMocks();
     fetchMock.mockResponse(async (req) => {
         const url = req.url;
-        if (url.includes('/api/reviews/assessment-groups')) {
+        if (url.includes('/api/reviews/assessments')) {
             const origin = new URL(url).searchParams.get('origin');
             const vulnTextsMap = buildVulnTextsMap(reviewList);
-            return JSON.stringify(toAssessmentGroups(origin === 'ai' ? [] : reviewList, vulnTextsMap));
+            return JSON.stringify(toAssessments(origin === 'ai' ? [] : reviewList, vulnTextsMap));
         }
         if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify(te);
         if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify(cvss);
@@ -923,10 +911,10 @@ function mockNetworkWithDeferredVuln(
     fetchMock.resetMocks();
     fetchMock.mockResponse(async (req) => {
         const url = req.url;
-        if (url.includes('/api/reviews/assessment-groups')) {
+        if (url.includes('/api/reviews/assessments')) {
             const origin = new URL(url).searchParams.get('origin');
             const vulnTextsMap = buildVulnTextsMap(reviewList);
-            return JSON.stringify(toAssessmentGroups(origin === 'ai' ? [] : reviewList, vulnTextsMap));
+            return JSON.stringify(toAssessments(origin === 'ai' ? [] : reviewList, vulnTextsMap));
         }
         if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify([]);
         if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify([]);
@@ -1304,26 +1292,19 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
 
 describe('Review — filters, search and keyboard', () => {
     test('does not provide a variants filter', async () => {
-        mockNetwork([makeAssessment('a1', 'v1', 'g-novfilter'), makeAssessment('a2', 'v2', 'g-novfilter')]);
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
         render(<Review projectId="proj1" />);
 
-        await screen.findByText('CVE-2020-1111');
+        await screen.findAllByText('CVE-2020-1111');
         expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     });
 
     test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
-        const mixedOutdated = {
-            ...makeAssessment('outdated', 'v1', 'g-mixed'),
-            vuln_id: 'CVE-2020-MIXED',
-            outdated: true,
-            superseded_map: { 'pkgA@1.0.0': ['pkgA@2.0.0'] },
-        };
-        const mixedCurrent = {
-            ...makeAssessment('current', 'v2', 'g-mixed'),
-            vuln_id: 'CVE-2020-MIXED',
-            packages: ['pkgB@1.0.0'],
-        };
-        mockNetwork([mixedOutdated, mixedCurrent, makeAssessment('current', 'v1')]);
+        const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
+        ]);
+        mockNetwork([mixedRow, makeAssessment('current', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
@@ -1484,7 +1465,7 @@ describe('Review — deleting an assessment', () => {
 
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessment-groups/a1'),
+                expect.stringContaining('/api/assessments/a1'),
                 expect.objectContaining({ method: 'DELETE' }),
             );
         });
@@ -1498,12 +1479,9 @@ describe('Review — deleting an assessment', () => {
         await user.click(await screen.findByText('AI Assessments'));
         await selectFirstTableRow(user);
 
-        // group_id is always the assessment's own id, so bulk rejection never
-        // needs the lazy-promotion route — it can call the group-scoped
-        // endpoint directly.
         await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining('/api/assessment-groups/ai-1/reject'),
+                expect.stringContaining('/api/assessments/ai-1/reject'),
                 expect.objectContaining({ method: 'POST' }),
             );
         });
@@ -1556,7 +1534,7 @@ describe('Review — deleting an assessment', () => {
 
         await screen.findByText('Assessment deleted successfully!');
         expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessment-groups/a1'),
+            expect.stringContaining('/api/assessments/a1'),
             expect.objectContaining({ method: 'DELETE' })
         );
         expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ type: 'delete', vulnId: 'CVE-2020-1111' }));
@@ -1613,7 +1591,10 @@ describe('Review — copying assessment ids', () => {
     });
 
     test('copies the group id when the row is a group', async () => {
-        mockNetwork([makeAssessment('a1', 'v1', 'g1'), makeAssessment('a2', 'v2', 'g1')]);
+        mockNetwork([makeMultiTargetAssessment('g1', 'CVE-2020-1111', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+            { variantId: 'v2', pkg: 'pkgA@1.0.0' },
+        ])]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
         const writeText = jest.fn().mockResolvedValue(undefined);
