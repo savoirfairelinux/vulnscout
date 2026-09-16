@@ -630,11 +630,11 @@ type VariantScopedSnapshot = {
         }
     }, [vuln, patchVuln]);
 
-    const groupCopyKey = (group: Assessment) =>
+    const rowCopyKey = (group: Assessment) =>
         `${isMultiTarget(group.targets ?? []) ? 'group' : 'assessment'}:${group.id}`;
 
-    const copyGroupId = async (group: Assessment) => {
-        const text = groupCopyKey(group);
+    const copyRowId = async (group: Assessment) => {
+        const text = rowCopyKey(group);
         try {
             await navigator.clipboard.writeText(text);
             // Confirm the copy inline: the clipboard gives no visible feedback of
@@ -1948,14 +1948,14 @@ type VariantScopedSnapshot = {
                                                     )}
                                                     <button
                                                         type="button"
-                                                        onClick={() => copyGroupId(group)}
-                                                        aria-label={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
-                                                        title={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
+                                                        onClick={() => copyRowId(group)}
+                                                        aria-label={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
+                                                        title={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
                                                         className="text-amber-300 hover:text-amber-100 transition-colors"
                                                     >
                                                         <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
                                                     </button>
-                                                    {copiedGroupKey === groupCopyKey(group) && (
+                                                    {copiedGroupKey === rowCopyKey(group) && (
                                                         <span role="status" className="inline-flex items-center gap-1 text-xs text-amber-300">
                                                             <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
                                                             Copied
@@ -2082,14 +2082,14 @@ type VariantScopedSnapshot = {
                                                             )}
                                                             <button
                                                                 type="button"
-                                                                onClick={() => copyGroupId(group)}
-                                                                aria-label={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
-                                                                title={isMultiTarget(targets) ? "Copy group id" : "Copy assessment id"}
+                                                                onClick={() => copyRowId(group)}
+                                                                aria-label={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
+                                                                title={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
                                                                 className="text-gray-400 hover:text-gray-200 transition-colors"
                                                             >
                                                                 <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
                                                             </button>
-                                                            {copiedGroupKey === groupCopyKey(group) && (
+                                                            {copiedGroupKey === rowCopyKey(group) && (
                                                                 <span role="status" className="inline-flex items-center gap-1 text-xs text-green-400">
                                                                     <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
                                                                     Copied

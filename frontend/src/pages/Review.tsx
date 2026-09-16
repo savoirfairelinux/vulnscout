@@ -149,7 +149,7 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
     onCopy: (row: ReviewRow) => void;
 }) {
     const copied = copiedKey === rowCopyKey(row);
-    const label = isMultiTarget(row.targets) ? 'Copy group id' : 'Copy assessment id';
+    const label = isMultiTarget(row.targets) ? 'Copy multi-target id' : 'Copy assessment id';
     return (
         <>
             <button

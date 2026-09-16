@@ -2973,7 +2973,7 @@ describe('Vulnerability Modal', () => {
         writeText.mockRestore();
     });
 
-    test('copy group id button copies "group:<id>" when the assessment endpoint returns a multi-target assessment', async () => {
+    test('copy multi-target id button copies "group:<id>" when the assessment endpoint returns a multi-target assessment', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
@@ -3003,7 +3003,7 @@ describe('Vulnerability Modal', () => {
         const user = userEvent.setup();
         const writeText = jest.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
 
-        const copyBtn = await screen.findByLabelText('Copy group id');
+        const copyBtn = await screen.findByLabelText('Copy multi-target id');
         await user.click(copyBtn);
 
         expect(writeText).toHaveBeenCalledWith('group:assessment-42');
