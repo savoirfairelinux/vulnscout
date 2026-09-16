@@ -194,6 +194,16 @@ type VariantScopedSnapshot = {
     }, [showCpeHint]);
 
     // Reviews are keyed by assessment ID and rendered beneath their assessment.
+    // Re-run after any assessment mutation, not just on scope change: a
+    // review's `is_stale` flag is derived server-side from the assessment's
+    // current content, so an edit/delete/approve leaves the previously
+    // fetched review stale-flag stale (pun intended) until this refetches.
+    const refreshReviews = useCallback(() => {
+        AssessmentReviews.fetchForScope(variantId, projectId)
+            .then(data => setReviews(data))
+            .catch(() => setReviews({}));
+    }, [variantId, projectId]);
+
     useEffect(() => {
         let cancelled = false;
         AssessmentReviews.fetchForScope(variantId, projectId)
@@ -709,6 +719,7 @@ type VariantScopedSnapshot = {
 
             patchVuln(vuln.id, vuln);
             refreshAssessmentRows();
+            refreshReviews();
             showMessage("AI assessment approved!", "success");
         } catch (e) {
             showMessage(`Failed to approve AI assessment: ${escape(String(e))}`, "error");
@@ -720,6 +731,7 @@ type VariantScopedSnapshot = {
             await Assessments.rejectAi(row.id);
             setAllVulnAssessments(prev => prev.filter(a => a.id !== row.id));
             refreshAssessmentRows();
+            refreshReviews();
             showMessage("AI assessment rejected.", "success");
         } catch (e) {
             showMessage(`Failed to reject AI assessment: ${escape(String(e))}`, "error");
@@ -753,6 +765,7 @@ type VariantScopedSnapshot = {
                     status_summary: statusSummary,
                 });
                 refreshAssessmentRows();
+                refreshReviews();
                 showMessage("Assessment deleted successfully!", "success");
             }
         }
@@ -806,6 +819,7 @@ type VariantScopedSnapshot = {
                 await Assessments.reconcile(editingAssessment.id, body);
                 const reconciledAssessments = await refreshAllVulnAssessments();
                 await refreshAssessmentRows();
+                refreshReviews();
 
                 const updatedAssessments = [...(reconciledAssessments ?? vuln.assessments)];
                 const statusSummary = buildStatusSummary(
@@ -991,6 +1005,7 @@ type VariantScopedSnapshot = {
                 status_summary: statusSummary,
             });
             refreshAssessmentRows();
+            refreshReviews();
             showMessage('Assessment updated successfully!', 'success');
         }
 
