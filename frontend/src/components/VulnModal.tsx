@@ -805,7 +805,10 @@ type VariantScopedSnapshot = {
         const targetVariantIds: string[] =
             data.variant_ids ?? [];
 
-        if (editingAssessmentIsServerConfirmed && data.variant_ids !== undefined) {
+        const hasVariantTargets = (editingAssessment.targets ?? []).some(
+            target => target.variant_id !== null
+        );
+        if (editingAssessmentIsServerConfirmed && hasVariantTargets && data.variant_ids !== undefined) {
             try {
                 const body: Record<string, unknown> = {
                     vuln_id: vuln.id,

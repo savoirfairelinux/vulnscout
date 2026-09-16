@@ -1718,6 +1718,16 @@ describe('Vulnerability Modal', () => {
             timestamp: '2021-01-01T00:00:00Z',
             targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
         }])); // assessment rows mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            variant_id: 'variant-1',
+            active_packages: ['aaabbbccc@1.0.0'],
+            findings: [{
+                finding_id: 'finding-1',
+                package: 'aaabbbccc@1.0.0',
+                outdated: false,
+            }],
+        }])); // variant-active-packages
 
         const reconcileSpy = jest.spyOn(Assessments, 'reconcile').mockResolvedValue({
             status: 'success',
@@ -1785,30 +1795,45 @@ describe('Vulnerability Modal', () => {
         reconcileSpy.mockRestore();
     });
 
-    test('edit assessment success', async () => {
+    test('status-only edit preserves a variantless assessment', async () => {
         fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({
-            status: 'success',
-            assessment: {
-                id: 'assessment-1',
-                vuln_id: 'CVE-2010-1234',
-                packages: ['aaabbbccc@1.0.0'],
-                packages_current: [],
-                status: 'fixed',
-                simplified_status: 'resolved',
-                justification: 'updated justification',
-                impact_statement: 'updated impact',
-                status_notes: 'updated notes',
-                workaround: 'updated workaround',
-                timestamp: '2021-01-01T00:00:00Z',
-                origin: 'custom',
-                responses: []
+        const variantlessAssessment = {
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            packages: ['aaabbbccc@1.0.0'],
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            timestamp: '2021-01-01T00:00:00Z',
+            origin: 'custom',
+            responses: [],
+            targets: [{
+                variant_id: null,
+                package: 'aaabbbccc@1.0.0',
+                outdated: false,
+            }],
+        };
+        fetchMock.mockResponse(req => {
+            if (req.url.includes('/api/assessment-reviews')) {
+                return Promise.resolve(JSON.stringify({}));
             }
-        }), { status: 200 });
+            if (req.url.includes('/variants')) {
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (req.url.includes('/api/vulnerabilities/CVE-2010-1234/assessments')) {
+                return Promise.resolve(JSON.stringify([variantlessAssessment]));
+            }
+            if (req.url.includes('/api/assessments/assessment-1')) {
+                return Promise.resolve(JSON.stringify({
+                    status: 'success',
+                    assessment: { ...variantlessAssessment, status: 'fixed', simplified_status: 'resolved' },
+                }));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
 
         const patchVuln = jest.fn();
         const vulnWithAssessment = {
@@ -1839,6 +1864,11 @@ describe('Vulnerability Modal', () => {
 
         // The default keeps the current history position and timestamp.
         expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toBeChecked();
+        const statusSelect = document.querySelector<HTMLSelectElement>(
+            'select[name="edit_assessment_status"]'
+        );
+        expect(statusSelect).not.toBeNull();
+        await user.selectOptions(statusSelect!, 'fixed');
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
@@ -1849,9 +1879,11 @@ describe('Vulnerability Modal', () => {
         const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
         const putBody = JSON.parse(String(putCall?.[1]?.body));
         expect(putBody).toEqual(expect.objectContaining({
+            status: 'fixed',
             update_timestamp: false,
             timestamp: '2021-01-01T00:00:00Z',
         }));
+        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
         expect(patchVuln).toHaveBeenCalled();
 
         // Check for success banner

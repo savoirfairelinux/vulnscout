@@ -79,7 +79,9 @@ function EditAssessment({
         defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : [])
     );
     const exactTargetMode = Boolean(
-        defaultSelectedTargets && availableVariants?.length && availablePackages
+        defaultSelectedTargets?.some(target => target.variant_id !== null)
+        && availableVariants?.length
+        && availablePackages
     );
     const compatibilityReady = !findingsLoading && !findingsError && variantPackageMap !== undefined;
     const compatibilityError = findingsError ?? (
