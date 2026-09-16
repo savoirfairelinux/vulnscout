@@ -1,6 +1,6 @@
 ---
 name: assessment-review
-description: Use when asked to review, audit, or second-opinion existing user/custom VEX assessments in VulnScout. Handles four scopes — an assessment group ID (expanded to every assessment it covers), a specific assessment ID, a project (and optional variant, defaulting to "default"), or every custom assessment when no scope is given. Only assessments whose origin is "custom" are ever reviewed; assessments from SBOM scans and pending AI suggestions are always skipped. Each review is an independent re-derivation recorded alongside the assessment; it never modifies the assessment itself.
+description: Use when asked to review, audit, or second-opinion existing user/custom VEX assessments in VulnScout. Handles three scopes — a specific assessment ID (which may cover several package/variant targets in one row), a project (and optional variant, defaulting to "default"), or every custom assessment when no scope is given. Only assessments whose origin is "custom" are ever reviewed; assessments from SBOM scans and pending AI suggestions are always skipped. Each review is an independent re-derivation recorded alongside the assessment; it never modifies the assessment itself.
 ---
 
 # Assessment Review Skill
@@ -23,20 +23,20 @@ scope resolution, the comparison, and the write.
 ## Workflow Overview
 
 ```
-INPUT: review request + scope (group ID | assessment ID(s) | project [+ variant] | nothing)
+INPUT: review request + scope (assessment ID(s) | project [+ variant] | nothing)
   ↓
-PHASE -1: Scope Resolution → map the inline scope to tool calls; expand every
-          group ID to its assessment IDs; resolve strict_mode and the
-          re-review policy
+PHASE -1: Scope Resolution → map the inline scope to tool calls; resolve
+          strict_mode and the re-review policy
   ↓
 PHASE 0: Origin Gate → drop every assessment whose origin != "custom"
   ↓
 PHASE 1: Context → vulnscout-get_merged_context once per variant, cached
   ↓
-PHASE 2: Independent Derivation (per assessment) → run cve-assessment
-         Phases 1 → 3.5 BEFORE reading the stored fields
+PHASE 2: Independent Derivation (per assessment, per target) → run
+         cve-assessment Phases 1 → 3.5 BEFORE reading the stored fields
   ↓
-PHASE 3: Diff & Compose → compare derived vs stored; compose review fields
+PHASE 3: Diff & Compose → compare derived vs stored; reconcile any
+         per-target divergence into one verdict; compose review fields
   ↓
 PHASE 4: Write → vulnscout-write_assessment_review per assessment
   ↓
@@ -51,43 +51,26 @@ The scope is stated inline in the prompt. Map it to exactly one of these:
 
 | Prompt contains | Action |
 |---|---|
-| A group ID, or a pasted `group:<uuid>` / `assessment:<uuid>` reference | `vulnscout-get_assessment_group(reference)` → review every ID it lists (see below) |
-| One or more assessment UUIDs | `vulnscout-get_assessment_group(reference="assessment:<id>")` per ID, then `vulnscout-get_custom_assessment(assessment_id)` per resolved ID |
+| One or more assessment UUIDs (bare, or an `assessment:<uuid>` reference) | `vulnscout-get_custom_assessment(assessment_id)` per ID |
 | A project name (and optionally a variant name) | `vulnscout-list_custom_assessments(project_name=..., variant_name=... or "default", order=..., limit=...)` |
 | Neither | `vulnscout-list_custom_assessments()` — every custom assessment |
 
-### Group scope
+### Multi-target assessments
 
-One VEX verdict in VulnScout can cover several (package, variant) pairs. Those
-rows are separate assessments sharing a **group id**, and a group id is not an
-assessment id — `get_custom_assessment` will reject it. Expand it first:
+One VEX verdict in VulnScout can cover several (package, variant) pairs, but
+they no longer live as separate assessment rows: they are **targets** on a
+single assessment (`assessment.targets`, each `{variant_id, package,
+outdated}`). `vulnscout-get_custom_assessment` returns the whole assessment —
+its stored verdict plus every target — in one call; there is nothing to expand.
 
-```
-group = vulnscout-get_assessment_group(reference="group:<uuid>")
-```
-
-The tool returns the group's shared VEX content, its `assessment_ids`, and one
-target line per (assessment, package, variant). **Every listed ID enters the
-scope.** From Phase 0 on, treat them exactly as if the caller had pasted them
-individually.
-
-The same tool accepts `assessment:<uuid>` and a bare UUID, so use it for single
-assessment IDs too: `get_custom_assessment` does not report group membership,
-and reviewing one member while leaving its siblings unreviewed leaves the group
-half-answered. An ungrouped assessment comes back in the same shape with
-`group_id` absent and a single target, so there is no separate case to handle.
-
-Group members share **authored content**, not **evidence** — a package present
-in one variant may be absent in another, and the targets differ by package.
-Derive each member independently in Phase 2 and write one review per assessment
-in Phase 4. Never copy one member's verdict across the group. Divergent verdicts
-are a real finding: they mean the assessment covers targets it should not, and
-the remedy is for the user to split the group, not for you to smooth the
-difference away.
-
-Expanding a group bypasses the `has_review=false` filter, just as an explicit ID
-list does. Apply the re-review policy below to the expanded IDs yourself, and
-count an expanded group toward the 25-assessment confirmation threshold.
+Targets share **authored content** (the one stored verdict), not **evidence** —
+a package present in one variant may be absent in another. Derive each target
+independently in Phase 2, but write exactly **one** review per assessment in
+Phase 4, since `vulnscout-write_assessment_review` carries a single verdict.
+When targets derive to different conclusions, that divergence is itself a
+finding: it means the assessment's targets should probably not be reviewed —
+or authored — as one row. Reconcile it per Phase 3 rather than silently
+picking one target's answer.
 
 ### Listing scope
 
@@ -133,11 +116,11 @@ the prompt explicitly asks for a strict review; otherwise `false`.
 
 Drop everything else — `sbom` (scanner-imported) and `ai` (pending AI
 suggestions) — silently, and count them for the summary. `list_custom_assessments`
-already filters by origin; `get_custom_assessment` refuses non-custom IDs. A
-group carries one `origin` for all its members, so a non-custom group is dropped
-whole at expansion time rather than member by member. If a
-prompt asks you to review an SBOM or AI assessment, decline that item, say why,
-and continue with the rest of the scope.
+already filters by origin; `get_custom_assessment` refuses non-custom IDs. An
+assessment has one `origin` for all of its targets, so a non-custom assessment
+is dropped whole, not target by target. If a prompt asks you to review an SBOM
+or AI assessment, decline that item, say why, and continue with the rest of the
+scope.
 
 ---
 
@@ -161,41 +144,64 @@ and variant descriptions. Apply them exactly as `cve-assessment` Phases 0, 2
 and 3 describe.
 
 Do not call `get_merged_context` per assessment. Assessments in a variant share
-one context — including the members of one group, which commonly span several
-variants and so need one context each.
+one context — including the targets of one multi-target assessment, which
+commonly span several variants and so need one context each.
 
 ---
 
 ## Phase 2: Independent Derivation
 
-For each in-scope assessment, run `cve-assessment` Phases 1 through 3.5 against
-the assessment's `vuln_id` and `packages`:
+For each in-scope assessment, run `cve-assessment` Phase 1 once against its
+`vuln_id`, then run Phases 2 through 3.5 once per **target**
+(`assessment.targets`: each a `{variant_id, package}` pair) before reading the
+assessment's stored fields:
 
-- **Phase 1** — CVE intelligence from NVD plus one reference
-- **Phase 2** — component presence under the variant's `codebase_path`
-- **Phase 3** — security objectives impact, with `risks` and `other_info` applied
+- **Phase 1** — CVE intelligence from NVD plus one reference (once per assessment;
+  `vuln_id` is fixed for the whole assessment, so this is not repeated per target)
+- **Phase 2** — component presence under the target's variant `codebase_path`
+- **Phase 3** — security objectives impact, with that variant's `risks` and
+  `other_info` applied
 - **Phase 3.5** — confidence score: HIGH, MEDIUM or LOW
 
-**Derive the verdict before reading the assessment's stored `status`,
+**Derive each target's verdict before reading the assessment's stored `status`,
 `justification`, `impact_statement`, and `workaround`.** The value of a review is
 that it is independent. Reading the user's conclusion first turns the exercise
 into a search for reasons the existing answer is right.
 
-The listing tool returns the stored fields alongside the IDs, so they will be in
+The listing tool returns the stored fields alongside the ID, so they will be in
 your context. Reach your own conclusion first anyway, and state it before
 comparing.
 
-Members of the same group share a `vuln_id`, so Phase 1 CVE intelligence may be
-reused across them. Phases 2 and 3 may not: component presence and objective
-impact depend on the member's package and variant, and are what the members
-actually differ on.
+A single-target assessment needs no reconciliation — its one derived verdict is
+the assessment's derived verdict. A multi-target assessment may derive
+differently per target (component presence and objective impact depend on the
+target's package and variant); see Phase 3 for how to reconcile that into the
+one verdict a review can carry.
 
 ---
 
 ## Phase 3: Diff & Compose
 
-Compare derived against stored on: `status`, `justification`,
-`impact_statement`, `workaround`, `responses`.
+### Reconciling multiple targets
+
+If the assessment has more than one target and Phase 2 derived different
+verdicts across them, reduce them to one before diffing against the stored
+fields:
+
+1. Rank derived statuses by severity: `affected` > `under_investigation` >
+   `not_affected` > `fixed`. Carry forward the most severe one as the
+   assessment's derived verdict — a review must never understate risk to reach
+   a single answer.
+2. Record the full per-target breakdown regardless of whether it changes the
+   final verdict; it always goes in `rationale` (see below).
+3. Treat the divergence itself as a finding: state in `rationale` that the
+   assessment's targets do not agree and that the analyst should consider
+   splitting the assessment so each target can be verdicted on its own
+   evidence, rather than leaving the disagreement smoothed over by the
+   most-severe pick.
+
+Compare the (possibly reconciled) derived verdict against stored on: `status`,
+`justification`, `impact_statement`, `workaround`, `responses`.
 
 **When they match** — the review carries the derived (identical) fields.
 `rationale` states what was verified and why it holds:
@@ -268,9 +274,11 @@ End with a summary table:
 | 8c04a19f…     | CVE-2024-0002 | zlib · release     | fixed        | fixed    | agrees  |
 ```
 
-`Target` is the member's package and variant; it is what distinguishes rows that
-came from one group. When the scope was a group, name the group ID above the
-table and call out any divergence between its members explicitly.
+`Target` is the assessment's package and variant. For a single-target
+assessment this is one pair; for a multi-target assessment, list every target
+(e.g. `openssl · default; openssl · release`) on that one row and call out any
+per-target divergence found in Phase 3 explicitly, including the split
+recommendation when one applies.
 
 Followed by counts: reviewed, skipped as non-custom, skipped as already
 reviewed, failed to write.
@@ -280,8 +288,8 @@ reviewed, failed to write.
 ## Quality Checklist
 
 - ✅ Scope mapped to a tool call; unsupported filters applied to returned rows, not invented as parameters
-- ✅ Every group ID expanded via `get_assessment_group` before any review; every member ID in scope
-- ✅ Each group member derived independently — no verdict copied across members
+- ✅ Every target on a multi-target assessment derived independently — no verdict copied across targets without going through the reconciliation rule
+- ✅ Divergent per-target verdicts reconciled to the most-severe status, with the full breakdown and a split recommendation in `rationale`
 - ✅ `has_review=false` used unless the caller asked to re-review
 - ✅ Caller confirmed before a run exceeding 25 assessments
 - ✅ Every non-custom assessment skipped and counted
