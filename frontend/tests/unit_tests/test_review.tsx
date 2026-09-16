@@ -715,7 +715,7 @@ describe('Review — AI Assessments tab', () => {
         await screen.findByText('No AI-generated assessments found');
     });
 
-    test('approving a pending AI row calls the group approve endpoint with its own id', async () => {
+    test('approving a pending AI row calls the approve endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -728,7 +728,7 @@ describe('Review — AI Assessments tab', () => {
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
     });
 
-    test('rejecting a pending AI row calls the group reject endpoint with its own id', async () => {
+    test('rejecting a pending AI row calls the reject endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -852,13 +852,12 @@ describe('Review — vulnerability modal', () => {
 // Assessments tab Previous/Next navigation (commit 144be635)
 // ===========================================================================
 
-// Two rows sharing the same vuln_id but differing in status/justification so
-// groupAssessments keeps them as two distinct rows — exercising the vuln_id
-// dedup in the display-order navigation list. A third row uses a different
-// vuln_id entirely.
+// Two rows sharing the same vuln_id but differing in status/justification,
+// each its own assessment — exercising the vuln_id dedup in the display-order
+// navigation list. A third row uses a different vuln_id entirely.
 // Timestamps are ordered newest-first to match `toAssessments`' sort
-// (mirroring the real `build_groups`, which returns groups newest first), so
-// the raw array order above already equals the rendered table order.
+// (mirroring the real assessment listing, which returns rows newest first),
+// so the raw array order above already equals the rendered table order.
 const NAV_DUP_A = {
     id: 'nav-a', vuln_id: 'CVE-NAV-1', packages: ['pkgA@1.0.0'], variant_id: 'v1',
     status: 'affected', status_notes: 'note-a', timestamp: '2024-01-03T00:00:00Z',
@@ -1590,7 +1589,7 @@ describe('Review — deleting an assessment', () => {
 });
 
 // ===========================================================================
-// Copying assessment / group ids
+// Copying assessment ids
 // ===========================================================================
 
 describe('Review — copying assessment ids', () => {
@@ -1602,7 +1601,7 @@ describe('Review — copying assessment ids', () => {
         });
     };
 
-    test('copies the assessment id of an ungrouped row', async () => {
+    test('copies the assessment id of a single-target row', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -1611,10 +1610,10 @@ describe('Review — copying assessment ids', () => {
 
         await user.click(await screen.findByTitle('Copy assessment id'));
 
-        expect(writeText).toHaveBeenCalledWith('assessment:a1');
+        expect(writeText).toHaveBeenCalledWith('a1');
     });
 
-    test('copies the multi-target id when the row is a group', async () => {
+    test('copies the assessment id when the row is multi-target', async () => {
         mockNetwork([makeMultiTargetAssessment('g1', 'CVE-2020-1111', [
             { variantId: 'v1', pkg: 'pkgA@1.0.0' },
             { variantId: 'v2', pkg: 'pkgA@1.0.0' },
@@ -1626,7 +1625,7 @@ describe('Review — copying assessment ids', () => {
 
         await user.click(await screen.findByTitle('Copy multi-target id'));
 
-        expect(writeText).toHaveBeenCalledWith('group:g1');
+        expect(writeText).toHaveBeenCalledWith('g1');
     });
 
     test('confirms the copy on the button itself, then reverts', async () => {
@@ -1678,7 +1677,7 @@ describe('Review — copying assessment ids', () => {
         await user.click(screen.getByText('AI Assessments'));
         await user.click(await screen.findByTitle('Copy assessment id'));
 
-        expect(writeText).toHaveBeenCalledWith('assessment:ai1');
+        expect(writeText).toHaveBeenCalledWith('ai1');
     });
 });
 
@@ -1945,10 +1944,9 @@ describe('Review — import and export', () => {
 });
 
 describe('Review page AI review column', () => {
-    // A "group" is now just a single assessment with more than one target,
-    // so what used to be two same-content assessment records sharing a
-    // group_id is one assessment spanning two (variant, package) targets.
-    const groupedAssessment = makeMultiTargetAssessment('assess-1', 'CVE-2024-0001', [
+    // What used to be two same-content assessment records sharing a group_id
+    // is now one assessment spanning two (variant, package) targets.
+    const multiTargetAssessment = makeMultiTargetAssessment('assess-1', 'CVE-2024-0001', [
         { variantId: 'v1', pkg: 'pkgA@1.0.0' },
         { variantId: 'v2', pkg: 'pkgA@1.0.0' },
     ], { status: 'not_affected' });
@@ -1968,9 +1966,9 @@ describe('Review page AI review column', () => {
         is_stale: false,
     };
 
-    test('renders one row per server-side group', async () => {
+    test('renders one row per server-side assessment', async () => {
         // Arrange
-        mockNetwork([groupedAssessment]);
+        mockNetwork([multiTargetAssessment]);
 
         // Act
         render(<Review projectId="proj1" />);
