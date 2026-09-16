@@ -259,10 +259,15 @@ class ScansHandler {
         return { ok: true, result: data as ScanImportResult };
     }
 
-    static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
+    static async list(variantId?: string, projectId?: string, variantIds?: string[]): Promise<Scan[]> {
         let url: string;
         if (variantId) {
             url = import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/scans`;
+        } else if (variantIds && variantIds.length > 0) {
+            const scopedUrl = new URL(import.meta.env.VITE_API_URL + '/api/scans', window.location.href);
+            scopedUrl.searchParams.set('variant_ids', variantIds.join(','));
+            if (projectId) scopedUrl.searchParams.set('project_id', projectId);
+            url = scopedUrl.toString();
         } else if (projectId) {
             url = import.meta.env.VITE_API_URL + `/api/projects/${encodeURIComponent(projectId)}/scans`;
         } else {

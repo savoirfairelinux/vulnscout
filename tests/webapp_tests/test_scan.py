@@ -175,6 +175,58 @@ class TestListAllScans:
         assert response.status_code == 200
         assert json.loads(response.data) == []
 
+    def test_variant_subset_excludes_unselected_scan(self, app, client, ids):
+        """variant_ids restricts history to the selected subset."""
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+
+        with app.app_context():
+            selected_variant = Variant.create(
+                "SelectedVariant", uuid.UUID(ids["project_id"]))
+            excluded_variant = Variant.create(
+                "ExcludedVariant", uuid.UUID(ids["project_id"]))
+            selected_scan = Scan.create("selected scan", selected_variant.id)
+            excluded_scan = Scan.create("excluded scan", excluded_variant.id)
+            selected_variant_id = str(selected_variant.id)
+            selected_scan_id = str(selected_scan.id)
+            excluded_scan_id = str(excluded_scan.id)
+
+        response = client.get(
+            "/api/scans",
+            query_string={
+                "variant_ids": f'{ids["variant_id"]},{selected_variant_id}',
+                "project_id": ids["project_id"],
+            },
+        )
+
+        assert response.status_code == 200
+        scan_ids = {scan["id"] for scan in json.loads(response.data)}
+        assert ids["scan_a_id"] in scan_ids
+        assert selected_scan_id in scan_ids
+        assert excluded_scan_id not in scan_ids
+
+    def test_variant_subset_rejects_invalid_uuid(self, client):
+        response = client.get("/api/scans?variant_ids=not-a-uuid")
+        assert response.status_code == 400
+
+    def test_variant_subset_rejects_unknown_variant(self, client):
+        response = client.get(
+            f"/api/scans?variant_ids={uuid.uuid4()}"
+        )
+        assert response.status_code == 404
+
+    def test_variant_subset_rejects_invalid_project(self, client, ids):
+        response = client.get(
+            f'/api/scans?variant_ids={ids["variant_id"]}&project_id=invalid'
+        )
+        assert response.status_code == 400
+
+    def test_variant_subset_rejects_other_project(self, client, ids):
+        response = client.get(
+            f'/api/scans?variant_ids={ids["variant_id"]}&project_id={uuid.uuid4()}'
+        )
+        assert response.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # GET /api/projects/<project_id>/scans

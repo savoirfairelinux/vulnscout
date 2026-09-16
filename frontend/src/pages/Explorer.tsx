@@ -553,7 +553,12 @@ function Explorer() {
                     missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
                     onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
                 />}
-                {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
+                {tab === 'scans' && <ScanHistory
+                    variantId={currentVariantId}
+                    projectId={currentVariantId ? undefined : currentProjectId}
+                    variantIds={currentVariantIds}
+                    onScanComplete={handleScanComplete}
+                />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
                 {tab === 'settings' && <Settings initialTab={settingsDestination?.tab} onDataChanged={(message) => {

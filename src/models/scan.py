@@ -108,6 +108,17 @@ class Scan(Base):
         ).scalars().all())
 
     @staticmethod
+    def get_by_variant_ids(variant_ids: list[uuid.UUID]) -> list["Scan"]:
+        """Return scans belonging to any selected variant."""
+        if not variant_ids:
+            return []
+        return list(db.session.execute(
+            db.select(Scan)
+            .where(Scan.variant_id.in_(variant_ids))
+            .order_by(Scan.timestamp, Scan.id)
+        ).scalars().all())
+
+    @staticmethod
     def get_latest() -> "Scan | None":
         """Return the most recently created scan, or ``None`` if no scans exist."""
         result = db.session.execute(

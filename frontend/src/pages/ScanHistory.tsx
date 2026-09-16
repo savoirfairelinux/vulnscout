@@ -49,6 +49,7 @@ import ModalShell, { ModalActions, ModalButton } from "../components/ModalShell"
 type Props = {
     variantId?: string;
     projectId?: string;
+    variantIds?: string[];
     onScanComplete?: () => void;
 };
 
@@ -1030,7 +1031,7 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
 // Main page
 // ---------------------------------------------------------------------------
 
-function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) {
+function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#scan-history");
     const [scans, setScans] = useState<Scan[]>([]);
     const [loading, setLoading] = useState(true);
@@ -1085,12 +1086,12 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const sccRunning = sccEntries.some(e => e.status === "running" || e.status === "queued");
 
     const refreshScans = useCallback(() => {
-        ScansHandler.list(variantId, projectId)
+        ScansHandler.list(variantId, projectId, variantIds)
             .then((data) => {
                 setScans([...data].reverse());
             })
             .catch(() => {});
-    }, [variantId, projectId]);
+    }, [variantId, projectId, variantIds]);
 
     async function saveDescription(scanId: string) {
         const ok = await ScansHandler.setDescription(scanId, editingDescValue);
@@ -1213,6 +1214,8 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // Derive the effective variant IDs to scan: explicit prop or unique IDs from loaded scans
     const effectiveVariantIds: string[] = variantId
         ? [variantId]
+        : variantIds?.length
+            ? variantIds
         : [...new Set(scans.map(s => s.variant_id))];
 
     // Register the refresh callback so the global store can trigger it on completion
@@ -1247,14 +1250,19 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {
+        const selectedVariantIdSet = new Set(variantIds ?? []);
         const fetchVariants = variantId
             // Single variant selected → fetch all and filter to just that one
             ? Variants.listAll().then(vs => vs.filter(v => v.id === variantId))
             : projectId
                 // Project selected → only that project's variants
-                ? Variants.list(projectId)
+                ? Variants.list(projectId).then(vs => selectedVariantIdSet.size > 0
+                    ? vs.filter(v => selectedVariantIdSet.has(v.id))
+                    : vs)
                 // No scope → all variants
-                : Variants.listAll();
+                : Variants.listAll().then(vs => selectedVariantIdSet.size > 0
+                    ? vs.filter(v => selectedVariantIdSet.has(v.id))
+                    : vs);
 
         fetchVariants.then(vs => {
             setAllVariants(vs);
@@ -1263,7 +1271,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             setAllVariants([]);
             setSelectedVariantIds(new Set());
         });
-    }, [variantId, projectId]);
+    }, [variantId, projectId, variantIds]);
 
     // Close export menus on outside click
     useEffect(() => {
@@ -1367,18 +1375,22 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     }
 
     useEffect(() => {
+        let cancelled = false;
         setLoading(true);
         setError(null);
-        ScansHandler.list(variantId, projectId)
+        ScansHandler.list(variantId, projectId, variantIds)
             .then((data) => {
+                if (cancelled) return;
                 setScans([...data].reverse()); // most recent first
                 setLoading(false);
             })
             .catch(() => {
+                if (cancelled) return;
                 setError("Failed to load scan history.");
                 setLoading(false);
             });
-    }, [variantId, projectId, refreshScans]);
+        return () => { cancelled = true; };
+    }, [variantId, projectId, variantIds]);
 
     // Build the scan-trigger button (always visible when there are variant(s) to scan)
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
