@@ -1072,11 +1072,40 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/scans')
     def list_all_scans() -> ResponseReturnValue:
-        """List every scan currently stored in the database.
+        """List scans, optionally restricted to selected variants.
 
         OpenAPI:
+        query variant_ids string optional Comma-separated selected variant IDs.
+        query project_id uuid optional Require selected variants to belong to this project.
         response 200 JsonObject Scan collection.
         """
+        raw_variant_ids = flask_request.args.get('variant_ids', '')
+        if raw_variant_ids:
+            raw_ids = list(dict.fromkeys(
+                value.strip() for value in raw_variant_ids.split(',') if value.strip()
+            ))
+            try:
+                variant_ids = [uuid_module.UUID(value) for value in raw_ids]
+            except ValueError:
+                return jsonify({"error": "Invalid variant_ids"}), 400
+            variants = list(db.session.execute(
+                db.select(Variant).where(Variant.id.in_(variant_ids))
+            ).scalars().all())
+            if len(variants) != len(variant_ids):
+                return jsonify({"error": "Variant not found"}), 404
+            project_id = flask_request.args.get('project_id')
+            if project_id:
+                try:
+                    project_uuid = uuid_module.UUID(project_id)
+                except ValueError:
+                    return jsonify({"error": "Invalid project_id"}), 400
+                if any(variant.project_id != project_uuid for variant in variants):
+                    return jsonify({"error": "Variant does not belong to project"}), 400
+            scans = ScanController.get_by_variants(variant_ids)
+            cache_ids = ','.join(sorted(str(variant_id) for variant_id in variant_ids))
+            result = serialize_list_with_diff_cached(f"variants:{cache_ids}", scans)
+            return jsonify(result)
+
         scans = ScanController.get_all()
         result = serialize_list_with_diff_cached("all", scans)
         return jsonify(result)
