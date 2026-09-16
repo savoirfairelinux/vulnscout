@@ -1066,7 +1066,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<RefreshType>>(new Set());
     const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
     const [excludeKernel, setExcludeKernel] = useState(true);
-    const [excludeNative, setExcludeNative] = useState(false);
+    const [excludeNative, setExcludeNative] = useState(true);
 
     // Global Grype scan state — survives tab switches (per-variant)
     const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);

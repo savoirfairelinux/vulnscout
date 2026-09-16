@@ -12,7 +12,7 @@ describe("RunScansWizard", () => {
         selectedRefreshTypes: new Set(["epss"]),
         refreshMode: "complete" as const,
         excludeKernel: true,
-        excludeNative: false,
+        excludeNative: true,
         onClose: jest.fn(),
         onToggleVariant: jest.fn(),
         onToggleScanType: jest.fn(),
@@ -54,7 +54,7 @@ describe("RunScansWizard", () => {
         expect(screen.getByRole("heading", { name: "Review and launch" })).toBeInTheDocument();
         expect(screen.getByText("Grype")).toBeInTheDocument();
         expect(screen.getByText("Production")).toBeInTheDocument();
-        expect(screen.getByText(/-native packages: Included/)).toBeInTheDocument();
+        expect(screen.getByText(/-native packages: Excluded/)).toBeInTheDocument();
         expect(screen.getByText("FKIE, EPSS, ENISA EUVD")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Edit vulnerability data refresh" }));
         expect(screen.getByRole("heading", { name: "Refresh data" })).toBeInTheDocument();
@@ -129,7 +129,7 @@ describe("RunScansWizard", () => {
         fireEvent.click(screen.getByRole("button", { name: /why exclude kernel packages/i }));
         fireEvent.click(screen.getByRole("checkbox", { name: /ignore -native packages/i }));
         expect(onExcludeKernelChange).toHaveBeenCalledWith(false);
-        expect(onExcludeNativeChange).toHaveBeenCalledWith(true);
+        expect(onExcludeNativeChange).toHaveBeenCalledWith(false);
 
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
         fireEvent.click(screen.getByRole("radio", { name: /custom refresh/i }));
