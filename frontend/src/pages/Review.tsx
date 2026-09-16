@@ -2,8 +2,8 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
-import type { AssessmentGroup, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
-import { asAssessment, isMultiTargetGroup, reconcileTargetPairs } from "../handlers/assessments";
+import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
+import { asAssessment, isMultiTarget, reconcileTargetPairs } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
@@ -49,12 +49,11 @@ type Props = {
 
 export type { AssessmentMutation };
 
-/** Table-friendly view of a server-built AssessmentGroup: same content fields,
+/** Table-friendly view of a server-returned Assessment: same content fields,
  *  plus packages/variant_ids flattened out of `targets` for column rendering
  *  and search, and a hover-tooltip `texts` field. */
 type ReviewRow = {
     id: string;
-    group_id: string | null;
     vuln_id: string;
     status: string;
     simplified_status: string;
@@ -65,9 +64,7 @@ type ReviewRow = {
     responses: string[];
     origin: string;
     timestamp: string;
-    targets: AssessmentGroup["targets"];
-    /** Every assessment id in this group (for bulk delete / legacy fallbacks). */
-    assessment_ids: string[];
+    targets: NonNullable<Assessment["targets"]>;
     /** Unique packages across every target (for columns and search). */
     packages: string[];
     /** Unique variant ids across every target. */
@@ -77,31 +74,30 @@ type ReviewRow = {
     extractedSuppliers: string[];
 };
 
-/** Adapt a server-built AssessmentGroup into the flattened shape the table
+/** Adapt a server-returned Assessment into the flattened shape the table
  *  columns and edit/delete/approve flows consume. */
 function toReviewRow(
-    group: AssessmentGroup,
+    group: Assessment,
     vulnDescriptions: Record<string, { title: string; content: string }[]>,
 ): ReviewRow {
-    const packages = [...new Set(group.targets.map(t => t.package))];
+    const targets = group.targets ?? [];
+    const packages = [...new Set(targets.map(t => t.package))];
     const variant_ids = [...new Set(
-        group.targets.map(t => t.variant_id).filter((v): v is string => v !== null)
+        targets.map(t => t.variant_id).filter((v): v is string => v !== null)
     )];
     return {
-        id: group.group_id ?? group.assessment_ids[0],
-        group_id: group.group_id,
+        id: group.id,
         vuln_id: group.vuln_id,
         status: group.status,
         simplified_status: group.simplified_status,
-        justification: group.justification,
-        impact_statement: group.impact_statement,
-        status_notes: group.status_notes,
-        workaround: group.workaround,
+        justification: group.justification ?? '',
+        impact_statement: group.impact_statement ?? '',
+        status_notes: group.status_notes ?? '',
+        workaround: group.workaround ?? '',
         responses: group.responses,
         origin: group.origin,
         timestamp: group.timestamp,
-        targets: group.targets,
-        assessment_ids: group.assessment_ids,
+        targets,
         packages,
         variant_ids,
         texts: vulnDescriptions[group.vuln_id] ?? [],
@@ -119,7 +115,7 @@ const COPIED_FEEDBACK_MS = 2000;
  *  distinction between "a group" and "a single assessment". Mirrors
  *  VulnModal's copy buttons. */
 const rowCopyKey = (row: ReviewRow) =>
-    `${isMultiTargetGroup(row.targets) ? 'group' : 'assessment'}:${row.group_id ?? row.assessment_ids[0]}`;
+    `${isMultiTarget(row.targets) ? 'group' : 'assessment'}:${row.id}`;
 
 /** Copies a row's group/assessment id, confirming inline like VulnModal does.
  *  Same styles and confirmation as the copy button in the assessment history,
@@ -130,7 +126,7 @@ function CopyIdButton({ row, copiedKey, onCopy }: {
     onCopy: (row: ReviewRow) => void;
 }) {
     const copied = copiedKey === rowCopyKey(row);
-    const label = isMultiTargetGroup(row.targets) ? 'Copy group id' : 'Copy assessment id';
+    const label = isMultiTarget(row.targets) ? 'Copy group id' : 'Copy assessment id';
     return (
         <>
             <button
@@ -351,8 +347,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setLoading(true);
         setError(null);
         Promise.all([
-            Assessments.listReviewGroups(variantId, projectId, 'custom'),
-            Assessments.listReviewGroups(variantId, projectId, 'ai'),
+            Assessments.listForReview(variantId, projectId, 'custom'),
+            Assessments.listForReview(variantId, projectId, 'ai'),
             Assessments.listReviewTimeEstimates(variantId, projectId),
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
@@ -643,7 +639,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 .then(response => response.json() as Promise<ImportResult>)
                 .then(result => {
                     if (result.status === 'success') {
-                        Assessments.listReviewGroups(variantId, projectId, 'custom')
+                        Assessments.listForReview(variantId, projectId, 'custom')
                             .then(groups => setAssessments(groups.map(g => toReviewRow(g, vulnDescriptions))));
                         showMessage('Assessments imported successfully!', 'success');
                     } else {
@@ -690,7 +686,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 const data = await result.json() as ImportResult;
 
                 if (data.status === 'success') {
-                    Assessments.listReviewGroups(variantId, projectId, 'custom')
+                    Assessments.listForReview(variantId, projectId, 'custom')
                         .then(groups => setAssessments(groups.map(g => toReviewRow(g, vulnDescriptions))));
                     const assessmentsImported = data.assessments_imported ?? 0;
                     const assessmentsSkipped = data.assessments_skipped ?? 0;
@@ -724,7 +720,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     /** Refetch just the handmade-assessments list (used after edits/deletes
      * that don't touch the AI-pending list). */
     const refreshAssessments = useCallback(async () => {
-        const groups = await Assessments.listReviewGroups(variantId, projectId, 'custom');
+        const groups = await Assessments.listForReview(variantId, projectId, 'custom');
         setAssessments(groups.map(g => toReviewRow(g, vulnDescriptions)));
     }, [variantId, projectId, vulnDescriptions]);
 
@@ -733,8 +729,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
      * table, since approving moves a row from one list to the other). */
     const refreshAssessmentLists = useCallback(async () => {
         const [reviewGroups, aiGroups] = await Promise.all([
-            Assessments.listReviewGroups(variantId, projectId, 'custom'),
-            Assessments.listReviewGroups(variantId, projectId, 'ai'),
+            Assessments.listForReview(variantId, projectId, 'custom'),
+            Assessments.listForReview(variantId, projectId, 'ai'),
         ]);
         setAssessments(reviewGroups.map(g => toReviewRow(g, vulnDescriptions)));
         setAiAssessments(aiGroups.map(g => toReviewRow(g, vulnDescriptions)));
@@ -744,23 +740,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (!rowToDelete) return;
         let anyError = false;
         try {
-            if (rowToDelete.group_id) {
-                await Assessments.deleteGroup(rowToDelete.group_id);
-            } else {
-                for (const id of rowToDelete.assessment_ids) {
-                    const res = await fetch(
-                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
-                        { method: 'DELETE', mode: 'cors' }
-                    );
-                    if (!res.ok) anyError = true;
-                }
-            }
+            await Assessments.remove(rowToDelete.id);
         } catch {
             anyError = true;
         }
         if (!anyError) {
             await refreshAssessments();
-            onAssessmentChanged?.({ type: 'delete', vulnId: rowToDelete.vuln_id, ids: rowToDelete.assessment_ids });
+            onAssessmentChanged?.({ type: 'delete', vulnId: rowToDelete.vuln_id, ids: [rowToDelete.id] });
             showMessage('Assessment deleted successfully!', 'success');
         } else {
             showMessage('Failed to delete assessment.', 'error');
@@ -790,8 +776,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            const groupId = row.group_id ?? await Assessments.promoteToGroup(row.assessment_ids[0]);
-            await Assessments.approveAiGroup(groupId);
+            await Assessments.approveAi(row.id);
             await refreshAssessmentLists();
             showMessage('AI assessment approved!', 'success');
         } catch (e) {
@@ -801,8 +786,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            const groupId = row.group_id ?? await Assessments.promoteToGroup(row.assessment_ids[0]);
-            await Assessments.rejectAiGroup(groupId);
+            await Assessments.rejectAi(row.id);
             await refreshAssessmentLists();
             showMessage('AI assessment rejected.', 'success');
         } catch (e) {
@@ -832,31 +816,18 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         try {
             if (bulkDeleteTab === 'assessments') {
                 const rows = assessments.filter(row => selectedAssessments[row.id]);
-                await Promise.all(rows.map(async row => {
-                    if (row.group_id) {
-                        await Assessments.deleteGroup(row.group_id);
-                        return;
-                    }
-                    const responses = await Promise.all(row.assessment_ids.map(id => fetch(
-                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
-                        { method: 'DELETE', mode: 'cors' }
-                    )));
-                    if (responses.some(response => !response.ok)) throw new Error('Assessment deletion failed');
-                }));
+                await Promise.all(rows.map(row => Assessments.remove(row.id)));
                 await refreshAssessments();
                 for (const row of rows) {
                     onAssessmentChanged?.({
                         type: 'delete',
                         vulnId: row.vuln_id,
-                        ids: row.assessment_ids,
+                        ids: [row.id],
                     });
                 }
             } else if (bulkDeleteTab === 'ai-assessments') {
                 const rows = aiAssessments.filter(row => selectedAiAssessments[row.id]);
-                await Promise.all(rows.map(async row => {
-                    const groupId = row.group_id ?? await Assessments.promoteToGroup(row.assessment_ids[0]);
-                    await Assessments.rejectAiGroup(groupId);
-                }));
+                await Promise.all(rows.map(row => Assessments.rejectAi(row.id)));
                 await refreshAssessmentLists();
             } else if (bulkDeleteTab === 'time-estimates') {
                 const ids = Object.keys(selectedTimeEstimates);
@@ -916,18 +887,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             data.packages ?? editingRow.packages;
 
         try {
-            const groupId = editingRow.group_id
-                ?? await Assessments.promoteToGroup(editingRow.assessment_ids[0]);
             const editSharedTimestamp = data.update_timestamp === false
                 ? editingRow.timestamp
                 : new Date().toISOString();
-            await Assessments.reconcileGroup(groupId, {
+            await Assessments.reconcile(editingRow.id, {
                 vuln_id: editingRow.vuln_id,
                 packages: targetPackages,
                 variant_ids: targetVariantIds,
                 targets: reconcileTargetPairs(
                     editingRow.targets, targetPackages, targetVariantIds),
-                existing_ids: editingRow.assessment_ids,
                 status: data.status,
                 justification: data.justification,
                 impact_statement: data.impact_statement,
@@ -938,7 +906,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             });
             await refreshAssessments();
             setEditingRow(null);
-            onAssessmentChanged?.({ type: 'update', vulnId: editingRow.vuln_id, ids: editingRow.assessment_ids, data });
+            onAssessmentChanged?.({ type: 'update', vulnId: editingRow.vuln_id, ids: [editingRow.id], data });
             showMessage('Assessment updated successfully!', 'success');
         } catch {
             showMessage('Failed to update assessment.', 'error');

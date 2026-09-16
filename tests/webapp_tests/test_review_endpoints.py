@@ -2480,30 +2480,22 @@ class TestFetchVulnerabilitiesTexts:
         assert shared[0].packages == ["cairo"]
 
 
-# ── POST /api/assessment-groups/<group_id>/reconcile ────────────────────────
+# ── POST /api/assessments/<assessment_id>/reconcile ─────────────────────────
 #
-# Ported from Feature#23169-dedup-assessment-table-entries's
-# tests/webapp_tests/test_assessment_group_reconcile.py, rekeyed to address
-# groups by ``group_id`` instead of an explicit ``existing_ids`` list, and
-# using the ``demo_ids`` fixture instead of that branch's bespoke fixtures.
-# Tests that only existed to exercise ``load_group_rows``'s id-list
-# validation (rejecting an id from another vulnerability/project, or a row
-# with no variant) are not ported: that function was intentionally not
-# carried over, since a group is identified by the URL's ``group_id`` and
-# loaded directly, rather than by trusting a client-supplied id list.
+# An assessment is addressed by the URL's ``assessment_id`` and loaded
+# directly, rather than by trusting a client-supplied id list.
 
-def _create_group(client, demo_ids, packages=None, variant_id=None, status="affected", **extra):
-    """Create one multi-target assessment and return (group_id, [group_id]).
+def _create_assessment(client, demo_ids, packages=None, variant_id=None, status="affected", **extra):
+    """Create one multi-target assessment and return (assessment_id, [assessment_id]).
 
-    A group is now exactly one assessment row; its "members" are targets on
-    that row, not sibling rows. The multi-package HTTP endpoint still creates
-    one independent row per package (migrating it to multi-target creation is
-    out of scope for this read-path task), so these reconcile tests build the
-    genuine multi-target assessment a migrated write path would produce,
-    directly at the model layer — the same pattern already used by
-    ``test_assessment_groups_controller.py``. The returned id list always has
-    exactly one entry; it stays a list because most call sites only ever loop
-    over it.
+    Its targets live on that one row, not on sibling rows. The multi-package
+    HTTP endpoint still creates one independent row per package (migrating it
+    to multi-target creation is out of scope for this read-path task), so
+    these reconcile tests build the genuine multi-target assessment a
+    migrated write path would produce, directly at the model layer — the same
+    pattern already used by ``test_assessment_targets_controller.py``. The
+    returned id list always has exactly one entry; it stays a list because
+    most call sites only ever loop over it.
     """
     from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
     from src.models.finding import Finding
@@ -2528,11 +2520,11 @@ def _create_group(client, demo_ids, packages=None, variant_id=None, status="affe
             responses=extra.get("responses"),
             commit=True,
         )
-        group_id = str(assessment.id)
-    return group_id, [group_id]
+        assessment_id = str(assessment.id)
+    return assessment_id, [assessment_id]
 
 
-def _reconcile(client, group_id, demo_ids, packages=None, variant_ids=None, status="fixed", **extra):
+def _reconcile(client, assessment_id, demo_ids, packages=None, variant_ids=None, status="fixed", **extra):
     payload = {
         "vuln_id": demo_ids["vuln_id"],
         "packages": packages if packages is not None else demo_ids["two_packages"],
@@ -2540,7 +2532,7 @@ def _reconcile(client, group_id, demo_ids, packages=None, variant_ids=None, stat
         "status": status,
     }
     payload.update(extra)
-    return client.post(f"/api/assessment-groups/{group_id}/reconcile", json=payload)
+    return client.post(f"/api/assessments/{assessment_id}/reconcile", json=payload)
 
 
 def _mutate_row(application, assessment_id, **fields):
@@ -2564,27 +2556,26 @@ def _read_row(application, assessment_id, field):
         return getattr(row, field)
 
 
-def test_reconcile_updates_every_member_and_keeps_the_group_id(client, demo_ids):
-    group_id, _ = _create_group(client, demo_ids, status="not_affected",
+def test_reconcile_updates_every_target(client, demo_ids):
+    group_id, _ = _create_assessment(client, demo_ids, status="not_affected",
                                  justification="component_not_present")
 
     resp = _reconcile(client, group_id, demo_ids, status="not_affected",
                        justification="vulnerable_code_not_present")
     assert resp.status_code == 200, resp.get_json()
     body = resp.get_json()
-    assert body["group_id"] == group_id
     assert len(body["updated"]) == 1
     assert body["created"] == []
     assert body["deleted"] == []
 
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    group = client.get(f"/api/assessments/{group_id}").get_json()
     assert group["status"] == "not_affected"
     assert group["justification"] == "vulnerable_code_not_present"
     assert len(group["targets"]) == 2
 
 
-def test_reconcile_removing_a_target_keeps_the_group_alive(client, demo_ids):
-    group_id, ids = _create_group(client, demo_ids, status="not_affected",
+def test_reconcile_removing_a_target_keeps_the_assessment_alive(client, demo_ids):
+    group_id, ids = _create_assessment(client, demo_ids, status="not_affected",
                                    justification="component_not_present")
 
     resp = _reconcile(client, group_id, demo_ids,
@@ -2592,16 +2583,16 @@ def test_reconcile_removing_a_target_keeps_the_group_alive(client, demo_ids):
                        justification="component_not_present")
     assert resp.status_code == 200, resp.get_json()
     body = resp.get_json()
-    assert body["deleted"] == [], "dropping one of two targets must not delete the group"
+    assert body["deleted"] == [], "dropping one of two targets must not delete the assessment"
     assert len(body["updated"]) == 1
 
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
-    assert group["group_id"] == group_id, "a group shrunk to one target survives"
+    group = client.get(f"/api/assessments/{group_id}").get_json()
+    assert group["id"] == group_id, "an assessment shrunk to one target survives"
     assert len(group["targets"]) == 1
 
 
-def test_reconcile_explicit_empty_targets_deletes_the_group(client, demo_ids):
-    group_id, _ = _create_group(client, demo_ids)
+def test_reconcile_explicit_empty_targets_deletes_the_assessment(client, demo_ids):
+    group_id, _ = _create_assessment(client, demo_ids)
 
     response = _reconcile(
         client, group_id, demo_ids,
@@ -2610,12 +2601,12 @@ def test_reconcile_explicit_empty_targets_deletes_the_group(client, demo_ids):
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json()["deleted"] == [group_id]
-    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 404
+    assert client.get(f"/api/assessments/{group_id}").status_code == 404
 
 
-def test_reconcile_on_unknown_group_is_404(client):
+def test_reconcile_on_unknown_assessment_is_404(client):
     resp = client.post(
-        f"/api/assessment-groups/{uuid.uuid4()}/reconcile",
+        f"/api/assessments/{uuid.uuid4()}/reconcile",
         json={"vuln_id": "CVE-1999-12345", "packages": ["cairo@1.16.0"],
               "variant_ids": ["22222222-2222-2222-2222-222222222222"], "status": "fixed"},
     )
@@ -2623,8 +2614,8 @@ def test_reconcile_on_unknown_group_is_404(client):
 
 
 def test_reconcile_adds_targets_for_a_newly_selected_variant(client, demo_ids):
-    """A newly selected variant grows the group's targets, not its rows."""
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    """A newly selected variant grows the assessment's targets, not its rows."""
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
 
     resp = _reconcile(
         client, group_id, demo_ids,
@@ -2634,12 +2625,12 @@ def test_reconcile_adds_targets_for_a_newly_selected_variant(client, demo_ids):
     assert resp.status_code == 200, resp.get_json()
     body = resp.get_json()
     assert len(body["updated"]) == 1
-    assert body["created"] == [], "a group is one assessment; new combos become targets, not rows"
+    assert body["created"] == [], "reconcile edits one assessment; new combos become targets, not rows"
     assert body["deleted"] == []
 
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    group = client.get(f"/api/assessments/{group_id}").get_json()
     assert len(group["targets"]) == 4
-    assert group["assessment_ids"] == [group_id]
+    assert group["id"] == group_id
 
 
 def test_reconcile_explicit_targets_preserve_sparse_pairs(client, demo_ids):
@@ -2676,7 +2667,7 @@ def test_reconcile_explicit_targets_preserve_sparse_pairs(client, demo_ids):
     )
 
     assert response.status_code == 200, response.get_json()
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    group = client.get(f"/api/assessments/{group_id}").get_json()
     assert {(target["package"], target["variant_id"]) for target in group["targets"]} == {
         (package_a, str(variant_a)),
         (package_b, str(variant_b)),
@@ -2684,7 +2675,7 @@ def test_reconcile_explicit_targets_preserve_sparse_pairs(client, demo_ids):
 
 
 def test_reconcile_explicit_targets_reject_unknown_variant(client, demo_ids):
-    group_id, _ = _create_group(client, demo_ids)
+    group_id, _ = _create_assessment(client, demo_ids)
     missing_variant = str(uuid.uuid4())
 
     response = _reconcile(
@@ -2702,7 +2693,7 @@ def test_reconcile_explicit_targets_reject_unknown_variant(client, demo_ids):
 def test_reconcile_explicit_targets_reject_unobserved_pair(client, demo_ids):
     from src.models.package import Package
 
-    group_id, _ = _create_group(client, demo_ids)
+    group_id, _ = _create_assessment(client, demo_ids)
     with client.application.app_context():
         unobserved = Package.find_or_create("explicit-unobserved", "1.0")
         unobserved_id = unobserved.string_id
@@ -2738,7 +2729,7 @@ def test_reconcile_cross_project_variant_is_400_not_500(client, demo_ids):
     from src.models.package import Package
 
     pkg_string_id = demo_ids["two_packages"][0]
-    group_id, _ = _create_group(
+    group_id, _ = _create_assessment(
         client, demo_ids, packages=[pkg_string_id],
         variant_id=demo_ids["variant_id"], status="affected",
     )
@@ -2769,7 +2760,7 @@ def test_reconcile_cross_project_variant_is_400_not_500(client, demo_ids):
 
 
 def test_reconcile_rejects_unknown_requested_variant(client, demo_ids):
-    group_id, _ = _create_group(client, demo_ids)
+    group_id, _ = _create_assessment(client, demo_ids)
     missing_variant = str(uuid.uuid4())
 
     response = _reconcile(
@@ -2782,7 +2773,7 @@ def test_reconcile_rejects_unknown_requested_variant(client, demo_ids):
 
 
 def test_reconcile_rejects_unknown_package(client, demo_ids):
-    group_id, _ = _create_group(client, demo_ids)
+    group_id, _ = _create_assessment(client, demo_ids)
 
     resp = _reconcile(client, group_id, demo_ids, packages=["ghost@9.9.9"])
     assert resp.status_code == 400
@@ -2790,7 +2781,7 @@ def test_reconcile_rejects_unknown_package(client, demo_ids):
 
 
 def test_reconcile_rejects_empty_variant_ids(client, demo_ids):
-    group_id, _ = _create_group(client, demo_ids)
+    group_id, _ = _create_assessment(client, demo_ids)
 
     resp = _reconcile(client, group_id, demo_ids, variant_ids=[])
     assert resp.status_code == 400
@@ -2798,7 +2789,7 @@ def test_reconcile_rejects_empty_variant_ids(client, demo_ids):
 
 
 def test_reconcile_editing_pending_ai_row_keeps_it_pending(client, demo_ids):
-    group_id, ids = _create_group(client, demo_ids, status="affected", ai_generated=True)
+    group_id, ids = _create_assessment(client, demo_ids, status="affected", ai_generated=True)
 
     resp = _reconcile(client, group_id, demo_ids, status="fixed")
     assert resp.status_code == 200, resp.get_json()
@@ -2810,7 +2801,7 @@ def test_reconcile_editing_pending_ai_row_keeps_it_pending(client, demo_ids):
 
 
 def test_reconcile_refuses_to_delete_pending_ai_row(client, demo_ids):
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
     _mutate_row(client.application, group_id, origin="ai")
 
     resp = _reconcile(client, group_id, demo_ids,
@@ -2824,7 +2815,7 @@ def test_reconcile_refuses_to_delete_pending_ai_row(client, demo_ids):
 
 
 def test_reconcile_invalid_combo_writes_nothing(client, demo_ids):
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
 
     resp = _reconcile(client, group_id, demo_ids,
                        packages=[demo_ids["two_packages"][0], "ghost@9.9.9"])
@@ -2835,7 +2826,7 @@ def test_reconcile_invalid_combo_writes_nothing(client, demo_ids):
 
 
 def test_reconcile_edit_without_responses_keeps_stored_responses(client, demo_ids):
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
     _mutate_row(client.application, ids[0], responses=["will_not_fix", "workaround_available"])
 
     resp = _reconcile(client, group_id, demo_ids, status="fixed")
@@ -2846,7 +2837,7 @@ def test_reconcile_edit_without_responses_keeps_stored_responses(client, demo_id
 
 
 def test_reconcile_explicit_responses_replace_stored_responses(client, demo_ids):
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
     _mutate_row(client.application, ids[0], responses=["will_not_fix"])
 
     resp = _reconcile(client, group_id, demo_ids, status="fixed", responses=["rollback"])
@@ -2857,7 +2848,7 @@ def test_reconcile_explicit_responses_replace_stored_responses(client, demo_ids)
 
 
 def test_reconcile_update_timestamp_false_preserves_timestamps(client, demo_ids):
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
     before = client.get(f"/api/assessments/{ids[0]}").get_json()["timestamp"]
 
     resp = _reconcile(client, group_id, demo_ids, status="fixed", update_timestamp=False)
@@ -2871,7 +2862,7 @@ def test_reconcile_update_timestamp_false_preserves_timestamps(client, demo_ids)
 
 def test_reconcile_failure_during_write_rolls_everything_back(client, demo_ids, monkeypatch):
     """A crash part-way through the writes must leave the group untouched."""
-    group_id, ids = _create_group(client, demo_ids, status="affected",
+    group_id, ids = _create_assessment(client, demo_ids, status="affected",
                                    variant_id=demo_ids["variant_id"])
 
     def boom(*args, **kwargs):
@@ -2892,7 +2883,7 @@ def test_reconcile_failure_during_write_rolls_everything_back(client, demo_ids, 
 
     # The target removal that ran before the failing content update must not
     # have been committed either — the group keeps both original targets.
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    group = client.get(f"/api/assessments/{group_id}").get_json()
     assert len(group["targets"]) == 2
     assert _read_row(client.application, group_id, "status") == "affected"
 
@@ -2931,7 +2922,7 @@ def test_reconcile_preserves_the_timestamp_when_adding_a_target(client, demo_ids
     timestamp, which is now trivially true — a group is one row, so there is
     nothing left to cross-check a timestamp against.)
     """
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
     before = client.get(f"/api/assessments/{ids[0]}").get_json()["timestamp"]
 
     resp = _reconcile(
@@ -2945,7 +2936,7 @@ def test_reconcile_preserves_the_timestamp_when_adding_a_target(client, demo_ids
     assert len(body["updated"]) == 1
     assert body["updated"][0]["timestamp"] == before
 
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
+    group = client.get(f"/api/assessments/{group_id}").get_json()
     assert len(group["targets"]) == 4
     assert group["timestamp"] == before
 
@@ -2957,7 +2948,7 @@ def test_reconcile_variant_without_the_package_does_not_cancel_the_edit(client, 
     endpoint replaced never did.
     """
     empty_variant = _add_variant_without_finding(client.application)
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
 
     resp = _reconcile(
         client, group_id, demo_ids,
@@ -2976,7 +2967,7 @@ def test_reconcile_variant_without_the_package_does_not_cancel_the_edit(client, 
 def test_reconcile_package_observed_in_no_selected_variant_is_refused(client, demo_ids):
     """A selection that resolves to nothing anywhere is still a bad request."""
     empty_variant = _add_variant_without_finding(client.application)
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
 
     resp = _reconcile(client, group_id, demo_ids, variant_ids=[empty_variant], status="fixed")
     assert resp.status_code == 400
@@ -2986,7 +2977,7 @@ def test_reconcile_package_observed_in_no_selected_variant_is_refused(client, de
 
 
 def test_reconcile_deleting_non_custom_row_invalidates_scan_cache(client, demo_ids, monkeypatch):
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
     _mutate_row(client.application, group_id, origin="sbom")
 
     calls = []
@@ -3002,7 +2993,7 @@ def test_reconcile_deleting_non_custom_row_invalidates_scan_cache(client, demo_i
 
 
 def test_reconcile_deleting_custom_row_does_not_invalidate_scan_cache(client, demo_ids, monkeypatch):
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
 
     calls = []
     monkeypatch.setattr(
@@ -3016,25 +3007,25 @@ def test_reconcile_deleting_custom_row_does_not_invalidate_scan_cache(client, de
 
 
 def test_reconcile_rejects_mismatched_vuln_id(client, demo_ids):
-    """The payload's vuln_id must match the group's real vulnerability (G1)."""
-    group_id, ids = _create_group(client, demo_ids, status="affected")
+    """The payload's vuln_id must match the assessment's real vulnerability."""
+    group_id, ids = _create_assessment(client, demo_ids, status="affected")
 
     resp = _reconcile(client, group_id, demo_ids, vuln_id=demo_ids["other_vuln_id"])
     assert resp.status_code == 400
     assert "vuln_id" in resp.get_json()["error"]
 
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
-    assert group["group_id"] == group_id
+    group = client.get(f"/api/assessments/{group_id}").get_json()
+    assert group["id"] == group_id
     assert len(group["targets"]) == 2
     for assessment_id in ids:
         assert _read_row(client.application, assessment_id, "status") == "affected"
 
 
-# ── DELETE /api/assessment-groups/<group_id> and lazy promotion ────────────
+# ── DELETE /api/assessments/<assessment_id> and lazy promotion ──────────────
 
 
-def test_delete_group_removes_only_the_addressed_row(client, demo_ids):
-    """Two independent single-package writes stay two independent groups;
+def test_delete_removes_only_the_addressed_row(client, demo_ids):
+    """Two independent single-package writes stay two independent rows;
     deleting one must not touch the other."""
     pkg_a, pkg_b = demo_ids["two_packages"]
     row_a = client.post(
@@ -3055,19 +3046,18 @@ def test_delete_group_removes_only_the_addressed_row(client, demo_ids):
             "variant_id": demo_ids["variant_id"],
         },
     ).get_json()["assessment"]
-    assert row_a["group_id"] != row_b["group_id"], "each write is its own group"
-    group_id = row_a["group_id"]
+    assert row_a["id"] != row_b["id"], "each write is its own row"
+    group_id = row_a["id"]
 
-    response = client.delete(f"/api/assessment-groups/{group_id}")
+    response = client.delete(f"/api/assessments/{group_id}")
 
     assert response.status_code == 200
-    assert response.get_json()["deleted_ids"] == [group_id]
-    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 404
-    # The sibling package's independent group is untouched.
-    assert client.get(f"/api/assessment-groups/{row_b['group_id']}").status_code == 200
+    assert client.get(f"/api/assessments/{group_id}").status_code == 404
+    # The sibling package's independent row is untouched.
+    assert client.get(f"/api/assessments/{row_b['id']}").status_code == 200
 
 
-def test_deleting_one_assessment_does_not_touch_the_sibling_packages_group(client, demo_ids):
+def test_deleting_one_assessment_does_not_touch_the_sibling_packages_assessment(client, demo_ids):
     pkg_a, pkg_b = demo_ids["two_packages"]
     row_a = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
@@ -3090,180 +3080,47 @@ def test_deleting_one_assessment_does_not_touch_the_sibling_packages_group(clien
 
     client.delete(f"/api/assessments/{row_a['id']}")
 
-    assert client.get(f"/api/assessment-groups/{row_a['group_id']}").status_code == 404
-    sibling_group = client.get(f"/api/assessment-groups/{row_b['group_id']}").get_json()
-    assert sibling_group["assessment_ids"] == [row_b["id"]]
+    assert client.get(f"/api/assessments/{row_a['id']}").status_code == 404
+    sibling = client.get(f"/api/assessments/{row_b['id']}").get_json()
+    assert sibling["id"] == row_b["id"]
 
 
-def test_promote_returns_the_assessments_own_group_id(client, demo_ids):
-    """Every assessment is already its own group; promoting is a no-op read."""
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "affected",
-            "packages": [demo_ids["two_packages"][0]],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    assessment_id = created["assessments"][0]["id"]
-    assert created["assessments"][0]["group_id"] == assessment_id
-
-    response = client.post(f"/api/assessments/{assessment_id}/group")
-
-    assert response.status_code == 200
-    group_id = response.get_json()["group_id"]
-    group = client.get(f"/api/assessment-groups/{group_id}").get_json()
-    assert group["assessment_ids"] == [assessment_id]
+def test_write_endpoints_treat_a_malformed_assessment_id_as_not_found(client):
+    assert client.post("/api/assessments/not-a-uuid/approve").status_code == 404
+    assert client.post("/api/assessments/not-a-uuid/reject").status_code == 404
+    assert client.delete("/api/assessments/not-a-uuid").status_code == 404
 
 
-def test_promoting_an_already_grouped_assessment_returns_its_group(client, demo_ids):
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "not_affected",
-            "justification": "component_not_present",
-            "packages": demo_ids["two_packages"],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    existing_group = created["assessments"][0]["group_id"]
-
-    response = client.post(
-        f"/api/assessments/{created['assessments'][0]['id']}/group")
-
-    assert response.status_code == 200
-    assert response.get_json()["group_id"] == existing_group
-
-
-def test_add_assessment_with_group_id_validates_but_does_not_join(client, demo_ids):
-    """A create request naming an existing ``group_id`` is still validated
-    against it (must exist, must match the vulnerability) but always lands
-    as its own independent row: write-time group-joining is out of scope for
-    this phase (a group only grows through reconcile), matching
-    ``test_group_id_payload_no_longer_merges_writes_across_variants`` in
-    test_ai_assessments.py.
-    """
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "affected",
-            "packages": [demo_ids["two_packages"][0]],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    group_id = created["assessments"][0]["group_id"]
-
-    response = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "affected",
-            "packages": [demo_ids["two_packages"][1]],
-            "variant_id": demo_ids["other_variant_id"],
-            "group_id": group_id,
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.get_json()
-    new_group_id = body["assessments"][0]["group_id"]
-    assert new_group_id != group_id, "lands as its own independent row, not merged in"
-
-
-def test_add_assessment_with_unknown_group_id_is_rejected(client, demo_ids):
-    response = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "affected",
-            "packages": [demo_ids["two_packages"][0]],
-            "variant_id": demo_ids["variant_id"],
-            "group_id": str(uuid.uuid4()),
-        },
-    )
-    assert response.status_code == 404
-
-
-def test_add_assessment_with_group_id_rejects_mismatched_vuln_id(client, demo_ids):
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "affected",
-            "packages": [demo_ids["two_packages"][0]],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    group_id = created["assessments"][0]["group_id"]
-
-    response = client.post(
-        f"/api/vulnerabilities/{demo_ids['other_vuln_id']}/assessments",
-        json={
-            "status": "affected",
-            "packages": [demo_ids["two_packages"][1]],
-            "variant_id": demo_ids["other_variant_id"],
-            "group_id": group_id,
-        },
-    )
-    assert response.status_code == 400
-    assert "vuln_id" in response.get_json()["error"]
-
-
-def test_group_endpoints_reject_a_malformed_group_id(client):
-    assert client.post("/api/assessment-groups/not-a-uuid/approve").status_code == 400
-    assert client.post("/api/assessment-groups/not-a-uuid/reject").status_code == 400
-    assert client.delete("/api/assessment-groups/not-a-uuid").status_code == 400
-
-
-def test_promote_rejects_a_malformed_assessment_id(client):
-    response = client.post("/api/assessments/not-a-uuid/group")
-
-    assert response.status_code == 400
-
-
-def test_delete_unknown_group_returns_404(client):
-    response = client.delete(f"/api/assessment-groups/{uuid.uuid4()}")
+def test_delete_unknown_assessment_returns_404(client):
+    response = client.delete(f"/api/assessments/{uuid.uuid4()}")
 
     assert response.status_code == 404
 
 
-def test_promote_unknown_assessment_returns_404(client):
-    response = client.post(f"/api/assessments/{uuid.uuid4()}/group")
-
-    assert response.status_code == 404
-
-
-def test_delete_group_of_pending_ai_assessments_is_rejected(client, app, demo_ids):
-    group_id, assessment_ids = _create_group(client, demo_ids)
+def test_delete_of_pending_ai_assessment_is_rejected(client, app, demo_ids):
+    group_id, assessment_ids = _create_assessment(client, demo_ids)
     for assessment_id in assessment_ids:
         _mutate_row(app, assessment_id, origin="ai")
 
-    response = client.delete(f"/api/assessment-groups/{group_id}")
+    response = client.delete(f"/api/assessments/{group_id}")
 
     assert response.status_code == 400
-    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 200
+    assert client.get(f"/api/assessments/{group_id}").status_code == 200
 
 
-def test_delete_group_of_non_custom_assessments_succeeds(client, app, demo_ids):
-    group_id, assessment_ids = _create_group(client, demo_ids)
+def test_delete_of_non_custom_assessment_succeeds(client, app, demo_ids):
+    group_id, assessment_ids = _create_assessment(client, demo_ids)
     for assessment_id in assessment_ids:
         _mutate_row(app, assessment_id, origin="sbom")
 
-    response = client.delete(f"/api/assessment-groups/{group_id}")
+    response = client.delete(f"/api/assessments/{group_id}")
 
     assert response.status_code == 200
-    assert sorted(response.get_json()["deleted_ids"]) == sorted(assessment_ids)
-    assert client.get(f"/api/assessment-groups/{group_id}").status_code == 404
-
-
-def test_reconcile_rejects_existing_ids_that_is_not_a_list(client, demo_ids):
-    group_id, _ = _create_group(client, demo_ids)
-
-    response = _reconcile(client, group_id, demo_ids, existing_ids="nope")
-
-    assert response.status_code == 400
-    assert "existing_ids" in response.get_json()["error"]
+    assert client.get(f"/api/assessments/{group_id}").status_code == 404
 
 
 def test_reconcile_converts_non_custom_rows_to_custom(client, app, demo_ids):
-    group_id, assessment_ids = _create_group(client, demo_ids)
+    group_id, assessment_ids = _create_assessment(client, demo_ids)
     for assessment_id in assessment_ids:
         _mutate_row(app, assessment_id, origin="sbom")
 
@@ -3304,12 +3161,12 @@ def _batch(client, items):
     return client.post("/api/assessments/batch", json={"assessments": items})
 
 
-def test_batch_never_groups_assessments_across_projects(client, app, demo_ids):
-    """One batch touching two projects must produce two independent groups.
+def test_batch_never_fuses_assessments_across_projects(client, app, demo_ids):
+    """One batch touching two projects must produce two independent rows.
 
     Reads are project-filtered while delete/reconcile/approve/reject load the
-    addressed assessment by its own ``group_id``, so a cross-project group
-    would let one project mutate the other's assessment.
+    addressed assessment by its own id, so a fused row would let one project
+    mutate the other's assessment.
     """
     other_project_variant = _variant_in_another_project(app, demo_ids)
     package = demo_ids["two_packages"][0]
@@ -3324,13 +3181,12 @@ def test_batch_never_groups_assessments_across_projects(client, app, demo_ids):
     assert response.status_code == 200, response.get_json()
     rows = response.get_json()["assessments"]
     assert len(rows) == 2
-    group_ids = {row["group_id"] for row in rows}
-    assert None not in group_ids
-    assert len(group_ids) == 2
+    ids = {row["id"] for row in rows}
+    assert len(ids) == 2
 
 
-def test_batch_never_groups_assessments_with_different_content(client, demo_ids):
-    """Same CVE, same project, but two statuses are two distinct groups."""
+def test_batch_never_fuses_assessments_with_different_content(client, demo_ids):
+    """Same CVE, same project, but two statuses are two distinct rows."""
     packages = demo_ids["two_packages"]
 
     response = _batch(client, [
@@ -3342,17 +3198,16 @@ def test_batch_never_groups_assessments_with_different_content(client, demo_ids)
 
     assert response.status_code == 200, response.get_json()
     rows = response.get_json()["assessments"]
-    groups = {row["status"]: row["group_id"] for row in rows}
-    assert groups["affected"] is not None
-    assert groups["fixed"] is not None
-    assert groups["affected"] != groups["fixed"]
+    ids = {row["status"]: row["id"] for row in rows}
+    assert ids["affected"] is not None
+    assert ids["fixed"] is not None
+    assert ids["affected"] != ids["fixed"]
 
 
-def test_batch_content_identical_rows_across_variants_are_still_two_groups(client, demo_ids):
-    """Identical content across variants no longer collapses into one group.
+def test_batch_content_identical_rows_across_variants_are_still_two_rows(client, demo_ids):
+    """Identical content across variants no longer collapses into one row.
 
-    Grouping is storage, not inference: two batch-created rows are two
-    groups even when their content happens to match.
+    Two batch-created rows stay two rows even when their content matches.
     """
     package = demo_ids["two_packages"][0]
 
@@ -3364,12 +3219,11 @@ def test_batch_content_identical_rows_across_variants_are_still_two_groups(clien
     ])
 
     assert response.status_code == 200, response.get_json()
-    group_ids = {row["group_id"] for row in response.get_json()["assessments"]}
-    assert None not in group_ids
-    assert len(group_ids) == 2
+    ids = {row["id"] for row in response.get_json()["assessments"]}
+    assert len(ids) == 2
 
 
-def test_batch_never_groups_two_vulnerabilities(client, demo_ids):
+def test_batch_never_fuses_two_vulnerabilities(client, demo_ids):
     package = demo_ids["two_packages"][0]
 
     response = _batch(client, [
@@ -3380,6 +3234,5 @@ def test_batch_never_groups_two_vulnerabilities(client, demo_ids):
     ])
 
     assert response.status_code == 200, response.get_json()
-    group_ids = {row["group_id"] for row in response.get_json()["assessments"]}
-    assert None not in group_ids
-    assert len(group_ids) == 2
+    ids = {row["id"] for row in response.get_json()["assessments"]}
+    assert len(ids) == 2

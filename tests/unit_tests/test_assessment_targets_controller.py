@@ -1,11 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for the read path in src/controllers/assessment_groups.py.
-
-A group is now an assessment: ``group_id`` is the assessment's own id and its
-targets come from ``target_rows`` instead of bucketed sibling rows.
-"""
+"""Tests for the read path in src/controllers/assessment_targets.py."""
 
 import uuid
 
@@ -59,9 +55,9 @@ def _make_finding_and_variant():
     return finding, variant
 
 
-def test_a_multi_target_assessment_is_one_group_with_two_targets(app):
+def test_a_multi_target_assessment_has_both_targets(app):
     with app.app_context():
-        from src.controllers.assessment_groups import build_groups
+        from src.controllers.assessment_targets import annotate_targets
         from src.models.assessment import Assessment
 
         project = uuid.uuid4()
@@ -75,23 +71,20 @@ def test_a_multi_target_assessment_is_one_group_with_two_targets(app):
             commit=True,
         )
 
-        groups = build_groups([assessment])
+        results = annotate_targets([assessment])
 
-        assert len(groups) == 1
-        assert groups[0]["group_id"] == str(assessment.id)
-        assert groups[0]["assessment_ids"] == [str(assessment.id)]
+        assert len(results) == 1
+        assert results[0]["id"] == str(assessment.id)
         # ``package`` is the finding's package string_id ("name@version"), and
         # targets sort by (variant_id, package) — variant ids are random, so
         # compare as a set rather than assuming creation order survives.
-        assert {t["package"] for t in groups[0]["targets"]} == {
+        assert {t["package"] for t in results[0]["targets"]} == {
             openssl.package.string_id, zlib.package.string_id}
 
 
-def test_two_content_identical_assessments_stay_two_groups(app):
-    """Grouping is now storage, not inference: rows that merely look alike are
-    no longer fused at read time."""
+def test_two_content_identical_assessments_stay_two_entries(app):
     with app.app_context():
-        from src.controllers.assessment_groups import build_groups
+        from src.controllers.assessment_targets import annotate_targets
         from src.models.assessment import Assessment
 
         finding, variant = _make_finding_and_variant()
@@ -102,29 +95,9 @@ def test_two_content_identical_assessments_stay_two_groups(app):
                                 targets=[(variant.id, finding.id)],
                                 commit=True)
 
-        groups = build_groups([one, two])
+        results = annotate_targets([one, two])
 
-        assert len(groups) == 2
-
-
-def test_load_group_returns_the_assessment_itself(app):
-    with app.app_context():
-        from src.controllers.assessment_groups import load_group
-        from src.models.assessment import Assessment
-
-        finding, variant = _make_finding_and_variant()
-        assessment = Assessment.create(status="affected", origin="custom",
-                                       targets=[(variant.id, finding.id)],
-                                       commit=True)
-
-        assert [a.id for a in load_group(assessment.id)] == [assessment.id]
-
-
-def test_load_group_of_an_unknown_id_is_empty(app):
-    with app.app_context():
-        from src.controllers.assessment_groups import load_group
-
-        assert load_group(uuid.uuid4()) == []
+        assert len(results) == 2
 
 
 def test_to_dict_exposes_every_touched_variant(app):
@@ -160,7 +133,7 @@ def test_outdated_is_scoped_to_the_variant_the_package_is_stale_in(app, monkeypa
     than about SBOM scan setup.
     """
     with app.app_context():
-        from src.controllers import assessment_groups
+        from src.controllers import assessment_targets
         from src.models.assessment import Assessment
 
         project = uuid.uuid4()
@@ -183,11 +156,11 @@ def test_outdated_is_scoped_to_the_variant_the_package_is_stale_in(app, monkeypa
                 ]
 
         monkeypatch.setattr(
-            assessment_groups, "annotate_assessments_outdated", _fake_annotate)
+            assessment_targets, "annotate_assessments_outdated", _fake_annotate)
 
-        groups = assessment_groups.build_groups([assessment])
+        results = assessment_targets.annotate_targets([assessment])
 
         outdated_by_variant = {
-            t["variant_id"]: t["outdated"] for t in groups[0]["targets"]}
+            t["variant_id"]: t["outdated"] for t in results[0]["targets"]}
         assert outdated_by_variant[str(variant_a.id)] is True
         assert outdated_by_variant[str(variant_b.id)] is False

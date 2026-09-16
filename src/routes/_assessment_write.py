@@ -61,8 +61,8 @@ def create_assessment_record(
     resolved. Shared between ``add_assessment`` and ``add_assessments_batch``
     — every package x variant combo resolved for one user action becomes
     targets on ONE row, never one row per combo. ``responses`` overrides the
-    DTO's own responses; group reconcile uses it so a new member inherits
-    the responses the rest of the group already carries.
+    DTO's own responses; reconcile uses it so an edit that adds a target
+    inherits the responses the rest of the assessment already carries.
     """
     return DBAssessment.create(
         status=assessment.status or "",
@@ -84,10 +84,9 @@ def create_assessment_record(
 
 @dataclass(frozen=True)
 class ReconcileRequest:
-    """A validated request to bring one assessment group to a desired state."""
+    """A validated request to bring one assessment to a desired state."""
 
     vuln_id: str
-    existing_ids: list[UUID]
     packages: list[str]
     variant_ids: list[UUID]
     target_pairs: "list[tuple[str, UUID]] | None"
@@ -96,14 +95,14 @@ class ReconcileRequest:
     timestamp: "datetime | None"
     # Whether the payload carried a ``responses`` key. Without this flag an
     # edit that simply omits ``responses`` would wipe the VEX responses stored
-    # on the existing rows.
+    # on the existing row.
     has_responses: bool = False
 
 
 def parse_reconcile_payload(
     data: dict[str, Any],
 ) -> "tuple[ReconcileRequest | None, dict[str, str] | None]":
-    """Validate a group-reconcile payload.
+    """Validate a reconcile payload.
 
     Returns ``(request, None)`` when the payload is well formed, otherwise
     ``(None, error_dict)``. Performs no database access.
@@ -152,16 +151,6 @@ def parse_reconcile_payload(
             except (ValueError, AttributeError, TypeError):
                 return None, {"error": f"Invalid variant_id: {raw}"}
 
-    raw_existing = data.get("existing_ids", [])
-    if not isinstance(raw_existing, list):
-        return None, {"error": "existing_ids must be a list"}
-    existing_ids: list[UUID] = []
-    for raw in raw_existing:
-        try:
-            existing_ids.append(UUID(str(raw)))
-        except (ValueError, AttributeError, TypeError):
-            return None, {"error": f"Invalid assessment id: {raw}"}
-
     dto, code = payload_to_assessment(
         {**data, "vuln_id": vuln_id, "packages": packages},
         allow_empty_packages=target_pairs is not None,
@@ -184,7 +173,6 @@ def parse_reconcile_payload(
 
     return ReconcileRequest(
         vuln_id=vuln_id,
-        existing_ids=existing_ids,
         packages=packages,
         variant_ids=variant_ids,
         target_pairs=target_pairs,
@@ -196,7 +184,7 @@ def parse_reconcile_payload(
 
 
 def validate_deletions(
-    rows: "list[DBAssessment]", targets: "dict[tuple[str, UUID], Finding]"
+    assessment: "DBAssessment | None", targets: "dict[tuple[str, UUID], Finding]"
 ) -> "dict[str, str] | None":
     """Refuse the edit when it would drop a target from a pending AI assessment.
 
@@ -204,23 +192,19 @@ def validate_deletions(
     through their own endpoints, never edited piecemeal by removing one of
     their targets.
     """
-    if not rows or rows[0].origin != "ai":
+    if assessment is None or assessment.origin != "ai":
         return None
-    if set(index_group_rows(rows)) - set(targets):
+    if set(index_targets(assessment)) - set(targets):
         return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}
     return None
 
 
-def index_group_rows(rows: "list[DBAssessment]") -> "dict[tuple[str, UUID], Any]":
-    """Index the group's current targets by their (package, variant) key.
-
-    A group is one assessment — ``rows`` holds zero or one of them — whose
-    targets live on ``target_rows``.
-    """
-    if not rows:
+def index_targets(assessment: "DBAssessment | None") -> "dict[tuple[str, UUID], Any]":
+    """Index the assessment's current targets by their (package, variant) key."""
+    if assessment is None:
         return {}
     indexed: dict[tuple[str, UUID], Any] = {}
-    for target in rows[0].target_rows:
+    for target in assessment.target_rows:
         finding = target.finding
         if finding is None or finding.package is None:
             continue
@@ -285,8 +269,8 @@ def resolve_targets(
     A selected package is not necessarily observed in every selected variant:
     the selection is a cross-product, but the scan data is sparse. Such an empty
     cell is not an error, it simply produces no row — rejecting the whole
-    request for it would make an otherwise valid group uneditable, which is what
-    the per-row loop this endpoint replaced never did.
+    request for it would make an otherwise valid assessment uneditable, which
+    is what the per-row loop this endpoint replaced never did.
 
     What is still refused before any write happens: an unknown package, and a
     package that is observed for this vulnerability in *none* of the selected
@@ -384,25 +368,24 @@ def resolve_targets(
 
 def apply_reconcile(
     req: ReconcileRequest,
-    rows: "list[DBAssessment]",
+    assessment: "DBAssessment | None",
     targets: "dict[tuple[str, UUID], Finding]",
 ) -> "dict[str, Any]":
-    """Bring the group — one assessment — to the desired target set and content.
+    """Bring *assessment* to the desired target set and content.
 
     Its target set is diffed against the request and applied as added or
     removed ``AssessmentTarget`` rows, and its content fields are updated
     once. Removing the last target leaves the assessment unreachable, so it
     is deleted along with it rather than kept around empty.
     """
-    if not rows:
+    if assessment is None:
         return {
             "updated": [], "created": [], "deleted": [],
             "became_custom": False, "deleted_non_custom": False,
         }
 
-    assessment = rows[0]
     shared_ts = req.timestamp or datetime.now(timezone.utc)
-    existing_by_key = index_group_rows(rows)
+    existing_by_key = index_targets(assessment)
     deleted_non_custom = False
 
     with batch_session():

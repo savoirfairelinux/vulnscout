@@ -1255,108 +1255,12 @@ def test_upload_asset_no_multipart(client):
 
 
 # ---------------------------------------------------------------------------
-# GET assessment-groups endpoints
+# GET assessment endpoints (merged, per-target shape)
 # ---------------------------------------------------------------------------
 
-def test_assessment_groups_by_vuln_returns_one_entry_per_group(client, demo_ids):
-    """A multi-package write fuses into ONE row/group, whose targets list
-    covers every package."""
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "not_affected",
-            "justification": "component_not_present",
-            "packages": demo_ids["two_packages"],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    created_group_ids = {a["group_id"] for a in created["assessments"]}
-
-    response = client.get(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups")
-
-    assert response.status_code == 200
-    match = [g for g in response.get_json() if g["group_id"] in created_group_ids]
-    assert len(match) == 1
-    assert len(match[0]["targets"]) == 2
-    assert all(g["status"] == "not_affected" for g in match)
-
-
-def test_assessment_group_by_id_returns_the_group(client, demo_ids):
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "not_affected",
-            "justification": "component_not_present",
-            "packages": demo_ids["two_packages"],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    group_id = created["assessments"][0]["group_id"]
-
-    response = client.get(f"/api/assessment-groups/{group_id}")
-
-    assert response.status_code == 200
-    assert response.get_json()["group_id"] == group_id
-
-
-def test_unknown_assessment_group_is_404(client):
-    import uuid
-
-    assert client.get(f"/api/assessment-groups/{uuid.uuid4()}").status_code == 404
-
-
-def test_ungrouped_assessment_appears_with_its_own_group_id(client, demo_ids):
-    """group_id is never None now: a single-target assessment is its own,
-    single-member group."""
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "affected",
-            "packages": [demo_ids["two_packages"][0]],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    assessment_id = created["assessments"][0]["id"]
-
-    groups = client.get(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups").get_json()
-
-    match = [g for g in groups if g["group_id"] == assessment_id]
-    assert len(match) == 1
-    assert len(match[0]["targets"]) == 1
-
-
-def test_review_assessment_groups_filters(client, demo_ids):
-    created = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "not_affected",
-            "justification": "component_not_present",
-            "packages": demo_ids["two_packages"],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    group_id = created["assessments"][0]["group_id"]
-
-    response = client.get(
-        f"/api/reviews/assessment-groups?variant_id={demo_ids['variant_id']}&origin=custom")
-    assert response.status_code == 200
-    match = [g for g in response.get_json() if g["group_id"] == group_id]
-    assert len(match) == 1
-
-    other_variant_response = client.get(
-        f"/api/reviews/assessment-groups?variant_id={demo_ids['other_variant_id']}")
-    assert other_variant_response.status_code == 200
-    assert all(
-        g["group_id"] != group_id for g in other_variant_response.get_json())
-
-
-def test_assessment_groups_targets_carry_their_owning_assessment_id(client, demo_ids):
-    """Each target dict must carry the id of the assessment record it came
-    from, so the frontend can PUT/DELETE that exact row for legacy per-row
-    edits (Task 13). A multi-package write fuses into ONE row/group whose
-    targets all point back at that same row."""
+def test_assessments_by_vuln_returns_one_entry_per_assessment(client, demo_ids):
+    """A multi-package write fuses into ONE row, whose targets list covers
+    every package."""
     created = client.post(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
         json={
@@ -1369,21 +1273,113 @@ def test_assessment_groups_targets_carry_their_owning_assessment_id(client, demo
     created_ids = {a["id"] for a in created["assessments"]}
 
     response = client.get(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessment-groups")
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments")
+
     assert response.status_code == 200
-    matches = [g for g in response.get_json() if g["group_id"] in created_ids]
+    match = [a for a in response.get_json() if a["id"] in created_ids]
+    assert len(match) == 1
+    assert len(match[0]["targets"]) == 2
+    assert all(a["status"] == "not_affected" for a in match)
+
+
+def test_assessment_by_id_returns_the_assessment(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    assessment_id = created["assessments"][0]["id"]
+
+    response = client.get(f"/api/assessments/{assessment_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["id"] == assessment_id
+
+
+def test_unknown_assessment_is_404(client):
+    import uuid
+
+    assert client.get(f"/api/assessments/{uuid.uuid4()}").status_code == 404
+
+
+def test_multi_target_assessment_has_all_its_targets(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "affected",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    assessment_id = created["assessments"][0]["id"]
+
+    assessments = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments").get_json()
+
+    match = [a for a in assessments if a["id"] == assessment_id]
+    assert len(match) == 1
+    assert len(match[0]["targets"]) == 1
+
+
+def test_review_assessments_filters(client, demo_ids):
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    assessment_id = created["assessments"][0]["id"]
+
+    response = client.get(
+        f"/api/reviews/assessments?variant_id={demo_ids['variant_id']}&origin=custom")
+    assert response.status_code == 200
+    match = [a for a in response.get_json() if a["id"] == assessment_id]
+    assert len(match) == 1
+
+    other_variant_response = client.get(
+        f"/api/reviews/assessments?variant_id={demo_ids['other_variant_id']}")
+    assert other_variant_response.status_code == 200
+    assert all(
+        a["id"] != assessment_id for a in other_variant_response.get_json())
+
+
+def test_assessment_targets_carry_outdated(client, demo_ids):
+    """A multi-package write fuses into ONE row whose targets all carry an
+    ``outdated`` flag."""
+    created = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ).get_json()
+    created_ids = {a["id"] for a in created["assessments"]}
+
+    response = client.get(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments")
+    assert response.status_code == 200
+    matches = [a for a in response.get_json() if a["id"] in created_ids]
     assert len(matches) == 1
-    group = matches[0]
-    assert len(group["targets"]) == 2
-    assert all(t["assessment_id"] == group["group_id"] for t in group["targets"])
-    assert {g["group_id"] for g in matches} == created_ids
+    assessment = matches[0]
+    assert len(assessment["targets"]) == 2
+    assert all("outdated" in t for t in assessment["targets"])
+    assert {a["id"] for a in matches} == created_ids
 
 
-def test_review_assessment_groups_include_vuln_id_and_texts(client, demo_ids, app):
-    """The cross-vuln review endpoint must tag each group with its
+def test_review_assessments_include_vuln_id_and_texts(client, demo_ids, app):
+    """The cross-vuln review endpoint must tag each assessment with its
     vulnerability id and enrich it with that vulnerability's texts, since the
     review table spans several CVEs and the frontend needs both for its
-    columns and hover tooltips (Task 13)."""
+    columns and hover tooltips."""
     from src.extensions import db
     from src.models.vulnerability import Vulnerability
 
@@ -1402,22 +1398,22 @@ def test_review_assessment_groups_include_vuln_id_and_texts(client, demo_ids, ap
     )
 
     response = client.get(
-        f"/api/reviews/assessment-groups?variant_id={demo_ids['variant_id']}&origin=custom")
+        f"/api/reviews/assessments?variant_id={demo_ids['variant_id']}&origin=custom")
     assert response.status_code == 200
-    groups = [g for g in response.get_json() if g["vuln_id"] == demo_ids["vuln_id"]]
-    assert len(groups) == 1
-    assert groups[0]["vuln_texts"]
+    assessments = [a for a in response.get_json() if a["vuln_id"] == demo_ids["vuln_id"]]
+    assert len(assessments) == 1
+    assert assessments[0]["vuln_texts"]
     assert any(
         t["content"] == "a description used for the review tooltip"
-        for t in groups[0]["vuln_texts"]
+        for t in assessments[0]["vuln_texts"]
     )
 
 
-def test_assessment_groups_by_vuln_filters_by_project(client, demo_ids):
-    """?project_id keeps only groups with a target in that project.
+def test_assessments_by_vuln_filters_by_project(client, demo_ids):
+    """?project_id keeps only assessments with a target in that project.
 
-    A group reaches a project through its targets' variants, so a project that
-    owns none of them must not see it.
+    An assessment reaches a project through its targets' variants, so a
+    project that owns none of them must not see it.
     """
     import uuid
 
@@ -1430,31 +1426,31 @@ def test_assessment_groups_by_vuln_filters_by_project(client, demo_ids):
             "variant_id": demo_ids["variant_id"],
         },
     ).get_json()
-    group_id = created["assessments"][0]["group_id"]
+    assessment_id = created["assessments"][0]["id"]
 
     owning_project = "11111111-1111-1111-1111-111111111111"
     kept = client.get(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}"
-        f"/assessment-groups?project_id={owning_project}")
+        f"/assessments?project_id={owning_project}")
     assert kept.status_code == 200
-    assert any(g["group_id"] == group_id for g in kept.get_json())
+    assert any(a["id"] == assessment_id for a in kept.get_json())
 
     dropped = client.get(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}"
-        f"/assessment-groups?project_id={uuid.uuid4()}")
+        f"/assessments?project_id={uuid.uuid4()}")
     assert dropped.status_code == 200
-    assert all(g["group_id"] != group_id for g in dropped.get_json())
+    assert all(a["id"] != assessment_id for a in dropped.get_json())
 
 
-def test_assessment_groups_by_vuln_rejects_a_non_uuid_project_id(client, demo_ids):
+def test_assessments_by_vuln_rejects_a_non_uuid_project_id(client, demo_ids):
     response = client.get(
         f"/api/vulnerabilities/{demo_ids['vuln_id']}"
-        "/assessment-groups?project_id=not-a-uuid")
+        "/assessments?project_id=not-a-uuid")
 
     assert response.status_code == 400
 
 
-def test_review_assessment_groups_filter_by_project(client, demo_ids):
+def test_review_assessments_filter_by_project(client, demo_ids):
     import uuid
 
     created = client.post(
@@ -1465,19 +1461,19 @@ def test_review_assessment_groups_filter_by_project(client, demo_ids):
             "variant_id": demo_ids["variant_id"],
         },
     ).get_json()
-    group_id = created["assessments"][0]["group_id"]
+    assessment_id = created["assessments"][0]["id"]
 
     owning_project = "11111111-1111-1111-1111-111111111111"
     kept = client.get(
-        f"/api/reviews/assessment-groups?project_id={owning_project}")
+        f"/api/reviews/assessments?project_id={owning_project}")
     assert kept.status_code == 200
-    assert any(g["group_id"] == group_id for g in kept.get_json())
+    assert any(a["id"] == assessment_id for a in kept.get_json())
 
-    dropped = client.get(f"/api/reviews/assessment-groups?project_id={uuid.uuid4()}")
+    dropped = client.get(f"/api/reviews/assessments?project_id={uuid.uuid4()}")
     assert dropped.status_code == 200
-    assert all(g["group_id"] != group_id for g in dropped.get_json())
+    assert all(a["id"] != assessment_id for a in dropped.get_json())
 
 
-def test_review_assessment_groups_reject_a_non_uuid_project_id(client):
+def test_review_assessments_reject_a_non_uuid_project_id(client):
     assert client.get(
-        "/api/reviews/assessment-groups?project_id=not-a-uuid").status_code == 400
+        "/api/reviews/assessments?project_id=not-a-uuid").status_code == 400

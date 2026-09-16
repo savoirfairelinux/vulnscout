@@ -15,10 +15,15 @@ type VulnText = {
     content: string;
 }
 
-/** One (variant, package) pair an assessment actually applies to. */
+/** One (variant, package) pair an assessment actually applies to.
+ *
+ *  ``outdated`` is only populated by endpoints that annotate staleness
+ *  per-target (the single-assessment and vulnerability-scoped listings);
+ *  it is absent right after a create/update response. */
 type AssessmentTargetPair = {
     variant_id: string | null;
     package: string;
+    outdated?: boolean;
 };
 
 type Assessment = {
@@ -115,20 +120,11 @@ const assessmentCoverageKey = (assessment: Assessment): string => {
 
 export { assessmentVariantIds, appliesToVariant, assessmentPackagesInVariant, coversTarget };
 
-type AssessmentTarget = {
-    variant_id: string | null;
-    package: string;
-    outdated: boolean;
-    /** Which underlying assessment record owns this (package, variant) pair —
-     *  needed to PUT/DELETE it directly when a legacy per-row edit applies. */
-    assessment_id: string;
-};
-
 /** Build exact desired pairs while preserving sparse existing coverage.
  * Newly selected package or variant dimensions are expanded as requested,
  * while absent cells between existing dimensions remain absent. */
 function reconcileTargetPairs(
-    existing: AssessmentTarget[], packages: string[], variantIds: string[],
+    existing: AssessmentTargetPair[], packages: string[], variantIds: string[],
 ): Array<{ package: string; variant_id: string }> {
     const existingKeys = new Set(existing.map(target =>
         `${target.package}\0${target.variant_id ?? ''}`));
@@ -146,25 +142,6 @@ function reconcileTargetPairs(
         return [];
     }));
 }
-
-type AssessmentGroup = {
-    group_id: string | null;
-    vuln_id: string;
-    status: string;
-    simplified_status: string;
-    justification: string;
-    impact_statement: string;
-    status_notes: string;
-    workaround: string;
-    responses: string[];
-    origin: string;
-    timestamp: string;
-    targets: AssessmentTarget[];
-    assessment_ids: string[];
-    /** Only populated by the cross-vuln review endpoint; vuln-scoped group
-     *  endpoints omit it since the caller already knows the vulnerability. */
-    vuln_texts?: VulnText[];
-};
 
 type BatchAssessmentItem = {
     vuln_id: string;
@@ -188,7 +165,7 @@ type BatchResult = {
     vuln_count: number;
 };
 
-export type { AssessmentGroup, AssessmentTarget, BatchAssessmentItem, BatchResult };
+export type { BatchAssessmentItem, BatchResult };
 export { reconcileTargetPairs };
 
 type ReviewTimeEstimate = {
@@ -228,7 +205,11 @@ const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
         .filter((item: any) => item && typeof item === "object"
             && typeof item.package === "string"
             && (item.variant_id === null || typeof item.variant_id === "string"))
-        .map((item: any) => ({ variant_id: item.variant_id, package: item.package }));
+        .map((item: any) => ({
+            variant_id: item.variant_id,
+            package: item.package,
+            ...(typeof item.outdated === "boolean" ? { outdated: item.outdated } : {}),
+        }));
 
 const asAssessment = (data: any): Assessment | [] => {
     if (Array.isArray(data)) {
@@ -322,9 +303,9 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
     return uniqueAssessments;
 }
 
-/** A group is user-facing shorthand for "more than one (variant, package)
- *  target under one assessment id" — a single target is just an assessment. */
-const isMultiTargetGroup = (targets: AssessmentTarget[]): boolean => targets.length > 1;
+/** "Multi-target" is user-facing shorthand for "more than one (variant,
+ *  package) target under one assessment id" — a single target is the common case. */
+const isMultiTarget = (targets: AssessmentTargetPair[]): boolean => targets.length > 1;
 
 class Assessments {
     /**
@@ -397,44 +378,49 @@ class Assessments {
         return data;
     }
 
-    /** Fetch server-built assessment groups for one vulnerability. */
-    static async listGroups(vulnId: string, projectId?: string): Promise<AssessmentGroup[]> {
+/** Fetch every assessment for one vulnerability, targets annotated with
+     *  staleness. */
+    static async listByVuln(vulnId: string, projectId?: string): Promise<Assessment[]> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}/assessment-groups`,
+            import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}/assessments`,
             window.location.href
         );
         if (projectId) url.searchParams.set('project_id', projectId);
         const response = await fetch(url.toString(), { mode: 'cors' });
-        if (!response.ok) throw new Error(`Failed to load assessment groups: ${response.status}`);
-        return await response.json();
+        if (!response.ok) throw new Error(`Failed to load assessments: ${response.status}`);
+        const data = await response.json();
+        return data.flatMap(asAssessment);
     }
 
-    /** Fetch server-built assessment groups for the review table. */
-    static async listReviewGroups(variantId?: string, projectId?: string, origin?: string): Promise<AssessmentGroup[]> {
-        const url = new URL(import.meta.env.VITE_API_URL + '/api/reviews/assessment-groups', window.location.href);
+    /** Fetch assessments for the review table, annotated with vuln texts. */
+    static async listForReview(variantId?: string, projectId?: string, origin?: string): Promise<Assessment[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + '/api/reviews/assessments', window.location.href);
         if (variantId) url.searchParams.set('variant_id', variantId);
         if (projectId) url.searchParams.set('project_id', projectId);
         if (origin) url.searchParams.set('origin', origin);
         const response = await fetch(url.toString(), { mode: 'cors' });
-        if (!response.ok) throw new Error(`Failed to load review groups: ${response.status}`);
-        return await response.json();
+        if (!response.ok) throw new Error(`Failed to load review assessments: ${response.status}`);
+        const data = await response.json();
+        return data.flatMap(asAssessment);
     }
 
-    /** Fetch a single group by id. */
-    static async getGroup(groupId: string): Promise<AssessmentGroup> {
+    /** Fetch a single assessment by id. */
+    static async get(assessmentId: string): Promise<Assessment | []> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}`,
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}`,
             window.location.href
         );
         const response = await fetch(url.toString(), { mode: 'cors' });
-        if (!response.ok) throw new Error(`Failed to load group: ${response.status}`);
-        return await response.json();
+        if (!response.ok) throw new Error(`Failed to load assessment: ${response.status}`);
+        return asAssessment(await response.json());
     }
 
-    /** Reconcile a group to a desired content/target state in one request. */
-    static async reconcileGroup(groupId: string, body: Record<string, unknown>): Promise<AssessmentGroup> {
+    /** Reconcile an assessment to a desired content/target state in one request. */
+    static async reconcile(assessmentId: string, body: Record<string, unknown>): Promise<{
+        status: string; updated: unknown[]; created: unknown[]; deleted: string[];
+    }> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}/reconcile`,
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reconcile`,
             window.location.href
         );
         const response = await fetch(url.toString(), {
@@ -450,22 +436,20 @@ class Assessments {
         return await response.json();
     }
 
-    /** Delete every assessment in a group; returns the deleted ids. */
-    static async deleteGroup(groupId: string): Promise<string[]> {
+    /** Delete an assessment. */
+    static async remove(assessmentId: string): Promise<void> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}`,
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}`,
             window.location.href
         );
         const response = await fetch(url.toString(), { method: 'DELETE', mode: 'cors' });
-        if (!response.ok) throw new Error(`Failed to delete group: ${response.status}`);
-        const data = await response.json();
-        return asStringArray(data?.deleted_ids);
+        if (!response.ok) throw new Error(`Failed to delete assessment: ${response.status}`);
     }
 
-    /** Approve every AI-origin assessment in a group. */
-    static async approveAiGroup(groupId: string): Promise<Assessment[]> {
+    /** Approve a pending AI-origin assessment. */
+    static async approveAi(assessmentId: string): Promise<Assessment[]> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}/approve`,
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
             window.location.href
         );
         const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
@@ -478,10 +462,10 @@ class Assessments {
         return data.assessments.flatMap(asAssessment);
     }
 
-    /** Reject every AI-origin assessment in a group, deleting it. */
-    static async rejectAiGroup(groupId: string): Promise<string[]> {
+    /** Reject a pending AI-origin assessment, deleting it. */
+    static async rejectAi(assessmentId: string): Promise<string[]> {
         const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessment-groups/${encodeURIComponent(groupId)}/reject`,
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reject`,
             window.location.href
         );
         const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
@@ -493,20 +477,7 @@ class Assessments {
         return asStringArray(data?.deleted);
     }
 
-    /** Put a lone assessment into a group so it can gain more targets. */
-    static async promoteToGroup(assessmentId: string): Promise<string> {
-        const url = new URL(
-            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/group`,
-            window.location.href
-        );
-        const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
-        if (!response.ok) throw new Error(`Failed to create group: ${response.status}`);
-        const data = await response.json();
-        return data.group_id;
-    }
-
-    /** Create every assessment of one user action in a single request, so the
-     *  backend can assign one group per vulnerability. */
+    /** Create every assessment of one user action in a single request. */
     static async createBatch(items: BatchAssessmentItem[]): Promise<BatchResult> {
         const url = new URL(import.meta.env.VITE_API_URL + '/api/assessments/batch', window.location.href);
         const response = await fetch(url.toString(), {
@@ -528,4 +499,4 @@ class Assessments {
 }
 
 export default Assessments;
-export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment, removeDuplicateAssessments, isMultiTargetGroup };
+export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment, removeDuplicateAssessments, isMultiTarget };

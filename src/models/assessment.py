@@ -263,15 +263,6 @@ class Assessment(Base):
             return variant_id is None
         return variant_id in target_variant_ids
 
-    # ------------------------------------------------------------------
-    # group_id -- an assessment is its own group
-    # ------------------------------------------------------------------
-
-    @property
-    def group_id(self) -> "uuid.UUID | None":
-        """The group this assessment is.  Kept as a property for callers."""
-        return self.id
-
     def __repr__(self) -> str:
         return f"<Assessment id={self.id} status={self.status!r}>"
 
@@ -441,7 +432,6 @@ class Assessment(Base):
 
     def to_dict(self) -> dict:
         ts = ensure_utc_iso(self.timestamp)
-        group_id = self.group_id
         variant_ids = sorted({str(t.variant_id) for t in self.target_rows})
         return {
             "id": str(self.id),
@@ -454,7 +444,6 @@ class Assessment(Base):
             # packages x variant_ids is the cross-product, which a sparse
             # target set is not; consumers pairing the two must read this.
             "targets": self.target_pairs,
-            "group_id": str(group_id) if group_id else None,
             "timestamp": ts,
             "last_update": ts or "",
             "status": self.status or "",

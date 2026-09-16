@@ -9,15 +9,24 @@ const response = (data: unknown = {}, ok = true, status = 200) => ({
   json: async () => data,
 }) as Response;
 
+const makeAssessment = (overrides: Record<string, unknown> = {}) => ({
+  id: "a1",
+  vuln_id: "CVE-2026-0001",
+  status: "not_affected",
+  timestamp: "2026-08-19T00:00:00Z",
+  targets: [],
+  ...overrides,
+});
+
 beforeEach(() => {
   fetchSpy.mockReset();
 });
 
-describe("Assessments group handlers", () => {
+describe("Assessments target/reconcile handlers", () => {
   test("reconcileTargetPairs preserves sparse existing coverage", () => {
     const existing = [
-      { variant_id: "variant-a", package: "openssl@1", outdated: false, assessment_id: "a1" },
-      { variant_id: "variant-b", package: "zlib@1", outdated: false, assessment_id: "a1" },
+      { variant_id: "variant-a", package: "openssl@1", outdated: false },
+      { variant_id: "variant-b", package: "zlib@1", outdated: false },
     ];
 
     expect(reconcileTargetPairs(
@@ -30,8 +39,8 @@ describe("Assessments group handlers", () => {
 
   test("reconcileTargetPairs expands a newly selected variant", () => {
     const existing = [
-      { variant_id: "variant-a", package: "openssl@1", outdated: false, assessment_id: "a1" },
-      { variant_id: "variant-b", package: "zlib@1", outdated: false, assessment_id: "a1" },
+      { variant_id: "variant-a", package: "openssl@1", outdated: false },
+      { variant_id: "variant-b", package: "zlib@1", outdated: false },
     ];
 
     expect(reconcileTargetPairs(
@@ -44,110 +53,105 @@ describe("Assessments group handlers", () => {
     ]);
   });
 
-  test("listGroups requests the grouped endpoint for the vulnerability", async () => {
-    fetchSpy.mockResolvedValueOnce(response([{ group_id: "g1", targets: [], assessment_ids: ["a1"] }]));
+  test("listByVuln requests the vulnerability-scoped endpoint", async () => {
+    fetchSpy.mockResolvedValueOnce(response([makeAssessment({ id: "a1" })]));
 
-    const groups = await Assessments.listGroups("CVE-2026-0001");
+    const assessments = await Assessments.listByVuln("CVE-2026-0001");
 
-    expect(fetchSpy.mock.calls[0][0]).toContain("/api/vulnerabilities/CVE-2026-0001/assessment-groups");
-    expect(groups[0].group_id).toBe("g1");
+    expect(fetchSpy.mock.calls[0][0]).toContain("/api/vulnerabilities/CVE-2026-0001/assessments");
+    expect(assessments[0].id).toBe("a1");
   });
 
-  test("listGroups includes the project_id filter when provided", async () => {
+  test("listByVuln includes the project_id filter when provided", async () => {
     fetchSpy.mockResolvedValueOnce(response([]));
 
-    await Assessments.listGroups("CVE-2026-0001", "project 1");
+    await Assessments.listByVuln("CVE-2026-0001", "project 1");
 
     expect(fetchSpy.mock.calls[0][0]).toContain("project_id=project+1");
   });
 
-  test("listGroups throws when the response is not ok", async () => {
+  test("listByVuln throws when the response is not ok", async () => {
     fetchSpy.mockResolvedValueOnce(response({}, false, 500));
 
-    await expect(Assessments.listGroups("CVE-2026-0001")).rejects.toThrow("Failed to load assessment groups: 500");
+    await expect(Assessments.listByVuln("CVE-2026-0001")).rejects.toThrow("Failed to load assessments: 500");
   });
 
-  test("listReviewGroups requests the review endpoint with filters", async () => {
-    fetchSpy.mockResolvedValueOnce(response([{ group_id: "g2", targets: [], assessment_ids: ["a2"] }]));
+  test("listForReview requests the review endpoint with filters", async () => {
+    fetchSpy.mockResolvedValueOnce(response([makeAssessment({ id: "a2" })]));
 
-    const groups = await Assessments.listReviewGroups("variant-1", "project-1", "ai");
+    const assessments = await Assessments.listForReview("variant-1", "project-1", "ai");
 
     const url = fetchSpy.mock.calls[0][0] as string;
-    expect(url).toContain("/api/reviews/assessment-groups");
+    expect(url).toContain("/api/reviews/assessments");
     expect(url).toContain("variant_id=variant-1");
     expect(url).toContain("project_id=project-1");
     expect(url).toContain("origin=ai");
-    expect(groups[0].group_id).toBe("g2");
+    expect(assessments[0].id).toBe("a2");
   });
 
-  test("getGroup fetches a single group by id", async () => {
-    fetchSpy.mockResolvedValueOnce(response({ group_id: "g1", targets: [], assessment_ids: ["a1"] }));
+  test("get fetches a single assessment by id", async () => {
+    fetchSpy.mockResolvedValueOnce(response(makeAssessment({ id: "a1" })));
 
-    const group = await Assessments.getGroup("g1");
+    const assessment = await Assessments.get("a1");
 
-    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessment-groups/g1");
-    expect(group.group_id).toBe("g1");
+    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessments/a1");
+    expect((assessment as { id: string }).id).toBe("a1");
   });
 
-  test("reconcileGroup posts the desired state and returns the updated group", async () => {
-    fetchSpy.mockResolvedValueOnce(response({ group_id: "g1", targets: [], assessment_ids: ["a1"] }));
+  test("reconcile posts the desired state and returns the summary", async () => {
+    fetchSpy.mockResolvedValueOnce(response({ status: "success", updated: [{ id: "a1" }], created: [], deleted: [] }));
 
-    const group = await Assessments.reconcileGroup("g1", { status: "not_affected" });
+    const result = await Assessments.reconcile("a1", { status: "not_affected" });
 
-    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessment-groups/g1/reconcile");
+    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessments/a1/reconcile");
     expect(fetchSpy.mock.calls[0][1]).toEqual(expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ status: "not_affected" }),
     }));
-    expect(group.group_id).toBe("g1");
+    expect(result.status).toBe("success");
   });
 
-  test("reconcileGroup throws with the server error message on failure", async () => {
+  test("reconcile throws with the server error message on failure", async () => {
     fetchSpy.mockResolvedValueOnce(response({ error: "conflict" }, false, 409));
 
-    await expect(Assessments.reconcileGroup("g1", {})).rejects.toThrow("conflict");
+    await expect(Assessments.reconcile("a1", {})).rejects.toThrow("conflict");
   });
 
-  test("deleteGroup returns the deleted assessment ids", async () => {
-    fetchSpy.mockResolvedValueOnce(response({ status: "success", deleted_ids: ["a1", "a2"] }));
+  test("remove deletes the assessment", async () => {
+    fetchSpy.mockResolvedValueOnce(response({ status: "success" }));
 
-    const deletedIds = await Assessments.deleteGroup("g1");
+    await Assessments.remove("a1");
 
-    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessment-groups/g1");
+    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessments/a1");
     expect(fetchSpy.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "DELETE" }));
-    expect(deletedIds).toEqual(["a1", "a2"]);
   });
 
-  test("approveAiGroup posts to the group approve endpoint and returns assessments", async () => {
+  test("remove throws when the response is not ok", async () => {
+    fetchSpy.mockResolvedValueOnce(response({}, false, 404));
+
+    await expect(Assessments.remove("a1")).rejects.toThrow("Failed to delete assessment: 404");
+  });
+
+  test("approveAi posts to the approve endpoint and returns assessments", async () => {
     fetchSpy.mockResolvedValueOnce(response({
       assessments: [{ id: "a1", vuln_id: "CVE-2026-0001", status: "not_affected", timestamp: "2026-08-19T00:00:00Z" }],
     }));
 
-    const assessments = await Assessments.approveAiGroup("g1");
+    const assessments = await Assessments.approveAi("a1");
 
-    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessment-groups/g1/approve");
+    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessments/a1/approve");
     expect(fetchSpy.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
     expect(assessments[0].id).toBe("a1");
   });
 
-  test("rejectAiGroup posts to the group reject endpoint and returns deleted ids", async () => {
-    fetchSpy.mockResolvedValueOnce(response({ deleted: ["a1", "a2"] }));
+  test("rejectAi posts to the reject endpoint and returns deleted ids", async () => {
+    fetchSpy.mockResolvedValueOnce(response({ deleted: ["a1"] }));
 
-    const deleted = await Assessments.rejectAiGroup("g1");
+    const deleted = await Assessments.rejectAi("a1");
 
-    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessment-groups/g1/reject");
+    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessments/a1/reject");
     expect(fetchSpy.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
-    expect(deleted).toEqual(["a1", "a2"]);
-  });
-
-  test("promoteToGroup posts to the assessment group endpoint and returns the group id", async () => {
-    fetchSpy.mockResolvedValueOnce(response({ group_id: "g3" }));
-
-    const groupId = await Assessments.promoteToGroup("a1");
-
-    expect(fetchSpy.mock.calls[0][0]).toContain("/api/assessments/a1/group");
-    expect(fetchSpy.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
-    expect(groupId).toBe("g3");
+    expect(deleted).toEqual(["a1"]);
   });
 
   test("createBatch posts every item in a single request and returns the batch result", async () => {

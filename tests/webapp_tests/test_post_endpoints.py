@@ -379,7 +379,7 @@ def test_resolve_target_set_covers_the_full_cross_product(client, demo_ids):
     """Two packages x two variants -> up to 4 (pkg, variant) targets, keyed
     by (package.string_id, variant_id), only for combos an observation
     actually recorded."""
-    from src.routes._assessment_group import resolve_target_set
+    from src.routes._assessment_write import resolve_target_set
     from src.models.package import Package
     import uuid as uuid_module
 
@@ -404,7 +404,7 @@ def test_resolve_target_set_covers_the_full_cross_product(client, demo_ids):
 
 
 def test_resolve_target_set_flags_a_package_unobserved_in_every_variant(client, demo_ids):
-    from src.routes._assessment_group import resolve_target_set
+    from src.routes._assessment_write import resolve_target_set
     from src.models.package import Package
     import uuid as uuid_module
 
@@ -422,7 +422,7 @@ def test_resolve_target_set_flags_a_package_unobserved_in_every_variant(client, 
 
 
 def test_resolve_target_set_rejects_unknown_variant(client, demo_ids):
-    from src.routes._assessment_group import resolve_target_set
+    from src.routes._assessment_write import resolve_target_set
     from src.models.package import Package
     import uuid as uuid_module
 
@@ -436,7 +436,7 @@ def test_resolve_target_set_rejects_unknown_variant(client, demo_ids):
 
 
 def test_resolve_target_set_rejects_variants_from_different_projects(client, demo_ids):
-    from src.routes._assessment_group import resolve_target_set
+    from src.routes._assessment_write import resolve_target_set
     from src.models.package import Package
     from src.models.project import Project
     from src.models.variant import Variant
@@ -622,7 +622,6 @@ def test_multi_package_assessment_is_one_row_with_two_targets(client, demo_ids):
     body = response.get_json()
     assert len(body["assessments"]) == 1
     row = body["assessments"][0]
-    assert row["group_id"] == row["id"]
     assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
     assert row["variant_ids"] == [demo_ids["variant_id"]]
 
@@ -645,7 +644,6 @@ def test_multi_variant_assessment_is_one_row_covering_every_variant(client, demo
     body = response.get_json()
     assert len(body["assessments"]) == 1
     row = body["assessments"][0]
-    assert row["group_id"] == row["id"]
     # Spans more than one variant -> the collapsed singular field is null,
     # but the full set is exposed via variant_ids.
     assert row["variant_id"] is None
@@ -675,55 +673,6 @@ def test_multi_variant_assessment_rejects_a_package_unobserved_everywhere(client
     assert "does-not-exist@9.9.9" in response.get_data(as_text=True)
 
 
-def test_single_package_assessment_is_its_own_group(client, demo_ids):
-    response = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "not_affected",
-            "justification": "component_not_present",
-            "packages": [demo_ids["two_packages"][0]],
-            "variant_id": demo_ids["variant_id"],
-        },
-    )
-
-    assert response.status_code == 200
-    row = response.get_json()["assessments"][0]
-    assert row["group_id"] == row["id"]
-
-
-def test_payload_group_id_no_longer_merges_writes_into_one_group(client, demo_ids):
-    """Joining an existing group at write time is out of scope for this
-    phase: a group only grows through reconcile, once it already holds real
-    targets. The legacy ``group_id`` payload still validates the referenced
-    group exists, but the new row remains its own, separate group."""
-    first = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "not_affected",
-            "justification": "component_not_present",
-            "packages": demo_ids["two_packages"],
-            "variant_id": demo_ids["variant_id"],
-        },
-    ).get_json()
-    group_id = first["assessments"][0]["group_id"]
-
-    second = client.post(
-        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
-        json={
-            "status": "not_affected",
-            "justification": "component_not_present",
-            "packages": [demo_ids["two_packages"][0]],
-            "variant_id": demo_ids["other_variant_id"],
-            "group_id": group_id,
-        },
-    )
-
-    assert second.status_code == 200
-    second_row = second.get_json()["assessments"][0]
-    assert second_row["group_id"] == second_row["id"]
-    assert second_row["group_id"] != group_id
-
-
 def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
     """A batch is one user action per item: each item (however many
     packages it lists) becomes exactly one Assessment row."""
@@ -748,7 +697,6 @@ def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
     rows = response.get_json()["assessments"]
     assert len(rows) == 2
     for row in rows:
-        assert row["group_id"] == row["id"]
         assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
 
 
@@ -773,7 +721,7 @@ def test_batch_item_with_multiple_variants_creates_one_row(client, demo_ids):
     assert len(row["targets"]) == 4
 
 
-def test_batch_two_items_remain_two_independent_groups(client, demo_ids):
+def test_batch_two_items_remain_two_independent_rows(client, demo_ids):
     """Separate items remain separate actions even when their content matches."""
     response = client.post("/api/assessments/batch", json={"assessments": [
         {
@@ -792,9 +740,7 @@ def test_batch_two_items_remain_two_independent_groups(client, demo_ids):
 
     assert response.status_code == 200
     rows = response.get_json()["assessments"]
-    group_ids = {row["group_id"] for row in rows}
-    assert len(group_ids) == 2
-    assert group_ids == {row["id"] for row in rows}
+    assert len({row["id"] for row in rows}) == 2
 
 
 def test_batch_multi_variant_item_rejects_cross_project_variants(client, demo_ids):
@@ -819,16 +765,3 @@ def test_batch_multi_variant_item_rejects_cross_project_variants(client, demo_id
     assert "different projects" in response.get_data(as_text=True)
     with client.application.app_context():
         assert len(Assessment.get_by_vulnerability(demo_ids["vuln_id"])) == before
-
-
-def test_batch_single_row_vulnerability_is_its_own_group(client, demo_ids):
-    response = client.post("/api/assessments/batch", json={"assessments": [{
-        "vuln_id": demo_ids["vuln_id"],
-        "status": "fixed",
-        "packages": [demo_ids["two_packages"][0]],
-        "variant_id": demo_ids["variant_id"],
-    }]})
-
-    assert response.status_code == 200
-    row = response.get_json()["assessments"][0]
-    assert row["group_id"] == row["id"]
