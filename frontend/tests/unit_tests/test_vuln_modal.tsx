@@ -4063,11 +4063,11 @@ describe("VulnModal AI review block", () => {
         assessments: []
     };
 
-    let currentReviews: Record<string, AssessmentReview> = {};
+    let currentReviews: Record<string, AssessmentReview[]> = {};
 
     // Sets the review payload the next render will receive from
     // AssessmentReviews.fetchForScope (mocked via the /api/assessment-reviews route).
-    const mockReviews = (data: Record<string, AssessmentReview>) => {
+    const mockReviews = (data: Record<string, AssessmentReview[]>) => {
         currentReviews = data;
     };
 
@@ -4118,6 +4118,8 @@ describe("VulnModal AI review block", () => {
     const review = {
         id: "r1",
         assessment_id: "assess-1",
+        variant_id: "v1",
+        package: "pkgA@1.0.0",
         status: "affected",
         status_notes: "reachable from the network. confidence level: high",
         justification: "",
@@ -4132,7 +4134,7 @@ describe("VulnModal AI review block", () => {
 
     test("renders the review beneath its assessment with the differs verdict", async () => {
         // Arrange
-        mockReviews({ "assess-1": review });
+        mockReviews({ "assess-1": [review] });
 
         // Act
         await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
@@ -4144,7 +4146,7 @@ describe("VulnModal AI review block", () => {
     });
 
     test("shows the stale banner when the assessment changed after the review", async () => {
-        mockReviews({ "assess-1": { ...review, is_stale: true } });
+        mockReviews({ "assess-1": [{ ...review, is_stale: true }] });
 
         await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
 
@@ -4160,7 +4162,7 @@ describe("VulnModal AI review block", () => {
     });
 
     test("discarding a review removes the block", async () => {        // Arrange
-        mockReviews({ "assess-1": review });
+        mockReviews({ "assess-1": [review] });
         const removeSpy = jest.spyOn(AssessmentReviews, "remove").mockResolvedValue(undefined);
 
         // Act
@@ -4169,9 +4171,29 @@ describe("VulnModal AI review block", () => {
         await userEvent.click(await screen.findByRole("button", { name: /confirm/i }));
 
         // Assert
-        expect(removeSpy).toHaveBeenCalledWith("assess-1");
+        expect(removeSpy).toHaveBeenCalledWith("assess-1", review.variant_id, review.package);
         await waitFor(() => expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument());
 
         removeSpy.mockRestore();
+    });
+
+    test("renders one block per target when an assessment has several reviews", async () => {
+        // Arrange
+        const otherReview = {
+            ...review,
+            id: "r2",
+            variant_id: "v2",
+            package: "zlib@1.2.13",
+            status: "fixed",
+            rationale: "zlib 1.2.13 patches it",
+        };
+        mockReviews({ "assess-1": [review, otherReview] });
+
+        // Act
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        // Assert
+        expect(await screen.findByText(/openssl 3.0.8 ships in the rootfs/)).toBeInTheDocument();
+        expect(screen.getByText(/zlib 1.2.13 patches it/)).toBeInTheDocument();
     });
 });

@@ -20,6 +20,8 @@ def upgrade():
         'assessment_reviews',
         sa.Column('id', sa.Uuid(), nullable=False),
         sa.Column('assessment_id', sa.Uuid(), nullable=False),
+        sa.Column('variant_id', sa.Uuid(), nullable=False),
+        sa.Column('finding_id', sa.Uuid(), nullable=False),
         sa.Column('status', sa.String(), nullable=False),
         sa.Column('status_notes', sa.Text(), nullable=True),
         sa.Column('justification', sa.Text(), nullable=True),
@@ -30,14 +32,26 @@ def upgrade():
         sa.Column('reviewed_fingerprint', sa.Text(), nullable=True),
         sa.Column('timestamp', sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(['assessment_id'], ['assessments.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['variant_id'], ['variants.id']),
+        sa.ForeignKeyConstraint(['finding_id'], ['findings.id']),
         sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('assessment_id', name='uq_assessment_review_assessment'),
+        sa.UniqueConstraint(
+            'assessment_id', 'variant_id', 'finding_id', name='uq_assessment_review_target'
+        ),
     )
     op.create_index(
         'ix_assessment_reviews_assessment_id', 'assessment_reviews', ['assessment_id']
     )
+    op.create_index(
+        'ix_assessment_reviews_variant_id', 'assessment_reviews', ['variant_id']
+    )
+    op.create_index(
+        'ix_assessment_reviews_finding_id', 'assessment_reviews', ['finding_id']
+    )
 
 
 def downgrade():
+    op.drop_index('ix_assessment_reviews_finding_id', table_name='assessment_reviews')
+    op.drop_index('ix_assessment_reviews_variant_id', table_name='assessment_reviews')
     op.drop_index('ix_assessment_reviews_assessment_id', table_name='assessment_reviews')
     op.drop_table('assessment_reviews')

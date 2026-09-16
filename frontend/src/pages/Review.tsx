@@ -12,7 +12,7 @@ import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
-import AssessmentReviews, { verdictOf, summarizeReviews, describeReviewSummary } from "../handlers/assessmentReviews";
+import AssessmentReviews, { verdictOf, worstVerdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
@@ -129,11 +129,12 @@ const aiReviewList = [
 ];
 
 /** The AI review label a row carries. An assessment without a review counts
- *  as "No AI review". */
-const rowAiReviewLabels = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
-    new Set([AI_REVIEW_LABELS[verdictOf(reviews[row.id])]]);
+ *  as "No AI review"; one with reviews on several targets carries the
+ *  worst-case label across them. */
+const rowAiReviewLabels = (row: ReviewRow, reviews: Record<string, AssessmentReview[]>) =>
+    new Set([AI_REVIEW_LABELS[worstVerdictOf(reviews[row.id])]]);
 
-/** Copies a row's group/assessment id. The confirmation swaps the icon for a
+/** Copies a row's assessment id. The confirmation swaps the icon for a
  *  checkmark in place rather than adding a label, so the button keeps its width
  *  and never pushes the neighbouring actions onto a second row. */
 function CopyIdButton({ row, copiedKey, onCopy }: {
@@ -231,7 +232,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [selectedAiReviews, setSelectedAiReviews] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
-    const [reviews, setReviews] = useState<Record<string, AssessmentReview>>({});
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -1155,19 +1156,35 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             id: "ai_review",
             header: () => <div className="flex items-center justify-center">AI review</div>,
             cell: ({ row }) => {
-                const summary = summarizeReviews([row.original.id], reviews);
+                // One verdict per target, not per assessment: an assessment
+                // may cover several (variant, package) targets, each judged
+                // against its own context, so each gets its own review to
+                // look up here.
+                const rowReviews = reviews[row.original.id] ?? [];
+                const targets = row.original.targets.length > 0
+                    ? row.original.targets
+                    : [{ variant_id: null, package: "" }];
+                const verdicts = targets.map(t => verdictOf(
+                    rowReviews.find(r => r.variant_id === t.variant_id && r.package === t.package)
+                ));
+                const count = (v: ReviewVerdict) => verdicts.filter(x => x === v).length;
+                const summary = {
+                    total: verdicts.length,
+                    reviewed: verdicts.filter(v => v !== "none").length,
+                    agrees: count("agrees"),
+                    differs: count("differs"),
+                    stale: count("stale"),
+                };
                 const title = describeReviewSummary(summary);
                 const pending = summary.total - summary.reviewed;
-                const singleVerdict = summary.total === 1
-                    ? verdictOf(reviews[row.original.id])
-                    : null;
+                const singleVerdict = summary.total === 1 ? verdicts[0] : null;
                 let content;
                 if (summary.reviewed === 0) {
                     content = <span title={title} className="text-gray-500">—</span>;
                 // A single-target row has exactly one verdict, so keep the plain
-                // symbol. Groups get per-verdict counts, because their members
-                // were reviewed against different variant/package contexts and
-                // may legitimately disagree with each other.
+                // symbol. A multi-target row gets per-verdict counts, because its
+                // targets were reviewed against different variant/package contexts
+                // and may legitimately disagree with each other.
                 } else if (singleVerdict === "agrees") {
                     content = <span title={title} className="text-green-400">✓</span>;
                 } else if (singleVerdict === "stale") {

@@ -140,5 +140,7 @@ def _reap_assessment_targets(
     also fires when a variant is removed through the project's ORM cascade.
     """
     from .assessment_target import AssessmentTarget, reap_targets
+    from .assessment_review import AssessmentReview, reap_reviews
 
     reap_targets(connection, AssessmentTarget.variant_id == variant.id)
+    reap_reviews(connection, AssessmentReview.variant_id == variant.id)

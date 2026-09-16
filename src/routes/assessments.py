@@ -951,8 +951,8 @@ def init_app(app: Flask) -> None:
         if item is None:
             return {"error": "Not found"}, 404
         payload = annotate_targets([item])[0]
-        review = AssessmentReview.get_by_assessment(item.id)
-        payload["review"] = review.to_dict() if review else None
+        reviews = AssessmentReview.get_all_for_assessment(item.id)
+        payload["reviews"] = [r.to_dict() for r in reviews]
         return payload, 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')

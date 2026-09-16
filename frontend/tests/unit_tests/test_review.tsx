@@ -1954,6 +1954,8 @@ describe('Review page AI review column', () => {
     const differsReview = {
         id: 'r1',
         assessment_id: 'assess-1',
+        variant_id: 'v1',
+        package: 'pkgA@1.0.0',
         status: 'affected',
         status_notes: '',
         justification: '',
@@ -1977,28 +1979,28 @@ describe('Review page AI review column', () => {
         expect(await screen.findAllByText('CVE-2024-0001')).toHaveLength(1);
     });
 
-    test('flags a group whose assessment carries a review', async () => {
-        // Arrange
-        mockNetwork([groupedAssessment], { reviews: { 'assess-1': differsReview } });
+    test('flags a multi-target assessment whose targets are only partly reviewed', async () => {
+        // Arrange: two targets (v1, v2), a review on just v1.
+        mockNetwork([multiTargetAssessment], { reviews: { 'assess-1': [differsReview] } });
 
         // Act
         render(<Review projectId="proj1" />);
 
         // Assert
-        expect(await screen.findByTitle('1 differ')).toBeInTheDocument();
+        expect(await screen.findByTitle('1 differ · 1 not reviewed')).toBeInTheDocument();
     });
 
     test('centres the verdict flags in the cell', async () => {
-        mockNetwork([groupedAssessment], { reviews: { 'assess-1': differsReview } });
+        mockNetwork([multiTargetAssessment], { reviews: { 'assess-1': [differsReview] } });
 
         render(<Review projectId="proj1" />);
 
-        const flags = await screen.findByTitle('1 differ');
+        const flags = await screen.findByTitle('1 differ · 1 not reviewed');
         expect(flags.parentElement).toHaveClass('justify-center');
     });
 
     test('renders a dash for assessments with no review', async () => {
-        mockNetwork([groupedAssessment]);
+        mockNetwork([multiTargetAssessment]);
 
         render(<Review projectId="proj1" />);
 
@@ -2011,12 +2013,15 @@ describe('Review — AI review filter', () => {
      *  verdict is identifiable in the table. */
     const assessment = (id: string, vulnId: string) => ({
         id, vuln_id: vulnId, status: 'not_affected',
-        origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
+        origin: 'custom', packages: ['pkgA@1.0.0'], timestamp: '2024-01-01T00:00:00Z', responses: [],
+        targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
     });
 
     const review = (assessmentId: string, verdict: 'agrees' | 'differs', isStale = false) => ({
         id: `rev-${assessmentId}`,
         assessment_id: assessmentId,
+        variant_id: 'v1',
+        package: 'pkgA@1.0.0',
         status: 'affected',
         status_notes: '',
         justification: '',
@@ -2037,9 +2042,9 @@ describe('Review — AI review filter', () => {
     ];
 
     const REVIEWS = {
-        'ag-1': review('ag-1', 'agrees'),
-        'df-1': review('df-1', 'differs'),
-        'st-1': review('st-1', 'agrees', true),
+        'ag-1': [review('ag-1', 'agrees')],
+        'df-1': [review('df-1', 'differs')],
+        'st-1': [review('st-1', 'agrees', true)],
     };
 
     /** Render the page with the four verdicts present and open the filter. */

@@ -134,8 +134,8 @@ class Assessment(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-    review: Mapped["AssessmentReview | None"] = relationship(
-        back_populates="assessment", cascade="all, delete-orphan", uselist=False
+    reviews: Mapped[list["AssessmentReview"]] = relationship(
+        back_populates="assessment", cascade="all, delete-orphan"
     )
 
     # ------------------------------------------------------------------

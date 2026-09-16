@@ -343,15 +343,19 @@ class TestOutdatedFlag:
 
         ``delete_outdated_data`` removes ``Assessment`` rows via a Core-level
         bulk ``DELETE`` (``_delete_in_chunks``), which bypasses the ORM
-        ``delete-orphan`` cascade wired on ``Assessment.review``. Exercise
+        ``delete-orphan`` cascade wired on ``Assessment.reviews``. Exercise
         that exact path (not ``db.session.delete()``) to confirm reviews
         don't leak.
         """
         with self.app.app_context():
+            target = _db.session.execute(
+                _db.select(AssessmentTarget).where(AssessmentTarget.assessment_id == self.assess_id)
+            ).scalars().one()
             AssessmentReview.upsert(
-                assessment_id=self.assess_id, status="not_affected", rationale="agrees with analyst"
+                assessment_id=self.assess_id, variant_id=target.variant_id, finding_id=target.finding_id,
+                status="not_affected", rationale="agrees with analyst"
             )
-            assert AssessmentReview.get_by_assessment(self.assess_id) is not None
+            assert AssessmentReview.get_all_for_assessment(self.assess_id) != []
 
         response = self._delete_outdated_data()
 
@@ -359,7 +363,7 @@ class TestOutdatedFlag:
         assert json.loads(response.data)["assessments_deleted"] == 1
         with self.app.app_context():
             assert _db.session.get(Assessment, self.assess_id) is None
-            assert AssessmentReview.get_by_assessment(self.assess_id) is None
+            assert AssessmentReview.get_all_for_assessment(self.assess_id) == []
 
     def test_outdated_data_preview_lists_the_records_to_delete(self):
         """The preview exposes the same stale package data and assessment."""
@@ -648,7 +652,7 @@ class TestOutdatedFlag:
 
         ``delete_orphaned_vulnerabilities`` removes an emptied assessment
         through ``remove_target``, which deletes it via the ORM so
-        ``cascade="all, delete-orphan"`` on ``Assessment.review`` fires.
+        ``cascade="all, delete-orphan"`` on ``Assessment.reviews`` fires.
         Exercise that path directly to confirm reviews don't leak.
         """
         orphaned_cve = "CVE-2024-00005"
@@ -669,16 +673,17 @@ class TestOutdatedFlag:
                 assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
             _db.session.commit()
             AssessmentReview.upsert(
-                assessment_id=orphaned_assessment_id, status="not_affected", rationale="agrees"
+                assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id,
+                status="not_affected", rationale="agrees"
             )
-            assert AssessmentReview.get_by_assessment(orphaned_assessment_id) is not None
+            assert AssessmentReview.get_all_for_assessment(orphaned_assessment_id) != []
 
         response = self._delete_orphaned_vulnerabilities()
         assert response.status_code == 200
         assert json.loads(response.data)["assessments_deleted"] == 1
         with self.app.app_context():
             assert _db.session.get(Assessment, orphaned_assessment_id) is None
-            assert AssessmentReview.get_by_assessment(orphaned_assessment_id) is None
+            assert AssessmentReview.get_all_for_assessment(orphaned_assessment_id) == []
 
     def test_orphaned_vulnerabilities_preserve_variant_owned_data(self):
         """Variant metrics and time estimates keep their CVEs out of cleanup."""

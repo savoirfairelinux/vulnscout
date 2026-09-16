@@ -165,16 +165,16 @@ type VariantScopedSnapshot = {
     const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
-    const [editingGroup, setEditingGroup] = useState<Assessment | null>(null);
-    // Whether editingGroup came from the server's assessment listing (whose
+    const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
+    // Whether editingAssessment came from the server's assessment listing (whose
     // targets are real AssessmentTarget rows, always variant-scoped) rather
     // than the client-side fallback used before that response lands (whose
     // targets are synthesized and may have no variant at all). Reconcile only
     // applies to a real variant scope; an assessment with none must still go
     // through the legacy per-row PUT below.
-    const [editingGroupIsServerConfirmed, setEditingGroupIsServerConfirmed] = useState(false);
-    const [reviews, setReviews] = useState<Record<string, AssessmentReview>>({});
-    const [reviewToDiscard, setReviewToDiscard] = useState<string | null>(null);
+    const [editingAssessmentIsServerConfirmed, setEditingAssessmentIsServerConfirmed] = useState(false);
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
+    const [reviewToDiscard, setReviewToDiscard] = useState<AssessmentReview | null>(null);
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
@@ -648,29 +648,31 @@ type VariantScopedSnapshot = {
         if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
     }, []);
 
-    const handleEditAssessment = (assessmentId: string, group: Assessment, isServerConfirmed: boolean) => {
+    const handleEditAssessment = (assessmentId: string, row: Assessment, isServerConfirmed: boolean) => {
         setEditingAssessmentId(assessmentId);
-        setEditingGroup(group);
-        setEditingGroupIsServerConfirmed(isServerConfirmed);
+        setEditingAssessment(row);
+        setEditingAssessmentIsServerConfirmed(isServerConfirmed);
     };
 
     const handleCancelEdit = () => {
         setEditingAssessmentId(null);
-        setEditingGroup(null);
-        setEditingGroupIsServerConfirmed(false);
+        setEditingAssessment(null);
+        setEditingAssessmentIsServerConfirmed(false);
     };
 
-    const handleDeleteAssessment = (group: Assessment) => {
-        setGroupToDelete(group);
+    const handleDeleteAssessment = (row: Assessment) => {
+        setAssessmentToDelete(row);
         setShowDeleteConfirm(true);
     };
 
-    const handleDiscardReview = async (assessmentId: string) => {
+    const handleDiscardReview = async (review: AssessmentReview) => {
         try {
-            await AssessmentReviews.remove(assessmentId);
+            await AssessmentReviews.remove(review.assessment_id, review.variant_id, review.package);
             setReviews(prev => {
                 const next = { ...prev };
-                delete next[assessmentId];
+                const remaining = (next[review.assessment_id] ?? []).filter(r => r.id !== review.id);
+                if (remaining.length > 0) next[review.assessment_id] = remaining;
+                else delete next[review.assessment_id];
                 return next;
             });
             showMessage("Review discarded.", "success");
@@ -2093,64 +2095,76 @@ type VariantScopedSnapshot = {
                                                             )}
                                                         </div>
                                                     </h3>
-                                                    {!isBeingEdited && (group.impact_statement || group.status === 'not_affected' || hasStatusNotes || hasWorkaround) && (
+                                                    {!isBeingEdited && (row.impact_statement || row.status === 'not_affected' || hasStatusNotes || hasWorkaround) && (
                                                         <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                                            {group.impact_statement && <>{group.impact_statement}<br/></>}
-                                                            {!group.impact_statement && group.status == 'not_affected' && <>no impact statement<br/></>}
-                                                            {hasStatusNotes && <>{group.status_notes}<br/></>}
-                                                            {hasWorkaround && group.workaround}
+                                                            {row.impact_statement && <>{row.impact_statement}<br/></>}
+                                                            {!row.impact_statement && row.status == 'not_affected' && <>no impact statement<br/></>}
+                                                            {hasStatusNotes && <>{row.status_notes}<br/></>}
+                                                            {hasWorkaround && row.workaround}
                                                         </p>
                                                     )}
                                                 </div>
                                             </div>
-                                            {group.origin === "custom" && (() => {
-                                                const assessmentId = group.id;
-                                                const review = reviews[assessmentId];
-                                                const verdict = verdictOf(review);
+                                            {row.origin === "custom" && (() => {
+                                                const assessmentId = row.id;
+                                                const rowReviews = reviews[assessmentId] ?? [];
+                                                const multiTarget = rowReviews.length > 1;
                                                 return (
                                                     <div key={`review-${assessmentId}`} className="mt-3">
-                                                        {review && (
-                                                            <div className="mt-2 ml-4 p-3 rounded-lg border border-sky-700 bg-sky-950/30">
-                                                                <div className="flex items-center justify-between mb-2">
-                                                                    <span className="inline-flex items-center gap-2 text-sky-300 font-semibold text-sm">
-                                                                        <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
-                                                                        AI review
-                                                                        <span className={verdict === "agrees" ? "text-green-400" : "text-amber-400"}>
-                                                                            · {verdict === "agrees" ? "✓ agrees" : verdict === "stale" ? "⚠ stale" : "⚠ differs"}
+                                                        {rowReviews.map(review => {
+                                                            const verdict = verdictOf(review);
+                                                            const variantName = variantNameById.get(review.variant_id) ?? review.variant_id;
+                                                            return (
+                                                                <div
+                                                                    key={review.id}
+                                                                    className="mt-2 ml-4 p-3 rounded-lg border border-sky-700 bg-sky-950/30"
+                                                                >
+                                                                    <div className="flex items-center justify-between mb-2">
+                                                                        <span className="inline-flex items-center gap-2 text-sky-300 font-semibold text-sm">
+                                                                            <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
+                                                                            AI review
+                                                                            {multiTarget && (
+                                                                                <span className="text-gray-400 font-normal">
+                                                                                    · {review.package} @ {variantName}
+                                                                                </span>
+                                                                            )}
+                                                                            <span className={verdict === "agrees" ? "text-green-400" : "text-amber-400"}>
+                                                                                · {verdict === "agrees" ? "✓ agrees" : verdict === "stale" ? "⚠ stale" : "⚠ differs"}
+                                                                            </span>
                                                                         </span>
-                                                                    </span>
-                                                                    {isEditing && (
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => setReviewToDiscard(assessmentId)}
-                                                                            className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
-                                                                        >
-                                                                            Discard review
-                                                                        </button>
+                                                                        {isEditing && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => setReviewToDiscard(review)}
+                                                                                className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                                                                            >
+                                                                                Discard review
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="text-sm text-gray-200 whitespace-pre-line">
+                                                                        <strong>{review.status}</strong>
+                                                                        {review.justification && <> · {review.justification}</>}<br/>
+                                                                        {review.impact_statement && <>{review.impact_statement}<br/></>}
+                                                                        {review.status_notes && <>{review.status_notes}<br/></>}
+                                                                        {review.workaround && <>{review.workaround}<br/></>}
+                                                                        <span className="text-gray-400">why: {review.rationale}</span>
+                                                                    </p>
+                                                                    {review.is_stale && (
+                                                                        <p className="mt-2 text-xs text-amber-400">
+                                                                            ⚠ Assessment was edited after this review was generated.
+                                                                        </p>
                                                                     )}
                                                                 </div>
-                                                                <p className="text-sm text-gray-200 whitespace-pre-line">
-                                                                    <strong>{review.status}</strong>
-                                                                    {review.justification && <> · {review.justification}</>}<br/>
-                                                                    {review.impact_statement && <>{review.impact_statement}<br/></>}
-                                                                    {review.status_notes && <>{review.status_notes}<br/></>}
-                                                                    {review.workaround && <>{review.workaround}<br/></>}
-                                                                    <span className="text-gray-400">why: {review.rationale}</span>
-                                                                </p>
-                                                                {review.is_stale && (
-                                                                    <p className="mt-2 text-xs text-amber-400">
-                                                                        ⚠ Assessment was edited after this review was generated.
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        )}
+                                                            );
+                                                        })}
                                                     </div>
                                                 );
                                             })()}
                                             {isBeingEdited && (
                                                 <div className="mt-3">
                                                     <EditAssessment
-                                                        assessment={groupAsAssessment}
+                                                        assessment={assessmentForEdit}
                                                         onSaveAssessment={saveEditedAssessment}
                                                         onCancel={handleCancelEdit}
                                                         triggerBanner={showMessage}

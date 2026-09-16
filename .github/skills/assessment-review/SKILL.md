@@ -1,6 +1,6 @@
 ---
 name: assessment-review
-description: Use when asked to review, audit, or second-opinion existing user/custom VEX assessments in VulnScout. Handles three scopes — a specific assessment ID (which may cover several package/variant targets in one row), a project (and optional variant, defaulting to "default"), or every custom assessment when no scope is given. Only assessments whose origin is "custom" are ever reviewed; assessments from SBOM scans and pending AI suggestions are always skipped. Each review is an independent re-derivation recorded alongside the assessment; it never modifies the assessment itself.
+description: Use when asked to review, audit, or second-opinion existing user/custom VEX assessments in VulnScout. Handles three scopes — a specific assessment ID (which may cover several package/variant targets in one row), a project (and optional variant, defaulting to "default"), or every custom assessment when no scope is given. Only assessments whose origin is "custom" are ever reviewed; assessments from SBOM scans and pending AI suggestions are always skipped. Each review is an independent re-derivation recorded alongside the assessment, one per target; it never modifies the assessment itself.
 ---
 
 # Assessment Review Skill
@@ -35,10 +35,10 @@ PHASE 1: Context → vulnscout-get_merged_context once per variant, cached
 PHASE 2: Independent Derivation (per assessment, per target) → run
          cve-assessment Phases 1 → 3.5 BEFORE reading the stored fields
   ↓
-PHASE 3: Diff & Compose → compare derived vs stored; reconcile any
-         per-target divergence into one verdict; compose review fields
+PHASE 3: Diff & Compose → compare each target's derived verdict against the
+         assessment's stored fields; compose one review's worth of fields per target
   ↓
-PHASE 4: Write → vulnscout-write_assessment_review per assessment
+PHASE 4: Write → vulnscout-write_assessment_review per target
   ↓
 OUTPUT: summary table + skip counts
 ```
@@ -64,13 +64,16 @@ outdated}`). `vulnscout-get_custom_assessment` returns the whole assessment —
 its stored verdict plus every target — in one call; there is nothing to expand.
 
 Targets share **authored content** (the one stored verdict), not **evidence** —
-a package present in one variant may be absent in another. Derive each target
-independently in Phase 2, but write exactly **one** review per assessment in
-Phase 4, since `vulnscout-write_assessment_review` carries a single verdict.
-When targets derive to different conclusions, that divergence is itself a
-finding: it means the assessment's targets should probably not be reviewed —
-or authored — as one row. Reconcile it per Phase 3 rather than silently
-picking one target's answer.
+a package present in one variant may be absent in another. Reviews are keyed
+the same way targets are: derive each target independently in Phase 2, and
+write one review per target in Phase 4 (`vulnscout-write_assessment_review`
+takes the target's `variant_id`/`package` alongside the assessment id). Nothing
+needs to be collapsed into a single verdict — if two targets derive
+differently, each gets its own review saying so, and the assessment's stored
+fields are diffed against each target's own derivation independently. Still
+call out in the summary when an assessment's targets disagree; it may mean the
+assessment itself should be split so each target can be authored on its own
+evidence, but the review no longer forces that choice by picking one answer.
 
 ### Listing scope
 
@@ -90,18 +93,24 @@ of more than 25 assessments.
 
 ### Re-review policy
 
-By default, **skip assessments that already carry a review**, by passing
-`has_review=false`. Re-running over a broad scope should not redo settled work.
+By default, **skip assessments where every target already carries a review**,
+by passing `has_review=false`. Re-running over a broad scope should not redo
+settled work. `has_review` on a listing row is true when *any* target has a
+review — an assessment with two targets and only one reviewed still comes back
+with `has_review=true`, so check `target_reviews` (each target's own
+`has_review`/`is_stale`) before assuming every target is covered, and derive
+the still-unreviewed targets normally.
 
 Two exceptions:
 - The caller explicitly asks to re-review everything → omit `has_review`.
-- An assessment's existing review is stale (`is_stale=true`, meaning the
-  assessment's reviewed content changed after the review was written — note
-  this is content-based, so it fires even when the analyst kept the original
-  assessment timestamp) → review it again. Stale
+- A target's existing review is stale (`is_stale=true` on that target's entry,
+  meaning the assessment's reviewed content changed after the review was
+  written — note this is content-based, so it fires even when the analyst kept
+  the original assessment timestamp) → review that target again. Stale
   reviews surface via `get_custom_assessment`; when listing with
-  `has_review=false` they are excluded, so fetch them explicitly if the caller
-  asks about stale reviews.
+  `has_review=false` an assessment with only stale targets left may be
+  excluded if another of its targets is fresh, so fetch it explicitly if the
+  caller asks about stale reviews.
 
 ### Strictness
 
@@ -172,36 +181,21 @@ The listing tool returns the stored fields alongside the ID, so they will be in
 your context. Reach your own conclusion first anyway, and state it before
 comparing.
 
-A single-target assessment needs no reconciliation — its one derived verdict is
-the assessment's derived verdict. A multi-target assessment may derive
-differently per target (component presence and objective impact depend on the
-target's package and variant); see Phase 3 for how to reconcile that into the
-one verdict a review can carry.
+A multi-target assessment may derive differently per target — component
+presence and objective impact depend on the target's package and variant —
+and that is fine: each target's derivation becomes that target's own review in
+Phase 4, independent of the others.
 
 ---
 
 ## Phase 3: Diff & Compose
 
-### Reconciling multiple targets
-
-If the assessment has more than one target and Phase 2 derived different
-verdicts across them, reduce them to one before diffing against the stored
-fields:
-
-1. Rank derived statuses by severity: `affected` > `under_investigation` >
-   `not_affected` > `fixed`. Carry forward the most severe one as the
-   assessment's derived verdict — a review must never understate risk to reach
-   a single answer.
-2. Record the full per-target breakdown regardless of whether it changes the
-   final verdict; it always goes in `rationale` (see below).
-3. Treat the divergence itself as a finding: state in `rationale` that the
-   assessment's targets do not agree and that the analyst should consider
-   splitting the assessment so each target can be verdicted on its own
-   evidence, rather than leaving the disagreement smoothed over by the
-   most-severe pick.
-
-Compare the (possibly reconciled) derived verdict against stored on: `status`,
-`justification`, `impact_statement`, `workaround`, `responses`.
+Each target gets its own comparison: diff that target's Phase 2 derivation
+against the assessment's stored fields on `status`, `justification`,
+`impact_statement`, `workaround`, `responses`. A multi-target assessment whose
+targets derive differently simply produces differing reviews — call that out
+in the summary (Output) as a sign the assessment may be worth splitting, but
+do not merge the targets' verdicts into one before writing.
 
 **When they match** — the review carries the derived (identical) fields.
 `rationale` states what was verified and why it holds:
@@ -241,11 +235,13 @@ MEDIUM and LOW, follow it with one sentence naming the uncertainty or data gap.
 
 ## Phase 4: Write
 
-Per assessment:
+Per target:
 
 ```
 vulnscout-write_assessment_review(
     assessment_id=<id>,
+    variant_id=<the target's variant_id>,
+    package=<the target's package>,
     status=<derived or under_investigation>,
     rationale=<why>,
     status_notes=<proposed notes + confidence level: ...>,
@@ -255,10 +251,12 @@ vulnscout-write_assessment_review(
 )
 ```
 
-Writing again for the same assessment overwrites its previous review — that is
-the intended behavior, not an error to avoid.
+Writing again for the same target overwrites its previous review — that is the
+intended behavior, not an error to avoid. A different target on the same
+assessment gets its own review row and is never touched by writing another
+target's.
 
-**On failure, log the error and continue to the next assessment.** One rejected
+**On failure, log the error and continue to the next target.** One rejected
 write must not abort a fifty-assessment run. Report every failure in the summary.
 
 ---
@@ -274,11 +272,10 @@ End with a summary table:
 | 8c04a19f…     | CVE-2024-0002 | zlib · release     | fixed        | fixed    | agrees  |
 ```
 
-`Target` is the assessment's package and variant. For a single-target
-assessment this is one pair; for a multi-target assessment, list every target
-(e.g. `openssl · default; openssl · release`) on that one row and call out any
-per-target divergence found in Phase 3 explicitly, including the split
-recommendation when one applies.
+`Target` is the assessment's package and variant. A multi-target assessment
+gets one summary row per target, each carrying its own review and verdict;
+call out explicitly when an assessment's targets disagree, and note that
+splitting the assessment is worth considering in that case.
 
 Followed by counts: reviewed, skipped as non-custom, skipped as already
 reviewed, failed to write.
@@ -288,9 +285,9 @@ reviewed, failed to write.
 ## Quality Checklist
 
 - ✅ Scope mapped to a tool call; unsupported filters applied to returned rows, not invented as parameters
-- ✅ Every target on a multi-target assessment derived independently — no verdict copied across targets without going through the reconciliation rule
-- ✅ Divergent per-target verdicts reconciled to the most-severe status, with the full breakdown and a split recommendation in `rationale`
-- ✅ `has_review=false` used unless the caller asked to re-review
+- ✅ Every target on a multi-target assessment derived and written independently — no verdict copied across targets
+- ✅ Divergent per-target verdicts left as separate reviews, with the disagreement and a split recommendation called out in the summary
+- ✅ `has_review=false` used unless the caller asked to re-review; per-target `target_reviews` checked rather than assuming the assessment-level flag means every target is covered
 - ✅ Caller confirmed before a run exceeding 25 assessments
 - ✅ Every non-custom assessment skipped and counted
 - ✅ `get_merged_context` called once per variant, not per assessment
