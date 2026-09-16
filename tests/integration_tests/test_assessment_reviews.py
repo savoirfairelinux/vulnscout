@@ -12,6 +12,7 @@ from sqlalchemy import event
 
 from src.extensions import db
 from src.models.assessment import Assessment
+from src.models.assessment_target import AssessmentTarget
 from src.models.assessment_review import AssessmentReview, fingerprint_assessment
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
@@ -45,12 +46,13 @@ def make_assessment(finding, variant, origin="custom", **kwargs):
     row = Assessment(
         id=uuid.uuid4(),
         origin=origin,
-        finding_id=finding.id,
-        variant_id=variant.id,
         timestamp=datetime.now(timezone.utc),
         **fields,
     )
     db.session.add(row)
+    db.session.flush()
+    db.session.add(AssessmentTarget(
+        assessment_id=row.id, variant_id=variant.id, finding_id=finding.id))
     db.session.commit()
     return row
 
@@ -502,10 +504,11 @@ def test_get_for_variants_query_count_does_not_scale_with_n(finding, variant):
         reviews = AssessmentReview.get_for_variants([variant_id])
         [r.to_dict() for r in reviews]
 
-    # Assert: eager-loaded assessment means exactly one query for the
-    # reviews (join), independent of how many rows come back.
+    # Assert: the reviews join plus one selectin batch each for
+    # target_rows and their findings — three queries total, independent of
+    # how many rows come back.
     assert len(reviews) == 5
-    assert counter["n"] == 1
+    assert counter["n"] == 3
 
 
 # ----------------------------------------------------------------------
