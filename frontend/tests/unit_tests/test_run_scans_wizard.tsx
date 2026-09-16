@@ -12,6 +12,7 @@ describe("RunScansWizard", () => {
         selectedRefreshTypes: new Set(["epss"]),
         refreshMode: "complete" as const,
         excludeKernel: true,
+        excludeNative: false,
         onClose: jest.fn(),
         onToggleVariant: jest.fn(),
         onToggleScanType: jest.fn(),
@@ -20,6 +21,7 @@ describe("RunScansWizard", () => {
         onSelectAllVariants: jest.fn(),
         onSelectNoVariants: jest.fn(),
         onExcludeKernelChange: jest.fn(),
+        onExcludeNativeChange: jest.fn(),
         onLaunch: jest.fn(),
     };
 
@@ -42,7 +44,7 @@ describe("RunScansWizard", () => {
         expect(screen.getByRole("heading", { name: "Select context variants" })).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-        expect(screen.getByRole("heading", { name: "Exclude kernel packages?" })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Filter scanner inputs" })).toBeInTheDocument();
         fireEvent.click(screen.getByRole("radio", { name: /no scan every kernel-related package/i }));
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
@@ -52,6 +54,7 @@ describe("RunScansWizard", () => {
         expect(screen.getByRole("heading", { name: "Review and launch" })).toBeInTheDocument();
         expect(screen.getByText("Grype")).toBeInTheDocument();
         expect(screen.getByText("Production")).toBeInTheDocument();
+        expect(screen.getByText(/-native packages: Included/)).toBeInTheDocument();
         expect(screen.getByText("FKIE, EPSS, ENISA EUVD")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Edit vulnerability data refresh" }));
         expect(screen.getByRole("heading", { name: "Refresh data" })).toBeInTheDocument();
@@ -87,6 +90,7 @@ describe("RunScansWizard", () => {
         const onSelectAllVariants = jest.fn();
         const onSelectNoVariants = jest.fn();
         const onExcludeKernelChange = jest.fn();
+        const onExcludeNativeChange = jest.fn();
         const onToggleRefreshType = jest.fn();
         const onRefreshModeChange = jest.fn();
         const { rerender } = render(
@@ -101,6 +105,7 @@ describe("RunScansWizard", () => {
                 onSelectAllVariants={onSelectAllVariants}
                 onSelectNoVariants={onSelectNoVariants}
                 onExcludeKernelChange={onExcludeKernelChange}
+                onExcludeNativeChange={onExcludeNativeChange}
                 onToggleRefreshType={onToggleRefreshType}
                 onRefreshModeChange={onRefreshModeChange}
             />,
@@ -122,7 +127,9 @@ describe("RunScansWizard", () => {
         fireEvent.click(screen.getByRole("button", { name: /why exclude kernel packages/i }));
         expect(screen.getByText(/Yocto kernel recipes create many companion packages/i)).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /why exclude kernel packages/i }));
+        fireEvent.click(screen.getByRole("checkbox", { name: /ignore -native packages/i }));
         expect(onExcludeKernelChange).toHaveBeenCalledWith(false);
+        expect(onExcludeNativeChange).toHaveBeenCalledWith(true);
 
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
         fireEvent.click(screen.getByRole("radio", { name: /custom refresh/i }));
@@ -139,6 +146,7 @@ describe("RunScansWizard", () => {
                 onSelectAllVariants={onSelectAllVariants}
                 onSelectNoVariants={onSelectNoVariants}
                 onExcludeKernelChange={onExcludeKernelChange}
+                onExcludeNativeChange={onExcludeNativeChange}
                 onToggleRefreshType={onToggleRefreshType}
                 onRefreshModeChange={onRefreshModeChange}
             />,
@@ -163,7 +171,7 @@ describe("RunScansWizard", () => {
         for (const [buttonName, heading] of [
             ["Edit scans", "Select scans"],
             ["Edit context variants", "Select context variants"],
-            ["Edit kernel package selection", "Exclude kernel packages?"],
+            ["Edit package filters", "Filter scanner inputs"],
         ]) {
             fireEvent.click(screen.getByRole("button", { name: buttonName }));
             expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();

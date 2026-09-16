@@ -10,7 +10,8 @@ import { ScanStateManager } from "./scanStateManager";
 export type { ScanEntryState as OsvState, ScanManagerSnapshot } from "./scanStateManager";
 
 const manager = new ScanStateManager(
-    (vid, opts) => ScansHandler.triggerOsvScan(vid, opts.excludeKernel ?? true),
+    (vid, opts) => ScansHandler.triggerOsvScan(
+        vid, opts.excludeKernel ?? true, opts.excludeNative ?? false),
     (vid) => ScansHandler.getOsvScanStatus(vid),
     "OSV",
     true, // serial: scans share the global queue with the other scan types

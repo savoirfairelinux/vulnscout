@@ -13,6 +13,7 @@ type Props = {
     selectedRefreshTypes: Set<string>;
     refreshMode: "complete" | "custom";
     excludeKernel: boolean;
+    excludeNative: boolean;
     onClose: () => void;
     onToggleVariant: (variantId: string) => void;
     onToggleScanType: (scanType: string) => void;
@@ -21,6 +22,7 @@ type Props = {
     onSelectAllVariants: () => void;
     onSelectNoVariants: () => void;
     onExcludeKernelChange: (exclude: boolean) => void;
+    onExcludeNativeChange: (exclude: boolean) => void;
     onLaunch: () => void;
 };
 
@@ -37,7 +39,7 @@ const refreshTypes = [
     { key: "euvd", label: "ENISA EUVD", description: "Refresh EU vulnerability data for newly discovered CVEs." },
 ] as const;
 
-const stepLabels = ["Scans", "Variants", "Kernel", "Refresh", "Review"] as const;
+const stepLabels = ["Scans", "Variants", "Filters", "Refresh", "Review"] as const;
 const reviewStep = stepLabels.length;
 
 export default function RunScansWizard({
@@ -48,6 +50,7 @@ export default function RunScansWizard({
     selectedRefreshTypes,
     refreshMode,
     excludeKernel,
+    excludeNative,
     onClose,
     onToggleVariant,
     onToggleScanType,
@@ -56,6 +59,7 @@ export default function RunScansWizard({
     onSelectAllVariants,
     onSelectNoVariants,
     onExcludeKernelChange,
+    onExcludeNativeChange,
     onLaunch,
 }: Readonly<Props>) {
     const [step, setStep] = useState(1);
@@ -154,8 +158,10 @@ export default function RunScansWizard({
             </>}
 
             {step === 3 && <>
-                <h3 className="text-base font-semibold text-white">Exclude kernel packages?</h3>
-                <p className="mt-1 text-sm text-neutral-400">The main kernel package is always scanned.</p>
+                <h3 className="text-base font-semibold text-white">Filter scanner inputs</h3>
+                <p className="mt-1 text-sm text-neutral-400">Skip package types that usually add little value to vulnerability analysis.</p>
+                <h4 className="mt-5 text-sm font-semibold text-white">Exclude kernel companion packages?</h4>
+                <p className="mt-1 text-xs text-neutral-400">The main kernel package is always scanned.</p>
                 <div className="mt-5 grid grid-cols-2 gap-3">
                     <label className={[
                         "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
@@ -176,6 +182,18 @@ export default function RunScansWizard({
                     <FontAwesomeIcon icon={faCircleQuestion} className="mr-2" />Why exclude kernel packages?
                 </button>
                 {showKernelHelp && <p className="mt-2 rounded border border-sky-700/40 bg-sky-900/30 p-3 text-xs leading-relaxed text-sky-200">Yocto kernel recipes create many companion packages that share the same kernel CPE. Excluding those companions avoids duplicate findings and slower scans while retaining CVE coverage for the real kernel package.</p>}
+                <label className={[
+                    "mt-5 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition-colors",
+                    excludeNative
+                        ? "border-cyan-500 bg-cyan-950/40 text-white"
+                        : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                ].join(" ")}>
+                    <input type="checkbox" checked={excludeNative} onChange={(event) => onExcludeNativeChange(event.target.checked)} className="mt-0.5 accent-cyan-500" />
+                    <span className="flex flex-col">
+                        <span className="font-medium">Ignore -native packages</span>
+                        <span className="mt-1 text-xs text-zinc-400">Do not scan Yocto build-host packages whose names end with <code>-native</code>.</span>
+                    </span>
+                </label>
             </>}
 
             {step === 4 && <>
@@ -222,7 +240,7 @@ export default function RunScansWizard({
                         <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Context variants</h4><p className="mt-1 text-zinc-300">{variants.filter(variant => selectedVariantIds.has(variant.id)).map(variant => variant.name).join(", ")}</p></div><button type="button" onClick={() => setStep(2)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit context variants">Edit</button></div>
                     </section>
                     <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
-                        <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Kernel packages</h4><p className="mt-1 text-zinc-300">{excludeKernel ? "Excluded" : "Included"}</p></div><button type="button" onClick={() => setStep(3)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit kernel package selection">Edit</button></div>
+                        <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Package filters</h4><p className="mt-1 text-zinc-300">Kernel companions: {excludeKernel ? "Excluded" : "Included"}; -native packages: {excludeNative ? "Excluded" : "Included"}</p></div><button type="button" onClick={() => setStep(3)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit package filters">Edit</button></div>
                     </section>
                     <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
                         <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Vulnerability data refresh</h4><p className="mt-1 text-zinc-300">{refreshTypes.filter(({ key }) => effectiveRefreshTypes.has(key)).map(({ label }) => label).join(", ") || "No refresh selected"}</p></div><button type="button" onClick={() => setStep(4)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit vulnerability data refresh">Edit</button></div>

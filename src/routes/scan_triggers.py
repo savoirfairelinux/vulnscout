@@ -22,7 +22,7 @@ from ..models.sbom_package import SBOMPackage
 from ..models.sbom_document import SBOMDocument
 from ..extensions import db
 from ..views.grype_vulns import GrypeVulns
-from ..helpers.scan_filters import is_kernel_package_name
+from ..helpers.scan_filters import is_kernel_package_name, is_native_package_name
 
 from ._scan_helpers import (
     validate_trigger,
@@ -41,6 +41,11 @@ def _read_exclude_kernel() -> bool:
     the UI can opt back in by sending ``?exclude_kernel=false``.
     """
     return request.args.get("exclude_kernel", "true").strip().lower() != "false"
+
+
+def _read_exclude_native() -> bool:
+    """Read the optional ``exclude_native`` scanner input filter."""
+    return request.args.get("exclude_native", "false").strip().lower() == "true"
 
 
 def _resolve_grype_memlimit() -> str | None:
@@ -133,6 +138,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query exclude_kernel string optional Disable kernel package exclusion by passing false.
+        query exclude_native string optional Exclude package names ending in -native by passing true.
         response 202 JsonObject Scan job accepted.
         response 503 Error Grype binary not available.
         """
@@ -178,6 +184,7 @@ def init_app(app: Flask) -> None:
             sbom_pkg_set = {(r[0], r[1]) for r in pkg_rows}
 
         exclude_kernel = _read_exclude_kernel()
+        exclude_native = _read_exclude_native()
         init_progress(_grype_scans_in_progress, vid_str, total=4)
 
         def _run_grype_scan() -> None:
@@ -227,50 +234,60 @@ def init_app(app: Flask) -> None:
                     #     whereas normalising would over-collapse genuinely
                     #     distinct packages that happen to share a normalised
                     #     name.
-                    if sbom_pkg_set:
-                        import json as _json
-                        with open(exported_cdx, "r") as cf:
-                            cdx_data = _json.load(cf)
-                        components = cdx_data.get("components", [])
-                        orig_components = len(components)
-                        kept = []
-                        kept_refs = set()
-                        seen_nv: set[tuple[str, str]] = set()
-                        kernel_modules_dropped = 0
-                        for comp in components:
-                            name = comp.get("name", "")
-                            version = comp.get("version", "")
-                            # Skip kernel companion packages: they expand to
-                            # thousands of entries in SPDX 3 SBOMs and all inherit
-                            # the base kernel CPE, so they make Grype crawl with
-                            # no useful results.  Skipped only when the kernel
-                            # exclusion option is enabled (the default).
-                            if exclude_kernel and is_kernel_package_name(name):
-                                kernel_modules_dropped += 1
-                                continue
-                            nv = (name, version)
-                            if nv in seen_nv:
-                                continue
-                            seen_nv.add(nv)
-                            kept.append(comp)
-                            ref = comp.get("bom-ref")
-                            if ref:
-                                kept_refs.add(ref)
-                        cdx_data["components"] = kept
-                        # Prune dependency edges that reference dropped components.
-                        if isinstance(cdx_data.get("dependencies"), list):
-                            cdx_data["dependencies"] = [
-                                dep for dep in cdx_data["dependencies"]
-                                if dep.get("ref") in kept_refs
-                            ]
-                        with open(exported_cdx, "w") as cf:
-                            _json.dump(cdx_data, cf)
-                        _grype_scans_in_progress[vid_str]["logs"].append(
-                            f"[1/4] De-duplicated components: "
-                            f"{len(kept)}/{orig_components} kept"
-                            + (f" ({kernel_modules_dropped} kernel modules excluded)"
-                               if kernel_modules_dropped else "")
+                    import json as _json
+                    with open(exported_cdx, "r") as cf:
+                        cdx_data = _json.load(cf)
+                    components = cdx_data.get("components", [])
+                    orig_components = len(components)
+                    kept = []
+                    kept_refs = set()
+                    seen_nv: set[tuple[str, str]] = set()
+                    kernel_modules_dropped = 0
+                    native_packages_dropped = 0
+                    for comp in components:
+                        name = comp.get("name", "")
+                        version = comp.get("version", "")
+                        # Skip kernel companion packages: they expand to
+                        # thousands of entries in SPDX 3 SBOMs and all inherit
+                        # the base kernel CPE, so they make Grype crawl with
+                        # no useful results.  Skipped only when the kernel
+                        # exclusion option is enabled (the default).
+                        if exclude_kernel and is_kernel_package_name(name):
+                            kernel_modules_dropped += 1
+                            continue
+                        if exclude_native and is_native_package_name(name):
+                            native_packages_dropped += 1
+                            continue
+                        nv = (name, version)
+                        if nv in seen_nv:
+                            continue
+                        seen_nv.add(nv)
+                        kept.append(comp)
+                        ref = comp.get("bom-ref")
+                        if ref:
+                            kept_refs.add(ref)
+                    cdx_data["components"] = kept
+                    # Prune dependency edges that reference dropped components.
+                    if isinstance(cdx_data.get("dependencies"), list):
+                        cdx_data["dependencies"] = [
+                            dep for dep in cdx_data["dependencies"]
+                            if dep.get("ref") in kept_refs
+                        ]
+                    with open(exported_cdx, "w") as cf:
+                        _json.dump(cdx_data, cf)
+                    filter_log = (
+                        f"[1/4] De-duplicated components: "
+                        f"{len(kept)}/{orig_components} kept"
+                    )
+                    if kernel_modules_dropped:
+                        filter_log += (
+                            f" ({kernel_modules_dropped} kernel modules excluded)"
                         )
+                    if native_packages_dropped:
+                        filter_log += (
+                            f" ({native_packages_dropped} native packages excluded)"
+                        )
+                    _grype_scans_in_progress[vid_str]["logs"].append(filter_log)
 
                     # 2. Run grype on the exported SBOM
                     _grype_scans_in_progress[vid_str]["progress"] = "2/4 Running Grype"
@@ -309,7 +326,7 @@ def init_app(app: Flask) -> None:
                     #     CycloneDX input is already scoped to the variant, so
                     #     this is normally a no-op, but it guards against any
                     #     stray artifact grype might synthesise.
-                    if sbom_pkg_set:
+                    if sbom_pkg_set or exclude_kernel or exclude_native:
                         import json as _json
                         with open(grype_out, "r") as gf:
                             grype_data = _json.load(gf)
@@ -322,8 +339,13 @@ def init_app(app: Flask) -> None:
                                 artifact.get("purl"),
                             )
                             version = artifact.get("version", "")
-                            if (name, version) in sbom_pkg_set:
-                                filtered.append(match)
+                            if exclude_kernel and is_kernel_package_name(name):
+                                continue
+                            if exclude_native and is_native_package_name(name):
+                                continue
+                            if sbom_pkg_set and (name, version) not in sbom_pkg_set:
+                                continue
+                            filtered.append(match)
                         grype_data["matches"] = filtered
                         with open(grype_out, "w") as gf:
                             _json.dump(grype_data, gf)
@@ -415,6 +437,7 @@ def init_app(app: Flask) -> None:
 
                 OpenAPI:
                 query exclude_kernel string optional Disable kernel package exclusion by passing false.
+                query exclude_native string optional Exclude package names ending in -native by passing true.
                 query mode string optional Select local or api mode.
                 response 202 JsonObject Scan job accepted.
         """
@@ -430,6 +453,7 @@ def init_app(app: Flask) -> None:
 
         vid_str = str(variant_uuid)
         exclude_kernel = _read_exclude_kernel()
+        exclude_native = _read_exclude_native()
         nvd_mode = _read_nvd_mode()
         init_progress(_nvd_scans_in_progress, vid_str)
 
@@ -445,7 +469,8 @@ def init_app(app: Flask) -> None:
                 )
                 packages, pkg_err = resolve_active_packages(
                     variant_uuid, _nvd_scans_in_progress, vid_str,
-                    exclude_kernel=exclude_kernel)
+                    exclude_kernel=exclude_kernel,
+                    exclude_native=exclude_native)
                 if pkg_err:
                     return
 
@@ -679,6 +704,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query exclude_kernel string optional Disable kernel package exclusion by passing false.
+        query exclude_native string optional Exclude package names ending in -native by passing true.
         response 202 JsonObject Scan job accepted.
         """
         variant_uuid, variant, err = validate_trigger(
@@ -690,6 +716,7 @@ def init_app(app: Flask) -> None:
 
         vid_str = str(variant_uuid)
         exclude_kernel = _read_exclude_kernel()
+        exclude_native = _read_exclude_native()
         init_progress(_osv_scans_in_progress, vid_str)
 
         def _run_osv_scan() -> None:
@@ -709,7 +736,8 @@ def init_app(app: Flask) -> None:
                 )
                 packages, pkg_err = resolve_active_packages(
                     variant_uuid, _osv_scans_in_progress, vid_str,
-                    exclude_kernel=exclude_kernel)
+                    exclude_kernel=exclude_kernel,
+                    exclude_native=exclude_native)
                 if pkg_err:
                     return
 
@@ -889,6 +917,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query exclude_kernel string optional Disable kernel package exclusion by passing false.
+        query exclude_native string optional Exclude package names ending in -native by passing true.
         response 202 JsonObject Scan job accepted.
         """
         from ..controllers.scc_engine import serialized_engine_operation
@@ -902,6 +931,7 @@ def init_app(app: Flask) -> None:
 
         vid_str = str(variant_uuid)
         exclude_kernel = _read_exclude_kernel()
+        exclude_native = _read_exclude_native()
         init_progress(_sbom_cve_check_scans_in_progress, vid_str)
 
         def _run_sbom_cve_check_scan() -> None:
@@ -921,7 +951,8 @@ def init_app(app: Flask) -> None:
                 )
                 packages, pkg_err = resolve_active_packages(
                     variant_uuid, _sbom_cve_check_scans_in_progress, vid_str,
-                    exclude_kernel=exclude_kernel)
+                    exclude_kernel=exclude_kernel,
+                    exclude_native=exclude_native)
                 if pkg_err:
                     return
 
