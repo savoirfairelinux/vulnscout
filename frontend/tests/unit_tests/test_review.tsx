@@ -282,6 +282,8 @@ type NetworkOpts = {
     packages?: unknown[];
     packagesByVariant?: Record<string, unknown[]>;
     packagesGate?: Promise<void>;
+    variantsGate?: Promise<void>;
+    variantsOk?: boolean;
     mutationOk?: boolean;
     exportOk?: boolean;
     importResult?: Record<string, unknown>;
@@ -303,6 +305,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         // Every variant ships the shared package by default so the editor's
         // package/variant compatibility gate does not disable the checkboxes.
         packages = [{ name: 'pkgA', version: '1.0.0' }], packagesByVariant, packagesGate,
+        variantsGate, variantsOk = true,
         mutationOk = true, exportOk = true,
         importResult = {
             status: 'success', assessments_imported: 2, assessments_skipped: 1,
@@ -340,7 +343,12 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
-            if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) return JSON.stringify(variants);
+            if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) {
+                if (variantsGate) await variantsGate;
+                return variantsOk
+                    ? JSON.stringify(variants)
+                    : {status: 500, body: JSON.stringify({error: 'variant lookup failed'})};
+            }
             if (url.includes('/api/packages')) {
                 if (packagesGate) await packagesGate;
                 const variant = new URL(url).searchParams.get('variant_id');
@@ -558,6 +566,52 @@ describe('Review — editing "Apply to variants"', () => {
         await act(async () => releasePackages());
         expect(await screen.findByText('Apply to exact targets:')).toBeInTheDocument();
         expect(screen.queryByText(/Target compatibility is unavailable/)).not.toBeInTheDocument();
+    });
+
+    test('saving before variants resolve cannot expand sparse targets', async () => {
+        let releaseVariants!: () => void;
+        const variantsGate = new Promise<void>(resolve => { releaseVariants = resolve; });
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                {variantId: 'v1', pkg: 'pkgA@1.0.0'},
+                {variantId: 'v2', pkg: 'pkgB@2.0.0'},
+            ]),
+        ], {
+            variantsGate,
+            packages: [
+                {name: 'pkgA', version: '1.0.0'},
+                {name: 'pkgB', version: '2.0.0'},
+            ],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByTitle('Edit assessment'));
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(await screen.findByText('Target compatibility is still loading')).toBeInTheDocument();
+        expect(reconcileCalls()).toHaveLength(0);
+
+        await act(async () => releaseVariants());
+        await screen.findByText('Apply to exact targets:');
+    });
+
+    test('saving after variant lookup fails cannot expand sparse targets', async () => {
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                {variantId: 'v1', pkg: 'pkgA@1.0.0'},
+                {variantId: 'v2', pkg: 'pkgB@2.0.0'},
+            ]),
+        ], {variantsOk: false});
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByTitle('Edit assessment'));
+        expect(await screen.findByText('Target compatibility is unavailable. Try again.')).toBeInTheDocument();
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(reconcileCalls()).toHaveLength(0);
+        expect(screen.getAllByText('Target compatibility is unavailable. Try again.').length).toBeGreaterThan(0);
     });
 
     test('a successful edit reports success and notifies the parent', async () => {
