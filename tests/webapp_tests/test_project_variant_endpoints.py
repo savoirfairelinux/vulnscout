@@ -602,6 +602,53 @@ class TestPackagesFiltering:
         assert "busybox" in names
         assert "cairo" not in names
 
+    def test_packages_compare_ignores_third_variant_membership(self, client_and_data):
+        """A package shared by compare and v3 remains unique against base."""
+        client, data = client_and_data
+        from src.extensions import db
+        from src.models.package import Package
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+
+        with client.application.app_context():
+            project = Project.create("ThreeVariantProject")
+            v1 = Variant.create("V1", project.id)
+            v2 = Variant.create("V2", project.id)
+            v3 = Variant.create("V3", project.id)
+            p1 = Package.find_or_create("p1", "1.0")
+            p2 = Package.find_or_create("p2", "2.0")
+
+            for variant, packages in (
+                (v1, [p1]),
+                (v2, [p1, p2]),
+                (v3, [p2]),
+            ):
+                scan = Scan.create(f"scan-{variant.name}", variant.id, scan_type="sbom")
+                document = SBOMDocument.create(
+                    path=f"/{variant.name}.cdx.json",
+                    source_name=variant.name,
+                    scan_id=scan.id,
+                )
+                for package in packages:
+                    SBOMPackage.create(document.id, package.id)
+            db.session.commit()
+            v1_id = str(v1.id)
+            v2_id = str(v2.id)
+
+        response = client.get(
+            f"/api/packages?variant_id={v1_id}"
+            f"&compare_variant_id={v2_id}"
+            "&operation=difference"
+        )
+
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        assert [package["name"] for package in body] == ["p2"]
+        assert body[0]["variants"] == ["V2"]
+
     def test_packages_compare_intersection_empty_when_no_common(self, client_and_data):
         """intersection(VA, VB): no common packages → empty."""
         client, data = client_and_data
