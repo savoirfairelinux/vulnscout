@@ -6,6 +6,7 @@ from uuid import UUID
 from flask import request
 from flask.typing import ResponseReturnValue
 
+from ..extensions import db
 from ..models.assessment import (
     Assessment,
     VALID_STATUS_OPENVEX,
@@ -256,6 +257,18 @@ def init_app(app) -> None:
             for r in AssessmentReview.get_for_variants(variant_ids)
         }
         reviewed_ids = {key[0] for key in reviews_by_target}
+        variant_project_ids = {
+            variant_id: project_id
+            for variant_id, project_id in db.session.execute(
+                db.select(Variant.id, Variant.project_id).where(
+                    Variant.id.in_({
+                        target.variant_id
+                        for assessment in assessments
+                        for target in assessment.target_rows
+                    })
+                )
+            )
+        }
 
         def scoped_target_keys(assessment: Assessment) -> list[tuple]:
             return [
@@ -272,6 +285,7 @@ def init_app(app) -> None:
                 assessment for assessment in assessments
                 if any(
                     key not in reviews_by_target
+                    or reviews_by_target[key].is_stale()
                     for key in scoped_target_keys(assessment)
                 )
             ]
@@ -303,11 +317,19 @@ def init_app(app) -> None:
             row["targets"] = [
                 {
                     "variant_id": str(target.variant_id),
+                    "project_id": str(variant_project_ids[target.variant_id]),
                     "package": target.finding.package.string_id,
                 }
                 for target in scoped_targets
                 if target.finding and target.finding.package
             ]
+            project_ids = {
+                variant_project_ids[target.variant_id]
+                for target in scoped_targets
+            }
+            row["project_id"] = (
+                str(next(iter(project_ids))) if len(project_ids) == 1 else None
+            )
             row["has_review"] = any(key in reviews_by_target for key in target_keys)
             row["target_reviews"] = [
                 {
