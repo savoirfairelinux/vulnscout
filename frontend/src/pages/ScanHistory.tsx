@@ -1035,6 +1035,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     const docUrl = useDocUrl("interactive-mode.html#scan-history");
     const [scans, setScans] = useState<Scan[]>([]);
     const [loading, setLoading] = useState(true);
+    const loadingRef = useRef(true);
     const [error, setError] = useState<string | null>(null);
     const [openDiffId, setOpenDiffId] = useState<string | null>(null);
     const [openDiffType, setOpenDiffType] = useState<string>('sbom');
@@ -1068,6 +1069,9 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
     const [excludeKernel, setExcludeKernel] = useState(true);
     const [excludeNative, setExcludeNative] = useState(true);
+    const scanRequestRef = useRef<{ generation: number; controller?: AbortController }>({
+        generation: 0,
+    });
 
     // Global Grype scan state — survives tab switches (per-variant)
     const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);
@@ -1085,13 +1089,38 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     const sccEntries: ScanManagerSnapshot = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
     const sccRunning = sccEntries.some(e => e.status === "running" || e.status === "queued");
 
-    const refreshScans = useCallback(() => {
-        ScansHandler.list(variantId, projectId, variantIds)
+    const requestScans = useCallback((showLoading: boolean) => {
+        scanRequestRef.current.controller?.abort();
+        const controller = new AbortController();
+        const generation = scanRequestRef.current.generation + 1;
+        scanRequestRef.current = {generation, controller};
+        const ownsLoadingState = showLoading || loadingRef.current;
+        if (ownsLoadingState) {
+            loadingRef.current = true;
+            setLoading(true);
+            setError(null);
+        }
+        ScansHandler.list(variantId, projectId, variantIds, controller.signal)
             .then((data) => {
+                if (controller.signal.aborted || scanRequestRef.current.generation !== generation) return;
                 setScans([...data].reverse());
+                if (ownsLoadingState) {
+                    loadingRef.current = false;
+                    setLoading(false);
+                }
             })
-            .catch(() => {});
+            .catch((err) => {
+                if (controller.signal.aborted || scanRequestRef.current.generation !== generation) return;
+                if (ownsLoadingState) {
+                    loadingRef.current = false;
+                    setError("Failed to load scan history.");
+                    setLoading(false);
+                }
+                if (err instanceof DOMException && err.name === 'AbortError') return;
+            });
     }, [variantId, projectId, variantIds]);
+
+    const refreshScans = useCallback(() => requestScans(false), [requestScans]);
 
     async function saveDescription(scanId: string) {
         const ok = await ScansHandler.setDescription(scanId, editingDescValue);
@@ -1250,27 +1279,35 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
 
     // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {
+        let cancelled = false;
+        const controller = new AbortController();
         const selectedVariantIdSet = new Set(variantIds ?? []);
         const fetchVariants = variantId
             // Single variant selected → fetch all and filter to just that one
-            ? Variants.listAll().then(vs => vs.filter(v => v.id === variantId))
+            ? Variants.listAll(controller.signal).then(vs => vs.filter(v => v.id === variantId))
             : projectId
                 // Project selected → only that project's variants
-                ? Variants.list(projectId).then(vs => selectedVariantIdSet.size > 0
+                ? Variants.list(projectId, controller.signal).then(vs => selectedVariantIdSet.size > 0
                     ? vs.filter(v => selectedVariantIdSet.has(v.id))
                     : vs)
                 // No scope → all variants
-                : Variants.listAll().then(vs => selectedVariantIdSet.size > 0
+                : Variants.listAll(controller.signal).then(vs => selectedVariantIdSet.size > 0
                     ? vs.filter(v => selectedVariantIdSet.has(v.id))
                     : vs);
 
         fetchVariants.then(vs => {
+            if (cancelled) return;
             setAllVariants(vs);
             setSelectedVariantIds(new Set(vs.map(v => v.id)));
         }).catch(() => {
+            if (cancelled) return;
             setAllVariants([]);
             setSelectedVariantIds(new Set());
         });
+        return () => {
+            cancelled = true;
+            controller.abort();
+        };
     }, [variantId, projectId, variantIds]);
 
     // Close export menus on outside click
@@ -1375,22 +1412,12 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     }
 
     useEffect(() => {
-        let cancelled = false;
-        setLoading(true);
-        setError(null);
-        ScansHandler.list(variantId, projectId, variantIds)
-            .then((data) => {
-                if (cancelled) return;
-                setScans([...data].reverse()); // most recent first
-                setLoading(false);
-            })
-            .catch(() => {
-                if (cancelled) return;
-                setError("Failed to load scan history.");
-                setLoading(false);
-            });
-        return () => { cancelled = true; };
-    }, [variantId, projectId, variantIds]);
+        requestScans(true);
+        return () => {
+            scanRequestRef.current.generation += 1;
+            scanRequestRef.current.controller?.abort();
+        };
+    }, [requestScans]);
 
     // Build the scan-trigger button (always visible when there are variant(s) to scan)
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;

@@ -5,6 +5,7 @@ import ScanHistory from '../../src/pages/ScanHistory';
 import ScansHandler from '../../src/handlers/scans';
 import Variants from '../../src/handlers/variant';
 import type { Scan } from '../../src/handlers/scans';
+import { setOnDone } from '../../src/handlers/grypeScanState';
 
 const mockEmptySnapshot: readonly never[] = [];
 function mockManager() {
@@ -52,6 +53,7 @@ jest.mock('../../src/components/RunScansWizard', () => ({
 
 const mockList = ScansHandler.list as jest.MockedFunction<typeof ScansHandler.list>;
 const mockVariantsList = Variants.list as jest.MockedFunction<typeof Variants.list>;
+const mockSetOnDone = setOnDone as jest.MockedFunction<typeof setOnDone>;
 
 const scan = (id: string, variantId: string): Scan => ({
     id,
@@ -106,6 +108,110 @@ describe('ScanHistory selected variant scope', () => {
         expect(screen.queryByText('v3-scan history')).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', {name: 'Run Scans'}));
+        await waitFor(() => expect(screen.getByTestId('wizard-variants')).toHaveTextContent('V1,V2'));
+        expect(screen.getByTestId('wizard-variants')).not.toHaveTextContent('V3');
+    });
+
+    test('an old-scope completion refresh cannot restore deselected history', async () => {
+        let resolveOldRefresh!: (scans: Scan[]) => void;
+        const oldRefresh = new Promise<Scan[]>(resolve => { resolveOldRefresh = resolve; });
+        let threeVariantCalls = 0;
+        mockList.mockImplementation((_variantId, _projectId, scopedVariantIds) => {
+            if (scopedVariantIds?.length === 3) {
+                threeVariantCalls += 1;
+                if (threeVariantCalls === 1) {
+                    return Promise.resolve([scan('initial-v3', 'v3')]);
+                }
+                return oldRefresh;
+            }
+            return Promise.resolve([scan('current-v1', 'v1'), scan('current-v2', 'v2')]);
+        });
+
+        const view = render(
+            <ScanHistory projectId="project" variantIds={['v1', 'v2', 'v3']} />
+        );
+        await screen.findByText('initial-v3 history');
+        const onDone = [...mockSetOnDone.mock.calls]
+            .reverse()
+            .map(call => call[0])
+            .find((callback): callback is () => void => typeof callback === 'function');
+        expect(onDone).toBeDefined();
+        act(() => onDone?.());
+        await waitFor(() => expect(threeVariantCalls).toBe(2));
+
+        view.rerender(
+            <ScanHistory projectId="project" variantIds={['v1', 'v2']} />
+        );
+        await screen.findByText('current-v1 history');
+
+        await act(async () => {
+            resolveOldRefresh([scan('stale-refresh-v3', 'v3')]);
+        });
+        expect(screen.queryByText('stale-refresh-v3 history')).not.toBeInTheDocument();
+        expect(screen.getByText('current-v2 history')).toBeInTheDocument();
+    });
+
+    test('a completion refresh superseding the initial load clears loading', async () => {
+        let resolveInitial!: (scans: Scan[]) => void;
+        const initialRequest = new Promise<Scan[]>(resolve => { resolveInitial = resolve; });
+        let calls = 0;
+        mockList.mockImplementation(() => {
+            calls += 1;
+            return calls === 1
+                ? initialRequest
+                : Promise.resolve([scan('refreshed-v1', 'v1')]);
+        });
+
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+        expect(await screen.findByText('Loading scan history…')).toBeInTheDocument();
+        const onDone = [...mockSetOnDone.mock.calls]
+            .reverse()
+            .map(call => call[0])
+            .find((callback): callback is () => void => typeof callback === 'function');
+        expect(onDone).toBeDefined();
+        act(() => onDone?.());
+
+        expect(await screen.findByText('refreshed-v1 history')).toBeInTheDocument();
+        expect(screen.queryByText('Loading scan history…')).not.toBeInTheDocument();
+
+        await act(async () => resolveInitial([scan('stale-initial', 'v1')]));
+        expect(screen.queryByText('stale-initial history')).not.toBeInTheDocument();
+    });
+
+    test('out-of-order variant responses cannot restore out-of-scope wizard choices', async () => {
+        let resolveOldVariants!: (variants: Array<{id: string; name: string; project_id: string}>) => void;
+        const oldVariants = new Promise<Array<{id: string; name: string; project_id: string}>>(
+            resolve => { resolveOldVariants = resolve; }
+        );
+        let variantCalls = 0;
+        mockVariantsList.mockImplementation(() => {
+            variantCalls += 1;
+            if (variantCalls === 1) return oldVariants;
+            return Promise.resolve([
+                {id: 'v1', name: 'V1', project_id: 'project'},
+                {id: 'v2', name: 'V2', project_id: 'project'},
+                {id: 'v3', name: 'V3', project_id: 'project'},
+            ]);
+        });
+        mockList.mockResolvedValue([scan('current-v1', 'v1')]);
+
+        const view = render(
+            <ScanHistory projectId="project" variantIds={['v1', 'v2', 'v3']} />
+        );
+        view.rerender(
+            <ScanHistory projectId="project" variantIds={['v1', 'v2']} />
+        );
+        await waitFor(() => expect(variantCalls).toBe(2));
+
+        await act(async () => {
+            resolveOldVariants([
+                {id: 'v1', name: 'V1', project_id: 'project'},
+                {id: 'v2', name: 'V2', project_id: 'project'},
+                {id: 'v3', name: 'V3', project_id: 'project'},
+            ]);
+        });
+
+        fireEvent.click(await screen.findByRole('button', {name: 'Run Scans'}));
         await waitFor(() => expect(screen.getByTestId('wizard-variants')).toHaveTextContent('V1,V2'));
         expect(screen.getByTestId('wizard-variants')).not.toHaveTextContent('V3');
     });
