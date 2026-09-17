@@ -302,5 +302,6 @@ reviewed, failed to write.
 - ✅ Confidence gate applied; `confidence level: <level>` in `status_notes`
 - ✅ `justification` / `impact_statement` present only for `not_affected`
 - ✅ `rationale` names the evidence, and every differing field for a disagreement
+- ✅ Exact read-time `assessment_fingerprint` passed as `expected_assessment_fingerprint` on every write
 - ✅ Write failures logged and reported, not fatal
 - ✅ Summary table plus skip and failure counts
