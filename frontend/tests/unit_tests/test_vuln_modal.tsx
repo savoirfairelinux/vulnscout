@@ -1697,7 +1697,7 @@ describe('Vulnerability Modal', () => {
         removeSpy.mockRestore();
     });
 
-    test('clearing a variant-scoped assessment reconciles an explicit empty target set', async () => {
+    test('clearing a variant-scoped assessment requires deletion confirmation', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -1718,6 +1718,16 @@ describe('Vulnerability Modal', () => {
             timestamp: '2021-01-01T00:00:00Z',
             targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
         }])); // assessment rows mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            variant_id: 'variant-1',
+            active_packages: ['aaabbbccc@1.0.0'],
+            findings: [{
+                finding_id: 'finding-1',
+                package: 'aaabbbccc@1.0.0',
+                outdated: false,
+            }],
+        }])); // variant-active-packages
 
         const reconcileSpy = jest.spyOn(Assessments, 'reconcile').mockResolvedValue({
             status: 'success',
@@ -1771,9 +1781,18 @@ describe('Vulnerability Modal', () => {
         const editPanel = saveBtn.closest('.bg-gray-800');
         expect(editPanel).not.toBeNull();
         await user.click(within(editPanel as HTMLElement).getByRole(
-            'checkbox', { name: 'Variant A' }));
+            'checkbox', { name: 'Variant A / aaabbbccc@1.0.0' }));
         await user.click(saveBtn);
 
+        expect(await screen.findByText(/No targets remain/)).toBeInTheDocument();
+        expect(reconcileSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', {name: 'Keep editing'}));
+        expect(screen.getByText(/Edit Assessment/)).toBeInTheDocument();
+        expect(reconcileSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByText(/save changes/i));
+        await user.click(await screen.findByRole('button', {name: 'Yes, delete'}));
         await waitFor(() => {
             expect(reconcileSpy).toHaveBeenCalledWith('assessment-1', expect.objectContaining({
                 vuln_id: 'CVE-2010-1234',
@@ -1785,30 +1804,45 @@ describe('Vulnerability Modal', () => {
         reconcileSpy.mockRestore();
     });
 
-    test('edit assessment success', async () => {
+    test('status-only edit preserves a variantless assessment', async () => {
         fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({
-            status: 'success',
-            assessment: {
-                id: 'assessment-1',
-                vuln_id: 'CVE-2010-1234',
-                packages: ['aaabbbccc@1.0.0'],
-                packages_current: [],
-                status: 'fixed',
-                simplified_status: 'resolved',
-                justification: 'updated justification',
-                impact_statement: 'updated impact',
-                status_notes: 'updated notes',
-                workaround: 'updated workaround',
-                timestamp: '2021-01-01T00:00:00Z',
-                origin: 'custom',
-                responses: []
+        const variantlessAssessment = {
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            packages: ['aaabbbccc@1.0.0'],
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            timestamp: '2021-01-01T00:00:00Z',
+            origin: 'custom',
+            responses: [],
+            targets: [{
+                variant_id: null,
+                package: 'aaabbbccc@1.0.0',
+                outdated: false,
+            }],
+        };
+        fetchMock.mockResponse(req => {
+            if (req.url.includes('/api/assessment-reviews')) {
+                return Promise.resolve(JSON.stringify({}));
             }
-        }), { status: 200 });
+            if (req.url.includes('/variants')) {
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (req.url.includes('/api/vulnerabilities/CVE-2010-1234/assessments')) {
+                return Promise.resolve(JSON.stringify([variantlessAssessment]));
+            }
+            if (req.url.includes('/api/assessments/assessment-1')) {
+                return Promise.resolve(JSON.stringify({
+                    status: 'success',
+                    assessment: { ...variantlessAssessment, status: 'fixed', simplified_status: 'resolved' },
+                }));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
 
         const patchVuln = jest.fn();
         const vulnWithAssessment = {
@@ -1839,6 +1873,11 @@ describe('Vulnerability Modal', () => {
 
         // The default keeps the current history position and timestamp.
         expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toBeChecked();
+        const statusSelect = document.querySelector<HTMLSelectElement>(
+            'select[name="edit_assessment_status"]'
+        );
+        expect(statusSelect).not.toBeNull();
+        await user.selectOptions(statusSelect!, 'fixed');
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
@@ -1849,9 +1888,11 @@ describe('Vulnerability Modal', () => {
         const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
         const putBody = JSON.parse(String(putCall?.[1]?.body));
         expect(putBody).toEqual(expect.objectContaining({
+            status: 'fixed',
             update_timestamp: false,
             timestamp: '2021-01-01T00:00:00Z',
         }));
+        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
         expect(patchVuln).toHaveBeenCalled();
 
         // Check for success banner
@@ -2673,6 +2714,80 @@ describe('Vulnerability Modal', () => {
         expect(rowFor('Staging', 'pkgA@1.0.0')).not.toHaveTextContent('Fixed');
     });
 
+    test('edits disjoint compatible targets without enabling cross-pairs', async () => {
+        const targets = [
+            { variant_id: 'var-1', package: 'pkgA@1.0.0', outdated: false, assessment_id: 'assess-sparse' },
+            { variant_id: 'var-2', package: 'pkgB@2.0.0', outdated: false, assessment_id: 'assess-sparse' },
+        ];
+        const sparseAssessment = {
+            id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            variant_ids: ['var-1', 'var-2'],
+            targets,
+            status: 'fixed', simplified_status: 'Fixed', justification: '',
+            impact_statement: '', status_notes: '', workaround: '',
+            timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [],
+            variant_id: null,
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/variant-active-packages')) {
+                return Promise.resolve(JSON.stringify([
+                    {
+                        variant_id: 'var-1', active_packages: ['pkgA@1.0.0'],
+                        findings: [{finding_id: 'f-a1', package: 'pkgA@1.0.0', outdated: false}],
+                    },
+                    {
+                        variant_id: 'var-2', active_packages: ['pkgB@2.0.0'],
+                        findings: [{finding_id: 'f-b2', package: 'pkgB@2.0.0', outdated: false}],
+                    },
+                ]));
+            }
+            if (url.includes('/assessment-groups')) {
+                return Promise.resolve(JSON.stringify([{
+                    group_id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+                    status: 'fixed', simplified_status: 'Fixed', justification: '',
+                    impact_statement: '', status_notes: '', workaround: '', responses: [],
+                    origin: 'custom', timestamp: '2025-06-01T00:00:00Z',
+                    targets, assessment_ids: ['assess-sparse'],
+                }]));
+            }
+            if (url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([sparseAssessment]));
+            }
+            if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'var-1', name: 'Production', project_id: 'proj1' },
+                    { id: 'var-2', name: 'Staging', project_id: 'proj1' },
+                ]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const sparseVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            packages_current: [],
+            assessments: [sparseAssessment as any],
+        };
+        render(<VulnModal vuln={sparseVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+
+        await screen.findByText('Assessment history');
+        await userEvent.setup().click(await screen.findByTitle('Edit assessment'));
+        const exactTargetSections = await screen.findAllByText('Apply to exact targets:');
+        const editSection = exactTargetSections
+            .map(element => element.closest('.rounded-lg') as HTMLElement | null)
+            .find(section => section && within(section).queryByRole<HTMLInputElement>(
+                'checkbox', {name: 'Production / pkgA@1.0.0'})?.checked);
+        expect(editSection).toBeDefined();
+
+        expect(within(editSection!).getByRole('checkbox', {name: 'Production / pkgA@1.0.0'})).toBeChecked();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Staging / pkgB@2.0.0'})).toBeChecked();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Production / pkgB@2.0.0'})).toBeDisabled();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Staging / pkgA@1.0.0'})).toBeDisabled();
+    });
+
     const pendingAiAssessment = {
         id: 'assessment-ai-1',
         vuln_id: 'CVE-2010-1234',
@@ -3026,7 +3141,10 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
-        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-active-packages (single request for variantPackageMap)
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {variant_id: 'v1', active_packages: ['aaabbbccc@1.0.0']},
+            {variant_id: 'v2', active_packages: ['aaabbbccc@1.0.0']},
+        ])); // variant-active-packages (single request for variantPackageMap)
         // Single fused POST returns one row covering both variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -3073,14 +3191,13 @@ describe('Vulnerability Modal', () => {
 
         // Wait for variants to load, then select both
         expect((await screen.findAllByText('Variant Alpha')).length).toBeGreaterThan(0);
-        const variantCheckboxes = screen.getAllByRole('checkbox');
-        // Select both variants
-        for (const cb of variantCheckboxes) {
-            const label = cb.closest('label');
-            if (label?.textContent?.includes('Variant Alpha') || label?.textContent?.includes('Variant Beta')) {
-                await user.click(cb);
-            }
-        }
+        await screen.findByText('Apply to exact targets:');
+        await user.click(screen.getByRole('checkbox', {
+            name: 'Variant Alpha / aaabbbccc@1.0.0',
+        }));
+        await user.click(screen.getByRole('checkbox', {
+            name: 'Variant Beta / aaabbbccc@1.0.0',
+        }));
 
         const selectSource = screen.getAllByRole('combobox').find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
         await user.selectOptions(selectSource, 'affected');
@@ -3655,7 +3772,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         expect(screen.queryByText(/NVD.*unavailable/i)).not.toBeInTheDocument();
     });
 
-    test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
+    test('builds variantPackageMap and disables incompatible exact target pairs', async () => {
         fetchMock.resetMocks();
         // Route fetches by URL so the single variant-active-packages lookup
         // resolves regardless of effect ordering.
@@ -3687,38 +3804,15 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
-        const user = userEvent.setup();
 
-        // Wait for the variants to render inside the StatusEditor.
-        await screen.findByText('Apply to variants:');
-
-        // Scope checkbox lookups to the StatusEditor sections so we do not match
-        // the TimeEstimateEditor / CVSS target-variant selectors that reuse the
-        // same variant names.
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
-
-        // Both packages are reachable before any variant is selected.
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
-        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
-
-        // Select Variant Alpha, which only contains pkgA.
-        await user.click(variantCheckbox('Variant Alpha'));
-
-        // pkgB is absent from Variant Alpha → its checkbox becomes disabled.
-        await waitFor(() => {
-            expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(true);
-        });
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
+        await screen.findByText('Apply to exact targets:');
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgA@1.0.0'})).not.toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgB@1.0.0'})).not.toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgB@1.0.0'})).toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgA@1.0.0'})).toBeDisabled();
     });
 
-    test('omits variantPackageMap so all packages stay enabled when package lookups fail', async () => {
+    test('keeps exact target mode blocked when package compatibility lookup fails', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             const url = req.url;
@@ -3743,25 +3837,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
-        const user = userEvent.setup();
-
-        await screen.findByText('Apply to variants:');
-
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
-
-        // With an empty map (all lookups failed), no incompatibility filtering
-        // applies: selecting a variant leaves every package enabled.
-        await user.click(variantCheckbox('Variant Alpha'));
-
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
-        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
+        expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load target compatibility. Try again.');
+        expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to packages:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to exact targets:')).not.toBeInTheDocument();
     });
 
     test('navigating between vulns fetches each variant endpoint once per vuln', async () => {

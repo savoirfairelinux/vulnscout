@@ -1251,6 +1251,35 @@ def init_app(app: Flask) -> None:
         elif payload_data["vuln_id"] != vuln_id or not isinstance(payload_data["vuln_id"], str):
             return {"error": "Invalid vuln_id"}, 400
 
+        explicit_targets: list[tuple[str, UUID]] | None = None
+        raw_targets = payload_data.get("targets")
+        if raw_targets is not None:
+            if not isinstance(raw_targets, list) or not raw_targets:
+                return {"error": "targets must be a non-empty list"}, 400
+            explicit_targets = []
+            for target in raw_targets:
+                if not isinstance(target, dict):
+                    return {"error": "Invalid target"}, 400
+                package_id = target.get("package")
+                if not isinstance(package_id, str) or not package_id:
+                    return {"error": "Target package is required"}, 400
+                raw_target_variant = target.get("variant_id")
+                if not isinstance(raw_target_variant, str):
+                    return {"error": "Invalid variant_id"}, 400
+                target_variant_id, err = parse_uuid_or_400(
+                    raw_target_variant, "variant_id")
+                if err:
+                    return err
+                if target_variant_id is None:
+                    return {"error": "Invalid variant_id"}, 400
+                pair = (package_id, target_variant_id)
+                if pair not in explicit_targets:
+                    explicit_targets.append(pair)
+            payload_data["packages"] = list(dict.fromkeys(
+                package for package, _variant in explicit_targets))
+            payload_data["variant_ids"] = list(dict.fromkeys(
+                str(variant) for _package, variant in explicit_targets))
+
         assessment, status = payload_to_assessment(payload_data)
         if status != 200:
             if not isinstance(assessment, dict):
@@ -1317,6 +1346,21 @@ def init_app(app: Flask) -> None:
                 + ", ".join(unobserved)
             }, 400
 
+        if explicit_targets is not None:
+            missing_targets = [
+                f"{package} in {variant}"
+                for package, variant in explicit_targets
+                if (package, variant) not in resolved
+            ]
+            if missing_targets:
+                return {
+                    "error": "Invalid package version for vulnerability and variant: "
+                    + ", ".join(missing_targets)
+                }, 400
+            resolved = {
+                pair: resolved[pair]
+                for pair in explicit_targets
+            }
         targets = [(variant_id, finding.id) for (_pkg, variant_id), finding in resolved.items()]
 
         try:

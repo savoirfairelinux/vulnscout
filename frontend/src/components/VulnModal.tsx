@@ -162,10 +162,12 @@ type VariantScopedSnapshot = {
     // True once the active-SBOM package list has been fetched for every variant,
     // so deprecated packages can reliably be split into their own table.
     const [variantPackageMapLoaded, setVariantPackageMapLoaded] = useState(false);
+    const [variantPackageMapError, setVariantPackageMapError] = useState<string | null>(null);
     const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
+    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
     // Whether editingAssessment came from the server's assessment listing (whose
     // targets are real AssessmentTarget rows, always variant-scoped) rather
     // than the client-side fallback used before that response lands (whose
@@ -405,6 +407,8 @@ type VariantScopedSnapshot = {
         const controller = new AbortController();
         const signal = controller.signal;
         setVariantPackageMapLoaded(false);
+        setVariantPackageMapError(null);
+        setVariantPackageMap({});
         setVariantFindingsMap({});
         if (availableVariants.length === 0) {
             // Only mark as loaded once we know variants have been resolved.
@@ -431,35 +435,37 @@ type VariantScopedSnapshot = {
                     url.searchParams.set('project_id', projectId);
                 }
                 const response = await fetch(url.toString(), { mode: 'cors', signal });
-                const data = response.ok ? await response.json() : [];
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (!Array.isArray(data)) throw new Error("Invalid compatibility response");
                 const map: Record<string, string[]> = {};
                 const findingsMap: Record<string, VariantFinding[]> = {};
-                if (Array.isArray(data)) {
-                    for (const entry of data) {
-                        if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
-                            map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
-                            if (Array.isArray(entry.findings)) {
-                                findingsMap[entry.variant_id] = entry.findings.flatMap((finding: any): VariantFinding[] => {
-                                    if (typeof finding?.finding_id !== 'string' || typeof finding?.package !== 'string') return [];
-                                    return [{
-                                        findingId: finding.finding_id,
-                                        pkg: finding.package,
-                                        outdated: finding.outdated === true,
-                                    }];
-                                });
-                            }
+                for (const entry of data) {
+                    if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
+                        map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
+                        if (Array.isArray(entry.findings)) {
+                            findingsMap[entry.variant_id] = entry.findings.flatMap((finding: any): VariantFinding[] => {
+                                if (typeof finding?.finding_id !== 'string' || typeof finding?.package !== 'string') return [];
+                                return [{
+                                    findingId: finding.finding_id,
+                                    pkg: finding.package,
+                                    outdated: finding.outdated === true,
+                                }];
+                            });
                         }
                     }
                 }
                 if (!signal.aborted) {
                     setVariantPackageMap(map);
                     setVariantFindingsMap(findingsMap);
+                    setVariantPackageMapError(null);
                     setVariantPackageMapLoaded(true);
                 }
             } catch {
                 if (!signal.aborted) {
                     setVariantPackageMap({});
                     setVariantFindingsMap({});
+                    setVariantPackageMapError("Unable to load target compatibility. Try again.");
                     setVariantPackageMapLoaded(true);
                 }
             }
@@ -778,7 +784,7 @@ type VariantScopedSnapshot = {
         setAssessmentToDelete(null);
     };
 
-    const saveEditedAssessment = async (data: EditAssessmentData) => {
+    const persistEditedAssessment = async (data: EditAssessmentData) => {
         if (!editingAssessment) return;
         setSubmittingMessage('Editing assessment...');
 
@@ -800,13 +806,16 @@ type VariantScopedSnapshot = {
         const targetVariantIds: string[] =
             data.variant_ids ?? [];
 
-        if (editingAssessmentIsServerConfirmed && data.variant_ids !== undefined) {
+        const hasVariantTargets = (editingAssessment.targets ?? []).some(
+            target => target.variant_id !== null
+        );
+        if (editingAssessmentIsServerConfirmed && hasVariantTargets && data.variant_ids !== undefined) {
             try {
                 const body: Record<string, unknown> = {
                     vuln_id: vuln.id,
                     packages: targetPackages,
                     variant_ids: targetVariantIds,
-                    targets: reconcileTargetPairs(
+                    targets: data.targets ?? reconcileTargetPairs(
                         editingAssessment.targets ?? [], targetPackages, targetVariantIds),
                     status: data.status,
                     justification: data.justification,
@@ -1012,6 +1021,14 @@ type VariantScopedSnapshot = {
         setSubmittingMessage(null);
         setEditingAssessmentId(null);
         setEditingAssessment(null);
+    };
+
+    const saveEditedAssessment = (data: EditAssessmentData) => {
+        if (data.targets !== undefined && data.targets.length === 0) {
+            setPendingEmptyTargetEdit(data);
+            return;
+        }
+        void persistEditedAssessment(data);
     };
 
     // Handle keyboard navigation (ESC to close, arrow keys to navigate)
@@ -1912,9 +1929,11 @@ type VariantScopedSnapshot = {
                                             variants={availableVariants}
                                             availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
-                                            variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                            variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
                                             variantFindingsMap={variantFindingsMap}
                                             findingsLoading={!variantPackageMapLoaded}
+                                            findingsError={variantPackageMapError ?? undefined}
+                                            exactTargetSelection={true}
                                         />
                                     </li>
                                 )}
@@ -2194,9 +2213,14 @@ type VariantScopedSnapshot = {
                                                         )]}
                                                         availablePackages={projectPackages}
                                                         defaultSelectedPackages={rowPackages}
-                                                        variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                                        defaultSelectedTargets={targets.map(target => ({
+                                                            variant_id: target.variant_id,
+                                                            package: target.package,
+                                                        }))}
+                                                        variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
                                                         variantFindingsMap={variantFindingsMap}
                                                         findingsLoading={!variantPackageMapLoaded}
+                                                        findingsError={variantPackageMapError ?? undefined}
                                                     />
                                                 </div>
                                             )}
@@ -2223,6 +2247,22 @@ type VariantScopedSnapshot = {
                 showTitleIcon={true}
                 onConfirm={handleConfirmClose}
                 onCancel={handleCancelClose}
+            />
+
+            <ConfirmationModal
+                isOpen={pendingEmptyTargetEdit !== null}
+                title="Delete Assessment"
+                message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
+                confirmText="Yes, delete"
+                cancelText="Keep editing"
+                showTitleIcon={true}
+                onConfirm={() => {
+                    if (!pendingEmptyTargetEdit) return;
+                    const data = pendingEmptyTargetEdit;
+                    setPendingEmptyTargetEdit(null);
+                    void persistEditedAssessment(data);
+                }}
+                onCancel={() => setPendingEmptyTargetEdit(null)}
             />
 
             <ConfirmationModal

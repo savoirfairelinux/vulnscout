@@ -928,6 +928,86 @@ describe('EditAssessment Component', () => {
         );
     });
 
+    test('selects exact sparse targets and disables incompatible cross-pairs', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={[
+                    {id: 'v1', name: 'Variant One', project_id: 'p1'},
+                    {id: 'v2', name: 'Variant Two', project_id: 'p1'},
+                ]}
+                defaultSelectedVariantIds={['v1', 'v2']}
+                availablePackages={['pkg1@1.0.0', 'pkg2@2.0.0']}
+                defaultSelectedPackages={['pkg1@1.0.0', 'pkg2@2.0.0']}
+                defaultSelectedTargets={[
+                    {variant_id: 'v1', package: 'pkg1@1.0.0'},
+                    {variant_id: 'v2', package: 'pkg2@2.0.0'},
+                ]}
+                variantPackageMap={{
+                    v1: ['pkg1@1.0.0'],
+                    v2: ['pkg2@2.0.0'],
+                }}
+            />
+        );
+
+        const v1p1 = screen.getByRole('checkbox', {name: 'Variant One / pkg1@1.0.0'});
+        const v1p2 = screen.getByRole('checkbox', {name: 'Variant One / pkg2@2.0.0'});
+        const v2p1 = screen.getByRole('checkbox', {name: 'Variant Two / pkg1@1.0.0'});
+        const v2p2 = screen.getByRole('checkbox', {name: 'Variant Two / pkg2@2.0.0'});
+
+        expect(v1p1).toBeChecked();
+        expect(v2p2).toBeChecked();
+        expect(v1p2).toBeDisabled();
+        expect(v2p1).toBeDisabled();
+
+        // Valid cells remain independently editable; selecting one does not
+        // remove the other variant's disjoint package target.
+        await user.click(v1p1);
+        await user.click(v1p1);
+        expect(v2p2).toBeChecked();
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            variant_ids: ['v1', 'v2'],
+            packages: ['pkg1@1.0.0', 'pkg2@2.0.0'],
+            targets: [
+                {variant_id: 'v1', package: 'pkg1@1.0.0'},
+                {variant_id: 'v2', package: 'pkg2@2.0.0'},
+            ],
+        }));
+    });
+
+    test.each([
+        {findingsLoading: true, expected: 'Target compatibility is still loading'},
+        {findingsError: 'Unable to load target compatibility. Try again.', expected: 'Unable to load target compatibility. Try again.'},
+    ])('blocks exact target edits while compatibility is unavailable', async ({expected, ...state}) => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                triggerBanner={mockTriggerBanner}
+                availableVariants={[{id: 'v1', name: 'Variant One', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@1.0.0']}
+                defaultSelectedPackages={['package@1.0.0']}
+                defaultSelectedTargets={[{variant_id: 'v1', package: 'package@1.0.0'}]}
+                {...state}
+            />
+        );
+
+        expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to packages:')).not.toBeInTheDocument();
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockTriggerBanner).toHaveBeenCalledWith(expected, 'error');
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
     test('allows adding an outdated package only after enabling the option', async () => {
         const user = userEvent.setup();
         render(

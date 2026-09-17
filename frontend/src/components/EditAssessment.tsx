@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import type { Assessment } from "../handlers/assessments";
+import type { Assessment, AssessmentTargetPair } from "../handlers/assessments";
 import type { Variant } from '../handlers/variant';
 import MessageBanner from './MessageBanner';
 import { formatPkgId } from '../helpers/pkgId';
+import TargetPairSelector from './TargetPairSelector';
 
 type EditAssessmentData = {
     id: string;
@@ -13,6 +14,7 @@ type EditAssessmentData = {
     workaround?: string;
     variant_ids?: string[];
     packages?: string[];
+    targets?: AssessmentTargetPair[];
     update_timestamp?: boolean;
 }
 
@@ -27,9 +29,11 @@ type Props = {
     defaultSelectedVariantIds?: string[];
     availablePackages?: string[];
     defaultSelectedPackages?: string[];
+    defaultSelectedTargets?: AssessmentTargetPair[];
     variantPackageMap?: Record<string, string[]>;
     variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
     findingsLoading?: boolean;
+    findingsError?: string;
 }
 
 function EditAssessment({
@@ -43,9 +47,11 @@ function EditAssessment({
     defaultSelectedVariantIds,
     availablePackages,
     defaultSelectedPackages,
+    defaultSelectedTargets,
     variantPackageMap,
     variantFindingsMap,
-    findingsLoading = false
+    findingsLoading = false,
+    findingsError,
 }: Readonly<Props>) {
     const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
     const hasSelectedOutdatedFinding = useMemo(() => {
@@ -71,6 +77,22 @@ function EditAssessment({
     );
     const [selectedPackages, setSelectedPackages] = useState<string[]>(
         defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : [])
+    );
+    const exactTargetMode = Boolean(
+        defaultSelectedTargets?.some(target => target.variant_id !== null)
+    );
+    const compatibilityReady = !findingsLoading && !findingsError && variantPackageMap !== undefined;
+    const compatibilityError = findingsError ?? (
+        exactTargetMode && !findingsLoading && variantPackageMap === undefined
+            ? "Target compatibility is unavailable. Try again."
+            : undefined
+    );
+    const targetKey = useCallback(
+        (variantId: string, pkg: string) => JSON.stringify([variantId, pkg]), []);
+    const [selectedTargetKeys, setSelectedTargetKeys] = useState<Set<string>>(
+        () => new Set((defaultSelectedTargets ?? []).flatMap(target =>
+            target.variant_id ? [targetKey(target.variant_id, target.package)] : []
+        ))
     );
     const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(hasSelectedOutdatedFinding);
     const [keepCurrentTimestamp, setKeepCurrentTimestamp] = useState(true);
@@ -114,6 +136,15 @@ function EditAssessment({
         }
         return result;
     }, [variantPackageMap, variantFindingsMap, includeOutdatedPackages]);
+
+    const selectedExactTargets = useMemo<AssessmentTargetPair[]>(() => {
+        if (!exactTargetMode || !availableVariants) return [];
+        return availableVariants.flatMap(variant => packageOptions.flatMap(pkg =>
+            selectedTargetKeys.has(targetKey(variant.id, pkg))
+                ? [{ variant_id: variant.id, package: pkg }]
+                : []
+        ));
+    }, [exactTargetMode, availableVariants, packageOptions, selectedTargetKeys, targetKey]);
 
     // A saved assessment applies to the full package × variant product.
     // Therefore each enabled package must exist in every selected variant, and
@@ -178,6 +209,7 @@ function EditAssessment({
         setIncludeOutdatedPackages(checked);
         setSelectedVariantIds([]);
         setSelectedPackages([]);
+        setSelectedTargetKeys(new Set());
     };
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
@@ -212,10 +244,16 @@ function EditAssessment({
             impact !== (isImpactStatus ? (assessment.impact_statement || "") : "") ||
             !hasSameValues(selectedVariantIds, initialVariantIds) ||
             !hasSameValues(selectedPackages, initialPackages) ||
+            (exactTargetMode && !hasSameValues(
+                [...selectedTargetKeys],
+                (defaultSelectedTargets ?? []).flatMap(target =>
+                    target.variant_id ? [targetKey(target.variant_id, target.package)] : []
+                ),
+            )) ||
             !keepCurrentTimestamp
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, selectedVariantIds, selectedPackages, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus, defaultSelectedVariantIds, availableVariants, defaultSelectedPackages, availablePackages]);
+    }, [status, justification, statusNotes, workaround, impact, selectedVariantIds, selectedPackages, selectedTargetKeys, exactTargetMode, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus, defaultSelectedVariantIds, availableVariants, defaultSelectedPackages, defaultSelectedTargets, availablePackages, targetKey]);
 
     // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -233,11 +271,22 @@ function EditAssessment({
             }
             return;
         }
+        if (exactTargetMode && !compatibilityReady) {
+            const message = findingsLoading
+                ? "Target compatibility is still loading"
+                : (compatibilityError ?? "Target compatibility is unavailable. Try again.");
+            if (triggerBanner) triggerBanner(message, "error");
+            else internalTriggerBanner(message, "error");
+            return;
+        }
 
         // Justification only applies to not_affected; the impact statement
         // applies to both not_affected and false_positive (mirrors StatusEditor).
         const includeJustification = status == "not_affected";
         const includeImpact = status == "not_affected" || status == "false_positive";
+        const exactVariantIds = [...new Set(selectedExactTargets.flatMap(target =>
+            target.variant_id ? [target.variant_id] : []))];
+        const exactPackages = [...new Set(selectedExactTargets.map(target => target.package))];
 
         onSaveAssessment({
             id: assessment.id,
@@ -247,8 +296,13 @@ function EditAssessment({
             workaround,
             // For non-impact statuses the value was folded into status_notes; clear impact_statement.
             impact_statement: includeImpact ? impact : "",
-            variant_ids: availableVariants ? selectedVariantIds : undefined,
-            packages: availablePackages ? selectedPackages : undefined,
+            variant_ids: availableVariants
+                ? (exactTargetMode ? exactVariantIds : selectedVariantIds)
+                : undefined,
+            packages: availablePackages
+                ? (exactTargetMode ? exactPackages : selectedPackages)
+                : undefined,
+            targets: exactTargetMode ? selectedExactTargets : undefined,
             update_timestamp: !keepCurrentTimestamp,
         });
     }
@@ -263,7 +317,10 @@ function EditAssessment({
         setKeepCurrentTimestamp(true);
         setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
         setSelectedPackages(defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []));
-    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages, hasSelectedOutdatedFinding]);
+        setSelectedTargetKeys(new Set((defaultSelectedTargets ?? []).flatMap(target =>
+            target.variant_id ? [targetKey(target.variant_id, target.package)] : []
+        )));
+    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, defaultSelectedTargets, availableVariants, availablePackages, hasSelectedOutdatedFinding, targetKey]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -320,6 +377,11 @@ function EditAssessment({
             {findingsLoading && (
                 <p className="mt-3 text-xs text-gray-400 animate-pulse">Checking for previous package versions…</p>
             )}
+            {exactTargetMode && compatibilityError && (
+                <p role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+                    {compatibilityError}
+                </p>
+            )}
             {!findingsLoading && outdatedPackages.size > 0 && (
                 <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 cursor-pointer select-none">
                     <span>
@@ -335,7 +397,18 @@ function EditAssessment({
                     />
                 </label>
             )}
-            {availableVariants && availableVariants.length > 0 && (
+            {exactTargetMode && compatibilityReady && availableVariants && (
+                <TargetPairSelector
+                    variants={availableVariants}
+                    packages={packageOptions}
+                    variantPackageMap={effectiveVariantPackageMap ?? {}}
+                    selectedTargets={selectedExactTargets}
+                    onChange={targets => setSelectedTargetKeys(new Set(targets.flatMap(target =>
+                        target.variant_id ? [targetKey(target.variant_id, target.package)] : []
+                    )))}
+                />
+            )}
+            {!exactTargetMode && availableVariants && availableVariants.length > 0 && (
                 <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
                     <p className="mb-2 text-sm font-medium text-gray-200">Apply to variants:</p>
                     <span className="float-right -mt-7 text-xs text-gray-400">{selectedVariantIds.length} selected</span>
@@ -369,7 +442,7 @@ function EditAssessment({
                     </div>
                 </div>
             )}
-            {availablePackages && (packageOptions.length > 1 || outdatedPackages.size > 0) && (
+            {!exactTargetMode && availablePackages && (packageOptions.length > 1 || outdatedPackages.size > 0) && (
                 <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
                     <p className="mb-2 text-sm font-medium text-gray-200">Apply to packages:</p>
                     <span className="float-right -mt-7 text-xs text-gray-400">{selectedPackages.length} selected</span>

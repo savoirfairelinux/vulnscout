@@ -5,6 +5,7 @@
 
 import pytest
 import json
+import uuid
 from src.bin.webapp import create_app
 from . import write_demo_files, setup_demo_db
 
@@ -649,6 +650,75 @@ def test_multi_variant_assessment_is_one_row_covering_every_variant(client, demo
     assert row["variant_id"] is None
     assert sorted(row["variant_ids"]) == sorted([demo_ids["variant_id"], demo_ids["other_variant_id"]])
     assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+
+
+def test_multi_variant_assessment_honours_exact_sparse_targets(client, demo_ids):
+    package_a, package_b = demo_ids["two_packages"]
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "fixed",
+            "packages": [package_a, package_b],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+            "targets": [
+                {"variant_id": demo_ids["variant_id"], "package": package_a},
+                {"variant_id": demo_ids["other_variant_id"], "package": package_b},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    row = response.get_json()["assessment"]
+    assert {(target["variant_id"], target["package"]) for target in row["targets"]} == {
+        (demo_ids["variant_id"], package_a),
+        (demo_ids["other_variant_id"], package_b),
+    }
+
+
+def test_multi_variant_assessment_rejects_unobserved_explicit_pair(client, demo_ids):
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    with client.application.app_context():
+        project = Project.get_by_id(uuid.UUID("11111111-1111-1111-1111-111111111111"))
+        unobserved_variant = Variant.create("no-findings", project.id)
+        unobserved_variant_id = str(unobserved_variant.id)
+
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "fixed",
+            "targets": [{
+                "variant_id": unobserved_variant_id,
+                "package": demo_ids["two_packages"][0],
+            }],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid package version" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("targets, expected", [
+    ([], "targets must be a non-empty list"),
+    ("not-a-list", "targets must be a non-empty list"),
+    (["not-an-object"], "Invalid target"),
+    ([{"variant_id": "22222222-2222-2222-2222-222222222222"}],
+     "Target package is required"),
+    ([{"package": "cairo@1.16.0"}], "Invalid variant_id"),
+    ([{"package": "cairo@1.16.0", "variant_id": "not-a-uuid"}],
+     "Invalid variant_id"),
+])
+def test_assessment_rejects_malformed_explicit_targets(
+    client, demo_ids, targets, expected,
+):
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={"status": "fixed", "targets": targets},
+    )
+
+    assert response.status_code == 400
+    assert expected in response.get_json()["error"]
 
 
 def test_multi_variant_assessment_rejects_a_package_unobserved_everywhere(client, demo_ids):
