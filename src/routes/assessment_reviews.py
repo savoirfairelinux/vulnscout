@@ -76,19 +76,27 @@ def _scoped_variant_ids() -> "tuple[list[UUID] | None, ResponseReturnValue | Non
     """Resolve variant_id / project_id query args into a variant ID list."""
     variant_id = request.args.get('variant_id')
     project_id = request.args.get('project_id')
-    if variant_id:
-        variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
-        if err:
-            return None, err
-        if variant_uuid is None:
-            return None, ({"error": "Internal error"}, 500)
-        return [variant_uuid], None
+    project_uuid: UUID | None = None
     if project_id:
         project_uuid, err = parse_uuid_or_400(project_id, "project_id")
         if err:
             return None, err
         if project_uuid is None:
             return None, ({"error": "Internal error"}, 500)
+    if variant_id:
+        variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+        if err:
+            return None, err
+        if variant_uuid is None:
+            return None, ({"error": "Internal error"}, 500)
+        if project_uuid is not None:
+            variant = Variant.get_by_id(variant_uuid)
+            if variant is None:
+                return None, ({"error": "Variant not found"}, 404)
+            if variant.project_id != project_uuid:
+                return None, ({"error": "Variant does not belong to project"}, 400)
+        return [variant_uuid], None
+    if project_uuid is not None:
         return [v.id for v in Variant.get_by_project(project_uuid)], None
     return None, None
 
