@@ -927,6 +927,53 @@ def test_scoped_routes_accept_a_project_id(client, finding, variant):
     assert str(assessment.id) in reviews
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/api/custom-assessments", "/api/assessment-reviews"],
+)
+def test_scoped_routes_reject_variant_from_another_project(
+    client, variant, endpoint
+):
+    other_project = Project.get_or_create("other-project")
+
+    response = client.get(
+        endpoint,
+        query_string={
+            "project_id": str(other_project.id),
+            "variant_id": str(variant.id),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Variant does not belong to project"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/api/custom-assessments", "/api/assessment-reviews"],
+)
+def test_scoped_routes_accept_matching_project_and_variant(
+    client, finding, variant, endpoint
+):
+    assessment = make_assessment(finding, variant)
+    upsert_for(assessment, finding, variant)
+
+    response = client.get(
+        endpoint,
+        query_string={
+            "project_id": str(variant.project_id),
+            "variant_id": str(variant.id),
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    if endpoint == "/api/custom-assessments":
+        assert [row["id"] for row in body] == [str(assessment.id)]
+    else:
+        assert str(assessment.id) in body
+
+
 def test_scoped_routes_without_scope_return_everything(client, finding, variant):
     # Arrange
     assessment = make_assessment(finding, variant)
