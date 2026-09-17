@@ -506,6 +506,10 @@ describe('Review — editing "Apply to variants"', () => {
 
         await screen.findByText('Assessment updated successfully!');
         expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ type: 'update', vulnId: 'CVE-2020-1111' }));
+        expect(fetchMock.mock.calls.filter(([url, init]) =>
+            String(url).includes('/api/assessment-reviews')
+            && (!init?.method || init.method === 'GET')
+        )).toHaveLength(2);
     });
 
     test('a failed edit reports an error', async () => {
@@ -2124,6 +2128,57 @@ describe('Review — AI review filter', () => {
         expect(screen.getByText('CVE-2024-AGREE')).toBeInTheDocument();
         expect(screen.getByText('CVE-2024-DIFFER')).toBeInTheDocument();
         expect(screen.queryByText('CVE-2024-STALE')).not.toBeInTheDocument();
+    });
+
+    test('matches every target-level state on a partially reviewed row', async () => {
+        const mixed = {
+            ...assessment('mixed-1', 'CVE-2024-MIXED'),
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            targets: [
+                {variant_id: 'v1', package: 'pkgA@1.0.0'},
+                {variant_id: 'v2', package: 'pkgB@2.0.0'},
+            ],
+        };
+        const mixedReview = review('mixed-1', 'differs');
+        mockNetwork([mixed], {reviews: {'mixed-1': [mixedReview]}});
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2024-MIXED');
+        await user.click(screen.getByRole('button', {name: /AI review/}));
+        await user.click(screen.getByRole('checkbox', {name: 'No AI review'}));
+        expect(screen.getByText('CVE-2024-MIXED')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('checkbox', {name: 'No AI review'}));
+        await user.click(screen.getByRole('checkbox', {name: 'AI review differed'}));
+        expect(screen.getByText('CVE-2024-MIXED')).toBeInTheDocument();
+    });
+
+    test('matches agreement when another target differs', async () => {
+        const mixed = {
+            ...assessment('mixed-2', 'CVE-2024-MIXED-VERDICTS'),
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            targets: [
+                {variant_id: 'v1', package: 'pkgA@1.0.0'},
+                {variant_id: 'v2', package: 'pkgB@2.0.0'},
+            ],
+        };
+        const agreeing = review('mixed-2', 'agrees');
+        const differing = {
+            ...review('mixed-2', 'differs'),
+            id: 'rev-mixed-2-v2',
+            variant_id: 'v2',
+            package: 'pkgB@2.0.0',
+        };
+        mockNetwork([mixed], {reviews: {'mixed-2': [agreeing, differing]}});
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2024-MIXED-VERDICTS');
+        await user.click(screen.getByRole('button', {name: /AI review/}));
+        await user.click(screen.getByRole('checkbox', {name: 'AI review agreed'}));
+
+        expect(screen.getByText('CVE-2024-MIXED-VERDICTS')).toBeInTheDocument();
     });
 
     test('reset filters clears the AI review selection', async () => {

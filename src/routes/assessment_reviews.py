@@ -278,8 +278,37 @@ def init_app(app) -> None:
 
         rows = []
         for a in assessments[offset:offset + limit]:
+            scoped_targets = [
+                target for target in a.target_rows
+                if variant_ids is None or target.variant_id in variant_ids
+            ]
+            target_keys = [
+                (a.id, target.variant_id, target.finding_id)
+                for target in scoped_targets
+            ]
             row = a.to_dict()
-            row["has_review"] = a.id in reviewed_ids
+            scoped_packages = list(dict.fromkeys(
+                target.finding.package.string_id
+                for target in scoped_targets
+                if target.finding and target.finding.package
+            ))
+            scoped_variant_ids = sorted({
+                str(target.variant_id) for target in scoped_targets
+            })
+            row["packages"] = scoped_packages
+            row["variant_ids"] = scoped_variant_ids
+            row["variant_id"] = (
+                scoped_variant_ids[0] if len(scoped_variant_ids) == 1 else None
+            )
+            row["targets"] = [
+                {
+                    "variant_id": str(target.variant_id),
+                    "package": target.finding.package.string_id,
+                }
+                for target in scoped_targets
+                if target.finding and target.finding.package
+            ]
+            row["has_review"] = any(key in reviews_by_target for key in target_keys)
             row["target_reviews"] = [
                 {
                     "variant_id": str(t.variant_id),
@@ -288,7 +317,7 @@ def init_app(app) -> None:
                     "is_stale": reviews_by_target[(a.id, t.variant_id, t.finding_id)].is_stale()
                     if (a.id, t.variant_id, t.finding_id) in reviews_by_target else False,
                 }
-                for t in a.target_rows
+                for t in scoped_targets
             ]
             rows.append(row)
         return rows, 200

@@ -281,6 +281,39 @@ def test_deleting_one_targets_review_leaves_others_intact(finding, other_finding
     assert AssessmentReview.get_for_target(assessment.id, variant.id, other_finding.id) is not None
 
 
+def test_reconcile_removes_only_the_deselected_targets_review(
+    client, finding, other_finding, variant
+):
+    assessment = make_assessment(
+        finding, variant, targets=[(variant, finding), (variant, other_finding)]
+    )
+    upsert_for(assessment, finding, variant, rationale="keep")
+    upsert_for(assessment, other_finding, variant, rationale="remove")
+
+    response = client.post(
+        f"/api/assessments/{assessment.id}/reconcile",
+        json={
+            "vuln_id": assessment.vuln_id,
+            "packages": [finding.package.string_id],
+            "variant_ids": [str(variant.id)],
+            "targets": [{
+                "variant_id": str(variant.id),
+                "package": finding.package.string_id,
+            }],
+            "status": assessment.status,
+            "justification": assessment.justification,
+        },
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert AssessmentReview.get_for_target(
+        assessment.id, variant.id, finding.id
+    ) is not None
+    assert AssessmentReview.get_for_target(
+        assessment.id, variant.id, other_finding.id
+    ) is None
+
+
 @pytest.fixture
 def client():
     # Reuse the app already created (and bound to the in-memory db with
@@ -587,6 +620,19 @@ def test_review_scope_uses_review_target_variant(client, finding, variant):
         f"/api/custom-assessments?variant_id={variant.id}&has_review=false"
     ).get_json()
     assert [row["id"] for row in incomplete] == [str(assessment.id)]
+    row = incomplete[0]
+    assert row["variant_id"] == str(variant.id)
+    assert row["variant_ids"] == [str(variant.id)]
+    assert row["targets"] == [{
+        "variant_id": str(variant.id),
+        "package": "openssl@3.0.8",
+    }]
+    assert row["target_reviews"] == [{
+        "variant_id": str(variant.id),
+        "package": "openssl@3.0.8",
+        "has_review": False,
+        "is_stale": False,
+    }]
 
 
 def test_list_custom_assessments_limit_and_order(client, finding, variant):
