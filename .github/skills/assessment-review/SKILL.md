@@ -59,7 +59,7 @@ The scope is stated inline in the prompt. Map it to exactly one of these:
 
 One VEX verdict in VulnScout can cover several (package, variant) pairs, but
 they no longer live as separate assessment rows: they are **targets** on a
-single assessment (`assessment.targets`, each `{variant_id, package,
+single assessment (`assessment.targets`, each `{project_id, variant_id, package,
 outdated}`). `vulnscout-get_custom_assessment` returns the whole assessment —
 its stored verdict plus every target — in one call; there is nothing to expand.
 
@@ -93,10 +93,11 @@ of more than 25 assessments.
 
 ### Re-review policy
 
-By default, **skip assessments where every target already carries a review**,
+By default, **skip assessments where every target has a fresh review**,
 by passing `has_review=false`. Re-running over a broad scope should not redo
-settled work. The filter returns assessments with at least one unreviewed target
-in the requested scope, including partially reviewed multi-target assessments.
+settled work. The filter returns assessments with at least one unreviewed or
+stale target in the requested scope, including partially reviewed multi-target
+assessments.
 `has_review` on a listing row is still true when *any* target has a review, so
 check `target_reviews` (each target's own `has_review`/`is_stale`) and derive
 only the still-unreviewed targets normally.
@@ -106,11 +107,8 @@ Two exceptions:
 - A target's existing review is stale (`is_stale=true` on that target's entry,
   meaning the assessment's reviewed content changed after the review was
   written — note this is content-based, so it fires even when the analyst kept
-  the original assessment timestamp) → review that target again. Stale
-  reviews surface via `get_custom_assessment`; when listing with
-  `has_review=false` an assessment with only stale targets left may be
-  excluded if another of its targets is fresh, so fetch it explicitly if the
-  caller asks about stale reviews.
+  the original assessment timestamp) → review that target again. The default
+  `has_review=false` listing includes stale targets automatically.
 
 ### Strictness
 
@@ -142,10 +140,10 @@ run:
 context = vulnscout-get_merged_context(project_id=<id>, variant_id=<id>)
 ```
 
-`get_custom_assessment` returns the assessment's `variant_id`;
-`list_custom_assessments` returns it per row. Resolve `project_id` with
-`vulnscout-find_project_id` when the caller gave a project name, or from the
-listing's scope.
+Both assessment tools return `project_id` and include it on each target beside
+`variant_id`. Use those IDs directly for assessment-ID and unscoped runs.
+When the caller supplied a project name, `vulnscout-find_project_id` remains
+the authoritative resolver for that named scope.
 
 The merged context supplies `codebase_path` (the source root for component
 presence), `environment`, `threat_model`, `risks`, `other_info`, and the project

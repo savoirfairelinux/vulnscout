@@ -596,6 +596,21 @@ def test_list_custom_assessments_has_review_filter(client, finding, variant):
     assert str(reviewed.id) not in [r["id"] for r in without_review]
 
 
+def test_has_review_false_includes_an_all_stale_assessment(
+    client, finding, variant
+):
+    assessment = make_assessment(finding, variant)
+    upsert_for(assessment, finding, variant)
+    assessment.update(status_notes="changed after review", update_timestamp=False)
+
+    rows = client.get(
+        "/api/custom-assessments?has_review=false"
+    ).get_json()
+
+    assert [row["id"] for row in rows] == [str(assessment.id)]
+    assert rows[0]["target_reviews"][0]["is_stale"] is True
+
+
 def test_list_custom_assessments_partial_target_review(client, finding, other_finding, variant):
     # Arrange: one assessment, two targets, only one reviewed.
     assessment = make_assessment(
@@ -651,8 +666,10 @@ def test_review_scope_uses_review_target_variant(client, finding, variant):
     assert row["variant_ids"] == [str(variant.id)]
     assert row["targets"] == [{
         "variant_id": str(variant.id),
+        "project_id": str(variant.project_id),
         "package": "openssl@3.0.8",
     }]
+    assert row["project_id"] == str(variant.project_id)
     assert row["target_reviews"] == [{
         "variant_id": str(variant.id),
         "package": "openssl@3.0.8",
@@ -735,6 +752,8 @@ def test_single_assessment_embeds_its_reviews(client, finding, variant):
 
     # Assert
     assert [r["status"] for r in body["reviews"]] == ["affected"]
+    assert body["project_id"] == str(variant.project_id)
+    assert body["targets"][0]["project_id"] == str(variant.project_id)
 
 
 def test_single_assessment_reviews_is_empty_when_absent(client, finding, variant):

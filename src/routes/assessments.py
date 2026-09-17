@@ -951,6 +951,21 @@ def init_app(app: Flask) -> None:
         if item is None:
             return {"error": "Not found"}, 404
         payload = annotate_targets([item])[0]
+        variant_project_ids = {
+            variant_id: project_id
+            for variant_id, project_id in db.session.execute(
+                db.select(DBVariant.id, DBVariant.project_id).where(
+                    DBVariant.id.in_({target.variant_id for target in item.target_rows})
+                )
+            )
+        }
+        for target in payload["targets"]:
+            variant_uuid = UUID(target["variant_id"])
+            target["project_id"] = str(variant_project_ids[variant_uuid])
+        project_ids = set(variant_project_ids.values())
+        payload["project_id"] = (
+            str(next(iter(project_ids))) if len(project_ids) == 1 else None
+        )
         reviews = AssessmentReview.get_all_for_assessment(item.id)
         payload["reviews"] = [r.to_dict() for r in reviews]
         return payload, 200
