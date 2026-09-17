@@ -12,7 +12,7 @@ from ..models.assessment import (
     VALID_STATUS_OPENVEX,
     VALID_JUSTIFICATION_OPENVEX,
 )
-from ..models.assessment_review import AssessmentReview
+from ..models.assessment_review import AssessmentReview, fingerprint_assessment
 from ..models.finding import Finding
 from ..models.variant import Variant
 from ._scan_helpers import parse_uuid_or_400
@@ -149,6 +149,7 @@ def init_app(app) -> None:
         body variant_id uuid required The target's variant.
         body finding_id uuid optional The target's finding (or pass ``package``).
         body package string optional The target's package string-id.
+        body expected_assessment_fingerprint string required Fingerprint returned when the assessment was read.
         response 200 JsonObject Review payload.
         response 400 Error Invalid payload or target.
         response 404 Error Assessment not found.
@@ -190,10 +191,22 @@ def init_app(app) -> None:
         if responses is not None and not isinstance(responses, list):
             return {"error": "responses must be a list"}, 400
 
+        expected_fingerprint = data.get("expected_assessment_fingerprint")
+        if not isinstance(expected_fingerprint, str) or not expected_fingerprint:
+            return {"error": "expected_assessment_fingerprint is required"}, 400
+        current_fingerprint = fingerprint_assessment(assessment)
+        if expected_fingerprint != current_fingerprint:
+            return {
+                "error": "Assessment changed after it was read; review it again",
+                "code": "assessment_changed",
+                "assessment_fingerprint": current_fingerprint,
+            }, 409
+
         review = AssessmentReview.upsert(
             assessment_id=assessment.id,
             variant_id=variant_uuid,
             finding_id=finding_uuid,
+            reviewed_fingerprint=expected_fingerprint,
             status=status,
             rationale=str(rationale).strip(),
             status_notes=data.get("status_notes") or None,
@@ -309,6 +322,7 @@ def init_app(app) -> None:
                 for target in scoped_targets
             ]
             row = a.to_dict()
+            row["assessment_fingerprint"] = fingerprint_assessment(a)
             scoped_packages = list(dict.fromkeys(
                 target.finding.package.string_id
                 for target in scoped_targets

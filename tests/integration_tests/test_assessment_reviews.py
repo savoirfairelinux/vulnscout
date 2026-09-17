@@ -72,12 +72,31 @@ def upsert_for(assessment, finding, variant, **kwargs):
     kwargs.setdefault("status", "affected")
     kwargs.setdefault("rationale", "r")
     return AssessmentReview.upsert(
-        assessment_id=assessment.id, variant_id=variant.id, finding_id=finding.id, **kwargs
+        assessment_id=assessment.id,
+        variant_id=variant.id,
+        finding_id=finding.id,
+        reviewed_fingerprint=fingerprint_assessment(assessment),
+        **kwargs,
     )
 
 
 def target_json(finding, variant, **kwargs):
     payload = {"variant_id": str(variant.id), "finding_id": str(finding.id)}
+    assessment = kwargs.pop("assessment", None)
+    if assessment is None:
+        candidates = list(db.session.execute(
+            db.select(Assessment)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .where(
+                AssessmentTarget.variant_id == variant.id,
+                AssessmentTarget.finding_id == finding.id,
+            )
+            .order_by(Assessment.timestamp, Assessment.id)
+        ).scalars().unique().all())
+        if len(candidates) == 1:
+            assessment = candidates[0]
+    if assessment is not None:
+        payload["expected_assessment_fingerprint"] = fingerprint_assessment(assessment)
     payload.update(kwargs)
     return payload
 
@@ -142,19 +161,68 @@ def test_put_review_with_matching_responses_agrees(client, finding, variant):
 
     response = client.put(
         f"/api/assessments/{assessment.id}/review",
-        json=target_json(
-            finding,
-            variant,
-            status="affected",
-            rationale="same remediation responses",
-            responses=["update", "will_not_fix"],
-        ),
+            json=target_json(
+                finding,
+                variant,
+                assessment=assessment,
+                status="affected",
+                rationale="same remediation responses",
+                responses=["update", "will_not_fix"],
+            ),
     )
 
     assert response.status_code == 200
     review = response.get_json()["review"]
     assert review["responses"] == ["update", "will_not_fix"]
     assert review["verdict"] == "agrees"
+
+
+def test_review_write_rejects_assessment_changed_after_read(
+    client, finding, variant
+):
+    assessment = make_assessment(finding, variant)
+    listed = client.get(
+        f"/api/custom-assessments?variant_id={variant.id}"
+    ).get_json()[0]
+    read_fingerprint = listed["assessment_fingerprint"]
+
+    assessment.update(status_notes="analyst edited during review", update_timestamp=False)
+    response = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json=target_json(
+            finding,
+            variant,
+            status="affected",
+            rationale="derived from the old assessment",
+            expected_assessment_fingerprint=read_fingerprint,
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "assessment_changed"
+    assert response.get_json()["assessment_fingerprint"] == fingerprint_assessment(
+        assessment
+    )
+    assert AssessmentReview.get_all_for_assessment(assessment.id) == []
+
+
+def test_review_write_requires_read_fingerprint(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+
+    response = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={
+            "variant_id": str(variant.id),
+            "finding_id": str(finding.id),
+            "status": "affected",
+            "rationale": "missing concurrency token",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == (
+        "expected_assessment_fingerprint is required"
+    )
 
 
 def test_is_stale_when_assessment_edited_after_review(finding, variant):
@@ -456,6 +524,7 @@ def test_put_review_accepts_package_string_in_place_of_finding_id(client, findin
             "package": "openssl@3.0.8",
             "status": "affected",
             "rationale": "r",
+            "expected_assessment_fingerprint": fingerprint_assessment(assessment),
         },
     )
 
@@ -580,7 +649,13 @@ def test_list_custom_assessments_has_review_filter(client, finding, variant):
     make_assessment(finding, variant, status_notes="second")
     client.put(
         f"/api/assessments/{reviewed.id}/review",
-        json=target_json(finding, variant, status="affected", rationale="r"),
+        json=target_json(
+            finding,
+            variant,
+            assessment=reviewed,
+            status="affected",
+            rationale="r",
+        ),
     )
 
     # Act
