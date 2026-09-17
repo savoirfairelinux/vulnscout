@@ -540,7 +540,6 @@ def init_app(app: Flask) -> None:
                         ))
                         .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant.id)
                         .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
-                        .where(Finding.vulnerability_id.in_([r.id for r in records]))
                         .where(db.or_(
                             SBOMDocument.scan_id.in_(latest_ids),
                             _PkgVariant.id == Package.id,
@@ -551,9 +550,16 @@ def init_app(app: Flask) -> None:
                         _affx_q = _affx_q.where(Finding.package_id.in_(_pkg_ids))
                     _pkg_var_rows = db.session.execute(_affx_q).all()
                     _pkgs_by_vuln_var: dict[str, list[str]] = {}
+                    _record_ids = {str(r.id) for r in records}
                     for _vid, _pname, _pver, _psup in _pkg_var_rows:
+                        _key = str(_vid)
+                        # Filtering here rather than with a literal IN-list of every
+                        # loaded vulnerability id, which SQLite would probe once per
+                        # id for each joined row.
+                        if _key not in _record_ids:
+                            continue
                         _sid = f"{_pname}@{_pver}::{_psup}" if _psup else f"{_pname}@{_pver}"
-                        _pkgs_by_vuln_var.setdefault(str(_vid), []).append(_sid)
+                        _pkgs_by_vuln_var.setdefault(_key, []).append(_sid)
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
                 variant_scoped_overrides = _variant_scoped_metrics_and_effort_overrides(records, variant_uuid)
@@ -786,16 +792,21 @@ def init_app(app: Flask) -> None:
                     ))
                     .join(Finding, Finding.package_id == _PkgVariant2.id)
                     .where(SBOMDocument.scan_id.in_(current_scan_ids))
-                    .where(Finding.vulnerability_id.in_(vuln_ids))
                     .distinct()
                 ).all()
                 current_by_vuln_variant: dict[str, dict[str, list[str]]] = {}
                 for vuln_id, variant_id, pkg_name, pkg_version, pkg_supplier in scoped_pkg_rows:
+                    vuln_key = str(vuln_id)
+                    # Restricting to in-scope vulnerabilities here rather than in
+                    # SQL: a literal IN-list of every vulnerability id makes SQLite
+                    # probe the findings index once per id for each joined row.
+                    if vuln_key not in vulns:
+                        continue
                     package_id = (
                         f"{pkg_name}@{pkg_version}::{pkg_supplier}"
                         if pkg_supplier else f"{pkg_name}@{pkg_version}"
                     )
-                    current_by_vuln_variant.setdefault(str(vuln_id), {}).setdefault(
+                    current_by_vuln_variant.setdefault(vuln_key, {}).setdefault(
                         str(variant_id), []).append(package_id)
                 for vuln in vulns.values():
                     vuln["packages_current_by_variant"] = {
