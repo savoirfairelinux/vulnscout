@@ -182,6 +182,8 @@ def init_app(app) -> None:
             return {"error": "rationale is required"}, 400
 
         justification = data.get("justification") or None
+        if status == "not_affected" and justification is None:
+            return {"error": "Justification required"}, 400
         if justification is not None and justification not in VALID_JUSTIFICATION_OPENVEX:
             return {
                 "error": f"justification must be one of {', '.join(VALID_JUSTIFICATION_OPENVEX)}"

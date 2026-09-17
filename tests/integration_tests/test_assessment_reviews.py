@@ -480,6 +480,27 @@ def test_put_review_rejects_invalid_justification(client, finding, variant):
     assert resp.status_code == 400
 
 
+def test_put_review_requires_justification_for_not_affected(
+    client, finding, variant
+):
+    assessment = make_assessment(finding, variant)
+
+    response = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json=target_json(
+            finding,
+            variant,
+            assessment=assessment,
+            status="not_affected",
+            rationale="missing required justification",
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Justification required"
+    assert AssessmentReview.get_all_for_assessment(assessment.id) == []
+
+
 def test_put_review_requires_rationale(client, finding, variant):
     assessment = make_assessment(finding, variant)
 
