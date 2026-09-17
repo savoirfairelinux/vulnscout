@@ -4,8 +4,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
+import gzip
 import json
+from flask import Flask
 from src.bin.webapp import create_app
+from src.routes.vulnerabilities import _compact_json_response
 from . import write_demo_files, setup_demo_db
 
 
@@ -1832,5 +1835,51 @@ def test_get_vulnerabilities_compare_difference_with_base_ids(app, client):
     # Only compare-only vuln should appear; shared one is excluded
     assert "CVE-DIFF-COMPARE-001" in ids
     assert "CVE-DIFF-SHARED-001" not in ids
+
+
+def _large_payload():
+    return [{"id": f"CVE-2020-{i:05d}", "summary": "x" * 64} for i in range(50)]
+
+
+def test_compact_response_is_gzipped_when_the_client_accepts_it():
+    payload = _large_payload()
+
+    with Flask(__name__).test_request_context(headers={"Accept-Encoding": "gzip"}):
+        response = _compact_json_response(payload)
+
+    assert response.headers["Content-Encoding"] == "gzip"
+    assert response.headers["Vary"] == "Accept-Encoding"
+    assert json.loads(gzip.decompress(response.get_data())) == payload
+
+
+def test_compact_response_stays_plain_without_gzip_support():
+    payload = _large_payload()
+
+    with Flask(__name__).test_request_context():
+        response = _compact_json_response(payload)
+
+    assert "Content-Encoding" not in response.headers
+    assert json.loads(response.get_data()) == payload
+
+
+def test_compact_response_leaves_small_payloads_uncompressed():
+    with Flask(__name__).test_request_context(headers={"Accept-Encoding": "gzip"}):
+        response = _compact_json_response([{"id": "CVE-2020-35492"}])
+
+    assert "Content-Encoding" not in response.headers
+    assert json.loads(response.get_data()) == [{"id": "CVE-2020-35492"}]
+
+
+def test_compact_endpoint_serves_decodable_json_to_a_gzip_client(client):
+    response = client.get(
+        "/api/vulnerabilities?format=compact",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    body = response.data
+    if response.headers.get("Content-Encoding") == "gzip":
+        body = gzip.decompress(body)
+    assert [v["id"] for v in json.loads(body)] == ["CVE-2020-35492"]
 
 

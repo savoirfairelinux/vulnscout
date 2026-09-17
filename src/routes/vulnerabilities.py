@@ -4,12 +4,14 @@
 import datetime
 import decimal
 import dataclasses
+import gzip
+import json
 import typing
 import re
 import urllib.error
 import uuid
 
-from flask import jsonify, request, Flask
+from flask import jsonify, request, Flask, current_app
 from flask.typing import ResponseReturnValue
 from sqlalchemy import func, select, ColumnElement
 from sqlalchemy.orm import joinedload, selectinload, aliased, attributes as orm_attrs
@@ -318,6 +320,22 @@ def _populate_found_by(
     for record in records:
         for scanner in found_by_map.get(record.id, set()):
             record.add_found_by(scanner)
+
+
+def _compact_json_response(payload_obj: typing.Any) -> ResponseReturnValue:
+    """Serialise a large list response without Flask's JSON provider.
+
+    Going through the provider would pretty-print the payload when the app runs
+    in debug mode and would route encoding through the pure-Python encoder;
+    ``json.dumps`` without a ``default`` hook keeps the C implementation.
+    """
+    payload = json.dumps(payload_obj, separators=(",", ":")).encode()
+    response = current_app.response_class(payload, mimetype="application/json")
+    if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
+        response.set_data(gzip.compress(payload, compresslevel=1))
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Vary"] = "Accept-Encoding"
+    return response
 
 
 def init_app(app: Flask) -> None:
@@ -918,7 +936,7 @@ def init_app(app: Flask) -> None:
                         }
                         for cvss in cvss_entries
                     ]
-                return list(vulns.values())
+                return _compact_json_response(list(vulns.values()))
             case "dict":
                 return vulns
             case _ as fmt:

@@ -18,6 +18,7 @@ import threading
 from datetime import datetime, timezone
 import signal
 from flask import request
+from flask.json.provider import DefaultJSONProvider
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
@@ -143,6 +144,11 @@ def create_app():
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE
     app.config["SCAN_DATE"] = "unknown date"
+
+    # Flask pretty-prints JSON with indent=2 whenever debug is on, which both
+    # inflates large Explorer payloads and forces the pure-Python JSON encoder.
+    if isinstance(app.json, DefaultJSONProvider):
+        app.json.compact = True
 
     if "SQLALCHEMY_DATABASE_URI" not in app.config:
         app.config["SQLALCHEMY_DATABASE_URI"] = DEFAULT_DB_URI
