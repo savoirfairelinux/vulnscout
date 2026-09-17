@@ -10,7 +10,7 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
-from ..models.assessment_review import AssessmentReview
+from ..models.assessment_review import AssessmentReview, fingerprint_assessment
 from ..extensions import db, batch_session
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
@@ -966,6 +966,7 @@ def init_app(app: Flask) -> None:
         payload["project_id"] = (
             str(next(iter(project_ids))) if len(project_ids) == 1 else None
         )
+        payload["assessment_fingerprint"] = fingerprint_assessment(item)
         reviews = AssessmentReview.get_all_for_assessment(item.id)
         payload["reviews"] = [r.to_dict() for r in reviews]
         return payload, 200

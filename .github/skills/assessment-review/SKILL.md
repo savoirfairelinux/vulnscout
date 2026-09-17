@@ -67,7 +67,8 @@ Targets share **authored content** (the one stored verdict), not **evidence** �
 a package present in one variant may be absent in another. Reviews are keyed
 the same way targets are: derive each target independently in Phase 2, and
 write one review per target in Phase 4 (`vulnscout-write_assessment_review`
-takes the target's `variant_id`/`package` alongside the assessment id). Nothing
+takes the target's `variant_id`/`package` and the assessment's read-time
+`assessment_fingerprint` alongside the assessment id). Nothing
 needs to be collapsed into a single verdict — if two targets derive
 differently, each gets its own review saying so, and the assessment's stored
 fields are diffed against each target's own derivation independently. Still
@@ -240,6 +241,7 @@ Per target:
 ```
 vulnscout-write_assessment_review(
     assessment_id=<id>,
+  expected_assessment_fingerprint=<assessment_fingerprint from the read>,
     variant_id=<the target's variant_id>,
     package=<the target's package>,
     status=<derived or under_investigation>,
@@ -256,6 +258,10 @@ Writing again for the same target overwrites its previous review — that is the
 intended behavior, not an error to avoid. A different target on the same
 assessment gets its own review row and is never touched by writing another
 target's.
+
+If the write reports `assessment_changed`, do not retry with the returned
+fingerprint. Fetch the assessment again and repeat the independent derivation:
+the authored content changed while the review was being researched.
 
 **On failure, log the error and continue to the next target.** One rejected
 write must not abort a fifty-assessment run. Report every failure in the summary.

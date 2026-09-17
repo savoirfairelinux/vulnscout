@@ -201,6 +201,7 @@ class AssessmentReview(Base):
         assessment_id: uuid.UUID,
         variant_id: uuid.UUID,
         finding_id: uuid.UUID,
+        reviewed_fingerprint: str,
         status: str,
         rationale: str,
         status_notes: str | None = None,
@@ -226,9 +227,7 @@ class AssessmentReview(Base):
         review.impact_statement = impact_statement
         review.workaround = workaround
         review.responses = list(responses or [])
-        review.reviewed_fingerprint = fingerprint_assessment(
-            db.session.get(Assessment, assessment_id)
-        )
+        review.reviewed_fingerprint = reviewed_fingerprint
         review.timestamp = datetime.now(timezone.utc)
         db.session.commit()
         return review

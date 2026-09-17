@@ -20,7 +20,7 @@ import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.models.assessment import Assessment
-from src.models.assessment_review import AssessmentReview
+from src.models.assessment_review import AssessmentReview, fingerprint_assessment
 from src.models.assessment_target import AssessmentTarget
 from src.models.finding import Finding
 from src.models.metrics import Metrics
@@ -353,6 +353,7 @@ class TestOutdatedFlag:
             ).scalars().one()
             AssessmentReview.upsert(
                 assessment_id=self.assess_id, variant_id=target.variant_id, finding_id=target.finding_id,
+                reviewed_fingerprint=fingerprint_assessment(target.assessment),
                 status="not_affected", rationale="agrees with analyst"
             )
             assert AssessmentReview.get_all_for_assessment(self.assess_id) != []
@@ -674,6 +675,9 @@ class TestOutdatedFlag:
             _db.session.commit()
             AssessmentReview.upsert(
                 assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id,
+                reviewed_fingerprint=fingerprint_assessment(
+                    _db.session.get(Assessment, orphaned_assessment_id)
+                ),
                 status="not_affected", rationale="agrees"
             )
             assert AssessmentReview.get_all_for_assessment(orphaned_assessment_id) != []
