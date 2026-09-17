@@ -390,6 +390,10 @@ def init_app(app: Flask) -> None:
         variant_scoped_overrides: dict[str, _ScopedOverrides] = {}
         current_scan_ids: list[uuid.UUID] = []
         records: list[Vulnerability] = []
+        # Set when ``record.packages`` was pre-populated from the same active
+        # scans that ``packages_current`` is derived from, which makes the two
+        # lists equal and lets the second query be skipped.
+        packages_match_current_scans = False
         _scope_variant: uuid.UUID | None = None
         _scope_project: uuid.UUID | None = None
         if variant_id and compare_variant_id:
@@ -562,6 +566,7 @@ def init_app(app: Flask) -> None:
                         _pkgs_by_vuln_var.setdefault(_key, []).append(_sid)
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
+                    packages_match_current_scans = True
                 variant_scoped_overrides = _variant_scoped_metrics_and_effort_overrides(records, variant_uuid)
         elif project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
@@ -725,6 +730,7 @@ def init_app(app: Flask) -> None:
                     # Mark findings and metrics as loaded to prevent lazy-load
                     orm_attrs.set_committed_value(r, 'findings', [])
                     orm_attrs.set_committed_value(r, 'metrics', metrics_by_vuln.get(r.id, []))
+                packages_match_current_scans = True
 
         else:
             records = Vulnerability.get_all()
@@ -746,7 +752,10 @@ def init_app(app: Flask) -> None:
             # packages_current: packages from the specific scan(s), expanded to include all
             # same-name+version supplier variants present in the active SBOM scans.
             # This ensures that Grype-linked packages (no supplier) also surface SBOM packages.
-            if current_scan_ids:
+            if current_scan_ids and packages_match_current_scans:
+                for v in vulns.values():
+                    v["packages_current"] = sorted(v["packages"])
+            elif current_scan_ids:
                 _PkgVariant2 = aliased(Package)
                 pkg_rows = db.session.execute(
                     db.select(Finding.vulnerability_id, _PkgVariant2.name, _PkgVariant2.version, _PkgVariant2.supplier)
@@ -770,27 +779,29 @@ def init_app(app: Flask) -> None:
                 for v in vulns.values():
                     v["packages_current"] = sorted(pkgs_current_by_vuln.get(v["id"], []))
 
+            if current_scan_ids:
                 # Preserve the variant dimension as well. A flattened package
                 # union cannot determine whether one exact assessment target
                 # is current in its own variant.
+                _PkgVariant3 = aliased(Package)
                 scoped_pkg_rows = db.session.execute(
                     db.select(
                         Finding.vulnerability_id,
                         Scan.variant_id,
-                        _PkgVariant2.name,
-                        _PkgVariant2.version,
-                        _PkgVariant2.supplier,
+                        _PkgVariant3.name,
+                        _PkgVariant3.version,
+                        _PkgVariant3.supplier,
                     )
                     .select_from(SBOMDocument)
                     .join(Scan, Scan.id == SBOMDocument.scan_id)
                     .join(SBOMPackage, SBOMPackage.sbom_document_id == SBOMDocument.id)
                     .join(Package, Package.id == SBOMPackage.package_id)
-                    .join(_PkgVariant2, (
-                        (_PkgVariant2.name == Package.name)
-                        & (_PkgVariant2.version == Package.version)
-                        & (_PkgVariant2.supplier == Package.supplier)
+                    .join(_PkgVariant3, (
+                        (_PkgVariant3.name == Package.name)
+                        & (_PkgVariant3.version == Package.version)
+                        & (_PkgVariant3.supplier == Package.supplier)
                     ))
-                    .join(Finding, Finding.package_id == _PkgVariant2.id)
+                    .join(Finding, Finding.package_id == _PkgVariant3.id)
                     .where(SBOMDocument.scan_id.in_(current_scan_ids))
                     .distinct()
                 ).all()
