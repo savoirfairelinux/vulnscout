@@ -1064,6 +1064,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     const [scanWizardOpen, setScanWizardOpen] = useState(false);
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+    const [loadedVariantScopeKey, setLoadedVariantScopeKey] = useState<string | null>(null);
     const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv', 'scc']));
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<RefreshType>>(new Set());
     const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
@@ -1246,6 +1247,25 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
         : variantIds?.length
             ? variantIds
         : [...new Set(scans.map(s => s.variant_id))];
+    const variantScopeKey = JSON.stringify([
+        variantId ?? null,
+        projectId ?? null,
+        [...(variantIds ?? [])].sort(),
+    ]);
+    const explicitVariantScope = variantId
+        ? new Set([variantId])
+        : variantIds?.length
+            ? new Set(variantIds)
+            : null;
+    const wizardVariants = explicitVariantScope
+        ? allVariants.filter(variant => explicitVariantScope.has(variant.id))
+        : allVariants;
+    const wizardSelectedVariantIds = new Set(
+        [...selectedVariantIds].filter(id =>
+            explicitVariantScope === null || explicitVariantScope.has(id)
+        )
+    );
+    const variantsReady = loadedVariantScopeKey === variantScopeKey;
 
     // Register the refresh callback so the global store can trigger it on completion
     useEffect(() => {
@@ -1281,6 +1301,10 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     useEffect(() => {
         let cancelled = false;
         const controller = new AbortController();
+        setScanWizardOpen(false);
+        setAllVariants([]);
+        setSelectedVariantIds(new Set());
+        setLoadedVariantScopeKey(null);
         const selectedVariantIdSet = new Set(variantIds ?? []);
         const fetchVariants = variantId
             // Single variant selected → fetch all and filter to just that one
@@ -1299,16 +1323,18 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
             if (cancelled) return;
             setAllVariants(vs);
             setSelectedVariantIds(new Set(vs.map(v => v.id)));
+            setLoadedVariantScopeKey(variantScopeKey);
         }).catch(() => {
             if (cancelled) return;
             setAllVariants([]);
             setSelectedVariantIds(new Set());
+            setLoadedVariantScopeKey(variantScopeKey);
         });
         return () => {
             cancelled = true;
             controller.abort();
         };
-    }, [variantId, projectId, variantIds]);
+    }, [variantId, projectId, variantIds, variantScopeKey]);
 
     // Close export menus on outside click
     useEffect(() => {
@@ -1349,8 +1375,9 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     }
 
     async function runSelectedScans() {
-        const variants = allVariants
-            .filter(v => selectedVariantIds.has(v.id))
+        if (!variantsReady) return;
+        const variants = wizardVariants
+            .filter(v => wizardSelectedVariantIds.has(v.id))
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanWizardOpen(false);
@@ -1622,7 +1649,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                     <>
                         <button
                             onClick={() => setScanWizardOpen(true)}
-                            disabled={allRunning || loading}
+                            disabled={allRunning || loading || !variantsReady}
                             className={[
                                 "inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-semibold transition-colors",
                                 allRunning
@@ -1634,9 +1661,9 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                             {allRunning ? 'Scanning…' : 'Run Scans'}
                         </button>
                         <RunScansWizard
-                            isOpen={scanWizardOpen}
-                            variants={allVariants}
-                            selectedVariantIds={selectedVariantIds}
+                            isOpen={scanWizardOpen && variantsReady}
+                            variants={wizardVariants}
+                            selectedVariantIds={wizardSelectedVariantIds}
                             selectedScanTypes={selectedScanTypes}
                             selectedRefreshTypes={selectedRefreshTypes}
                             refreshMode={refreshMode}
@@ -1647,7 +1674,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                             onToggleScanType={toggleScanType}
                             onToggleRefreshType={toggleRefreshType}
                             onRefreshModeChange={setRefreshMode}
-                            onSelectAllVariants={() => setSelectedVariantIds(new Set(allVariants.map(v => v.id)))}
+                            onSelectAllVariants={() => setSelectedVariantIds(new Set(wizardVariants.map(v => v.id)))}
                             onSelectNoVariants={() => setSelectedVariantIds(new Set())}
                             onExcludeKernelChange={setExcludeKernel}
                             onExcludeNativeChange={setExcludeNative}
