@@ -377,13 +377,16 @@ def init_app(app) -> None:
         OpenAPI:
         query variant_id uuid optional Filter by a single variant ID.
         query project_id uuid optional Filter by a single project ID.
+        query vulnerability_id string optional Filter by vulnerability ID.
         response 200 JsonObject Reviews grouped by assessment ID.
         response 400 Error Invalid identifiers.
         """
         variant_ids, err = _scoped_variant_ids()
         if err:
             return err
-        reviews = AssessmentReview.get_for_variants(variant_ids)
+        reviews = AssessmentReview.get_for_variants(
+            variant_ids, request.args.get("vulnerability_id")
+        )
         grouped: dict[str, list[dict]] = {}
         for r in reviews:
             grouped.setdefault(str(r.assessment_id), []).append(r.to_dict())

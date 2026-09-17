@@ -665,6 +665,19 @@ describe("assessmentReviews handler", () => {
         expect(String((global.fetch as jest.Mock).mock.calls[0][0])).toContain("variant_id=v1");
     });
 
+      test("fetchForScope filters reviews by vulnerability", async () => {
+        jest.spyOn(global, "fetch").mockResolvedValue({
+          ok: true,
+          json: async () => ({ a1: [makeReview()] }),
+        } as Response);
+
+        await AssessmentReviews.fetchForScope(undefined, "p1", "CVE-2024-0001");
+
+        const url = new URL(String((global.fetch as jest.Mock).mock.calls[0][0]));
+        expect(url.searchParams.get("project_id")).toBe("p1");
+        expect(url.searchParams.get("vulnerability_id")).toBe("CVE-2024-0001");
+      });
+
     test("fetchForScope returns an empty map when the request fails", async () => {
         jest.spyOn(global, "fetch").mockResolvedValue({ ok: false } as Response);
 
