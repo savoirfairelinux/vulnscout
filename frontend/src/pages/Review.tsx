@@ -12,7 +12,7 @@ import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
-import AssessmentReviews, { verdictOf, worstVerdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
+import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
@@ -128,11 +128,19 @@ const aiReviewList = [
     AI_REVIEW_LABELS.none,
 ];
 
-/** The AI review label a row carries. An assessment without a review counts
- *  as "No AI review"; one with reviews on several targets carries the
- *  worst-case label across them. */
-const rowAiReviewLabels = (row: ReviewRow, reviews: Record<string, AssessmentReview[]>) =>
-    new Set([AI_REVIEW_LABELS[worstVerdictOf(reviews[row.id])]]);
+/** Every AI-review state represented by a row's individual targets. */
+const rowAiReviewLabels = (row: ReviewRow, reviews: Record<string, AssessmentReview[]>) => {
+    const rowReviews = reviews[row.id] ?? [];
+    const targets = row.targets.length > 0
+        ? row.targets
+        : [{variant_id: null, package: ""}];
+    return new Set(targets.map(target => AI_REVIEW_LABELS[verdictOf(
+        rowReviews.find(review =>
+            review.variant_id === target.variant_id
+            && review.package === target.package
+        )
+    )]));
+};
 
 /** Copies a row's assessment id. The confirmation swaps the icon for a
  *  checkmark in place rather than adding a label, so the button keeps its width
@@ -358,6 +366,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         })();
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
+
+    const refreshReviews = useCallback(async () => {
+        const data = await AssessmentReviews.fetchForScope(variantId, projectId);
+        setReviews(data);
+    }, [variantId, projectId]);
 
     useEffect(() => {
         let cancelled = false;
@@ -774,7 +787,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             anyError = true;
         }
         if (!anyError) {
-            await refreshAssessments();
+            await Promise.all([refreshAssessments(), refreshReviews()]);
             onAssessmentChanged?.({ type: 'delete', vulnId: rowToDelete.vuln_id, ids: [rowToDelete.id] });
             showMessage('Assessment deleted successfully!', 'success');
         } else {
@@ -782,7 +795,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }
 
         setRowToDelete(null);
-    }, [rowToDelete, refreshAssessments, onAssessmentChanged, showMessage]);
+    }, [rowToDelete, refreshAssessments, refreshReviews, onAssessmentChanged, showMessage]);
 
     const copyRowId = useCallback(async (row: ReviewRow) => {
         try {
@@ -845,7 +858,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (bulkDeleteTab === 'assessments') {
                 const rows = assessments.filter(row => selectedAssessments[row.id]);
                 await Promise.all(rows.map(row => Assessments.remove(row.id)));
-                await refreshAssessments();
+                await Promise.all([refreshAssessments(), refreshReviews()]);
                 for (const row of rows) {
                     onAssessmentChanged?.({
                         type: 'delete',
@@ -896,6 +909,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         projectId,
         refreshAssessments,
         refreshAssessmentLists,
+        refreshReviews,
         selectedAiAssessments,
         selectedAssessments,
         selectedCustomCvss,
@@ -932,7 +946,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 update_timestamp: data.update_timestamp !== false,
                 timestamp: editSharedTimestamp,
             });
-            await refreshAssessments();
+            await Promise.all([refreshAssessments(), refreshReviews()]);
             setEditingRow(null);
             onAssessmentChanged?.({ type: 'update', vulnId: editingRow.vuln_id, ids: [editingRow.id], data });
             showMessage('Assessment updated successfully!', 'success');
@@ -941,7 +955,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         } finally {
             setEditSubmitting(false);
         }
-    }, [editingRow, refreshAssessments, onAssessmentChanged, showMessage]);
+    }, [editingRow, refreshAssessments, refreshReviews, onAssessmentChanged, showMessage]);
 
     const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {

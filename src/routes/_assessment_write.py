@@ -389,11 +389,20 @@ def apply_reconcile(
     deleted_non_custom = False
 
     with batch_session():
+        reviews_by_target = {
+            (review.variant_id, review.finding_id): review
+            for review in assessment.reviews
+        }
         for key, target_row in existing_by_key.items():
             if key in targets:
                 continue
             if (assessment.origin or "") != "custom":
                 deleted_non_custom = True
+            review = reviews_by_target.get(
+                (target_row.variant_id, target_row.finding_id)
+            )
+            if review is not None:
+                assessment.reviews.remove(review)
             assessment.target_rows.remove(target_row)
 
         for key, finding in targets.items():
