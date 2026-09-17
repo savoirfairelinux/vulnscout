@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -2632,6 +2632,13 @@ describe('Vulnerability Modal', () => {
         expect(within(current).getByText('pkgA@1.0.0')).toBeInTheDocument();
         expect(within(current).getByText('Exploitable')).toBeInTheDocument();
         expect(within(current).queryByText('pkgOld@0.9.0')).not.toBeInTheDocument();
+
+        for (const column of ['Variant', 'Package', 'Status', 'Justification', 'Impact', 'Notes', 'Workaround']) {
+            const headers = screen.getAllByRole('columnheader', {name: new RegExp(column)});
+            fireEvent.click(headers[0]);
+        }
+        fireEvent.click(screen.getAllByRole('columnheader', {name: /Package/})[0]);
+        fireEvent.click(screen.getAllByRole('columnheader', {name: /Package/})[0]);
 
         const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
         const outdatedHistoryTag = within(history).getByText('pkgOld@0.9.0').closest('span');

@@ -447,4 +447,145 @@ describe("Settings scoped project and variant views", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
     fireEvent.click(screen.getByRole("button", { name: "Collapse Apollo" }));
   });
+
+  test("uses keyboard submits and project variant overview actions", async () => {
+    const createdProject = { id: "project-2", name: "Zeus" };
+    projectsList.mockResolvedValueOnce([]).mockResolvedValue([createdProject, project]);
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add project" }));
+    const projectName = screen.getByLabelText("Project name");
+    fireEvent.change(projectName, { target: { value: "Zeus" } });
+    fireEvent.keyDown(projectName, { key: "Enter" });
+    expect(await screen.findByText('Project "Zeus" created.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Release" }));
+    expect(await screen.findByRole("heading", { name: "Import SBOM" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Release" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(variantsDelete).not.toHaveBeenCalled();
+  });
+
+  test("dismisses settings feedback banners", async () => {
+    configPatch.mockRejectedValueOnce(new Error("Invalid memory limit"));
+    render(<Settings />);
+
+    fireEvent.click(await screen.findAllByRole("button", { name: "Save" }).then((buttons) => buttons[1]));
+    expect(await screen.findByText("Invalid memory limit")).toBeInTheDocument();
+    const banner = screen.getByText("Invalid memory limit").closest('[role="alert"]');
+    const close = banner?.querySelector<HTMLButtonElement>('button');
+    expect(close).not.toBeNull();
+    fireEvent.click(close!);
+    await waitFor(() => expect(screen.queryByText("Invalid memory limit")).not.toBeInTheDocument());
+
+    getOutdatedDataPreview.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: /Analyze outdated data/ }));
+    expect(await screen.findByText("Failed to load outdated data.")).toBeInTheDocument();
+  });
+
+  test("reports project lifecycle failures", async () => {
+    projectsCreate.mockRejectedValueOnce(new Error("Create failed"));
+    projectsRename.mockRejectedValueOnce(new Error("Rename failed"));
+    projectsDelete.mockRejectedValueOnce(new Error("Delete failed"));
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add project" }));
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Broken" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText("Create failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
+    fireEvent.change(screen.getByLabelText("New name"), { target: { value: "Renamed" } });
+    fireEvent.keyDown(screen.getByLabelText("New name"), { key: "Enter" });
+    expect(await screen.findByText("Rename failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Project" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
+    expect(await screen.findByText("Delete failed")).toBeInTheDocument();
+  });
+
+  test("reports variant lifecycle failures", async () => {
+    variantsCreate.mockRejectedValueOnce(new Error("Variant create failed"));
+    variantsRename.mockRejectedValueOnce(new Error("Variant rename failed"));
+    variantsDelete.mockRejectedValueOnce(new Error("Variant delete failed"));
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Variant" }));
+    const variantName = await screen.findByLabelText("Variant name");
+    fireEvent.change(variantName, { target: { value: "Broken" } });
+    fireEvent.keyDown(variantName, { key: "Enter" });
+    expect(await screen.findByText("Variant create failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Release" }));
+    const newName = await screen.findByLabelText("New name");
+    fireEvent.change(newName, { target: { value: "Broken rename" } });
+    fireEvent.keyDown(newName, { key: "Enter" });
+    expect(await screen.findByText("Variant rename failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Variant" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
+    expect(await screen.findByText("Variant delete failed")).toBeInTheDocument();
+  });
+
+  test("reports API-key and cleanup deletion failures", async () => {
+    nvdApiKeySet.mockRejectedValueOnce(new Error("offline"));
+    deleteEmptyScans.mockResolvedValueOnce({ ok: false, error: "Empty cleanup failed" });
+    deleteOrphanedVulnerabilities.mockRejectedValueOnce(new Error("offline"));
+    render(<Settings />);
+
+    fireEvent.change(await screen.findByLabelText("API Key"), { target: { value: "new-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+    expect(await screen.findByText("Failed to save NVD API key.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Analyze empty scans/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete empty scans" }));
+    expect(await screen.findByText("Empty cleanup failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Analyze orphaned CVEs/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete orphaned CVEs" }));
+    expect(await screen.findByText("Cleanup failed.")).toBeInTheDocument();
+  });
+
+  test("cancels project, variant, API-key, and maintenance confirmations", async () => {
+    nvdApiKeyGet.mockResolvedValueOnce({ has_key: true, masked_key: "abcd...wxyz" });
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Project" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(projectsDelete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Release" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Variant" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(variantsDelete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(nvdApiKeyRemove).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Analyze outdated data/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(deleteOutdatedData).not.toHaveBeenCalled();
+  });
+
+  test("closes a cleanup preview from the modal header", async () => {
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze empty scans/ }));
+    expect(await screen.findByRole("list", { name: "Empty scans deletion plan" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close modal" }));
+    await waitFor(() => expect(screen.queryByRole("list", { name: "Empty scans deletion plan" })).not.toBeInTheDocument());
+  });
 });

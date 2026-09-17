@@ -4,8 +4,9 @@ import '@testing-library/jest-dom';
 import ScanHistory from '../../src/pages/ScanHistory';
 import ScansHandler from '../../src/handlers/scans';
 import Variants from '../../src/handlers/variant';
-import type { Scan } from '../../src/handlers/scans';
+import type { GlobalResult, Scan, ScanDiff } from '../../src/handlers/scans';
 import { setOnDone } from '../../src/handlers/grypeScanState';
+import { downloadJson } from '../../src/helpers/exportJson';
 
 const mockEmptySnapshot: readonly never[] = [];
 function mockManager() {
@@ -34,6 +35,11 @@ jest.mock('../../src/handlers/scans', () => ({
     __esModule: true,
     default: {
         list: jest.fn(),
+        getDiff: jest.fn(),
+        getGlobalResult: jest.fn(),
+        setDescription: jest.fn(),
+        deleteScan: jest.fn(),
+        importExport: jest.fn(),
     },
 }));
 jest.mock('../../src/handlers/variant', () => ({
@@ -44,16 +50,40 @@ jest.mock('../../src/handlers/variant', () => ({
     },
 }));
 jest.mock('../../src/helpers/useDocUrl', () => ({ useDocUrl: () => '#' }));
+jest.mock('../../src/helpers/exportJson', () => ({
+    downloadJson: jest.fn(),
+}));
 jest.mock('../../src/components/RunScansWizard', () => ({
     __esModule: true,
-    default: ({ isOpen, variants }: { isOpen: boolean; variants: Array<{name: string}> }) => (
-        isOpen ? <div data-testid="wizard-variants">{variants.map(variant => variant.name).join(',')}</div> : null
+    default: ({ isOpen, variants, onClose, onToggleVariant, onToggleScanType,
+        onToggleRefreshType, onRefreshModeChange, onSelectAllVariants,
+        onSelectNoVariants, onExcludeKernelChange, onExcludeNativeChange, onLaunch }: any) => (
+        isOpen ? <div>
+            <div data-testid="wizard-variants">{variants.map((variant: any) => variant.name).join(',')}</div>
+            <button onClick={onClose}>wizard-close</button>
+            <button onClick={() => onToggleVariant(variants[0]?.id)}>wizard-toggle-variant</button>
+            <button onClick={() => onToggleScanType('grype')}>wizard-toggle-scan</button>
+            <button onClick={() => onToggleRefreshType('nvd')}>wizard-toggle-refresh</button>
+            <button onClick={() => onToggleRefreshType('invalid')}>wizard-toggle-invalid-refresh</button>
+            <button onClick={() => onRefreshModeChange('custom')}>wizard-custom-refresh</button>
+            <button onClick={onSelectAllVariants}>wizard-select-all</button>
+            <button onClick={onSelectNoVariants}>wizard-select-none</button>
+            <button onClick={() => onExcludeKernelChange(false)}>wizard-include-kernel</button>
+            <button onClick={() => onExcludeNativeChange(false)}>wizard-include-native</button>
+            <button onClick={onLaunch}>wizard-launch</button>
+        </div> : null
     ),
 }));
 
 const mockList = ScansHandler.list as jest.MockedFunction<typeof ScansHandler.list>;
 const mockVariantsList = Variants.list as jest.MockedFunction<typeof Variants.list>;
 const mockSetOnDone = setOnDone as jest.MockedFunction<typeof setOnDone>;
+const mockGetDiff = ScansHandler.getDiff as jest.MockedFunction<typeof ScansHandler.getDiff>;
+const mockGetGlobalResult = ScansHandler.getGlobalResult as jest.MockedFunction<typeof ScansHandler.getGlobalResult>;
+const mockSetDescription = ScansHandler.setDescription as jest.MockedFunction<typeof ScansHandler.setDescription>;
+const mockDeleteScan = ScansHandler.deleteScan as jest.MockedFunction<typeof ScansHandler.deleteScan>;
+const mockImportExport = ScansHandler.importExport as jest.MockedFunction<typeof ScansHandler.importExport>;
+const mockDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
 
 const scan = (id: string, variantId: string): Scan => ({
     id,
@@ -70,14 +100,82 @@ const scan = (id: string, variantId: string): Scan => ({
     is_first: true,
 } as Scan);
 
+const finding = {
+    finding_id: 'finding-1', package_name: 'openssl', package_version: '3.0',
+    package_supplier: 'Organization: ACME', package_id: 'package-1',
+    vulnerability_id: 'CVE-2026-0001', origin: 'nvd',
+};
+const pkg = {
+    package_id: 'package-1', package_name: 'openssl', package_version: '3.0',
+    package_supplier: 'Organization: ACME',
+};
+const assessment = {
+    vulnerability_id: 'CVE-2026-0001', status: 'affected',
+    simplified_status: 'Exploitable', justification: '', impact_statement: 'impact',
+    status_notes: 'note',
+};
+const richDiff: ScanDiff = {
+    scan_id: 'scan-1', scan_type: 'sbom', previous_scan_id: 'scan-0', is_first: false,
+    finding_count: 3, package_count: 4, vuln_count: 3,
+    findings_added: [finding], findings_removed: [{...finding, finding_id: 'finding-2'}],
+    findings_upgraded: [{
+        vulnerability_id: finding.vulnerability_id, package_name: finding.package_name,
+        old_version: '2.0', new_version: '3.0', package_supplier: finding.package_supplier,
+        origin: 'nvd',
+    }],
+    findings_unchanged: [{...finding, finding_id: 'finding-3'}],
+    packages_added: [pkg], packages_removed: [{...pkg, package_id: 'package-2'}],
+    packages_upgraded: [{
+        package_name: 'openssl', old_version: '2.0', new_version: '3.0',
+        old_package_id: 'old', new_package_id: 'new', package_supplier: pkg.package_supplier,
+    }],
+    packages_unchanged: [{...pkg, package_id: 'package-3'}],
+    vulns_added: ['CVE-2026-0001'], vulns_removed: ['CVE-2026-0002'],
+    vulns_unchanged: ['CVE-2026-0003'], assessment_count: 3,
+    assessments_added: [assessment], assessments_removed: [{...assessment, vulnerability_id: 'CVE-2026-0002'}],
+    assessments_unchanged: [{...assessment, vulnerability_id: 'CVE-2026-0003'}],
+    newly_detected_findings: 1, newly_detected_vulns: 1,
+    newly_detected_findings_list: [finding], newly_detected_vulns_list: ['CVE-2026-0004'],
+    newly_detected_assessments_list: [assessment], all_findings: [finding],
+    all_vulns: ['CVE-2026-0001'],
+};
+const globalResult: GlobalResult = {
+    scan_id: 'scan-1', scan_type: 'sbom', package_count: 1, finding_count: 1,
+    vuln_count: 1, assessment_count: 1,
+    packages: [{...pkg, sources: ['sbom']}],
+    findings: [{...finding, sources: ['nvd']}],
+    vulnerabilities: [{vulnerability_id: 'CVE-2026-0001', sources: ['nvd']}],
+    assessments: [assessment],
+};
+
 describe('ScanHistory selected variant scope', () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        (global.fetch as jest.Mock | undefined)?.mockRestore?.();
         mockVariantsList.mockResolvedValue([
             {id: 'v1', name: 'V1', project_id: 'project'},
             {id: 'v2', name: 'V2', project_id: 'project'},
             {id: 'v3', name: 'V3', project_id: 'project'},
         ]);
+        mockGetDiff.mockResolvedValue(richDiff);
+        mockGetGlobalResult.mockResolvedValue(globalResult);
+        mockSetDescription.mockResolvedValue(true);
+        mockDeleteScan.mockResolvedValue({ok: true});
+        mockImportExport.mockResolvedValue({
+            ok: true,
+            result: {
+                scan_id: 'imported-scan',
+                imported_count: 1,
+                skipped_count: 0,
+                package_count: 1,
+                finding_count: 1,
+                vulnerability_count: 1,
+                assessment_count: 1,
+                format: 'diff',
+                is_first: false,
+                scans: [],
+            },
+        });
     });
 
     test('switching from three variants to two drops stale history and wizard choices', async () => {
@@ -262,5 +360,162 @@ describe('ScanHistory selected variant scope', () => {
         fireEvent.click(screen.getByRole('button', {name: 'Run Scans'}));
         expect(await screen.findByTestId('wizard-variants')).toHaveTextContent('V1,V2');
         expect(screen.getByTestId('wizard-variants')).not.toHaveTextContent('V3');
+    });
+
+    test('browses and filters active scan result sections', async () => {
+        mockList.mockResolvedValue([{...scan('scan-1', 'v1'), is_first: false}]);
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+
+        const details = await screen.findAllByRole('button', {name: 'Details'});
+        fireEvent.click(details[0]);
+        expect(await screen.findByText('Scan Result — Active Items')).toBeInTheDocument();
+        expect(screen.getByText('openssl')).toBeInTheDocument();
+
+        const resultModal = screen.getByTestId('scan-result-modal-backdrop');
+        const resultFilter = resultModal.querySelector<HTMLInputElement>('input[type="text"]');
+        expect(resultFilter).not.toBeNull();
+        fireEvent.change(resultFilter!, {target: {value: 'missing'}});
+        expect(screen.queryByText('openssl')).not.toBeInTheDocument();
+        fireEvent.change(resultFilter!, {target: {value: ''}});
+        fireEvent.click(screen.getByRole('button', {name: /Findings/}));
+        expect(screen.getByText('CVE-2026-0001')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: /Vulnerabilities/}));
+        expect(screen.getByText('CVE-2026-0001')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: /Assessments/}));
+        expect(screen.getByText('Exploitable')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: 'Close'}));
+        expect(screen.queryByText('Scan Result — Active Items')).not.toBeInTheDocument();
+    });
+
+    test('browses every SBOM diff section and filters detail tables', async () => {
+        mockList.mockResolvedValue([{...scan('scan-1', 'v1'), is_first: false}]);
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+
+        const details = await screen.findAllByRole('button', {name: 'Details'});
+        fireEvent.click(details[1]);
+        expect(await screen.findByText('Scan diff details')).toBeInTheDocument();
+        expect(screen.getByText('Added packages (1)')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: /Findings/}));
+        expect(screen.getByText('Findings on upgraded packages (1)')).toBeInTheDocument();
+        const diffModal = screen.getByTestId('scan-diff-modal-backdrop');
+        const filters = diffModal.querySelectorAll<HTMLInputElement>('input[type="text"]');
+        expect(filters.length).toBeGreaterThan(0);
+        fireEvent.change(filters[0], {target: {value: 'does-not-match'}});
+        fireEvent.change(filters[0], {target: {value: ''}});
+        fireEvent.click(screen.getByRole('button', {name: /Vulnerabilities/}));
+        expect(screen.getByText('Removed vulnerabilities (1)')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: /Assessments/}));
+        expect(screen.getByText('Removed assessments (1)')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: 'Close'}));
+    });
+
+    test('renders tool scan and detail error branches', async () => {
+        mockList.mockResolvedValue([{
+            ...scan('tool-scan', 'v1'), scan_type: 'tool', scan_source: 'grype',
+            is_first: true, newly_detected_findings: 1, newly_detected_vulns: 1,
+        }]);
+        mockGetGlobalResult.mockResolvedValueOnce(null);
+        mockGetDiff.mockResolvedValueOnce({...richDiff, scan_type: 'tool'});
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+
+        let details = await screen.findAllByRole('button', {name: 'Details'});
+        fireEvent.click(details[0]);
+        expect(await screen.findByText('Failed to load scan result.')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: 'Close'}));
+
+        details = screen.getAllByRole('button', {name: 'Details'});
+        fireEvent.click(details[1]);
+        expect(await screen.findByText('Tool scan diff details')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: /New Discovered/}));
+        expect(screen.getByText('New findings discovered (1)')).toBeInTheDocument();
+    });
+
+    test('exercises simple timeline, wizard, description, delete, and import controls', async () => {
+        mockList.mockResolvedValue([
+            {...scan('scan-1', 'v1'), is_first: false, description: 'before'},
+            {...scan('scan-2', 'v1'), is_first: false, scan_type: 'tool', scan_source: 'osv'},
+            {...scan('scan-3', 'v1'), is_first: false, scan_type: 'tool', scan_source: 'nvd'},
+            {...scan('scan-4', 'v1'), is_first: false, scan_type: 'tool', scan_source: 'scc'},
+        ]);
+        const {container} = render(<ScanHistory projectId="project" variantIds={['v1']} />);
+        await screen.findByText('before');
+
+        for (const title of [
+            'Showing all scans', 'Grype scans visible', 'OSV scans visible',
+            'NVD scans visible', 'sbom-cve-check scans visible',
+        ]) fireEvent.click(screen.getByTitle(title));
+        fireEvent.click(screen.getByTitle('Showing only scans with changes'));
+
+        fireEvent.click(screen.getByRole('button', {name: 'Run Scans'}));
+        for (const label of [
+            'wizard-toggle-variant', 'wizard-toggle-scan', 'wizard-toggle-refresh',
+            'wizard-toggle-invalid-refresh', 'wizard-custom-refresh', 'wizard-select-none',
+            'wizard-select-all', 'wizard-include-kernel', 'wizard-include-native',
+        ]) fireEvent.click(screen.getByText(label));
+        fireEvent.click(screen.getByText('wizard-close'));
+        fireEvent.click(screen.getByRole('button', {name: 'Run Scans'}));
+        fireEvent.click(screen.getByText('wizard-launch'));
+
+        fireEvent.click(screen.getAllByTitle('Edit description')[0]);
+        let descriptionInput = container.querySelector<HTMLInputElement>('input[placeholder="Add a description…"]');
+        expect(descriptionInput).not.toBeNull();
+        fireEvent.change(descriptionInput!, {target: {value: 'after'}});
+        fireEvent.keyDown(descriptionInput!, {key: 'Escape'});
+        fireEvent.click(screen.getAllByTitle('Edit description')[0]);
+        descriptionInput = container.querySelector<HTMLInputElement>('input[placeholder="Add a description…"]');
+        fireEvent.change(descriptionInput!, {target: {value: 'after'}});
+        fireEvent.keyDown(descriptionInput!, {key: 'Enter'});
+        await waitFor(() => expect(mockSetDescription).toHaveBeenCalledWith('scan-1', 'after'));
+
+        fireEvent.click(screen.getAllByTitle('Delete scan')[0]);
+        fireEvent.click(await screen.findByRole('button', {name: 'Cancel'}));
+        fireEvent.click(screen.getAllByTitle('Delete scan')[0]);
+        fireEvent.click(await screen.findByRole('button', {name: 'Yes, delete'}));
+        await waitFor(() => expect(mockDeleteScan).toHaveBeenCalled());
+
+        const importFile = new File(['{}'], 'scan.json', {type: 'application/json'});
+        Object.defineProperty(importFile, 'text', {value: jest.fn().mockResolvedValue('{}')});
+        fireEvent.change(screen.getByLabelText('Choose exported scan data'), {
+            target: {files: [importFile]},
+        });
+        await waitFor(() => expect(mockImportExport).toHaveBeenCalled());
+        expect(await screen.findByText(/Imported 1 scan diff/)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: 'Dismiss'}));
+        expect(screen.queryByText(/Imported 1 scan diff/)).not.toBeInTheDocument();
+    });
+
+    test('exports per-scan results and all diffs and dismisses export menus', async () => {
+        mockList.mockResolvedValue([{...scan('scan-1', 'v1'), is_first: false}]);
+        const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+            ok: true,
+            headers: new Headers({'Content-Disposition': 'attachment; filename="export.json"'}),
+            json: async () => ({exported: true}),
+        } as Response);
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+        await screen.findByText('scan-1 history');
+
+        const exportScan = screen.getByTitle('Export scan');
+        fireEvent.click(exportScan);
+        expect(screen.getByText('Export Diff')).toBeInTheDocument();
+        fireEvent.mouseDown(document.body);
+        expect(screen.queryByText('Export Diff')).not.toBeInTheDocument();
+
+        fireEvent.click(exportScan);
+        fireEvent.click(screen.getByText('Export Diff'));
+        await waitFor(() => expect(mockDownloadJson).toHaveBeenCalledWith({exported: true}, 'export.json'));
+
+        fireEvent.click(exportScan);
+        fireEvent.click(screen.getByText('Export Scan Result'));
+        await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+            expect.stringContaining('/api/scans/scan-1/export-result'),
+            expect.objectContaining({mode: 'cors'}),
+        ));
+
+        fireEvent.click(screen.getByTitle('Export all scan diffs'));
+        await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+            expect.stringContaining('/api/scans/export?type=diff&project_id=project'),
+            expect.objectContaining({mode: 'cors'}),
+        ));
+        fetchSpy.mockRestore();
     });
 });
