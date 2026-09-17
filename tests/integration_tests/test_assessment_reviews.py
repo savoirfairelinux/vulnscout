@@ -131,6 +131,32 @@ def test_verdict_differs_when_status_differs(finding, variant):
     assert review.to_dict()["verdict"] == "differs"
 
 
+def test_put_review_with_matching_responses_agrees(client, finding, variant):
+    assessment = make_assessment(
+        finding,
+        variant,
+        status="affected",
+        justification=None,
+        responses=["update", "will_not_fix"],
+    )
+
+    response = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json=target_json(
+            finding,
+            variant,
+            status="affected",
+            rationale="same remediation responses",
+            responses=["update", "will_not_fix"],
+        ),
+    )
+
+    assert response.status_code == 200
+    review = response.get_json()["review"]
+    assert review["responses"] == ["update", "will_not_fix"]
+    assert review["verdict"] == "agrees"
+
+
 def test_is_stale_when_assessment_edited_after_review(finding, variant):
     # Arrange
     assessment = make_assessment(finding, variant)

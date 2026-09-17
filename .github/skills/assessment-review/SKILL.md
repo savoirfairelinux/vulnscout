@@ -228,6 +228,8 @@ MEDIUM and LOW, follow it with one sentence naming the uncertainty or data gap.
 - `justification` and `impact_statement` only when the review's `status` is
   `not_affected`; omit otherwise.
 - `workaround` only when a remediation exists.
+- `responses` is always the independently derived response list. Pass an
+  explicit empty list when no response applies.
 - `rationale` is always required and always about the review — never a copy of
   `status_notes`.
 
@@ -248,6 +250,7 @@ vulnscout-write_assessment_review(
     justification=<only for not_affected>,
     impact_statement=<only for not_affected>,
     workaround=<only when one exists>,
+    responses=<derived responses, or [] when none apply>,
 )
 ```
 
