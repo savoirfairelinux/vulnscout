@@ -557,6 +557,37 @@ def test_list_custom_assessments_partial_target_review(client, finding, other_fi
     assert by_package["openssl@3.0.8"]["has_review"] is True
     assert by_package["zlib@1.2.13"]["has_review"] is False
 
+    # has_review=false means there is still target-level review work to do,
+    # not that the assessment has no reviews at all.
+    incomplete = client.get(
+        f"/api/custom-assessments?variant_id={variant.id}&has_review=false"
+    ).get_json()
+    assert [row["id"] for row in incomplete] == [str(assessment.id)]
+
+
+def test_review_scope_uses_review_target_variant(client, finding, variant):
+    """A review on variant B must not leak into variant A's review scope."""
+    other_variant = Variant.get_or_create("other", variant.project_id)
+    assessment = make_assessment(
+        finding,
+        variant,
+        targets=[(variant, finding), (other_variant, finding)],
+    )
+    upsert_for(assessment, finding, other_variant)
+
+    assert AssessmentReview.get_for_variants([variant.id]) == []
+    assert len(AssessmentReview.get_for_variants([other_variant.id])) == 1
+
+    reviews = client.get(
+        f"/api/assessment-reviews?variant_id={variant.id}"
+    ).get_json()
+    assert reviews == {}
+
+    incomplete = client.get(
+        f"/api/custom-assessments?variant_id={variant.id}&has_review=false"
+    ).get_json()
+    assert [row["id"] for row in incomplete] == [str(assessment.id)]
+
 
 def test_list_custom_assessments_limit_and_order(client, finding, variant):
     # Arrange

@@ -13,7 +13,6 @@ from sqlalchemy.orm import Mapped, relationship, mapped_column, contains_eager, 
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
 from .assessment import Assessment
-from .assessment_target import AssessmentTarget
 from .finding import Finding
 
 if TYPE_CHECKING:
@@ -194,9 +193,7 @@ class AssessmentReview(Base):
             joinedload(AssessmentReview.finding).joinedload(Finding.package),
         )
         if variant_ids:
-            query = query.where(
-                Assessment.target_rows.any(AssessmentTarget.variant_id.in_(variant_ids))
-            )
+            query = query.where(AssessmentReview.variant_id.in_(variant_ids))
         return list(db.session.execute(query).scalars().unique().all())
 
     @staticmethod
