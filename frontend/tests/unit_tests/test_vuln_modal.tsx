@@ -1697,7 +1697,7 @@ describe('Vulnerability Modal', () => {
         removeSpy.mockRestore();
     });
 
-    test('clearing a variant-scoped assessment reconciles an explicit empty target set', async () => {
+    test('clearing a variant-scoped assessment requires deletion confirmation', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -1784,6 +1784,15 @@ describe('Vulnerability Modal', () => {
             'checkbox', { name: 'Variant A / aaabbbccc@1.0.0' }));
         await user.click(saveBtn);
 
+        expect(await screen.findByText(/No targets remain/)).toBeInTheDocument();
+        expect(reconcileSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', {name: 'Keep editing'}));
+        expect(screen.getByText(/Edit Assessment/)).toBeInTheDocument();
+        expect(reconcileSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByText(/save changes/i));
+        await user.click(await screen.findByRole('button', {name: 'Yes, delete'}));
         await waitFor(() => {
             expect(reconcileSpy).toHaveBeenCalledWith('assessment-1', expect.objectContaining({
                 vuln_id: 'CVE-2010-1234',

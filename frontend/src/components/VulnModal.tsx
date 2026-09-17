@@ -167,6 +167,7 @@ type VariantScopedSnapshot = {
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
+    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
     // Whether editingAssessment came from the server's assessment listing (whose
     // targets are real AssessmentTarget rows, always variant-scoped) rather
     // than the client-side fallback used before that response lands (whose
@@ -783,7 +784,7 @@ type VariantScopedSnapshot = {
         setAssessmentToDelete(null);
     };
 
-    const saveEditedAssessment = async (data: EditAssessmentData) => {
+    const persistEditedAssessment = async (data: EditAssessmentData) => {
         if (!editingAssessment) return;
         setSubmittingMessage('Editing assessment...');
 
@@ -1020,6 +1021,14 @@ type VariantScopedSnapshot = {
         setSubmittingMessage(null);
         setEditingAssessmentId(null);
         setEditingAssessment(null);
+    };
+
+    const saveEditedAssessment = (data: EditAssessmentData) => {
+        if (data.targets !== undefined && data.targets.length === 0) {
+            setPendingEmptyTargetEdit(data);
+            return;
+        }
+        void persistEditedAssessment(data);
     };
 
     // Handle keyboard navigation (ESC to close, arrow keys to navigate)
@@ -2238,6 +2247,22 @@ type VariantScopedSnapshot = {
                 showTitleIcon={true}
                 onConfirm={handleConfirmClose}
                 onCancel={handleCancelClose}
+            />
+
+            <ConfirmationModal
+                isOpen={pendingEmptyTargetEdit !== null}
+                title="Delete Assessment"
+                message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
+                confirmText="Yes, delete"
+                cancelText="Keep editing"
+                showTitleIcon={true}
+                onConfirm={() => {
+                    if (!pendingEmptyTargetEdit) return;
+                    const data = pendingEmptyTargetEdit;
+                    setPendingEmptyTargetEdit(null);
+                    void persistEditedAssessment(data);
+                }}
+                onCancel={() => setPendingEmptyTargetEdit(null)}
             />
 
             <ConfirmationModal

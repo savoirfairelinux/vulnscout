@@ -249,9 +249,12 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [editingRow, setEditingRow] = useState<ReviewRow | null>(null);
     const [editVariants, setEditVariants] = useState<Variant[]>([]);
     const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
+    const [editCompatibilityLoading, setEditCompatibilityLoading] = useState(false);
+    const [editCompatibilityError, setEditCompatibilityError] = useState<string | undefined>();
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
     const [showDiscardEditConfirmation, setShowDiscardEditConfirmation] = useState(false);
+    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
@@ -316,14 +319,28 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     // this CVE (optionally scoped to the current project), instead of every
     // variant in the database.
     useEffect(() => {
+        let cancelled = false;
         if (!editingRow) {
             setEditVariants([]);
+            setEditCompatibilityLoading(false);
+            setEditCompatibilityError(undefined);
             return;
         }
         setEditVariants([]);
+        setEditVariantPackageMap({});
+        setEditCompatibilityLoading(true);
+        setEditCompatibilityError(undefined);
         Variants.listByVuln(editingRow.vuln_id).then(variants => {
-            setEditVariants(projectId ? variants.filter(v => v.project_id === projectId) : variants);
-        }).catch(() => {});
+            if (cancelled) return;
+            const scoped = projectId ? variants.filter(v => v.project_id === projectId) : variants;
+            setEditVariants(scoped);
+            if (scoped.length === 0) setEditCompatibilityLoading(false);
+        }).catch(() => {
+            if (cancelled) return;
+            setEditCompatibilityLoading(false);
+            setEditCompatibilityError('Unable to load target compatibility. Try again.');
+        });
+        return () => { cancelled = true; };
     }, [editingRow, projectId]);
 
     // Build the variant -> package compatibility map for the edited row so the
@@ -335,34 +352,40 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             setEditVariantPackageMap({});
             return;
         }
+        setEditCompatibilityLoading(true);
+        setEditCompatibilityError(undefined);
         (async () => {
-            const entries: [string, string[]][] = await Promise.all(
-                editVariants.map(async (variant): Promise<[string, string[]]> => {
-                    try {
+            try {
+                const entries: [string, string[]][] = await Promise.all(
+                    editVariants.map(async (variant): Promise<[string, string[]]> => {
                         const pkgs = await Packages.list(variant.id);
                         return [variant.id, pkgs.map(p =>
                             p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
                         )];
-                    } catch {
-                        return [variant.id, []];
+                    })
+                );
+                if (cancelled) return;
+                const map: Record<string, string[]> = Object.fromEntries(entries);
+                // Seed the map with (variant, package) pairs already covered by the
+                // assessment being edited. Deprecated packages are no longer in the
+                // variant's current SBOM, so Packages.list omits them; without this
+                // they would be flagged incompatible and their checkbox disabled.
+                if (editingRow) {
+                    for (const t of editingRow.targets) {
+                        if (!t.variant_id) continue;
+                        const merged = new Set(map[t.variant_id] ?? []);
+                        merged.add(t.package);
+                        map[t.variant_id] = [...merged];
                     }
-                })
-            );
-            if (cancelled) return;
-            const map: Record<string, string[]> = Object.fromEntries(entries);
-            // Seed the map with (variant, package) pairs already covered by the
-            // assessment being edited. Deprecated packages are no longer in the
-            // variant's current SBOM, so Packages.list omits them; without this
-            // they would be flagged incompatible and their checkbox disabled.
-            if (editingRow) {
-                for (const t of editingRow.targets) {
-                    if (!t.variant_id) continue;
-                    const merged = new Set(map[t.variant_id] ?? []);
-                    merged.add(t.package);
-                    map[t.variant_id] = [...merged];
                 }
+                setEditVariantPackageMap(map);
+                setEditCompatibilityLoading(false);
+            } catch {
+                if (cancelled) return;
+                setEditVariantPackageMap({});
+                setEditCompatibilityLoading(false);
+                setEditCompatibilityError('Unable to load target compatibility. Try again.');
             }
-            setEditVariantPackageMap(map);
         })();
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
@@ -427,6 +450,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const openAssessmentEditor = (row: ReviewRow) => {
         setEditHasUnsavedChanges(false);
+        setPendingEmptyTargetEdit(null);
+        setShowBanner(false);
         setEditingRow(row);
     };
 
@@ -919,7 +944,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         variantId,
     ]);
 
-    const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
+    const persistEditedAssessment = useCallback(async (data: EditAssessmentData) => {
         if (!editingRow) return;
         setEditSubmitting(true);
 
@@ -956,6 +981,21 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             setEditSubmitting(false);
         }
     }, [editingRow, refreshAssessments, refreshReviews, onAssessmentChanged, showMessage]);
+
+    const handleSaveEdit = useCallback((data: EditAssessmentData) => {
+        if (data.targets !== undefined && data.targets.length === 0) {
+            setPendingEmptyTargetEdit(data);
+            return;
+        }
+        void persistEditedAssessment(data);
+    }, [persistEditedAssessment]);
+
+    const confirmEmptyTargetEdit = useCallback(() => {
+        if (!pendingEmptyTargetEdit) return;
+        const data = pendingEmptyTargetEdit;
+        setPendingEmptyTargetEdit(null);
+        void persistEditedAssessment(data);
+    }, [pendingEmptyTargetEdit, persistEditedAssessment]);
 
     const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {
@@ -1907,10 +1947,23 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 package: target.package,
                             }))}
                             variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
+                            findingsLoading={editCompatibilityLoading}
+                            findingsError={editCompatibilityError}
                         />
                     )}
                 </ModalShell>
             )}
+
+            <ConfirmationModal
+                isOpen={pendingEmptyTargetEdit !== null}
+                title="Delete Assessment"
+                message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
+                confirmText="Yes, delete"
+                cancelText="Keep editing"
+                showTitleIcon={true}
+                onConfirm={confirmEmptyTargetEdit}
+                onCancel={() => setPendingEmptyTargetEdit(null)}
+            />
 
             <ConfirmationModal
                 isOpen={showDiscardEditConfirmation}
