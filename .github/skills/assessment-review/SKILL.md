@@ -95,11 +95,11 @@ of more than 25 assessments.
 
 By default, **skip assessments where every target already carries a review**,
 by passing `has_review=false`. Re-running over a broad scope should not redo
-settled work. `has_review` on a listing row is true when *any* target has a
-review — an assessment with two targets and only one reviewed still comes back
-with `has_review=true`, so check `target_reviews` (each target's own
-`has_review`/`is_stale`) before assuming every target is covered, and derive
-the still-unreviewed targets normally.
+settled work. The filter returns assessments with at least one unreviewed target
+in the requested scope, including partially reviewed multi-target assessments.
+`has_review` on a listing row is still true when *any* target has a review, so
+check `target_reviews` (each target's own `has_review`/`is_stale`) and derive
+only the still-unreviewed targets normally.
 
 Two exceptions:
 - The caller explicitly asks to re-review everything → omit `has_review`.

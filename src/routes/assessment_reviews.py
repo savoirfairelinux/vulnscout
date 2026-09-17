@@ -227,7 +227,7 @@ def init_app(app) -> None:
         OpenAPI:
         query variant_id uuid optional Filter by a single variant ID.
         query project_id uuid optional Filter by a single project ID.
-        query has_review string optional 'true' or 'false' to filter on review presence.
+        query has_review string optional 'true' for any reviewed target or 'false' for any unreviewed target.
         query order string optional 'timestamp_desc' (default) or 'timestamp_asc'.
         query limit integer optional Maximum rows to return, default 50.
         query offset integer optional Rows to skip, default 0.
@@ -257,11 +257,24 @@ def init_app(app) -> None:
         }
         reviewed_ids = {key[0] for key in reviews_by_target}
 
+        def scoped_target_keys(assessment: Assessment) -> list[tuple]:
+            return [
+                (assessment.id, target.variant_id, target.finding_id)
+                for target in assessment.target_rows
+                if variant_ids is None or target.variant_id in variant_ids
+            ]
+
         has_review = request.args.get('has_review')
         if has_review == 'true':
             assessments = [a for a in assessments if a.id in reviewed_ids]
         elif has_review == 'false':
-            assessments = [a for a in assessments if a.id not in reviewed_ids]
+            assessments = [
+                assessment for assessment in assessments
+                if any(
+                    key not in reviews_by_target
+                    for key in scoped_target_keys(assessment)
+                )
+            ]
 
         rows = []
         for a in assessments[offset:offset + limit]:
