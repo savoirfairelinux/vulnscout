@@ -185,15 +185,22 @@ class AssessmentReview(Base):
         ).scalars().all())
 
     @staticmethod
-    def get_for_variants(variant_ids: list[uuid.UUID] | None = None) -> list["AssessmentReview"]:
+    def get_for_variants(
+        variant_ids: list[uuid.UUID] | None = None,
+        vulnerability_id: str | None = None,
+    ) -> list["AssessmentReview"]:
         query = db.select(AssessmentReview).join(
             Assessment, AssessmentReview.assessment_id == Assessment.id
         ).options(
             contains_eager(AssessmentReview.assessment),
             joinedload(AssessmentReview.finding).joinedload(Finding.package),
         )
-        if variant_ids:
+        if variant_ids is not None:
             query = query.where(AssessmentReview.variant_id.in_(variant_ids))
+        if vulnerability_id:
+            query = query.join(
+                Finding, AssessmentReview.finding_id == Finding.id
+            ).where(Finding.vulnerability_id == vulnerability_id.upper())
         return list(db.session.execute(query).scalars().unique().all())
 
     @staticmethod

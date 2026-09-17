@@ -199,14 +199,14 @@ type VariantScopedSnapshot = {
     // current content, so an edit/delete/approve leaves the previously
     // fetched review stale-flag stale (pun intended) until this refetches.
     const refreshReviews = useCallback(() => {
-        AssessmentReviews.fetchForScope(variantId, projectId)
+        AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
             .then(data => setReviews(data))
             .catch(() => setReviews({}));
-    }, [variantId, projectId]);
+    }, [variantId, projectId, vuln.id]);
 
     useEffect(() => {
         let cancelled = false;
-        AssessmentReviews.fetchForScope(variantId, projectId)
+        AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
             .then(data => { if (!cancelled) setReviews(data); })
             .catch(() => { if (!cancelled) setReviews({}); });
         return () => { cancelled = true; };

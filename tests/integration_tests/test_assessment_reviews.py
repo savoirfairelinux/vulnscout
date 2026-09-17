@@ -813,6 +813,40 @@ def test_bulk_reviews_keyed_by_assessment_id(client, finding, variant):
     assert [r["status"] for r in body[str(assessment.id)]] == ["affected"]
 
 
+def test_bulk_reviews_filter_by_vulnerability(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+    upsert_for(assessment, finding, variant)
+
+    other_package = Package.find_or_create("curl", "8.0.0")
+    other_vulnerability = Vulnerability.get_or_create("CVE-2024-0002")
+    other_finding = Finding.get_or_create(
+        package_id=other_package.id,
+        vulnerability_id=other_vulnerability.id,
+    )
+    other_assessment = make_assessment(other_finding, variant)
+    upsert_for(other_assessment, other_finding, variant)
+
+    body = client.get(
+        f"/api/assessment-reviews?variant_id={variant.id}"
+        f"&vulnerability_id={finding.vulnerability_id}"
+    ).get_json()
+
+    assert list(body) == [str(assessment.id)]
+
+
+def test_bulk_reviews_empty_project_scope_returns_nothing(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+    upsert_for(assessment, finding, variant)
+    empty_project = Project.get_or_create("empty-project")
+
+    body = client.get(
+        f"/api/assessment-reviews?project_id={empty_project.id}"
+        f"&vulnerability_id={finding.vulnerability_id}"
+    ).get_json()
+
+    assert body == {}
+
+
 def test_bulk_reviews_group_multiple_targets_under_one_assessment(client, finding, other_finding, variant):
     # Arrange
     assessment = make_assessment(

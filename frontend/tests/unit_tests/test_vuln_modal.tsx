@@ -4065,8 +4065,8 @@ describe("VulnModal AI review block", () => {
 
     let currentReviews: Record<string, AssessmentReview[]> = {};
 
-    // Sets the review payload the next render will receive from
-    // AssessmentReviews.fetchForScope (mocked via the /api/assessment-reviews route).
+    // Sets the review payload the next render will receive from the
+    // vulnerability-filtered /api/assessment-reviews route.
     const mockReviews = (data: Record<string, AssessmentReview[]>) => {
         currentReviews = data;
     };
@@ -4143,6 +4143,19 @@ describe("VulnModal AI review block", () => {
         expect(await screen.findByText(/AI review/i)).toBeInTheDocument();
         expect(screen.getByText(/differs/i)).toBeInTheDocument();
         expect(screen.getByText(/openssl 3.0.8 ships in the rootfs/)).toBeInTheDocument();
+    });
+
+    test("requests reviews only for the displayed vulnerability", async () => {
+        mockReviews({ "assess-1": [review] });
+
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        const reviewRequest = fetchMock.mock.calls.find(([request]) =>
+            String(request).includes("/api/assessment-reviews")
+        );
+        expect(reviewRequest).toBeDefined();
+        const url = new URL(String(reviewRequest![0]));
+        expect(url.searchParams.get("vulnerability_id")).toBe(baseVulnerability.id);
     });
 
     test("renders proposed response tags in the review card", async () => {

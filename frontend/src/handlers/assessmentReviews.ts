@@ -110,6 +110,7 @@ class AssessmentReviews {
     static async fetchForScope(
         variantId?: string,
         projectId?: string,
+        vulnerabilityId?: string,
     ): Promise<Record<string, AssessmentReview[]>> {
         const url = new URL(
             import.meta.env.VITE_API_URL + "/api/assessment-reviews",
@@ -117,6 +118,7 @@ class AssessmentReviews {
         );
         if (variantId) url.searchParams.set("variant_id", variantId);
         else if (projectId) url.searchParams.set("project_id", projectId);
+        if (vulnerabilityId) url.searchParams.set("vulnerability_id", vulnerabilityId);
 
         try {
             const response = await fetch(url.toString(), { mode: "cors" });
