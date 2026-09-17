@@ -198,14 +198,14 @@ class TestTriggerGrypeScan:
 
 
 # ---------------------------------------------------------------------------
-# Grype scan — kernel module exclusion
+# Grype scan — package exclusions
 # ---------------------------------------------------------------------------
 
-class TestGrypeKernelModuleExclusion:
+class TestGrypePackageExclusion:
     @patch("shutil.which", return_value="/usr/bin/grype")
     @patch("subprocess.run")
     def test_kernel_modules_pruned_from_cdx_before_grype(self, mock_run, mock_which, client, ids):
-        """Kernel-module components are removed from the CDX handed to Grype."""
+        """Enabled package filters prune components from the CDX handed to Grype."""
         import json as _json
 
         captured = {}
@@ -219,10 +219,12 @@ class TestGrypeKernelModuleExclusion:
                             {"name": "openssl", "version": "1.1.1", "bom-ref": "ref-openssl"},
                             {"name": "kernel-module-ext4", "version": "6.1", "bom-ref": "ref-km1"},
                             {"name": "kernel-module-usbcore", "version": "6.1", "bom-ref": "ref-km2"},
+                            {"name": "cmake-native", "version": "3.28", "bom-ref": "ref-native"},
                         ],
                         "dependencies": [
                             {"ref": "ref-openssl"},
                             {"ref": "ref-km1"},
+                            {"ref": "ref-native"},
                         ],
                     }, f)
             elif isinstance(cmd, list) and "grype" in cmd:
@@ -238,7 +240,8 @@ class TestGrypeKernelModuleExclusion:
         mock_run.side_effect = _fake_run
 
         with _sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/grype-scan")
+            resp = client.post(
+                f"/api/variants/{ids['variant_id']}/grype-scan?exclude_native=true")
         assert resp.status_code == 202
 
         names = {c["name"] for c in captured["cdx"]["components"]}
@@ -250,6 +253,7 @@ class TestGrypeKernelModuleExclusion:
         resp_s = client.get(f"/api/variants/{ids['variant_id']}/grype-scan/status")
         data = json.loads(resp_s.data)
         assert any("2 kernel modules excluded" in line for line in data["logs"])
+        assert any("1 native packages excluded" in line for line in data["logs"])
 
 
 # ---------------------------------------------------------------------------

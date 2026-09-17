@@ -10,7 +10,8 @@ import { ScanStateManager } from "./scanStateManager";
 export type { ScanEntryState as GrypeState, ScanManagerSnapshot } from "./scanStateManager";
 
 const manager = new ScanStateManager(
-    (vid, opts) => ScansHandler.triggerGrypeScan(vid, opts.excludeKernel ?? true),
+    (vid, opts) => ScansHandler.triggerGrypeScan(
+        vid, opts.excludeKernel ?? true, opts.excludeNative ?? false),
     (vid) => ScansHandler.getGrypeScanStatus(vid),
     "Grype",
     true, // serial: run one variant at a time (flask process is global)

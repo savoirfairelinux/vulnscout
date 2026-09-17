@@ -1066,6 +1066,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<RefreshType>>(new Set());
     const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
     const [excludeKernel, setExcludeKernel] = useState(true);
+    const [excludeNative, setExcludeNative] = useState(true);
 
     // Global Grype scan state — survives tab switches (per-variant)
     const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);
@@ -1308,7 +1309,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanWizardOpen(false);
-        const opts = { excludeKernel };
+        const opts = { excludeKernel, excludeNative };
         const scanQueue = [
             ['grype', grypeQueueScan, grypeStartQueuedScan, grypeWaitForCompletion],
             ['nvd', nvdQueueScan, nvdStartQueuedScan, nvdWaitForCompletion],
@@ -1601,6 +1602,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                             selectedRefreshTypes={selectedRefreshTypes}
                             refreshMode={refreshMode}
                             excludeKernel={excludeKernel}
+                            excludeNative={excludeNative}
                             onClose={() => setScanWizardOpen(false)}
                             onToggleVariant={toggleVariant}
                             onToggleScanType={toggleScanType}
@@ -1609,6 +1611,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                             onSelectAllVariants={() => setSelectedVariantIds(new Set(allVariants.map(v => v.id)))}
                             onSelectNoVariants={() => setSelectedVariantIds(new Set())}
                             onExcludeKernelChange={setExcludeKernel}
+                            onExcludeNativeChange={setExcludeNative}
                             onLaunch={handleRunSelectedScans}
                         />
                     </>
