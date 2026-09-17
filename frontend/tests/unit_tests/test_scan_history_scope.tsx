@@ -215,4 +215,52 @@ describe('ScanHistory selected variant scope', () => {
         await waitFor(() => expect(screen.getByTestId('wizard-variants')).toHaveTextContent('V1,V2'));
         expect(screen.getByTestId('wizard-variants')).not.toHaveTextContent('V3');
     });
+
+    test('scope change immediately disables and closes stale wizard choices', async () => {
+        let resolveNarrowVariants!: (variants: Array<{id: string; name: string; project_id: string}>) => void;
+        const narrowVariants = new Promise<Array<{id: string; name: string; project_id: string}>>(
+            resolve => { resolveNarrowVariants = resolve; }
+        );
+        let variantCalls = 0;
+        mockVariantsList.mockImplementation(() => {
+            variantCalls += 1;
+            if (variantCalls === 1) {
+                return Promise.resolve([
+                    {id: 'v1', name: 'V1', project_id: 'project'},
+                    {id: 'v2', name: 'V2', project_id: 'project'},
+                    {id: 'v3', name: 'V3', project_id: 'project'},
+                ]);
+            }
+            return narrowVariants;
+        });
+        mockList.mockResolvedValue([scan('current-v1', 'v1')]);
+
+        const view = render(
+            <ScanHistory projectId="project" variantIds={['v1', 'v2', 'v3']} />
+        );
+        const runScans = await screen.findByRole('button', {name: 'Run Scans'});
+        await waitFor(() => expect(runScans).toBeEnabled());
+        fireEvent.click(runScans);
+        expect(await screen.findByTestId('wizard-variants')).toHaveTextContent('V1,V2,V3');
+
+        view.rerender(
+            <ScanHistory projectId="project" variantIds={['v1', 'v2']} />
+        );
+
+        await waitFor(() => expect(screen.getByRole('button', {name: 'Run Scans'})).toBeDisabled());
+        expect(screen.queryByTestId('wizard-variants')).not.toBeInTheDocument();
+
+        await act(async () => {
+            resolveNarrowVariants([
+                {id: 'v1', name: 'V1', project_id: 'project'},
+                {id: 'v2', name: 'V2', project_id: 'project'},
+                {id: 'v3', name: 'V3', project_id: 'project'},
+            ]);
+        });
+
+        await waitFor(() => expect(screen.getByRole('button', {name: 'Run Scans'})).toBeEnabled());
+        fireEvent.click(screen.getByRole('button', {name: 'Run Scans'}));
+        expect(await screen.findByTestId('wizard-variants')).toHaveTextContent('V1,V2');
+        expect(screen.getByTestId('wizard-variants')).not.toHaveTextContent('V3');
+    });
 });
