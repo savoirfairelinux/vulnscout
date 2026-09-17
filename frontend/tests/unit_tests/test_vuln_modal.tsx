@@ -4145,6 +4145,32 @@ describe("VulnModal AI review block", () => {
         expect(screen.getByText(/openssl 3.0.8 ships in the rootfs/)).toBeInTheDocument();
     });
 
+    test("renders proposed response tags in the review card", async () => {
+        mockReviews({
+            "assess-1": [{...review, responses: ["update", "will_not_fix"]}],
+        });
+
+        await renderModalWithAssessment({id: "assess-1", origin: "custom"});
+
+        expect(await screen.findByText(/responses: update, will_not_fix/i)).toBeInTheDocument();
+    });
+
+    test("labels the sole reviewed target of a multi-target assessment", async () => {
+        mockReviews({"assess-1": [review]});
+
+        await renderModalWithAssessment({
+            id: "assess-1",
+            origin: "custom",
+            packages: ["pkgA@1.0.0", "zlib@1.2.13"],
+            targets: [
+                {variant_id: "v1", package: "pkgA@1.0.0"},
+                {variant_id: "v2", package: "zlib@1.2.13"},
+            ],
+        });
+
+        expect(await screen.findByText(/pkgA@1\.0\.0 @ v1/)).toBeInTheDocument();
+    });
+
     test("shows the stale banner when the assessment changed after the review", async () => {
         mockReviews({ "assess-1": [{ ...review, is_stale: true }] });
 

@@ -2123,7 +2123,7 @@ type VariantScopedSnapshot = {
                                             {row.origin === "custom" && (() => {
                                                 const assessmentId = row.id;
                                                 const rowReviews = reviews[assessmentId] ?? [];
-                                                const multiTarget = rowReviews.length > 1;
+                                                const multiTarget = isMultiTarget(targets);
                                                 return (
                                                     <div key={`review-${assessmentId}`} className="mt-3">
                                                         {rowReviews.map(review => {
@@ -2163,6 +2163,9 @@ type VariantScopedSnapshot = {
                                                                         {review.impact_statement && <>{review.impact_statement}<br/></>}
                                                                         {review.status_notes && <>{review.status_notes}<br/></>}
                                                                         {review.workaround && <>{review.workaround}<br/></>}
+                                                                        {review.responses.length > 0 && <>
+                                                                            responses: {review.responses.join(', ')}<br/>
+                                                                        </>}
                                                                         <span className="text-gray-400">why: {review.rationale}</span>
                                                                     </p>
                                                                     {review.is_stale && (
