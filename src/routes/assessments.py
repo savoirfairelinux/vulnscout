@@ -23,6 +23,7 @@ from ..helpers.assessment_io import (
     import_statements as _import_openvex_statements,
     build_variant_by_name_map,
     build_custom_data_export,
+    custom_data_version,
     detect_review_export_format,
     import_custom_data,
     reconcile_review_export,
@@ -912,6 +913,10 @@ def init_app(app: Flask) -> None:
 
         if not isinstance(data, dict) or "version" not in data:
             return {"error": "Invalid custom-data format. Expected {version, assessments, ...}"}, 400
+        try:
+            custom_data_version(data)
+        except ValueError as error:
+            return {"error": str(error)}, 400
 
         if not isinstance(project_id, str) or not project_id:
             return {"error": "project_id is required"}, 400

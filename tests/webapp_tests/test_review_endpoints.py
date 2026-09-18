@@ -1065,7 +1065,9 @@ def test_export_custom_data_basic(client):
     assert "vuln_id" in a
     assert "status" in a
     assert "packages" in a
-    assert "variant" in a
+    assert "variant" not in a
+    assert "variant_id" not in a
+    assert all(set(target) == {"variant", "package"} for target in a["targets"])
 
 
 def test_export_custom_data_by_variant(client):
@@ -1075,7 +1077,9 @@ def test_export_custom_data_by_variant(client):
     data = json.loads(resp.data)
     assert len(data["assessments"]) >= 1
     for assessment in data["assessments"]:
-        assert assessment["variant_id"] == str(VARIANT_UUID)
+        assert "variant_id" not in assessment
+        assert "variant" not in assessment
+        assert all(target["variant"] == "default" for target in assessment["targets"])
 
 
 def test_export_custom_data_by_project(client):
@@ -1179,9 +1183,8 @@ def test_update_custom_export_preserves_matching_content_and_removes_unselected(
     existing["assessments"][0]["x-local-note"] = "preserved"
     existing["assessments"].insert(0, {
         "vuln_id": "CVE-2099-REMOVED",
-        "variant_id": "33333333-3333-3333-3333-333333333333",
-        "variant": "not-selected",
         "packages": [],
+        "targets": [{"variant": "not-selected", "package": "removed@1"}],
         "status": "affected",
     })
 
@@ -1199,7 +1202,12 @@ def test_update_custom_export_preserves_matching_content_and_removes_unselected(
     updated = json.loads(response.data)
     assert updated["custom_header"] == "preserved"
     assert updated["assessments"][0]["x-local-note"] == "preserved"
-    assert {item["variant_id"] for item in updated["assessments"]} == {str(VARIANT_UUID)}
+    assert all("variant_id" not in item for item in updated["assessments"])
+    assert {
+        target["variant"]
+        for item in updated["assessments"]
+        for target in item["targets"]
+    } == {"default"}
     assert 'filename="custom_data.json"' in response.headers["Content-Disposition"]
 
 
@@ -1259,6 +1267,7 @@ def test_update_export_can_remove_all_selected_data(client):
     (b"not-json", "Invalid JSON file"),
     (json.dumps({"foo": "bar"}).encode(), "Unsupported export format"),
     (json.dumps({"@context": "openvex", "statements": []}).encode(), "Unsupported export format"),
+    (json.dumps({"version": 3, "assessments": []}).encode(), "Unsupported VulnScout JSON version: 3"),
 ])
 def test_update_export_rejects_malformed_or_unsupported_input(client, body, expected_error):
     response = client.post(
@@ -1349,6 +1358,16 @@ def test_import_custom_data_missing_version(client):
     assert resp.status_code == 400
 
 
+def test_import_custom_data_rejects_future_version(client):
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json={"version": 3, "project_id": str(PROJECT_UUID), "assessments": []},
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+    assert "Unsupported VulnScout JSON version: 3" in json.loads(resp.data)["error"]
+
+
 def test_import_custom_data_assessments(client):
     """Import assessments via the custom-data endpoint."""
     payload = _custom_data_payload(assessments=[{
@@ -1397,7 +1416,7 @@ def test_import_custom_data_v2_rejects_cross_project_observation(app, client):
             "vuln_id": vuln_id,
             "status": "affected",
             "targets": [{
-                "variant_id": str(VARIANT_UUID),
+                    "variant": "default",
                 "package": "cross-project-import@1.0",
             }],
         }],
