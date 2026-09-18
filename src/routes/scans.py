@@ -1102,8 +1102,12 @@ def init_app(app: Flask) -> None:
                 if any(variant.project_id != project_uuid for variant in variants):
                     return jsonify({"error": "Variant does not belong to project"}), 400
             scans = ScanController.get_by_variants(variant_ids)
-            cache_ids = ','.join(sorted(str(variant_id) for variant_id in variant_ids))
-            result = serialize_list_with_diff_cached(f"variants:{cache_ids}", scans)
+            # Do not cache arbitrary caller-controlled subsets. A project with
+            # N variants has 2^N possible combinations, so retaining one full
+            # serialised history per combination lets requests grow this
+            # process-wide cache without bound. Fixed all/project/variant
+            # scopes below remain cached.
+            result = _serialize_list_with_diff(scans)
             return jsonify(result)
 
         scans = ScanController.get_all()

@@ -205,6 +205,31 @@ class TestListAllScans:
         assert selected_scan_id in scan_ids
         assert excluded_scan_id not in scan_ids
 
+    def test_variant_subset_does_not_populate_scan_list_cache(self, app, client, ids):
+        """Caller-controlled subsets must not grow the process-wide cache."""
+        from src.models.variant import Variant
+        from src.routes import _scan_diff
+
+        with app.app_context():
+            selected_variant = Variant.create(
+                "UncachedSubsetVariant", uuid.UUID(ids["project_id"]))
+            selected_variant_id = str(selected_variant.id)
+
+        with _scan_diff._LIST_CACHE_LOCK:
+            _scan_diff._LIST_CACHE.clear()
+
+        response = client.get(
+            "/api/scans",
+            query_string={
+                "variant_ids": f'{ids["variant_id"]},{selected_variant_id}',
+                "project_id": ids["project_id"],
+            },
+        )
+
+        assert response.status_code == 200
+        with _scan_diff._LIST_CACHE_LOCK:
+            assert _scan_diff._LIST_CACHE == {}
+
     def test_variant_subset_rejects_invalid_uuid(self, client):
         response = client.get("/api/scans?variant_ids=not-a-uuid")
         assert response.status_code == 400
