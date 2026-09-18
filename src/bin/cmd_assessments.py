@@ -13,6 +13,7 @@ from ..helpers.assessment_io import (
     sanitize_variant_name,
     import_statements,
     build_custom_data_export,
+    custom_data_version,
     import_custom_data,
     reconcile_review_export,
 )
@@ -112,6 +113,10 @@ def import_custom_vulnscout_data_command(
     data = _load_json_file(file_path)
     if "version" not in data or is_openvex_doc(data):
         raise click.ClickException("Not a valid VulnScout JSON data file.")
+    try:
+        custom_data_version(data)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
 
     variant_by_name = build_variant_by_name_map(project_obj.id)
     _print_custom_data_import_result(import_custom_data(

@@ -410,6 +410,10 @@ system time by default. Add `--use-original-timestamps` to preserve assessment
 timestamps from the file. `--use-current-timestamps` is also accepted to select
 the default explicitly.
 
+Current version 2 exports identify targets with variant names and packages,
+not instance-local variant UUIDs. Legacy version 1 files remain importable;
+unsupported future versions are rejected explicitly.
+
 ```bash
 ./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json
 
