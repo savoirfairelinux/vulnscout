@@ -1065,6 +1065,9 @@ def import_custom_data(
         return [variant_id for (variant_id,) in rows]
 
     known_variant_ids = {v.id for v in variant_by_name.values()}
+    portable_variants_by_name = {
+        variant.name: variant for variant in variant_by_name.values()
+    }
 
     def _resolve_variant(
         raw_item: dict, *, portable_only: bool = False,
@@ -1072,7 +1075,14 @@ def import_custom_data(
         if variant_id is not None:
             return variant_id
 
-        variant_token = None if portable_only else raw_item.get("variant_id")
+        if portable_only:
+            variant_name = raw_item.get("variant")
+            if variant_name in (None, ""):
+                return None
+            mapped_variant = portable_variants_by_name.get(str(variant_name))
+            return mapped_variant.id if mapped_variant is not None else None
+
+        variant_token = raw_item.get("variant_id")
         if variant_token in (None, ""):
             variant_token = raw_item.get("variant")
 

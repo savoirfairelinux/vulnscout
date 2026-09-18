@@ -975,6 +975,80 @@ class TestImportCustomDataMultiTarget:
 class TestCustomDataVersion2:
     """Version-2 export/import with portable ``{variant, package}`` targets."""
 
+    def test_uuid_shaped_variant_name_is_never_resolved_as_an_id(self, app):
+        """Portable variant tokens are names, even when UUID-shaped."""
+        from src.extensions import db
+        from src.models.assessment import Assessment
+        from src.models.metrics import Metrics
+        from src.models.project import Project
+        from src.models.time_estimate import TimeEstimate
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("io-v2-uuid-name-project")
+            colliding_id = _uuid.uuid4()
+            colliding_variant = Variant(
+                id=colliding_id, name="ordinary-name", project_id=project.id,
+            )
+            named_variant = Variant(
+                name=str(colliding_id), project_id=project.id,
+            )
+            db.session.add_all([colliding_variant, named_variant])
+            db.session.commit()
+
+            finding = _make_finding(
+                "CVE-2099-UUID-NAME", "uuid-name-package", "1.0",
+            )
+            _observe_finding(finding, named_variant.id)
+            data = {
+                "version": 2,
+                "assessments": [{
+                    "vuln_id": "CVE-2099-UUID-NAME",
+                    "status": "affected",
+                    "targets": [{
+                        "variant": str(colliding_id),
+                        "package": "uuid-name-package@1.0",
+                    }],
+                }],
+                "cvss": [{
+                    "vuln_id": "CVE-2099-UUID-NAME",
+                    "variant": str(colliding_id),
+                    "version": "3.1",
+                    "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                    "base_score": 9.8,
+                    "author": "custom",
+                    "origin": "custom",
+                }],
+                "time_estimates": [{
+                    "vuln_id": "CVE-2099-UUID-NAME",
+                    "variant": str(colliding_id),
+                    "optimistic": "PT1H",
+                    "likely": "PT2H",
+                    "pessimistic": "PT3H",
+                }],
+            }
+
+            result = import_custom_data(data, {
+                colliding_variant.name: colliding_variant,
+                named_variant.name: named_variant,
+            })
+
+            assert result["errors"] == []
+            assert result["assessments_imported"] == 1
+            assert result["cvss_imported"] == 1
+            assert result["time_estimates_imported"] == 1
+            assessment = Assessment.get_by_vulnerability("CVE-2099-UUID-NAME")[0]
+            assert {target[0] for target in assessment.targets} == {named_variant.id}
+            metrics = Metrics.get_by_vulnerability("CVE-2099-UUID-NAME")
+            assert {metric.variant_id for metric in metrics} == {named_variant.id}
+            estimate = TimeEstimate.get_by_finding_and_variant(
+                finding.id, named_variant.id,
+            )
+            assert estimate is not None
+            assert TimeEstimate.get_by_finding_and_variant(
+                finding.id, colliding_variant.id,
+            ) is None
+
     @pytest.mark.parametrize("data", [
         {"assessments": []},
         {"version": 3, "assessments": []},
