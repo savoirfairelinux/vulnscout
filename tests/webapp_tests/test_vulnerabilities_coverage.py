@@ -1841,10 +1841,15 @@ def _large_payload():
     return [{"id": f"CVE-2020-{i:05d}", "summary": "x" * 64} for i in range(50)]
 
 
-def test_compact_response_is_gzipped_when_the_client_accepts_it():
+@pytest.mark.parametrize("accept_encoding", [
+    "gzip",
+    "GZip",
+    "br, GZIP;q=0.5",
+])
+def test_compact_response_is_gzipped_when_the_client_accepts_it(accept_encoding):
     payload = _large_payload()
 
-    with Flask(__name__).test_request_context(headers={"Accept-Encoding": "gzip"}):
+    with Flask(__name__).test_request_context(headers={"Accept-Encoding": accept_encoding}):
         response = _compact_json_response(payload)
 
     assert response.headers["Content-Encoding"] == "gzip"
@@ -1856,6 +1861,16 @@ def test_compact_response_stays_plain_without_gzip_support():
     payload = _large_payload()
 
     with Flask(__name__).test_request_context():
+        response = _compact_json_response(payload)
+
+    assert "Content-Encoding" not in response.headers
+    assert json.loads(response.get_data()) == payload
+
+
+def test_compact_response_stays_plain_when_gzip_is_rejected():
+    payload = _large_payload()
+
+    with Flask(__name__).test_request_context(headers={"Accept-Encoding": "gzip;q=0"}):
         response = _compact_json_response(payload)
 
     assert "Content-Encoding" not in response.headers

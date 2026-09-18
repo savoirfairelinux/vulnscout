@@ -331,7 +331,7 @@ def _compact_json_response(payload_obj: typing.Any) -> ResponseReturnValue:
     """
     payload = json.dumps(payload_obj, separators=(",", ":")).encode()
     response = current_app.response_class(payload, mimetype="application/json")
-    if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
+    if request.accept_encodings["gzip"] > 0 and len(payload) > 1024:
         response.set_data(gzip.compress(payload, compresslevel=1))
         response.headers["Content-Encoding"] = "gzip"
         response.headers["Vary"] = "Accept-Encoding"
@@ -557,29 +557,26 @@ def init_app(app: Flask) -> None:
                             _PkgVariant.version, _PkgVariant.supplier
                         )
                         .join(Package, Finding.package_id == Package.id)
+                        .join(Observation, Observation.finding_id == Finding.id)
+                        .join(Scan, Scan.id == Observation.scan_id)
                         .join(_PkgVariant, (
                             (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version)
                         ))
                         .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant.id)
                         .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+                        .where(Observation.scan_id.in_(latest_ids))
                         .where(db.or_(
                             SBOMDocument.scan_id.in_(latest_ids),
                             _PkgVariant.id == Package.id,
                         ))
                         .distinct()
                     )
-                    if _pkg_ids:
-                        _affx_q = _affx_q.where(Finding.package_id.in_(_pkg_ids))
+                    if _flt is not None:
+                        _affx_q = _affx_q.where(_flt)
                     _pkg_var_rows = db.session.execute(_affx_q).all()
                     _pkgs_by_vuln_var: dict[str, list[str]] = {}
-                    _record_ids = {str(r.id) for r in records}
                     for _vid, _pname, _pver, _psup in _pkg_var_rows:
                         _key = str(_vid)
-                        # Filtering here rather than with a literal IN-list of every
-                        # loaded vulnerability id, which SQLite would probe once per
-                        # id for each joined row.
-                        if _key not in _record_ids:
-                            continue
                         _sid = f"{_pname}@{_pver}::{_psup}" if _psup else f"{_pname}@{_pver}"
                         _pkgs_by_vuln_var.setdefault(_key, []).append(_sid)
                     for r in records:
