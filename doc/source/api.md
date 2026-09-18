@@ -761,13 +761,20 @@ from the **AI Assessments** tab after import.
 
 ```json
 {
-  "version": "1.0",
+  "version": 2,
   "assessments": [...],
   "ai_assessments": [...],
   "cvss": [...],
   "time_estimates": [...]
 }
 ```
+
+Version 2 assessment records store their scope exclusively as exact target
+pairs such as `{"variant": "x86", "package": "openssl@3.0"}`. Exported
+records do not contain database variant UUIDs, so files can be transferred to
+another VulnScout instance. CVSS and time-estimate records likewise identify
+their variant by name. Legacy version 1 files remain importable; unsupported
+future versions are rejected explicitly.
 
 Returns `404` if there is no custom data to export.
 
@@ -786,9 +793,9 @@ Accepts either:
 - `multipart/form-data` with a `file` field containing a `.json` file.
 - `application/json` body with the custom-data payload directly.
 
-The JSON body must include the destination `project_id` UUID. Variant IDs in
-the file are resolved only within that project; a foreign ID falls back to its
-variant name in the selected project.
+The JSON body must include the destination `project_id` UUID. Version 2 variant
+names are resolved only within that project. Version 1 retains its legacy
+variant ID/name resolution for existing backups.
 
 **Response:**
 ```json

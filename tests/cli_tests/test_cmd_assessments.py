@@ -331,3 +331,20 @@ class TestImportCrossInstanceVariantId:
 
         assert result.exit_code != 0
         assert foreign_variant_id in result.output
+
+    def test_future_custom_data_version_is_rejected(self, app, tmp_path):
+        from src.models.project import Project
+
+        with app.app_context():
+            project_name = Project.create("FutureVersionProject").name
+        import_file = tmp_path / "future-custom-data.json"
+        import_file.write_text(json.dumps({"version": 3, "assessments": []}))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code != 0
+        assert "Unsupported VulnScout JSON version: 3" in result.output
