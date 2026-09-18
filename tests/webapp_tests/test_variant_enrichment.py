@@ -283,6 +283,9 @@ class TestVariantScopedEnrichment:
         assert vulnerability_data is not None
         assert vulnerability_data["packages"] == ["openssl@3.0.0"]
         assert vulnerability_data["packages_current"] == ["openssl@3.0.0"]
+        assert vulnerability_data["packages_current_by_variant"] == {
+            str(variant_id): ["openssl@3.0.0"],
+        }
 
 
 # ---------------------------------------------------------------------------

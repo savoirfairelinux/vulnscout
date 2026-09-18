@@ -799,6 +799,7 @@ def init_app(app: Flask) -> None:
                 # union cannot determine whether one exact assessment target
                 # is current in its own variant.
                 _PkgVariant3 = aliased(Package)
+                _sbom_scan = aliased(Scan)
                 scoped_pkg_rows = db.session.execute(
                     db.select(
                         Finding.vulnerability_id,
@@ -807,27 +808,30 @@ def init_app(app: Flask) -> None:
                         _PkgVariant3.version,
                         _PkgVariant3.supplier,
                     )
-                    .select_from(SBOMDocument)
-                    .join(Scan, Scan.id == SBOMDocument.scan_id)
-                    .join(SBOMPackage, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .join(Package, Package.id == SBOMPackage.package_id)
+                    .select_from(Observation)
+                    .join(Scan, Scan.id == Observation.scan_id)
+                    .join(Finding, Finding.id == Observation.finding_id)
+                    .join(Package, Package.id == Finding.package_id)
                     .join(_PkgVariant3, (
                         (_PkgVariant3.name == Package.name)
                         & (_PkgVariant3.version == Package.version)
-                        & (_PkgVariant3.supplier == Package.supplier)
                     ))
-                    .join(Finding, Finding.package_id == _PkgVariant3.id)
-                    .where(SBOMDocument.scan_id.in_(current_scan_ids))
+                    .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant3.id)
+                    .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+                    .outerjoin(_sbom_scan, _sbom_scan.id == SBOMDocument.scan_id)
+                    .where(Observation.scan_id.in_(current_scan_ids))
+                    .where(db.or_(
+                        _PkgVariant3.id == Package.id,
+                        (
+                            SBOMDocument.scan_id.in_(current_scan_ids)
+                            & (_sbom_scan.variant_id == Scan.variant_id)
+                        ),
+                    ))
                     .distinct()
                 ).all()
                 current_by_vuln_variant: dict[str, dict[str, list[str]]] = {}
                 for vuln_id, variant_id, pkg_name, pkg_version, pkg_supplier in scoped_pkg_rows:
                     vuln_key = str(vuln_id)
-                    # Restricting to in-scope vulnerabilities here rather than in
-                    # SQL: a literal IN-list of every vulnerability id makes SQLite
-                    # probe the findings index once per id for each joined row.
-                    if vuln_key not in vulns:
-                        continue
                     package_id = (
                         f"{pkg_name}@{pkg_version}::{pkg_supplier}"
                         if pkg_supplier else f"{pkg_name}@{pkg_version}"
