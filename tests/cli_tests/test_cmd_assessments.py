@@ -348,3 +348,33 @@ class TestImportCrossInstanceVariantId:
 
         assert result.exit_code != 0
         assert "Unsupported VulnScout JSON version: 3" in result.output
+
+    def test_documented_legacy_string_version_is_accepted(self, app, tmp_path):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("LegacyStringVersionProject")
+            variant = Variant.create("legacy-string-version", project.id)
+            project_name = project.name
+            variant_id = variant.id
+
+        import_file = tmp_path / "legacy-string-version.json"
+        import_file.write_text(json.dumps({
+            "version": "1.0",
+            "assessments": [{
+                "vuln_id": "CVE-2099-LEGACY-STRING-CLI",
+                "status": "affected",
+                "packages": ["legacy-string-cli@1.0"],
+                "variant_id": str(variant_id),
+            }],
+        }))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "Imported 1 assessments" in result.output

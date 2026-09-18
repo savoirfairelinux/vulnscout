@@ -245,6 +245,8 @@ def custom_data_version(doc: object) -> int:
     if not isinstance(doc, dict):
         raise ValueError("Export file must contain a JSON object")
     version = doc.get("version")
+    if version == "1.0":
+        return 1
     if type(version) is not int or version not in SUPPORTED_CUSTOM_DATA_VERSIONS:
         supported = ", ".join(str(item) for item in sorted(SUPPORTED_CUSTOM_DATA_VERSIONS))
         raise ValueError(f"Unsupported VulnScout JSON version: {version!r}. Supported versions: {supported}")
@@ -293,7 +295,8 @@ def _is_valid_custom_record(section: str, record: object, version: object) -> bo
 
     if version == 2:
         return "variant_id" not in record and (
-            record.get("variant") is None or isinstance(record.get("variant"), str)
+            record.get("variant") is None
+            or (isinstance(record.get("variant"), str) and bool(record.get("variant")))
         )
 
     return isinstance(record.get("variant_id"), str) or isinstance(record.get("variant"), str)
@@ -1400,6 +1403,14 @@ def import_custom_data(
                     "error": "Version 2 CVSS records must use variant, not variant_id",
                 })
                 continue
+            if is_v2 and "variant" in c and c["variant"] is not None and (
+                not isinstance(c["variant"], str) or not c["variant"]
+            ):
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Version 2 CVSS variant must be a non-empty string or null",
+                })
+                continue
             cvss_variant_id = _resolve_variant(c, portable_only=is_v2)
 
             variant_token = c.get("variant_id")
@@ -1465,6 +1476,14 @@ def import_custom_data(
                 result["errors"].append({
                     "vuln_id": vuln_id,
                     "error": "Version 2 time-estimate records must use variant, not variant_id",
+                })
+                continue
+            if is_v2 and "variant" in t and t["variant"] is not None and (
+                not isinstance(t["variant"], str) or not t["variant"]
+            ):
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Version 2 time-estimate variant must be a non-empty string or null",
                 })
                 continue
             te_variant_id = _resolve_variant(t, portable_only=is_v2)

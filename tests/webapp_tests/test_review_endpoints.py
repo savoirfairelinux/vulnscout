@@ -1387,6 +1387,25 @@ def test_import_custom_data_assessments(client):
     assert result["assessments_imported"] >= 1
 
 
+def test_import_custom_data_accepts_documented_legacy_string_version(client):
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-LEGACY-STRING",
+        "status": "affected",
+        "packages": ["legacy-string@1.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    payload["version"] = "1.0"
+
+    response = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.data)["assessments_imported"] == 1
+
+
 def test_import_custom_data_v2_rejects_cross_project_observation(app, client):
     """A v2 target must have been observed for its declared variant."""
     from src.models.assessment import Assessment
