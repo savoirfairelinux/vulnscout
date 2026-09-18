@@ -1995,7 +1995,7 @@ describe('Review — import and export', () => {
         await user.click(within(dialog).getByRole('button', { name: 'Choose file' }));
 
         const file = new File(
-            [JSON.stringify({ version: 1, assessments: [{ id: 'x' }] })],
+            [JSON.stringify({ version: '1', assessments: [{ id: 'x' }] })],
             'custom.json',
             { type: 'application/json' },
         );
