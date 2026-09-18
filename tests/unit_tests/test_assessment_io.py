@@ -1049,6 +1049,50 @@ class TestCustomDataVersion2:
                 finding.id, colliding_variant.id,
             ) is None
 
+    @pytest.mark.parametrize("variant_value", ["", 42])
+    def test_v2_rejects_invalid_cvss_and_time_estimate_variant_names(
+        self, app, variant_and_project, variant_value,
+    ):
+        from src.models.metrics import Metrics
+        from src.models.time_estimate import TimeEstimate
+
+        _, var = variant_and_project
+        finding = _make_finding(
+            "CVE-2099-INVALID-VARIANT", "invalid-variant", "1.0",
+        )
+        _observe_finding(finding, var.id)
+        data = {
+            "version": 2,
+            "assessments": [],
+            "cvss": [{
+                "vuln_id": "CVE-2099-INVALID-VARIANT",
+                "variant": variant_value,
+                "version": "3.1",
+                "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                "base_score": 9.8,
+            }],
+            "time_estimates": [{
+                "vuln_id": "CVE-2099-INVALID-VARIANT",
+                "variant": variant_value,
+                "optimistic": "PT1H",
+                "likely": "PT2H",
+                "pessimistic": "PT3H",
+            }],
+        }
+
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+
+            assert result["status"] == "error"
+            assert result["cvss_imported"] == 0
+            assert result["time_estimates_imported"] == 0
+            assert [error["error"] for error in result["errors"]] == [
+                "Version 2 CVSS variant must be a non-empty string or null",
+                "Version 2 time-estimate variant must be a non-empty string or null",
+            ]
+            assert Metrics.get_by_vulnerability("CVE-2099-INVALID-VARIANT") == []
+            assert TimeEstimate.get_by_finding(finding.id) == []
+
     @pytest.mark.parametrize("data", [
         {"assessments": []},
         {"version": 3, "assessments": []},
