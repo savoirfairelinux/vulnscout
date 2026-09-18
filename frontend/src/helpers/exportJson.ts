@@ -32,7 +32,9 @@ export function detectReviewExportFormat(data: unknown): ReviewExportFormat {
     if (String(document['@context'] ?? '').includes('openvex') && Array.isArray(document.statements)) {
         return 'openvex';
     }
-    const version = document.version === '1.0' ? 1 : document.version;
+    const version = document.version === '1' || document.version === '1.0'
+        ? 1
+        : document.version;
     if (typeof version === 'number'
         && !supportedCustomDataVersions.includes(version as 1 | 2)) {
         throw new Error(

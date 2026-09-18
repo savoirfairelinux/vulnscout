@@ -245,8 +245,10 @@ def custom_data_version(doc: object) -> int:
     if not isinstance(doc, dict):
         raise ValueError("Export file must contain a JSON object")
     version = doc.get("version")
-    if version == "1.0":
+    if isinstance(version, str) and version in {"1", "1.0"}:
         return 1
+    if isinstance(version, float) and version.is_integer():
+        version = int(version)
     if type(version) is not int or version not in SUPPORTED_CUSTOM_DATA_VERSIONS:
         supported = ", ".join(str(item) for item in sorted(SUPPORTED_CUSTOM_DATA_VERSIONS))
         raise ValueError(f"Unsupported VulnScout JSON version: {version!r}. Supported versions: {supported}")
