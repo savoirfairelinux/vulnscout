@@ -32,13 +32,14 @@ export function detectReviewExportFormat(data: unknown): ReviewExportFormat {
     if (String(document['@context'] ?? '').includes('openvex') && Array.isArray(document.statements)) {
         return 'openvex';
     }
-    if (typeof document.version === 'number'
-        && !supportedCustomDataVersions.includes(document.version as 1 | 2)) {
+    const version = document.version === '1.0' ? 1 : document.version;
+    if (typeof version === 'number'
+        && !supportedCustomDataVersions.includes(version as 1 | 2)) {
         throw new Error(
-            `Unsupported VulnScout JSON version: ${document.version}. Supported versions: ${supportedCustomDataVersions.join(', ')}.`,
+            `Unsupported VulnScout JSON version: ${version}. Supported versions: ${supportedCustomDataVersions.join(', ')}.`,
         );
     }
-    if (supportedCustomDataVersions.includes(document.version as 1 | 2)
+    if (supportedCustomDataVersions.includes(version as 1 | 2)
         && Array.isArray(document.assessments)) {
         for (const section of ['ai_assessments', 'cvss', 'time_estimates']) {
             if (document[section] !== undefined && !Array.isArray(document[section])) {
