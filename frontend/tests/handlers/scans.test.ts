@@ -64,8 +64,9 @@ describe("ScansHandler request contracts", () => {
     expect(result.ok === false && result.error).toContain("could not reach the server");
   });
 
-  test("lists scans for global, project, and variant scopes", async () => {
+  test("lists scans for global, project, variant, and subset scopes", async () => {
     const scan = { id: "scan-1", timestamp: "2026-08-07", variant_id: "variant-1", finding_count: 1 };
+    fetchSpy.mockResolvedValueOnce(response([scan]));
     fetchSpy.mockResolvedValueOnce(response([scan]));
     fetchSpy.mockResolvedValueOnce(response([scan]));
     fetchSpy.mockResolvedValueOnce(response([scan]));
@@ -73,10 +74,12 @@ describe("ScansHandler request contracts", () => {
     expect(await ScansHandler.list()).toEqual([scan]);
     expect(await ScansHandler.list(undefined, "project 1")).toEqual([scan]);
     expect(await ScansHandler.list("variant 1")).toEqual([scan]);
+    expect(await ScansHandler.list(undefined, "project 1", ["variant 1", "variant 2"])).toEqual([scan]);
     expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual(expect.arrayContaining([
       expect.stringContaining("/api/scans"),
       expect.stringContaining("/api/projects/project%201/scans"),
       expect.stringContaining("/api/variants/variant%201/scans"),
+      expect.stringMatching(/\/api\/scans\?variant_ids=variant(%20|\+)1%2Cvariant(%20|\+)2&project_id=project(%20|\+)1/),
     ]));
   });
 

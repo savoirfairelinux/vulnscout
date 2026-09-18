@@ -49,6 +49,7 @@ import ModalShell, { ModalActions, ModalButton } from "../components/ModalShell"
 type Props = {
     variantId?: string;
     projectId?: string;
+    variantIds?: string[];
     onScanComplete?: () => void;
 };
 
@@ -1030,10 +1031,11 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
 // Main page
 // ---------------------------------------------------------------------------
 
-function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) {
+function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#scan-history");
     const [scans, setScans] = useState<Scan[]>([]);
     const [loading, setLoading] = useState(true);
+    const loadingRef = useRef(true);
     const [error, setError] = useState<string | null>(null);
     const [openDiffId, setOpenDiffId] = useState<string | null>(null);
     const [openDiffType, setOpenDiffType] = useState<string>('sbom');
@@ -1062,11 +1064,15 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [scanWizardOpen, setScanWizardOpen] = useState(false);
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+    const [loadedVariantScopeKey, setLoadedVariantScopeKey] = useState<string | null>(null);
     const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv', 'scc']));
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<RefreshType>>(new Set());
     const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
     const [excludeKernel, setExcludeKernel] = useState(true);
     const [excludeNative, setExcludeNative] = useState(true);
+    const scanRequestRef = useRef<{ generation: number; controller?: AbortController }>({
+        generation: 0,
+    });
 
     // Global Grype scan state — survives tab switches (per-variant)
     const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);
@@ -1084,13 +1090,38 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const sccEntries: ScanManagerSnapshot = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
     const sccRunning = sccEntries.some(e => e.status === "running" || e.status === "queued");
 
-    const refreshScans = useCallback(() => {
-        ScansHandler.list(variantId, projectId)
+    const requestScans = useCallback((showLoading: boolean) => {
+        scanRequestRef.current.controller?.abort();
+        const controller = new AbortController();
+        const generation = scanRequestRef.current.generation + 1;
+        scanRequestRef.current = {generation, controller};
+        const ownsLoadingState = showLoading || loadingRef.current;
+        if (ownsLoadingState) {
+            loadingRef.current = true;
+            setLoading(true);
+            setError(null);
+        }
+        ScansHandler.list(variantId, projectId, variantIds, controller.signal)
             .then((data) => {
+                if (controller.signal.aborted || scanRequestRef.current.generation !== generation) return;
                 setScans([...data].reverse());
+                if (ownsLoadingState) {
+                    loadingRef.current = false;
+                    setLoading(false);
+                }
             })
-            .catch(() => {});
-    }, [variantId, projectId]);
+            .catch((err) => {
+                if (controller.signal.aborted || scanRequestRef.current.generation !== generation) return;
+                if (ownsLoadingState) {
+                    loadingRef.current = false;
+                    setError("Failed to load scan history.");
+                    setLoading(false);
+                }
+                if (err instanceof DOMException && err.name === 'AbortError') return;
+            });
+    }, [variantId, projectId, variantIds]);
+
+    const refreshScans = useCallback(() => requestScans(false), [requestScans]);
 
     async function saveDescription(scanId: string) {
         const ok = await ScansHandler.setDescription(scanId, editingDescValue);
@@ -1213,7 +1244,28 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // Derive the effective variant IDs to scan: explicit prop or unique IDs from loaded scans
     const effectiveVariantIds: string[] = variantId
         ? [variantId]
+        : variantIds?.length
+            ? variantIds
         : [...new Set(scans.map(s => s.variant_id))];
+    const variantScopeKey = JSON.stringify([
+        variantId ?? null,
+        projectId ?? null,
+        [...(variantIds ?? [])].sort(),
+    ]);
+    const explicitVariantScope = variantId
+        ? new Set([variantId])
+        : variantIds?.length
+            ? new Set(variantIds)
+            : null;
+    const wizardVariants = explicitVariantScope
+        ? allVariants.filter(variant => explicitVariantScope.has(variant.id))
+        : allVariants;
+    const wizardSelectedVariantIds = new Set(
+        [...selectedVariantIds].filter(id =>
+            explicitVariantScope === null || explicitVariantScope.has(id)
+        )
+    );
+    const variantsReady = loadedVariantScopeKey === variantScopeKey;
 
     // Register the refresh callback so the global store can trigger it on completion
     useEffect(() => {
@@ -1247,23 +1299,42 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {
+        let cancelled = false;
+        const controller = new AbortController();
+        setScanWizardOpen(false);
+        setAllVariants([]);
+        setSelectedVariantIds(new Set());
+        setLoadedVariantScopeKey(null);
+        const selectedVariantIdSet = new Set(variantIds ?? []);
         const fetchVariants = variantId
             // Single variant selected → fetch all and filter to just that one
-            ? Variants.listAll().then(vs => vs.filter(v => v.id === variantId))
+            ? Variants.listAll(controller.signal).then(vs => vs.filter(v => v.id === variantId))
             : projectId
                 // Project selected → only that project's variants
-                ? Variants.list(projectId)
+                ? Variants.list(projectId, controller.signal).then(vs => selectedVariantIdSet.size > 0
+                    ? vs.filter(v => selectedVariantIdSet.has(v.id))
+                    : vs)
                 // No scope → all variants
-                : Variants.listAll();
+                : Variants.listAll(controller.signal).then(vs => selectedVariantIdSet.size > 0
+                    ? vs.filter(v => selectedVariantIdSet.has(v.id))
+                    : vs);
 
         fetchVariants.then(vs => {
+            if (cancelled) return;
             setAllVariants(vs);
             setSelectedVariantIds(new Set(vs.map(v => v.id)));
+            setLoadedVariantScopeKey(variantScopeKey);
         }).catch(() => {
+            if (cancelled) return;
             setAllVariants([]);
             setSelectedVariantIds(new Set());
+            setLoadedVariantScopeKey(variantScopeKey);
         });
-    }, [variantId, projectId]);
+        return () => {
+            cancelled = true;
+            controller.abort();
+        };
+    }, [variantId, projectId, variantIds, variantScopeKey]);
 
     // Close export menus on outside click
     useEffect(() => {
@@ -1304,8 +1375,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     }
 
     async function runSelectedScans() {
-        const variants = allVariants
-            .filter(v => selectedVariantIds.has(v.id))
+        if (!variantsReady) return;
+        const variants = wizardVariants
+            .filter(v => wizardSelectedVariantIds.has(v.id))
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanWizardOpen(false);
@@ -1367,18 +1439,12 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     }
 
     useEffect(() => {
-        setLoading(true);
-        setError(null);
-        ScansHandler.list(variantId, projectId)
-            .then((data) => {
-                setScans([...data].reverse()); // most recent first
-                setLoading(false);
-            })
-            .catch(() => {
-                setError("Failed to load scan history.");
-                setLoading(false);
-            });
-    }, [variantId, projectId, refreshScans]);
+        requestScans(true);
+        return () => {
+            scanRequestRef.current.generation += 1;
+            scanRequestRef.current.controller?.abort();
+        };
+    }, [requestScans]);
 
     // Build the scan-trigger button (always visible when there are variant(s) to scan)
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
@@ -1583,7 +1649,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                     <>
                         <button
                             onClick={() => setScanWizardOpen(true)}
-                            disabled={allRunning || loading}
+                            disabled={allRunning || loading || !variantsReady}
                             className={[
                                 "inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-semibold transition-colors",
                                 allRunning
@@ -1595,9 +1661,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                             {allRunning ? 'Scanning…' : 'Run Scans'}
                         </button>
                         <RunScansWizard
-                            isOpen={scanWizardOpen}
-                            variants={allVariants}
-                            selectedVariantIds={selectedVariantIds}
+                            isOpen={scanWizardOpen && variantsReady}
+                            variants={wizardVariants}
+                            selectedVariantIds={wizardSelectedVariantIds}
                             selectedScanTypes={selectedScanTypes}
                             selectedRefreshTypes={selectedRefreshTypes}
                             refreshMode={refreshMode}
@@ -1608,7 +1674,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                             onToggleScanType={toggleScanType}
                             onToggleRefreshType={toggleRefreshType}
                             onRefreshModeChange={setRefreshMode}
-                            onSelectAllVariants={() => setSelectedVariantIds(new Set(allVariants.map(v => v.id)))}
+                            onSelectAllVariants={() => setSelectedVariantIds(new Set(wizardVariants.map(v => v.id)))}
                             onSelectNoVariants={() => setSelectedVariantIds(new Set())}
                             onExcludeKernelChange={setExcludeKernel}
                             onExcludeNativeChange={setExcludeNative}

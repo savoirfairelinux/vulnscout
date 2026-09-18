@@ -151,7 +151,10 @@ jest.mock('../../src/pages/TableVulnerabilities', () => ({
 }));
 jest.mock('../../src/pages/ScanHistory', () => ({
     __esModule: true,
-    default: ({ onScanComplete }: { onScanComplete: () => void }) => <button onClick={onScanComplete}>scan complete</button>,
+    default: ({ onScanComplete, variantIds }: { onScanComplete: () => void; variantIds?: string[] }) => <div>
+        <span data-testid="scan-history-variant-ids">{variantIds?.join(',') ?? ''}</span>
+        <button onClick={onScanComplete}>scan complete</button>
+    </div>,
 }));
 jest.mock('../../src/pages/Review', () => ({
     __esModule: true,
@@ -439,5 +442,23 @@ describe('Explorer saved-scope validation', () => {
         fireEvent.click(screen.getByRole('button', { name: 'settings loaded' }));
 
         await waitFor(() => expect(mockConfigGet).toHaveBeenCalledTimes(2));
+    });
+
+    test('passes a selected variant subset to scan history', async () => {
+        mockGetFrontendScope.mockReturnValue(savedScope('saved-project', ['v1', 'v2']));
+        mockProjectsList.mockResolvedValue([{id: 'saved-project', name: 'Saved Project'}]);
+        mockVariantsList.mockResolvedValue([
+            {id: 'v1', name: 'V1', project_id: 'saved-project'},
+            {id: 'v2', name: 'V2', project_id: 'saved-project'},
+            {id: 'v3', name: 'V3', project_id: 'saved-project'},
+        ]);
+
+        render(<Explorer />);
+        await waitFor(() => expect(mockPackagesList).toHaveBeenCalledWith(
+            undefined, 'saved-project', undefined, undefined, ['v1', 'v2'], 'union',
+        ));
+        fireEvent.click(screen.getByRole('button', {name: 'scans'}));
+
+        expect(screen.getByTestId('scan-history-variant-ids')).toHaveTextContent('v1,v2');
     });
 });
