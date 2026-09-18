@@ -1387,18 +1387,38 @@ def test_import_custom_data_assessments(client):
     assert result["assessments_imported"] >= 1
 
 
-def test_import_custom_data_accepts_documented_legacy_string_version(client):
+@pytest.mark.parametrize("legacy_version", ["1", "1.0"])
+def test_import_custom_data_accepts_legacy_string_versions(client, legacy_version):
     payload = _custom_data_payload(assessments=[{
         "vuln_id": "CVE-2099-LEGACY-STRING",
         "status": "affected",
         "packages": ["legacy-string@1.0"],
         "variant_id": str(VARIANT_UUID),
     }])
-    payload["version"] = "1.0"
+    payload["version"] = legacy_version
 
     response = client.post(
         "/api/assessments/review/import-custom-data",
         json=payload,
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.data)["assessments_imported"] == 1
+
+
+def test_import_custom_data_accepts_legacy_decimal_version(client):
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-LEGACY-DECIMAL",
+        "status": "affected",
+        "packages": ["legacy-decimal@1.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    raw_payload = json.dumps(payload).replace('"version": 1', '"version": 1.0', 1)
+
+    response = client.post(
+        "/api/assessments/review/import-custom-data",
+        data=raw_payload,
         content_type="application/json",
     )
 

@@ -68,6 +68,7 @@ describe('exportJson helpers', () => {
 
     test('detects supported review export formats and rejects unsupported JSON', () => {
         expect(detectReviewExportFormat({ version: 1, assessments: [] })).toBe('custom');
+        expect(detectReviewExportFormat({ version: '1', assessments: [] })).toBe('custom');
         expect(detectReviewExportFormat({ version: '1.0', assessments: [] })).toBe('custom');
         expect(detectReviewExportFormat({ version: 2, assessments: [] })).toBe('custom');
         expect(detectReviewExportFormat({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })).toBe('openvex');
