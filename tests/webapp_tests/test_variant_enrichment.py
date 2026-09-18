@@ -246,6 +246,44 @@ class TestVariantScopedEnrichment:
         assert vuln_a is not None
         assert "beta" in vuln_a["variants"]
 
+    def test_packages_only_include_findings_from_active_scans(self, app, client, ids):
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.scan import Scan
+        from src.models.variant import Variant
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            variant = Variant.create("tool-only", uuid.UUID(ids["project_id"]))
+            scan = Scan(
+                description="active tool scan",
+                variant_id=variant.id,
+                scan_type="tool",
+                scan_source="nvd",
+                timestamp=datetime.now(timezone.utc),
+            )
+            _db.session.add(scan)
+            _db.session.commit()
+
+            current_package = Package.find_or_create("openssl", "3.0.0")
+            historical_package = Package.find_or_create("openssl", "1.0.0")
+            vulnerability = Vulnerability.create_record(
+                id="CVE-2026-00001", description="version-scoping regression"
+            )
+            current_finding = Finding.get_or_create(current_package.id, vulnerability.id)
+            Finding.get_or_create(historical_package.id, vulnerability.id)
+            Observation.create(finding_id=current_finding.id, scan_id=scan.id)
+            _db.session.commit()
+            variant_id = variant.id
+
+        resp = client.get(f"/api/vulnerabilities?variant_id={variant_id}")
+        assert resp.status_code == 200
+        vulnerability_data = _vuln_by_id(json.loads(resp.data), "CVE-2026-00001")
+        assert vulnerability_data is not None
+        assert vulnerability_data["packages"] == ["openssl@3.0.0"]
+        assert vulnerability_data["packages_current"] == ["openssl@3.0.0"]
+
 
 # ---------------------------------------------------------------------------
 # Tests — project-scoped request
