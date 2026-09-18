@@ -4,12 +4,14 @@
 import datetime
 import decimal
 import dataclasses
+import gzip
+import json
 import typing
 import re
 import urllib.error
 import uuid
 
-from flask import jsonify, request, Flask
+from flask import jsonify, request, Flask, current_app
 from flask.typing import ResponseReturnValue
 from sqlalchemy import func, select, ColumnElement
 from sqlalchemy.orm import joinedload, selectinload, aliased, attributes as orm_attrs
@@ -320,6 +322,22 @@ def _populate_found_by(
             record.add_found_by(scanner)
 
 
+def _compact_json_response(payload_obj: typing.Any) -> ResponseReturnValue:
+    """Serialise a large list response without Flask's JSON provider.
+
+    Going through the provider would pretty-print the payload when the app runs
+    in debug mode and would route encoding through the pure-Python encoder;
+    ``json.dumps`` without a ``default`` hook keeps the C implementation.
+    """
+    payload = json.dumps(payload_obj, separators=(",", ":")).encode()
+    response = current_app.response_class(payload, mimetype="application/json")
+    if request.accept_encodings["gzip"] > 0 and len(payload) > 1024:
+        response.set_data(gzip.compress(payload, compresslevel=1))
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Vary"] = "Accept-Encoding"
+    return response
+
+
 def init_app(app: Flask) -> None:
 
     if "TIME_ESTIMATES_PATH" not in app.config:
@@ -390,6 +408,10 @@ def init_app(app: Flask) -> None:
         variant_scoped_overrides: dict[str, _ScopedOverrides] = {}
         current_scan_ids: list[uuid.UUID] = []
         records: list[Vulnerability] = []
+        # Set when ``record.packages`` was pre-populated from the same active
+        # scans that ``packages_current`` is derived from, which makes the two
+        # lists equal and lets the second query be skipped.
+        packages_match_current_scans = False
         _scope_variant: uuid.UUID | None = None
         _scope_project: uuid.UUID | None = None
         if variant_id and compare_variant_id:
@@ -535,27 +557,31 @@ def init_app(app: Flask) -> None:
                             _PkgVariant.version, _PkgVariant.supplier
                         )
                         .join(Package, Finding.package_id == Package.id)
+                        .join(Observation, Observation.finding_id == Finding.id)
+                        .join(Scan, Scan.id == Observation.scan_id)
                         .join(_PkgVariant, (
                             (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version)
                         ))
                         .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant.id)
                         .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
-                        .where(Finding.vulnerability_id.in_([r.id for r in records]))
+                        .where(Observation.scan_id.in_(latest_ids))
                         .where(db.or_(
                             SBOMDocument.scan_id.in_(latest_ids),
                             _PkgVariant.id == Package.id,
                         ))
                         .distinct()
                     )
-                    if _pkg_ids:
-                        _affx_q = _affx_q.where(Finding.package_id.in_(_pkg_ids))
+                    if _flt is not None:
+                        _affx_q = _affx_q.where(_flt)
                     _pkg_var_rows = db.session.execute(_affx_q).all()
                     _pkgs_by_vuln_var: dict[str, list[str]] = {}
                     for _vid, _pname, _pver, _psup in _pkg_var_rows:
+                        _key = str(_vid)
                         _sid = f"{_pname}@{_pver}::{_psup}" if _psup else f"{_pname}@{_pver}"
-                        _pkgs_by_vuln_var.setdefault(str(_vid), []).append(_sid)
+                        _pkgs_by_vuln_var.setdefault(_key, []).append(_sid)
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
+                    packages_match_current_scans = True
                 variant_scoped_overrides = _variant_scoped_metrics_and_effort_overrides(records, variant_uuid)
         elif project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
@@ -719,6 +745,7 @@ def init_app(app: Flask) -> None:
                     # Mark findings and metrics as loaded to prevent lazy-load
                     orm_attrs.set_committed_value(r, 'findings', [])
                     orm_attrs.set_committed_value(r, 'metrics', metrics_by_vuln.get(r.id, []))
+                packages_match_current_scans = True
 
         else:
             records = Vulnerability.get_all()
@@ -740,7 +767,10 @@ def init_app(app: Flask) -> None:
             # packages_current: packages from the specific scan(s), expanded to include all
             # same-name+version supplier variants present in the active SBOM scans.
             # This ensures that Grype-linked packages (no supplier) also surface SBOM packages.
-            if current_scan_ids:
+            if current_scan_ids and packages_match_current_scans:
+                for v in vulns.values():
+                    v["packages_current"] = sorted(v["packages"])
+            elif current_scan_ids:
                 _PkgVariant2 = aliased(Package)
                 pkg_rows = db.session.execute(
                     db.select(Finding.vulnerability_id, _PkgVariant2.name, _PkgVariant2.version, _PkgVariant2.supplier)
@@ -764,38 +794,49 @@ def init_app(app: Flask) -> None:
                 for v in vulns.values():
                     v["packages_current"] = sorted(pkgs_current_by_vuln.get(v["id"], []))
 
+            if current_scan_ids:
                 # Preserve the variant dimension as well. A flattened package
                 # union cannot determine whether one exact assessment target
                 # is current in its own variant.
+                _PkgVariant3 = aliased(Package)
+                _sbom_scan = aliased(Scan)
                 scoped_pkg_rows = db.session.execute(
                     db.select(
                         Finding.vulnerability_id,
                         Scan.variant_id,
-                        _PkgVariant2.name,
-                        _PkgVariant2.version,
-                        _PkgVariant2.supplier,
+                        _PkgVariant3.name,
+                        _PkgVariant3.version,
+                        _PkgVariant3.supplier,
                     )
-                    .select_from(SBOMDocument)
-                    .join(Scan, Scan.id == SBOMDocument.scan_id)
-                    .join(SBOMPackage, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .join(Package, Package.id == SBOMPackage.package_id)
-                    .join(_PkgVariant2, (
-                        (_PkgVariant2.name == Package.name)
-                        & (_PkgVariant2.version == Package.version)
-                        & (_PkgVariant2.supplier == Package.supplier)
+                    .select_from(Observation)
+                    .join(Scan, Scan.id == Observation.scan_id)
+                    .join(Finding, Finding.id == Observation.finding_id)
+                    .join(Package, Package.id == Finding.package_id)
+                    .join(_PkgVariant3, (
+                        (_PkgVariant3.name == Package.name)
+                        & (_PkgVariant3.version == Package.version)
                     ))
-                    .join(Finding, Finding.package_id == _PkgVariant2.id)
-                    .where(SBOMDocument.scan_id.in_(current_scan_ids))
-                    .where(Finding.vulnerability_id.in_(vuln_ids))
+                    .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant3.id)
+                    .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+                    .outerjoin(_sbom_scan, _sbom_scan.id == SBOMDocument.scan_id)
+                    .where(Observation.scan_id.in_(current_scan_ids))
+                    .where(db.or_(
+                        _PkgVariant3.id == Package.id,
+                        (
+                            SBOMDocument.scan_id.in_(current_scan_ids)
+                            & (_sbom_scan.variant_id == Scan.variant_id)
+                        ),
+                    ))
                     .distinct()
                 ).all()
                 current_by_vuln_variant: dict[str, dict[str, list[str]]] = {}
                 for vuln_id, variant_id, pkg_name, pkg_version, pkg_supplier in scoped_pkg_rows:
+                    vuln_key = str(vuln_id)
                     package_id = (
                         f"{pkg_name}@{pkg_version}::{pkg_supplier}"
                         if pkg_supplier else f"{pkg_name}@{pkg_version}"
                     )
-                    current_by_vuln_variant.setdefault(str(vuln_id), {}).setdefault(
+                    current_by_vuln_variant.setdefault(vuln_key, {}).setdefault(
                         str(variant_id), []).append(package_id)
                 for vuln in vulns.values():
                     vuln["packages_current_by_variant"] = {
@@ -896,7 +937,7 @@ def init_app(app: Flask) -> None:
                         }
                         for cvss in cvss_entries
                     ]
-                return list(vulns.values())
+                return _compact_json_response(list(vulns.values()))
             case "dict":
                 return vulns
             case _ as fmt:
