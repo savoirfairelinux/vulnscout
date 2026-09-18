@@ -973,8 +973,172 @@ class TestImportCustomDataMultiTarget:
 
 
 class TestCustomDataVersion2:
-    """Version-2 export/import: one assessment, many ``{variant_id, package}``
-    targets."""
+    """Version-2 export/import with portable ``{variant, package}`` targets."""
+
+    def test_uuid_shaped_variant_name_is_never_resolved_as_an_id(self, app):
+        """Portable variant tokens are names, even when UUID-shaped."""
+        from src.extensions import db
+        from src.models.assessment import Assessment
+        from src.models.metrics import Metrics
+        from src.models.project import Project
+        from src.models.time_estimate import TimeEstimate
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("io-v2-uuid-name-project")
+            colliding_id = _uuid.uuid4()
+            colliding_variant = Variant(
+                id=colliding_id, name="ordinary-name", project_id=project.id,
+            )
+            named_variant = Variant(
+                name=str(colliding_id), project_id=project.id,
+            )
+            db.session.add_all([colliding_variant, named_variant])
+            db.session.commit()
+
+            finding = _make_finding(
+                "CVE-2099-UUID-NAME", "uuid-name-package", "1.0",
+            )
+            _observe_finding(finding, named_variant.id)
+            data = {
+                "version": 2,
+                "assessments": [{
+                    "vuln_id": "CVE-2099-UUID-NAME",
+                    "status": "affected",
+                    "targets": [{
+                        "variant": str(colliding_id),
+                        "package": "uuid-name-package@1.0",
+                    }],
+                }],
+                "cvss": [{
+                    "vuln_id": "CVE-2099-UUID-NAME",
+                    "variant": str(colliding_id),
+                    "version": "3.1",
+                    "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                    "base_score": 9.8,
+                    "author": "custom",
+                    "origin": "custom",
+                }],
+                "time_estimates": [{
+                    "vuln_id": "CVE-2099-UUID-NAME",
+                    "variant": str(colliding_id),
+                    "optimistic": "PT1H",
+                    "likely": "PT2H",
+                    "pessimistic": "PT3H",
+                }],
+            }
+
+            result = import_custom_data(data, {
+                colliding_variant.name: colliding_variant,
+                named_variant.name: named_variant,
+            })
+
+            assert result["errors"] == []
+            assert result["assessments_imported"] == 1
+            assert result["cvss_imported"] == 1
+            assert result["time_estimates_imported"] == 1
+            assessment = Assessment.get_by_vulnerability("CVE-2099-UUID-NAME")[0]
+            assert {target[0] for target in assessment.targets} == {named_variant.id}
+            metrics = Metrics.get_by_vulnerability("CVE-2099-UUID-NAME")
+            assert {metric.variant_id for metric in metrics} == {named_variant.id}
+            estimate = TimeEstimate.get_by_finding_and_variant(
+                finding.id, named_variant.id,
+            )
+            assert estimate is not None
+            assert TimeEstimate.get_by_finding_and_variant(
+                finding.id, colliding_variant.id,
+            ) is None
+
+    @pytest.mark.parametrize("variant_value", ["", 42])
+    def test_v2_rejects_invalid_cvss_and_time_estimate_variant_names(
+        self, app, variant_and_project, variant_value,
+    ):
+        from src.models.metrics import Metrics
+        from src.models.time_estimate import TimeEstimate
+
+        _, var = variant_and_project
+        finding = _make_finding(
+            "CVE-2099-INVALID-VARIANT", "invalid-variant", "1.0",
+        )
+        _observe_finding(finding, var.id)
+        data = {
+            "version": 2,
+            "assessments": [],
+            "cvss": [{
+                "vuln_id": "CVE-2099-INVALID-VARIANT",
+                "variant": variant_value,
+                "version": "3.1",
+                "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                "base_score": 9.8,
+            }],
+            "time_estimates": [{
+                "vuln_id": "CVE-2099-INVALID-VARIANT",
+                "variant": variant_value,
+                "optimistic": "PT1H",
+                "likely": "PT2H",
+                "pessimistic": "PT3H",
+            }],
+        }
+
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+
+            assert result["status"] == "error"
+            assert result["cvss_imported"] == 0
+            assert result["time_estimates_imported"] == 0
+            assert [error["error"] for error in result["errors"]] == [
+                "Version 2 CVSS variant must be a non-empty string or null",
+                "Version 2 time-estimate variant must be a non-empty string or null",
+            ]
+            assert Metrics.get_by_vulnerability("CVE-2099-INVALID-VARIANT") == []
+            assert TimeEstimate.get_by_finding(finding.id) == []
+
+    @pytest.mark.parametrize("data", [
+        {"assessments": []},
+        {"version": 3, "assessments": []},
+    ])
+    def test_import_requires_a_supported_explicit_version(self, app, data):
+        with app.app_context(), pytest.raises(ValueError, match=r"Supported versions: 1, 2"):
+            import_custom_data(data, {})
+
+    def test_v2_import_rejects_instance_local_variant_fields(self, app, variant_and_project):
+        _, var = variant_and_project
+        _make_finding("CVE-2099-NONPORTABLE", "nonportable", "1.0")
+        data = {
+            "version": 2,
+            "assessments": [{
+                "vuln_id": "CVE-2099-NONPORTABLE",
+                "status": "affected",
+                "variant_id": str(var.id),
+                "targets": [{"variant": var.name, "package": "nonportable@1.0"}],
+            }, {
+                "vuln_id": "CVE-2099-NONPORTABLE",
+                "status": "affected",
+                "targets": [{"variant_id": str(var.id), "package": "nonportable@1.0"}],
+            }],
+            "cvss": [{
+                "vuln_id": "CVE-2099-NONPORTABLE",
+                "variant_id": str(var.id),
+            }],
+            "time_estimates": [{
+                "vuln_id": "CVE-2099-NONPORTABLE",
+                "variant_id": str(var.id),
+                "optimistic": "PT1H", "likely": "PT2H", "pessimistic": "PT3H",
+            }],
+        }
+
+        with app.app_context():
+            result = import_custom_data(data, {var.name: var})
+
+        assert result["assessments_imported"] == 0
+        assert result["cvss_imported"] == 0
+        assert result["time_estimates_imported"] == 0
+        assert [error["error"] for error in result["errors"]] == [
+            "Version 2 assessment variants must be specified only in targets",
+            "Version 2 targets must use variant, not variant_id",
+            "Version 2 CVSS records must use variant, not variant_id",
+            "Version 2 time-estimate records must use variant, not variant_id",
+        ]
 
     def test_export_emits_version_2_with_targets(self, app, variant_and_project):
         """A single-target custom assessment exports its target explicitly."""
@@ -994,8 +1158,10 @@ class TestCustomDataVersion2:
         assert payload["version"] == 2
         assert len(payload["assessments"]) == 1
         assert payload["assessments"][0]["targets"] == [
-            {"variant_id": str(var.id), "variant": var.name, "package": "exp-pkg@1.0"},
+            {"variant": var.name, "package": "exp-pkg@1.0"},
         ]
+        assert "variant_id" not in payload["assessments"][0]
+        assert "variant" not in payload["assessments"][0]
 
     def test_version_2_export_round_trips_a_cross_variant_assessment(self, app):
         """A genuine multi-target (cross-variant) assessment created via
@@ -1042,29 +1208,20 @@ class TestCustomDataVersion2:
                 (variant_a.id, openssl.id), (variant_b.id, zlib.id),
             }
 
-    def test_v2_import_falls_back_to_the_variant_name_on_another_instance(self, app, variant_and_project):
-        """A backup restores on an instance whose variant UUIDs differ.
-
-        Each VulnScout instance generates its own variant UUIDs, so the
-        ``variant_id`` in an export never matches on a different install. The
-        exported variant *name* is what makes the restore work, exactly as it
-        does for a version-1 export.
-        """
-        import uuid as _uuid_mod
+    def test_v2_import_resolves_the_portable_variant_name(self, app, variant_and_project):
+        """A backup restores without transporting instance-local UUIDs."""
 
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
         finding = _make_finding("CVE-2099-FOREIGNVAR", "openssl", "1.0")
         _observe_finding(finding, var.id)
-        foreign_variant_id = str(_uuid_mod.uuid4())
         data = {
             "version": 2,
             "assessments": [{
                 "vuln_id": "CVE-2099-FOREIGNVAR",
                 "status": "affected",
                 "targets": [{
-                    "variant_id": foreign_variant_id,
                     "variant": var.name,
                     "package": "openssl@1.0",
                 }],
@@ -1081,8 +1238,6 @@ class TestCustomDataVersion2:
 
     def test_v2_import_honours_the_variant_id_override(self, app, variant_and_project):
         """``import_custom_data(variant_id=...)`` attaches every target to it."""
-        import uuid as _uuid_mod
-
         from src.models.assessment import Assessment
 
         _, var = variant_and_project
@@ -1094,7 +1249,6 @@ class TestCustomDataVersion2:
                 "vuln_id": "CVE-2099-OVERRIDEVAR",
                 "status": "affected",
                 "targets": [{
-                    "variant_id": str(_uuid_mod.uuid4()),
                     "variant": "some-other-name",
                     "package": "openssl@1.0",
                 }],
@@ -1110,8 +1264,6 @@ class TestCustomDataVersion2:
 
     def test_v2_import_reports_a_variant_that_resolves_nowhere(self, app, variant_and_project):
         """An unknown id *and* unknown name is still an error, not a guess."""
-        import uuid as _uuid_mod
-
         _, var = variant_and_project
         _make_finding("CVE-2099-NOVAR", "openssl", "1.0")
         data = {
@@ -1120,7 +1272,6 @@ class TestCustomDataVersion2:
                 "vuln_id": "CVE-2099-NOVAR",
                 "status": "affected",
                 "targets": [{
-                    "variant_id": str(_uuid_mod.uuid4()),
                     "variant": "not-a-local-variant",
                     "package": "openssl@1.0",
                 }],
@@ -1152,7 +1303,7 @@ class TestCustomDataVersion2:
                     "vuln_id": "CVE-2099-WRONGPROJECT",
                     "status": "affected",
                     "targets": [{
-                        "variant_id": str(target_variant.id),
+                        "variant": target_variant.name,
                         "package": "cross-project-pkg@1.0",
                     }],
                 }],
@@ -1179,8 +1330,8 @@ class TestCustomDataVersion2:
                 "vuln_id": "CVE-2099-BADPKG",
                 "status": "affected",
                 "targets": [
-                    {"variant_id": str(var.id), "package": "openssl"},
-                    {"variant_id": str(var.id), "package": "does-not-exist"},
+                    {"variant": var.name, "package": "openssl"},
+                    {"variant": var.name, "package": "does-not-exist"},
                 ],
             }],
         }
@@ -1247,15 +1398,15 @@ class TestCustomDataVersion2:
                         "vuln_id": "CVE-2099-XPROJ",
                         "status": "affected",
                         "targets": [
-                            {"variant_id": str(variant_a.id), "package": "cross-pkg-a@1.0"},
-                            {"variant_id": str(variant_b.id), "package": "cross-pkg-b@1.0"},
+                            {"variant": variant_a.name, "package": "cross-pkg-a@1.0"},
+                            {"variant": variant_b.name, "package": "cross-pkg-b@1.0"},
                         ],
                     },
                     {
                         "vuln_id": "CVE-2099-OK",
                         "status": "affected",
                         "targets": [
-                            {"variant_id": str(variant_a.id), "package": "ok-pkg@1.0"},
+                            {"variant": variant_a.name, "package": "ok-pkg@1.0"},
                         ],
                     },
                 ],
@@ -1342,8 +1493,8 @@ class TestCustomDataVersion2:
                     "status": "not_affected",
                     "justification": "component_not_present",
                     "targets": [
-                        {"variant_id": str(var.id), "package": "overlap2-pkg-a@1.0"},
-                        {"variant_id": str(var.id), "package": "overlap2-pkg-c@1.0"},
+                        {"variant": var.name, "package": "overlap2-pkg-a@1.0"},
+                        {"variant": var.name, "package": "overlap2-pkg-c@1.0"},
                     ],
                 }],
             }
@@ -1380,8 +1531,8 @@ class TestCustomDataVersion2:
                     "vuln_id": "CVE-2099-PARTIAL2",
                     "status": "affected",
                     "targets": [
-                        {"variant_id": str(var.id), "package": "partial2-a@1.0"},
-                        {"variant_id": str(var.id), "package": "partial2-b@1.0"},
+                        {"variant": var.name, "package": "partial2-a@1.0"},
+                        {"variant": var.name, "package": "partial2-b@1.0"},
                     ],
                 }],
             }
@@ -1411,7 +1562,7 @@ class TestCustomDataVersion2:
             "vuln_id": "CVE-2099-DETAILS2",
             "status": "affected",
             "targets": [{
-                "variant_id": str(var.id),
+                "variant": var.name,
                 "package": "details2-pkg@1.0",
             }],
         }

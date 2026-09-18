@@ -132,11 +132,11 @@ def test_scoped_export_excludes_out_of_scope_targets(app):
 
     assert len(exported["assessments"]) == 1
     record = exported["assessments"][0]
-    assert [t["variant_id"] for t in record["targets"]] == [str(VARIANT_A)]
+    assert record["targets"] == [{"variant": "default", "package": PKG_A}]
     assert [t["package"] for t in record["targets"]] == [PKG_A]
-    # packages and the scalar variant_id describe the same subset as targets.
     assert record["packages"] == [PKG_A]
-    assert record["variant_id"] == str(VARIANT_A)
+    assert "variant_id" not in record
+    assert "variant" not in record
 
 
 def test_scoped_export_of_the_other_variant_is_symmetric(app):
@@ -147,9 +147,10 @@ def test_scoped_export_of_the_other_variant_is_symmetric(app):
         exported = build_custom_data_export([VARIANT_B])
 
     record = exported["assessments"][0]
-    assert [t["variant_id"] for t in record["targets"]] == [str(VARIANT_B)]
+    assert record["targets"] == [{"variant": "second", "package": PKG_B}]
     assert record["packages"] == [PKG_B]
-    assert record["variant_id"] == str(VARIANT_B)
+    assert "variant_id" not in record
+    assert "variant" not in record
 
 
 def test_unscoped_export_keeps_every_target(app):
@@ -161,10 +162,10 @@ def test_unscoped_export_keeps_every_target(app):
         exported = build_custom_data_export(None)
 
     record = exported["assessments"][0]
-    assert {t["variant_id"] for t in record["targets"]} == {str(VARIANT_A), str(VARIANT_B)}
+    assert {t["variant"] for t in record["targets"]} == {"default", "second"}
     assert sorted(record["packages"]) == sorted([PKG_A, PKG_B])
-    # No single variant covers it, so the legacy scalar field is null.
-    assert record["variant_id"] is None
+    assert "variant_id" not in record
+    assert "variant" not in record
 
 
 # ── R4: VulnScout must accept its own version-2 export ────────────────────
@@ -179,7 +180,7 @@ def test_detect_format_accepts_v2_export_spanning_variants(app):
         _make_cross_variant_assessment()
         exported = build_custom_data_export(None)
 
-    assert exported["assessments"][0]["variant_id"] is None
+    assert "variant_id" not in exported["assessments"][0]
     # Round-trip through JSON: this is what export-update/import receive.
     assert detect_review_export_format(json.loads(json.dumps(exported))) == "custom"
 
@@ -194,6 +195,13 @@ def test_detect_format_still_rejects_v1_record_without_variant(app):
     }
     with pytest.raises(ValueError):
         detect_review_export_format(doc)
+
+
+def test_detect_format_rejects_future_custom_data_version(app):
+    from src.helpers.assessment_io import detect_review_export_format
+
+    with pytest.raises(ValueError, match=r"version: 3.*1, 2"):
+        detect_review_export_format({"version": 3, "assessments": []})
 
 
 def test_detect_format_rejects_v2_record_with_unusable_targets(app):

@@ -231,19 +231,45 @@ _CUSTOM_EXPORT_SECTIONS = (
     "time_estimates",
 )
 
+CUSTOM_DATA_VERSION = 2
+SUPPORTED_CUSTOM_DATA_VERSIONS = frozenset({1, 2})
+
+
+def custom_data_version(doc: object) -> int:
+    """Return a supported VulnScout custom-data version.
+
+    Keeping version dispatch in one helper makes adding a future migration
+    path deliberate instead of silently interpreting a new schema as the
+    current one.
+    """
+    if not isinstance(doc, dict):
+        raise ValueError("Export file must contain a JSON object")
+    version = doc.get("version")
+    if isinstance(version, str) and version in {"1", "1.0"}:
+        return 1
+    if isinstance(version, float) and version.is_integer():
+        version = int(version)
+    if type(version) is not int or version not in SUPPORTED_CUSTOM_DATA_VERSIONS:
+        supported = ", ".join(str(item) for item in sorted(SUPPORTED_CUSTOM_DATA_VERSIONS))
+        raise ValueError(f"Unsupported VulnScout JSON version: {version!r}. Supported versions: {supported}")
+    return version
+
 
 def _is_valid_v2_target(target: object) -> bool:
     """True when *target* carries enough scope for ``_resolve_v2_target``.
 
-    A target must name a package and identify its variant by id or by name --
-    the name is what lets a backup restore on an instance whose variant UUIDs
-    all differ.
+    A target must name a package and identify its variant by portable name.
+    Database UUIDs are deliberately not part of version 2.
     """
     if not isinstance(target, dict):
         return False
     if not isinstance(target.get("package"), str):
         return False
-    return isinstance(target.get("variant_id"), str) or isinstance(target.get("variant"), str)
+    return (
+        isinstance(target.get("variant"), str)
+        and bool(target.get("variant"))
+        and "variant_id" not in target
+    )
 
 
 def _is_valid_custom_record(section: str, record: object, version: object) -> bool:
@@ -261,16 +287,21 @@ def _is_valid_custom_record(section: str, record: object, version: object) -> bo
         if not all(isinstance(package, str) for package in packages):
             return False
 
-    # A version-2 assessment carries its scope in ``targets``, so its
-    # top-level ``variant_id`` is null whenever the record spans several
-    # variants -- that is exactly what ``build_custom_data_export`` writes.
-    # Requiring a string here would make VulnScout reject its own export.
     if version == 2 and is_assessment:
+        if "variant_id" in record or "variant" in record:
+            return False
         targets = record.get("targets")
         if isinstance(targets, list) and targets:
             return all(_is_valid_v2_target(target) for target in targets)
+        return False
 
-    return isinstance(record.get("variant_id"), str)
+    if version == 2:
+        return "variant_id" not in record and (
+            record.get("variant") is None
+            or (isinstance(record.get("variant"), str) and bool(record.get("variant")))
+        )
+
+    return isinstance(record.get("variant_id"), str) or isinstance(record.get("variant"), str)
 
 
 def detect_review_export_format(doc: object) -> str:
@@ -283,8 +314,13 @@ def detect_review_export_format(doc: object) -> str:
         return "openvex"
     if not isinstance(doc, dict):
         raise ValueError("Export file must contain a JSON object")
-    if doc.get("version") in (1, 2) and isinstance(doc.get("assessments"), list):
-        version = doc.get("version")
+    if "version" not in doc:
+        raise ValueError("Unsupported export format. Expected VulnScout JSON or OpenVEX")
+    try:
+        version = custom_data_version(doc)
+    except ValueError as error:
+        raise ValueError(str(error)) from error
+    if isinstance(doc.get("assessments"), list):
         for section in _CUSTOM_EXPORT_SECTIONS:
             value = doc.get(section, [])
             if not isinstance(value, list):
@@ -299,13 +335,24 @@ def detect_review_export_format(doc: object) -> str:
 
 
 def _record_identity(section: str, record: dict[str, Any]) -> tuple[Any, ...]:
-    variant_id = record.get("variant_id")
     vuln_id = record.get("vuln_id")
     if section in {"assessments", "ai_assessments"}:
+        targets = record.get("targets")
+        if isinstance(targets, list) and targets:
+            target_key = tuple(sorted(
+                (str(target.get("variant") or target.get("variant_id") or ""),
+                 str(target.get("package") or ""))
+                for target in targets if isinstance(target, dict)
+            ))
+            return vuln_id, target_key
         packages = record.get("packages", [])
-        package_key = tuple(sorted(str(package) for package in packages)) if isinstance(packages, list) else ()
-        return variant_id, vuln_id, package_key
-    return variant_id, vuln_id, None
+        variant = record.get("variant") or record.get("variant_id")
+        target_key = tuple(sorted(
+            (str(variant or ""), str(package))
+            for package in packages
+        )) if isinstance(packages, list) else ()
+        return vuln_id, target_key
+    return record.get("variant") or record.get("variant_id"), vuln_id, None
 
 
 def _openvex_statement_identity(record: dict[str, Any]) -> tuple[Any, ...]:
@@ -824,14 +871,10 @@ def build_custom_data_export(
             target_rows = _scoped_target_rows(assessment)
             if not target_rows:
                 continue
-            # ``packages`` and the top-level ``variant_id`` describe the same
-            # subset as ``targets``; taking them from ``to_dict()`` would span
-            # every target and leak the out-of-scope ones back in.
+            # ``packages`` describes the same subset as ``targets``; taking it
+            # from ``to_dict()`` would span every target and leak out-of-scope
+            # packages back in. Variant scope itself belongs only in targets.
             packages = scoped_packages(assessment, variant_ids)
-            scoped_variant_ids = {row.variant_id for row in target_rows}
-            single_variant_id = (
-                str(next(iter(scoped_variant_ids))) if len(scoped_variant_ids) == 1 else None
-            )
             exported.append({
                 "vuln_id": assessment_dict["vuln_id"],
                 "status": assessment_dict["status"],
@@ -842,13 +885,8 @@ def build_custom_data_export(
                 "workaround": assessment_dict.get("workaround") or None,
                 "timestamp": assessment_dict["timestamp"],
                 "packages": packages,
-                "variant_id": single_variant_id,
-                # ``variant`` (the human-readable name) travels with the id
-                # because a variant_id generated by another VulnScout instance
-                # never matches a local one -- see ``_resolve_v2_target``.
                 "targets": [
                     {
-                        "variant_id": str(row.variant_id),
                         "variant": row.variant.name if row.variant is not None else None,
                         "package": row.finding.package.string_id,
                     }
@@ -863,6 +901,7 @@ def build_custom_data_export(
     # Gather ALL custom CVSS entries, not just those linked to handmade
     # assessments.
     cvss_entries: list[dict] = []
+    cvss_variant_ids: list[_uuid.UUID | None] = []
     metrics_query = db.select(Metrics).where(Metrics.origin == "custom")
     if variant_ids is not None:
         metrics_query = metrics_query.where(Metrics.variant_id.in_(variant_ids))
@@ -874,7 +913,6 @@ def build_custom_data_export(
             variant_uuid_set.add(m.variant_id)
         cvss_entries.append({
             "vuln_id": m.vulnerability_id,
-            "variant_id": str(m.variant_id) if m.variant_id is not None else None,
             "variant": None,
             "version": m.version or "",
             "vector_string": m.vector or "",
@@ -882,10 +920,12 @@ def build_custom_data_export(
             "author": m.author,
             "origin": m.origin or "scanner",
         })
+        cvss_variant_ids.append(m.variant_id)
 
     # Gather ALL non-zero time estimates, not just those linked to
     # handmade assessments.
     time_estimates: list[dict] = []
+    time_estimate_variant_ids: list[_uuid.UUID | None] = []
 
     def _hours_to_iso(h: int) -> str:
         try:
@@ -929,13 +969,12 @@ def build_custom_data_export(
         pes = pes or 0
         time_estimates.append({
             "vuln_id": vid,
-            "variant_id": str(te_variant_id) if te_variant_id is not None else None,
             "variant": None,
             "optimistic": _hours_to_iso(opt),
             "likely": _hours_to_iso(lik),
             "pessimistic": _hours_to_iso(pes),
         })
-    time_estimates.sort(key=lambda t: (t["vuln_id"], t.get("variant_id") or ""))
+        time_estimate_variant_ids.append(te_variant_id)
 
     if variant_uuid_set:
         variants = db.session.execute(
@@ -943,24 +982,15 @@ def build_custom_data_export(
         ).scalars().all()
         variant_name_by_id = {str(v.id): v.name for v in variants}
 
-    for item in exported_assessments:
-        vid = item.get("variant_id")
-        item["variant"] = variant_name_by_id.get(vid) if vid else None
+    for item, item_variant_id in zip(cvss_entries, cvss_variant_ids):
+        item["variant"] = variant_name_by_id.get(str(item_variant_id)) if item_variant_id else None
 
-    for item in exported_ai_assessments:
-        vid = item.get("variant_id")
-        item["variant"] = variant_name_by_id.get(vid) if vid else None
-
-    for item in cvss_entries:
-        vid = item.get("variant_id")
-        item["variant"] = variant_name_by_id.get(vid) if vid else None
-
-    for item in time_estimates:
-        vid = item.get("variant_id")
-        item["variant"] = variant_name_by_id.get(vid) if vid else None
+    for item, item_variant_id in zip(time_estimates, time_estimate_variant_ids):
+        item["variant"] = variant_name_by_id.get(str(item_variant_id)) if item_variant_id else None
+    time_estimates.sort(key=lambda t: (t["vuln_id"], t.get("variant") or ""))
 
     return {
-        "version": 2,
+        "version": CUSTOM_DATA_VERSION,
         "exported_at": _dt.now(_tz.utc).isoformat(),
         "assessments": exported_assessments,
         "ai_assessments": exported_ai_assessments,
@@ -1015,7 +1045,8 @@ def import_custom_data(
         apply_effort,
     )
 
-    is_v2 = data.get("version") == 2
+    version = custom_data_version(data)
+    is_v2 = version == 2
 
     result: dict[str, Any] = {
         "status": "success",
@@ -1039,10 +1070,22 @@ def import_custom_data(
         return [variant_id for (variant_id,) in rows]
 
     known_variant_ids = {v.id for v in variant_by_name.values()}
+    portable_variants_by_name = {
+        variant.name: variant for variant in variant_by_name.values()
+    }
 
-    def _resolve_variant(raw_item: dict) -> "_uuid.UUID | None":
+    def _resolve_variant(
+        raw_item: dict, *, portable_only: bool = False,
+    ) -> "_uuid.UUID | None":
         if variant_id is not None:
             return variant_id
+
+        if portable_only:
+            variant_name = raw_item.get("variant")
+            if variant_name in (None, ""):
+                return None
+            mapped_variant = portable_variants_by_name.get(str(variant_name))
+            return mapped_variant.id if mapped_variant is not None else None
 
         variant_token = raw_item.get("variant_id")
         if variant_token in (None, ""):
@@ -1075,7 +1118,7 @@ def import_custom_data(
     def _resolve_v2_target(
         raw_target: Any, vuln_name: str,
     ) -> "tuple[_uuid.UUID | None, _uuid.UUID | None, str | None]":
-        """Resolve one version-2 ``{"variant_id", "package"}`` target.
+        """Resolve one version-2 ``{"variant", "package"}`` target.
 
         Returns ``(variant_id, finding_id, None)`` on success or
         ``(None, None, error_message)`` when the pair does not resolve. Unlike
@@ -1084,24 +1127,22 @@ def import_custom_data(
         already knows, so a name that does not resolve is reported instead of
         silently fabricating a new package/finding.
 
-        The variant is resolved with the same precedence as the version-1
-        path: an explicit ``variant_id`` argument to ``import_custom_data``
-        wins, then a target ``variant_id`` that exists locally, then the
-        target's variant *name*. The name fallback is what makes a backup
-        restorable on a different VulnScout instance, where every locally
-        generated variant UUID differs from the exported one.
+        The portable variant name is resolved within the selected destination
+        project. An explicit ``variant_id`` argument to
+        ``import_custom_data`` still wins for programmatic callers.
         """
         if not isinstance(raw_target, dict):
             return None, None, "Invalid target entry"
-        variant_token = raw_target.get("variant_id")
+        if "variant_id" in raw_target:
+            return None, None, "Version 2 targets must use variant, not variant_id"
         pkg_string = raw_target.get("package")
         if not pkg_string:
             return None, None, "Target missing package"
-        if variant_id is None and not variant_token and not raw_target.get("variant"):
-            return None, None, "Target missing variant_id or package"
-        resolved_variant_id = _resolve_variant(raw_target)
+        if variant_id is None and not raw_target.get("variant"):
+            return None, None, "Target missing variant or package"
+        resolved_variant_id = _resolve_variant(raw_target, portable_only=True)
         if resolved_variant_id is None:
-            label = raw_target.get("variant") or variant_token
+            label = raw_target.get("variant")
             return None, None, f"Variant '{label}' not found"
 
         if "::" in pkg_string:
@@ -1165,6 +1206,12 @@ def import_custom_data(
             )
 
             if is_v2:
+                if "variant_id" in a or "variant" in a:
+                    result["errors"].append({
+                        "vuln_id": vuln_name,
+                        "error": "Version 2 assessment variants must be specified only in targets",
+                    })
+                    continue
                 raw_targets = a.get("targets", [])
                 if not isinstance(raw_targets, list) or not raw_targets:
                     result["errors"].append({
@@ -1352,7 +1399,21 @@ def import_custom_data(
                 "exploitability_score": c.get("exploitability_score", 0.0),
                 "impact_score": c.get("impact_score", 0.0),
             }
-            cvss_variant_id = _resolve_variant(c)
+            if is_v2 and "variant_id" in c:
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Version 2 CVSS records must use variant, not variant_id",
+                })
+                continue
+            if is_v2 and "variant" in c and c["variant"] is not None and (
+                not isinstance(c["variant"], str) or not c["variant"]
+            ):
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Version 2 CVSS variant must be a non-empty string or null",
+                })
+                continue
+            cvss_variant_id = _resolve_variant(c, portable_only=is_v2)
 
             variant_token = c.get("variant_id")
             if variant_token in (None, ""):
@@ -1413,7 +1474,21 @@ def import_custom_data(
                 result["errors"].append({"vuln_id": vuln_id, "error": err})
                 continue
 
-            te_variant_id = _resolve_variant(t)
+            if is_v2 and "variant_id" in t:
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Version 2 time-estimate records must use variant, not variant_id",
+                })
+                continue
+            if is_v2 and "variant" in t and t["variant"] is not None and (
+                not isinstance(t["variant"], str) or not t["variant"]
+            ):
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Version 2 time-estimate variant must be a non-empty string or null",
+                })
+                continue
+            te_variant_id = _resolve_variant(t, portable_only=is_v2)
 
             variant_token = t.get("variant_id")
             if variant_token in (None, ""):

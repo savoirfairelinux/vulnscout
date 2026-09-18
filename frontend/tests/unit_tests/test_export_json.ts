@@ -68,8 +68,13 @@ describe('exportJson helpers', () => {
 
     test('detects supported review export formats and rejects unsupported JSON', () => {
         expect(detectReviewExportFormat({ version: 1, assessments: [] })).toBe('custom');
+        expect(detectReviewExportFormat({ version: '1', assessments: [] })).toBe('custom');
+        expect(detectReviewExportFormat({ version: '1.0', assessments: [] })).toBe('custom');
+        expect(detectReviewExportFormat({ version: 2, assessments: [] })).toBe('custom');
         expect(detectReviewExportFormat({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })).toBe('openvex');
         expect(() => detectReviewExportFormat({ version: 1, assessments: [], cvss: {} })).toThrow(/cvss.*array/);
+        expect(() => detectReviewExportFormat({ version: 3, assessments: [] })).toThrow(/version: 3.*1, 2/);
+        expect(() => detectReviewExportFormat({ version: '2', assessments: [] })).toThrow(/Unsupported export format/);
         expect(() => detectReviewExportFormat({ foo: 'bar' })).toThrow(/Unsupported export format/);
     });
 });

@@ -2008,6 +2008,22 @@ describe('Review — import and export', () => {
         expect(importPayload.project_id).toBe('proj1');
     });
 
+    test('rejects unsupported VulnScout JSON versions before submission', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Import'));
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Choose file' }));
+        fireEvent.change(fileInput(), {
+            target: { files: [new File([JSON.stringify({ version: 3, assessments: [] })], 'future.json')] },
+        });
+
+        expect(await screen.findByText(/Unsupported VulnScout JSON version: 3/)).toBeInTheDocument();
+        expect(postCalls().some(call => String(call[0]).includes('/import-custom-data'))).toBe(false);
+    });
+
     test('imports OpenVEX into one selected variant without using the filename', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
