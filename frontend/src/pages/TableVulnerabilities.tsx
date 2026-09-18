@@ -1041,7 +1041,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
                 // Format the date using the same format as VulnModal
                 const formattedDate = mostRecentTime.getTime() > 0 ?
-                    mostRecentTime.toLocaleString(undefined, dt_options) : 'No assessment';
+                    mostRecentTime.toLocaleString('en-US', dt_options) : 'No assessment';
 
                 return (
                     <div className="flex items-center justify-center h-full text-center text-sm">
