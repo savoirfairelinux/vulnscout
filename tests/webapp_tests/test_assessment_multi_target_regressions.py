@@ -318,12 +318,24 @@ def test_covers_variant_treats_empty_target_set_as_unscoped(app):
         assert not legacy.covers_variant(VARIANT_A)
 
 
-def test_pending_ai_guard_blocks_a_variant_already_covered(client, app):
-    with app.app_context():
-        _make_cross_variant_assessment(origin="ai", status="under_investigation")
+def _ai_rows(app):
+    from src.models.assessment import Assessment as DBAssessment
 
-    # Variant A is one of the two targets, so a second AI suggestion for it
-    # must be refused exactly as it was when rows were per-variant.
+    with app.app_context():
+        return {
+            str(a.id): sorted(str(t.variant_id) for t in a.target_rows)
+            for a in DBAssessment.get_by_vulnerability(VULN_ID)
+            if a.origin == "ai"
+        }
+
+
+def test_new_ai_write_trims_only_the_overlapping_variant(client, app):
+    """A pending AI row spans A and B; a new AI write for A takes A away from
+    it but leaves B's pending suggestion alone."""
+    with app.app_context():
+        old_id = str(_make_cross_variant_assessment(
+            origin="ai", status="under_investigation").id)
+
     response = client.post(
         f"/api/vulnerabilities/{VULN_ID}/assessments",
         json={
@@ -333,21 +345,38 @@ def test_pending_ai_guard_blocks_a_variant_already_covered(client, app):
             "ai_generated": True,
         },
     )
-    assert response.status_code == 409
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["replaced"] == [
+        {"id": old_id, "action": "trimmed", "variant_ids": [str(VARIANT_A)]}]
 
-    response_b = client.post(
+    rows = _ai_rows(app)
+    assert rows[old_id] == [str(VARIANT_B)]
+    assert rows[body["assessment"]["id"]] == [str(VARIANT_A)]
+
+
+def test_new_ai_write_covering_every_target_deletes_the_old_row(client, app):
+    with app.app_context():
+        old_id = str(_make_cross_variant_assessment(
+            origin="ai", status="under_investigation").id)
+
+    response = client.post(
         f"/api/vulnerabilities/{VULN_ID}/assessments",
         json={
-            "packages": [PKG_B],
+            "packages": [PKG_A, PKG_B],
             "status": "affected",
-            "variant_id": str(VARIANT_B),
+            "variant_ids": [str(VARIANT_A), str(VARIANT_B)],
             "ai_generated": True,
         },
     )
-    assert response_b.status_code == 409
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["replaced"] == [{
+        "id": old_id, "action": "deleted",
+        "variant_ids": sorted([str(VARIANT_A), str(VARIANT_B)]),
+    }]
+    assert list(_ai_rows(app)) == [body["assessment"]["id"]]
 
-
-# ── R5: the wire shape must keep the (variant, package) pairs ─────────────
 
 def test_to_dict_carries_the_exact_target_pairs(app):
     """packages x variant_ids is a cross-product, and a sparse assessment is

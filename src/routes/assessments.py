@@ -72,12 +72,36 @@ def _is_scanner_author(author: str | None) -> bool:
     return False
 
 
-def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
-    """True if a pending AI assessment already exists for this (vuln, variant)."""
-    for a in DBAssessment.get_by_vulnerability(vuln_id):
-        if a.origin == "ai" and a.covers_variant(variant_id):
-            return True
-    return False
+def _replace_pending_ai(vuln_id: str, variant_ids: list[UUID]) -> list[dict[str, Any]]:
+    """Make room for a new AI assessment on *variant_ids* by removing the old one.
+
+    A new AI assessment replaces any pending AI assessment (``origin == "ai"``)
+    on the same (vulnerability, variant), whatever its packages. Only the
+    overlapping variants are taken away: a pending assessment that also covers
+    other variants keeps those targets (``trimmed``) and is deleted only once
+    no target remains (``deleted``). Approved (``custom``) and SBOM
+    assessments are never touched.
+
+    Does not commit; call it inside ``batch_session`` together with the create
+    so a failed write leaves the old assessment intact.
+    """
+    replacing = set(variant_ids)
+    replaced: list[dict[str, Any]] = []
+    for row in DBAssessment.get_by_vulnerability(vuln_id):
+        if row.origin != "ai":
+            continue
+        overlap = [t for t in row.target_rows if t.variant_id in replacing]
+        if not overlap:
+            continue
+        removed = sorted({str(t.variant_id) for t in overlap})
+        if len(overlap) == len(row.target_rows):
+            replaced.append({"id": str(row.id), "action": "deleted", "variant_ids": removed})
+            row.delete()
+        else:
+            for target in overlap:
+                row.target_rows.remove(target)
+            replaced.append({"id": str(row.id), "action": "trimmed", "variant_ids": removed})
+    return replaced
 
 
 def _assessments_for_vulnerability(
@@ -1314,8 +1338,6 @@ def init_app(app: Flask) -> None:
 
         ai_generated = bool(payload_data.get("ai_generated"))
         target_origin = "ai" if ai_generated else "custom"
-        if ai_generated and any(_has_pending_ai(vuln_id, vid) for vid in variant_ids):
-            return {"error": "A pending AI assessment already exists for this variant"}, 409
 
         # Use a single timestamp so the created row's own targets (and any
         # sibling row a caller correlates by timestamp) share the exact same
@@ -1368,8 +1390,14 @@ def init_app(app: Flask) -> None:
             }
         targets = [(variant_id, finding.id) for (_pkg, variant_id), finding in resolved.items()]
 
+        replaced: list[dict[str, Any]] = []
         try:
             with batch_session():
+                # A new AI assessment replaces the pending one on the same
+                # variant(s). Done in the same transaction as the create, so a
+                # failed create rolls the removal back.
+                if ai_generated:
+                    replaced = _replace_pending_ai(vuln_id, variant_ids)
                 # Always create a new record — never merge with an existing
                 # one. from_vuln_assessment does a find-or-update which would
                 # overwrite previous user assessments on the same target set.
@@ -1381,7 +1409,10 @@ def init_app(app: Flask) -> None:
             return {"error": f"DB error: {e}"}, 500
 
         created = [db_a.to_dict()]
-        response_body = {"status": "success", "assessments": created, "assessment": created[0]}
+        response_body: dict[str, Any] = {
+            "status": "success", "assessments": created, "assessment": created[0]}
+        if replaced:
+            response_body["replaced"] = replaced
         return response_body, 200
 
     @app.route("/api/assessments/batch", methods=["POST"])
