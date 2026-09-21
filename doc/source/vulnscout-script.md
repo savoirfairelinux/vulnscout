@@ -479,7 +479,7 @@ Example:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VULNSCOUT_CONTAINER` | Name of the container | `vulnscout` |
-| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.21` |
+| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.22` |
 | `VULNSCOUT_BUILD_DIR` | Root build directory on the host | `./.vulnscout` |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |
