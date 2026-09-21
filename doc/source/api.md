@@ -587,14 +587,27 @@ POST /api/vulnerabilities/<vuln_id>/assessments
 }
 ```
 
+`variant_ids` (a list) may be given instead of `variant_id` to scope one
+assessment to several variants. Set `"ai_generated": true` to create a pending
+AI assessment (`origin` `"ai"`) instead of a `custom` one.
+
 **Response:**
 ```
 {
   "status": "success",
   "assessments": [...],
-  "assessment": { ... }
+  "assessment": { ... },
+  "replaced": [ { "id": "...", "action": "trimmed", "variant_ids": ["..."] } ]
 }
 ```
+
+`replaced` is present only when an AI-generated write replaced a pending AI
+assessment. Such a write replaces every pending AI assessment on the same
+vulnerability and variant(s), whatever its packages, in the same transaction as
+the create, so a failed write leaves the old assessment untouched. `action` is
+`"deleted"` when the old assessment had no other targets left and `"trimmed"`
+when it also covered other variants and keeps those. Approved (`custom`) and
+scan-imported assessments are never replaced.
 
 ### Batch Create Assessments
 
