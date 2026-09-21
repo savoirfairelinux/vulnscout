@@ -130,9 +130,17 @@ def _get_first_ai_id(client):
     return body["assessment"]["id"]
 
 
+def _approve(client, assessment_id):
+    return client.post(f"/api/assessments/{assessment_id}/approve")
+
+
+def _reject(client, assessment_id):
+    return client.post(f"/api/assessments/{assessment_id}/reject")
+
+
 def test_approve_promotes_group_to_custom(client):
     aid = _get_first_ai_id(client)
-    resp = client.post(f"/api/assessments/{aid}/approve")
+    resp = _approve(client, aid)
     assert resp.status_code == 200
     body = json.loads(resp.data)
     assert all(a["origin"] == "custom" for a in body["assessments"])
@@ -141,49 +149,36 @@ def test_approve_promotes_group_to_custom(client):
     assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
 
 
-def test_approve_promotes_multi_package_group(client):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    aid = body["assessments"][0]["id"]
+def test_approve_promotes_only_the_addressed_row(client, app):
+    """Two separate AI writes (different variants) are two separate user
+    actions and stay two separate rows; approving one must not promote the
+    other."""
+    other_variant = "22222222-2222-2222-2222-222222222224"
+    _add_variant(app, other_variant)
 
-    resp = client.post(f"/api/assessments/{aid}/approve")
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
+    assert first["id"] != second["id"]
+
+    resp = _approve(client, first["id"])
 
     assert resp.status_code == 200
     approved = json.loads(resp.data)["assessments"]
-    assert len(approved) >= 2
-    assert all(a["origin"] == "custom" for a in approved)
+    assert {a["id"] for a in approved} == {first["id"]}
+    assert approved[0]["origin"] == "custom"
 
     listed = json.loads(client.get("/api/assessments?format=list").data)
-    promoted = [a for a in listed if a["id"] in {row["id"] for row in approved}]
-    assert len(promoted) >= 2
-    assert all(a["origin"] == "custom" for a in promoted)
-
-
-def test_approve_group_update_is_atomic(client, app, monkeypatch):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    ids = [row["id"] for row in body["assessments"]]
-
-    original_update = DBAssessment.update
-    call_count = 0
-
-    def flaky_update(self, *args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
-            raise RuntimeError("boom")
-        return original_update(self, *args, **kwargs)
-
-    monkeypatch.setattr(DBAssessment, "update", flaky_update)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        client.post(f"/api/assessments/{ids[0]}/approve")
-
-    with app.app_context():
-        reloaded = [DBAssessment.get_by_id(assessment_id) for assessment_id in ids]
-        assert all(row is not None and row.origin == "ai" for row in reloaded)
+    listed_ids = {a["id"] for a in listed}
+    assert first["id"] in listed_ids
+    assert second["id"] not in listed_ids
+    still_pending = json.loads(client.get("/api/assessments/review/ai").data)
+    assert any(a["id"] == second["id"] for a in still_pending)
 
 
 def test_approve_missing_returns_404(client):
-    resp = client.post(f"/api/assessments/{uuid.uuid4()}/approve")
+    resp = _approve(client, str(uuid.uuid4()))
     assert resp.status_code == 404
 
 
@@ -193,7 +188,7 @@ def test_approve_non_ai_returns_400(client):
         "packages": [PKG], "status": "affected", "variant_id": str(VARIANT_UUID),
     })
     custom_id = json.loads(r.data)["assessment"]["id"]
-    resp = client.post(f"/api/assessments/{custom_id}/approve")
+    resp = _approve(client, custom_id)
     assert resp.status_code == 400
 
 
@@ -215,98 +210,29 @@ def _add_variant(app, variant_id):
         db.session.commit()
 
 
-def test_approve_with_ids_spans_multiple_variants(client, app):
-    """A grouped review row can cover several variants; passing every id in the
-    row must promote all of them, not just the addressed variant's assessment."""
-    other_variant = "22222222-2222-2222-2222-222222222223"
+def test_reject_deletes_only_the_addressed_row(client, app):
+    """Two separate AI writes (different variants) stay two separate rows;
+    rejecting one must not delete the other."""
+    other_variant = "22222222-2222-2222-2222-222222222225"
     _add_variant(app, other_variant)
 
-    a1 = json.loads(_post_ai(client).data)["assessment"]["id"]
-    a2 = json.loads(_post_ai(client, variant_id=other_variant).data)["assessment"]["id"]
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
 
-    resp = client.post(f"/api/assessments/{a1}/approve", json={"ids": [a1, a2]})
+    resp = _reject(client, first["id"])
+
     assert resp.status_code == 200
-    approved = {a["id"]: a for a in json.loads(resp.data)["assessments"]}
-    assert set(approved) == {a1, a2}
-    assert all(a["origin"] == "custom" for a in approved.values())
-
-
-def test_reject_with_ids_spans_multiple_variants(client, app):
-    other_variant = "22222222-2222-2222-2222-222222222223"
-    _add_variant(app, other_variant)
-
-    a1 = json.loads(_post_ai(client).data)["assessment"]["id"]
-    a2 = json.loads(_post_ai(client, variant_id=other_variant).data)["assessment"]["id"]
-
-    resp = client.post(f"/api/assessments/{a1}/reject", json={"ids": [a1, a2]})
-    assert resp.status_code == 200
-    assert set(json.loads(resp.data)["deleted"]) == {a1, a2}
+    assert set(json.loads(resp.data)["deleted"]) == {first["id"]}
     listed = json.loads(client.get("/api/assessments?format=list").data)
-    assert not ({a1, a2} & {a["id"] for a in listed})
-
-
-def test_approve_with_ids_rejects_non_ai_member(client):
-    aid = _get_first_ai_id(client)
-    r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
-        "packages": [PKG2], "status": "affected", "variant_id": str(VARIANT_UUID),
-    })
-    custom_id = json.loads(r.data)["assessment"]["id"]
-
-    resp = client.post(f"/api/assessments/{aid}/approve", json={"ids": [aid, custom_id]})
-    assert resp.status_code == 400
-    # the pending AI row must remain untouched
-    listed = json.loads(client.get("/api/assessments/review/ai").data)
-    assert any(a["id"] == aid for a in listed)
-
-
-def test_approve_with_ids_rejects_missing_member(client):
-    aid = _get_first_ai_id(client)
-    resp = client.post(
-        f"/api/assessments/{aid}/approve", json={"ids": [aid, str(uuid.uuid4())]}
-    )
-    assert resp.status_code == 404
-
-
-def test_reject_deletes_group(client):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    aid = body["assessment"]["id"]
-    ids = {a["id"] for a in body["assessments"]}
-
-    resp = client.post(f"/api/assessments/{aid}/reject")
-
-    assert resp.status_code == 200
-    assert len(body["assessments"]) >= 2
-    assert set(json.loads(resp.data)["deleted"]) == ids
-    listed = json.loads(client.get("/api/assessments?format=list").data)
-    assert not (ids & {a["id"] for a in listed})
-
-
-def test_reject_group_delete_is_atomic(client, app, monkeypatch):
-    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
-    ids = [row["id"] for row in body["assessments"]]
-
-    original_delete = DBAssessment.delete
-    call_count = 0
-
-    def flaky_delete(self, *args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
-            raise RuntimeError("boom")
-        return original_delete(self, *args, **kwargs)
-
-    monkeypatch.setattr(DBAssessment, "delete", flaky_delete)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        client.post(f"/api/assessments/{ids[0]}/reject")
-
-    with app.app_context():
-        reloaded = [DBAssessment.get_by_id(assessment_id) for assessment_id in ids]
-        assert all(row is not None and row.origin == "ai" for row in reloaded)
+    assert first["id"] not in {a["id"] for a in listed}
+    still_pending = json.loads(client.get("/api/assessments/review/ai").data)
+    assert any(a["id"] == second["id"] for a in still_pending)
 
 
 def test_reject_missing_returns_404(client):
-    assert client.post(f"/api/assessments/{uuid.uuid4()}/reject").status_code == 404
+    assert _reject(client, str(uuid.uuid4())).status_code == 404
 
 
 def test_reject_non_ai_returns_400(client):
@@ -314,7 +240,7 @@ def test_reject_non_ai_returns_400(client):
         "packages": [PKG], "status": "affected", "variant_id": str(VARIANT_UUID),
     })
     custom_id = json.loads(r.data)["assessment"]["id"]
-    assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
+    assert _reject(client, custom_id).status_code == 400
 
 
 def test_ai_excluded_from_list_all_formats(client):
@@ -370,7 +296,7 @@ def test_patch_ai_row_then_approve_promotes_to_custom(client):
     )
     assert patch_resp.status_code == 200
 
-    approve_resp = client.post(f"/api/assessments/{aid}/approve")
+    approve_resp = _approve(client, aid)
     assert approve_resp.status_code == 200
     approved = json.loads(approve_resp.data)["assessments"]
     assert any(a["id"] == aid and a["origin"] == "custom" for a in approved)
@@ -408,7 +334,7 @@ def test_pending_ai_excluded_from_openvex_export(client):
     pending = json.dumps(_openvex_statements(client), sort_keys=True)
     assert pending == before
 
-    resp = client.post(f"/api/assessments/{aid}/approve")
+    resp = _approve(client, aid)
     assert resp.status_code == 200
 
     approved = json.dumps(_openvex_statements(client), sort_keys=True)
@@ -481,7 +407,7 @@ def test_pending_ai_excluded_from_cyclonedx_export(client):
     # Pending AI must not surface as the exported VEX analysis.
     assert _cyclonedx_vuln_analysis(client) == before
 
-    resp = client.post(f"/api/assessments/{aid}/approve")
+    resp = _approve(client, aid)
     assert resp.status_code == 200
 
     # Once approved (origin -> custom) it becomes the exported analysis.
@@ -510,8 +436,88 @@ def test_pending_ai_excluded_from_report_templates(client):
     # Pending AI is not passed to report templates.
     assert aid not in _report_assessment_ids(client)
 
-    resp = client.post(f"/api/assessments/{aid}/approve")
+    resp = _approve(client, aid)
     assert resp.status_code == 200
 
     # After approval it appears in the report feed.
     assert aid in _report_assessment_ids(client)
+
+
+# ── legacy per-assessment approve/reject (compatibility wrappers) ─────────
+
+def test_legacy_approve_promotes_only_the_addressed_row(client, app):
+    """Pre-group clients address one id. Two separate AI writes (different
+    variants) stay two separate rows, so the legacy wrapper only ever
+    promotes the addressed row."""
+    other_variant = "22222222-2222-2222-2222-222222222226"
+    _add_variant(app, other_variant)
+
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
+
+    resp = client.post(f"/api/assessments/{first['id']}/approve")
+
+    assert resp.status_code == 200
+    approved = json.loads(resp.data)["assessments"]
+    assert {a["id"] for a in approved} == {first["id"]}
+    assert approved[0]["origin"] == "custom"
+    still_pending = {a["id"] for a in json.loads(
+        client.get("/api/assessments/review/ai").data)}
+    assert still_pending == {second["id"]}
+
+
+def test_legacy_approve_works_on_an_ungrouped_assessment(client):
+    aid = _get_first_ai_id(client)
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+
+    assert resp.status_code == 200
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
+
+
+def test_legacy_reject_deletes_only_the_addressed_row(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222227"
+    _add_variant(app, other_variant)
+
+    first = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]
+    second = json.loads(
+        _post_ai(client, packages=[PKG2], variant_id=other_variant).data
+    )["assessment"]
+
+    resp = client.post(f"/api/assessments/{first['id']}/reject")
+
+    assert resp.status_code == 200
+    assert set(json.loads(resp.data)["deleted"]) == {first["id"]}
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert first["id"] not in {a["id"] for a in listed}
+    still_pending = {a["id"] for a in json.loads(
+        client.get("/api/assessments/review/ai").data)}
+    assert still_pending == {second["id"]}
+
+
+def test_legacy_approve_rejects_a_non_ai_assessment(client):
+    resp = client.post(
+        f"/api/vulnerabilities/{VULN_ID}/assessments",
+        json={"packages": [PKG], "status": "affected",
+              "variant_id": str(VARIANT_UUID)},
+    )
+    custom_id = json.loads(resp.data)["assessment"]["id"]
+
+    assert client.post(f"/api/assessments/{custom_id}/approve").status_code == 400
+    assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
+
+
+def test_legacy_approve_returns_404_for_unknown_assessment(client):
+    unknown = str(uuid.uuid4())
+
+    assert client.post(f"/api/assessments/{unknown}/approve").status_code == 404
+    assert client.post(f"/api/assessments/{unknown}/reject").status_code == 404
+
+
+# NOTE: there is deliberately no test for "approve refuses a group with a
+# non-AI member". A group is an assessment, and an assessment carries a
+# single `origin`, so a group spanning two origins is unrepresentable
+# rather than merely rejected.

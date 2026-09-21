@@ -338,6 +338,90 @@ class TestImportScan:
         assert response.status_code == 201
         assert response.get_json()["format"] == "full"
 
+    def test_multi_target_assessment_round_trips_all_packages(self, app, client, ids):
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.project import Project
+        from src.models.scan import Scan
+        from src.models.variant import Variant
+
+        with app.app_context():
+            source_scan = _db.session.get(Scan, uuid.UUID(ids["scan_b_id"]))
+            assert source_scan is not None
+            cairo = Package.get_by_string_id("cairo@1.16.0")
+            libpng = Package.get_by_string_id("libpng@1.6.37")
+            assert cairo is not None and libpng is not None
+            cairo_finding = Finding.get_or_create(cairo.id, "CVE-2020-35492")
+            libpng_finding = Finding.get_or_create(libpng.id, "CVE-2020-35492")
+            Observation.create(libpng_finding.id, source_scan.id)
+            assessment = Assessment.create(
+                status="affected",
+                targets=[
+                    (source_scan.variant_id, cairo_finding.id),
+                    (source_scan.variant_id, libpng_finding.id),
+                ],
+                origin="sbom",
+                status_notes="multi-target round trip",
+            )
+            assessment.timestamp = source_scan.timestamp
+            _db.session.commit()
+
+        payload = json.loads(client.get(
+            f"/api/scans/{ids['scan_b_id']}/export-result"
+        ).data)
+        exported = next(
+            item for item in payload["assessments"]
+            if item["status_notes"] == "multi-target round trip"
+        )
+        assert {
+            (target["package_name"], target["package_version"])
+            for target in exported["targets"]
+        } == {("cairo", "1.16.0"), ("libpng", "1.6.37")}
+
+        self._set_fresh_destination(app, payload)
+        with app.app_context():
+            destination_project = Project.get_by_name(payload["project_name"])
+            assert destination_project is not None
+            destination_variant = Variant.get_by_name_and_project(
+                payload["variant_name"], destination_project.id)
+            assert destination_variant is not None
+            cairo = Package.get_by_string_id("cairo@1.16.0")
+            libpng = Package.get_by_string_id("libpng@1.6.37")
+            assert cairo is not None and libpng is not None
+            cairo_finding = Finding.get_or_create(cairo.id, "CVE-2020-35492")
+            libpng_finding = Finding.get_or_create(libpng.id, "CVE-2020-35492")
+            Assessment.create(
+                status="affected",
+                targets=[
+                    (destination_variant.id, cairo_finding.id),
+                    (destination_variant.id, libpng_finding.id),
+                ],
+                origin="sbom",
+                source="Imported VulnScout scan",
+                status_notes="older different details",
+            )
+
+        response = client.post("/api/scans/import", json=payload)
+        assert response.status_code == 201
+
+        with app.app_context():
+            destination_project = Project.get_by_name(payload["project_name"])
+            assert destination_project is not None
+            destination_variant = Variant.get_by_name_and_project(
+                payload["variant_name"], destination_project.id)
+            assert destination_variant is not None
+            imported = [
+                row for row in Assessment.get_by_vulnerability("CVE-2020-35492")
+                if row.status_notes == "multi-target round trip"
+                and row.covers_variant(destination_variant.id)
+            ]
+            assert len(imported) == 1
+            assert {target.finding.package.string_id for target in imported[0].target_rows} == {
+                "cairo@1.16.0", "libpng@1.6.37",
+            }
+
     def test_imports_legacy_full_result(self, app, client, ids):
         payload = json.loads(client.get(
             f"/api/scans/{ids['scan_b_id']}/export-result"
@@ -564,14 +648,18 @@ class TestImportScan:
         assert first.get_json()["assessment_count"] == 1
 
         def variant_assessments():
+            from src.models.assessment_target import AssessmentTarget
+
             with app.app_context():
                 project = Project.get_by_name(payload["project_name"])
                 variant = Variant.get_by_name_and_project(
                     payload["variant_name"], project.id
                 )
                 return _db.session.execute(
-                    _db.select(Assessment).where(Assessment.variant_id == variant.id)
-                ).scalars().all()
+                    _db.select(Assessment)
+                    .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+                    .where(AssessmentTarget.variant_id == variant.id)
+                ).scalars().unique().all()
 
         assert len(variant_assessments()) == 1
 

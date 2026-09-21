@@ -183,6 +183,8 @@ If you want to use the non-interactive mode, without the web interface, you can 
 
 The command exits with code `2` if any vulnerability matches the condition, enabling use in CI pipelines.
 
+Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Add `--refresh-vulnerability-data` to the same command when the condition must use current enrichment data.
+
 See the link:doc/source/ci_conditions.md[match conditions documentation] for the full condition syntax and token reference.
 
 You can combine inputs with a match condition in a single invocation:
@@ -248,17 +250,21 @@ export GRYPE_MEMLIMIT=24GiB
 ===  Generating Reports
 
 Reports are generated from AsciiDoc templates. VulnScout ships with built-in templates and also supports custom ones.
+Use `--project` to select the report scope; when omitted, the `default` project is used. A project report includes all its variants. Add `--variant` to restrict the report to one variant in that project. Unknown project or variant names fail instead of broadening the report scope.
 
 [source,shell]
 ----
 # Generate a report from a built-in template
 ./vulnscout --project demo --report summary.adoc
 
+# Generate a report for one variant only
+./vulnscout --project demo --variant x86 --report summary.adoc
+
 # Generate a match-condition report (lists vulnerabilities that triggered the condition)
 ./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
 
-# Register a custom template permanently in the container and generate a report from it
-./vulnscout --report /path/to/my-custom-report.adoc
+# Register a custom template permanently in the container and generate a report
+./vulnscout --project demo --report /path/to/my-custom-report.adoc
 
 # Then generate a report from it by name
 ./vulnscout --project demo --report my-custom-report.adoc
@@ -331,8 +337,9 @@ The `--export-custom-vulnscout-data` flag exports custom assessments, CVSS score
 
 Add `--amend` to reconcile current review data with the existing file in the output directory. The file must already exist at the path produced by the same export scope. Existing records retain stable ordering and extension fields while updated and new records are incorporated.
 
-The `--import-custom-vulnscout-data` command restores entries according to the variant metadata in the file. Imported assessments use the current system time by default. Add `--use-original-timestamps` to preserve assessment timestamps from the file.
-`--use-current-timestamps` is also accepted to select the default explicitly.
+The `--import-custom-vulnscout-data` command restores entries according to the variant metadata in the file. Imported assessments use the current system time by default. Add `--use-original-timestamps` to preserve assessment timestamps from the file. `--use-current-timestamps` is also accepted to select the default explicitly.
+
+Current version 2 exports identify assessment targets by variant name and package, without instance-local variant UUIDs, so they can be shared between VulnScout installations. Legacy version 1 files remain importable; unsupported future versions are rejected explicitly.
 
 [source,shell]
 ----
@@ -414,7 +421,7 @@ The following environment variables can be set via `vulnscout config` or exporte
 
 |`VULNSCOUT_IMAGE`
 |Docker image to use
-|`docker.io/sflinux/vulnscout:v0.21`
+|`docker.io/sflinux/vulnscout:v0.22`
 
 |`VULNSCOUT_BUILD_DIR`
 |Root build directory on the host (parent of `cache/` and `outputs/`)

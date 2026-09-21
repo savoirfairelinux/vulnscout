@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { ReactNode, RefObject } from "react";
+import type { ReactNode } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faSpinner, faRobot, faBook, faFileExport, faFileImport, faChevronDown, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
+import { faSpinner, faRobot, faBook, faFileExport, faFileImport, faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import Variants from "../handlers/variant";
@@ -9,39 +9,8 @@ import Context from "../handlers/context";
 import type { VariantContextData, ContextExport, ImportResult } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
 import { useDocUrl } from "../helpers/useDocUrl";
-
-/**
- * Dismisses an open popover/menu when the user clicks outside of `ref` or
- * (optionally) presses Escape. No-op while `open` is false.
- */
-function useDismissable(
-    open: boolean,
-    ref: RefObject<HTMLElement | null>,
-    onDismiss: () => void,
-    options: { escape?: boolean } = {}
-): void {
-    const { escape = false } = options;
-    useEffect(() => {
-        if (!open) return;
-        const onClick = (ev: MouseEvent) => {
-            if (ref.current && !ref.current.contains(ev.target as Node)) {
-                onDismiss();
-            }
-        };
-        document.addEventListener("mousedown", onClick);
-        let onKey: ((ev: KeyboardEvent) => void) | undefined;
-        if (escape) {
-            onKey = (ev: KeyboardEvent) => {
-                if (ev.key === "Escape") onDismiss();
-            };
-            document.addEventListener("keydown", onKey);
-        }
-        return () => {
-            document.removeEventListener("mousedown", onClick);
-            if (onKey) document.removeEventListener("keydown", onKey);
-        };
-    }, [open, ref, onDismiss, escape]);
-}
+import HelpPopover from "../components/HelpPopover";
+import useDismissablePopover from "../hooks/useDismissablePopover";
 
 // Throwing fetch helpers for selector loads (existing handlers swallow HTTP errors)
 async function fetchProjectList(): Promise<Project[]> {
@@ -102,9 +71,7 @@ function AIContext() {
     const [exportSelection, setExportSelection] = useState<Set<string>>(new Set());
     const [ioBusy, setIoBusy] = useState(false);
     const [importDetails, setImportDetails] = useState<ImportResult | null>(null);
-    const [importHelpOpen, setImportHelpOpen] = useState(false);
     const exportMenuRef = useRef<HTMLDivElement | null>(null);
-    const importHelpRef = useRef<HTMLDivElement | null>(null);
     const importInputRef = useRef<HTMLInputElement | null>(null);
 
     const showBanner = (msg: ReactNode, type: 'success' | 'error') => {
@@ -341,9 +308,7 @@ function AIContext() {
     const clearAllExport = () => setExportSelection(new Set());
 
     // Close the export menu on outside click
-    useDismissable(exportMenuOpen, exportMenuRef, useCallback(() => setExportMenuOpen(false), []));
-    // Close the import-help popover on outside click or Escape
-    useDismissable(importHelpOpen, importHelpRef, useCallback(() => setImportHelpOpen(false), []), { escape: true });
+    useDismissablePopover(exportMenuOpen, exportMenuRef, useCallback(() => setExportMenuOpen(false), []), { closeOnEscape: false });
 
     const variantSelected = Boolean(selectedVariantId);
     const projectSelected = Boolean(selectedProjectId);
@@ -470,29 +435,13 @@ function AIContext() {
                             </div>
                         )}
                     </div>
-                    <div className="relative" ref={importHelpRef}>
-                        <button
-                            type="button"
-                            aria-label="Import help"
-                            title="Import help"
-                            onClick={() => setImportHelpOpen(o => !o)}
-                            className="text-sky-300 hover:text-sky-100 transition-colors"
-                        >
-                            <FontAwesomeIcon icon={faCircleQuestion} />
-                        </button>
-                        {importHelpOpen && (
-                            <div
-                                role="tooltip"
-                                className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[320px] text-sm text-left font-normal"
-                            >
-                                Importing overwrites the existing context for each matching
-                                project/variant. Variants whose project or variant does not exist
-                                are ignored; variants missing mandatory fields (description, threat
-                                model) fail. Accepts an exported file, whose projects each nest
-                                their variants.
-                            </div>
-                        )}
-                    </div>
+                    <HelpPopover ariaLabel="Import help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[320px] p-3">
+                        Importing overwrites the existing context for each matching
+                        project/variant. Variants whose project or variant does not exist
+                        are ignored; variants missing mandatory fields (description, threat
+                        model) fail. Accepts an exported file, whose projects each nest
+                        their variants.
+                    </HelpPopover>
                 </div>
             </div>
 

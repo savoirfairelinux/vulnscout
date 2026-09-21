@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from src.bin.webapp import create_app
 from src.extensions import db as _db
+from src.models.project import Project
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ def _build_db(app):
     with app.app_context():
         _db.drop_all()
         _db.create_all()
+        Project.create("default")
         _db.session.commit()
 
 
@@ -67,7 +69,8 @@ class TestCmdExportCoverage:
             mock_render.return_value = "= Title\nsome content"
             runner = app.test_cli_runner()
             result = runner.invoke(args=[
-                "report", "report.adoc", "--output-dir", str(tmp_path)
+                "report", "report.adoc", "--output-dir", str(tmp_path),
+                "--project", "default",
             ])
 
         out_file = tmp_path / "report.adoc"
@@ -86,6 +89,7 @@ class TestCmdExportCoverage:
                 "report", "report.adoc",
                 "--output-dir", str(tmp_path),
                 "--format", "pdf",
+                "--project", "default",
             ])
 
         out_file = tmp_path / "report.adoc.pdf"
@@ -104,6 +108,7 @@ class TestCmdExportCoverage:
                 "report", "report.adoc",
                 "--output-dir", str(tmp_path),
                 "--format", "html",
+                "--project", "default",
             ])
 
         out_file = tmp_path / "report.adoc.html"
@@ -118,7 +123,8 @@ class TestCmdExportCoverage:
             mock_render.return_value = "rendered content"
             runner = app.test_cli_runner()
             result = runner.invoke(args=[
-                "report", "main.adoc", "--output-dir", str(tmp_path)
+                "report", "main.adoc", "--output-dir", str(tmp_path),
+                "--project", "default",
             ])
 
         # main.adoc + 2 extras = 3 renders
@@ -138,7 +144,8 @@ class TestCmdExportCoverage:
                 mock_eval.return_value = []
                 runner = app.test_cli_runner()
                 result = runner.invoke(args=[
-                    "report", "report.adoc", "--output-dir", str(tmp_path)
+                    "report", "report.adoc", "--output-dir", str(tmp_path),
+                    "--project", "default",
                 ])
             mock_eval.assert_called_once()
         finally:
@@ -157,7 +164,8 @@ class TestCmdExportCoverage:
             mock_eval.return_value = ["CVE-1234-5678"]
             runner = app.test_cli_runner()
             result = runner.invoke(args=[
-                "report", "report.adoc", "--output-dir", str(tmp_path)
+                "report", "report.adoc", "--output-dir", str(tmp_path),
+                "--project", "default",
             ])
         mock_eval.assert_called_once()
 
@@ -168,7 +176,8 @@ class TestCmdExportCoverage:
             mock_render.return_value = "= Title\ncontent"
             runner = app.test_cli_runner()
             result = runner.invoke(args=[
-                "report", "report.adoc", "--output-dir", str(tmp_path)
+                "report", "report.adoc", "--output-dir", str(tmp_path),
+                "--project", "default",
             ])
 
         assert result.exit_code == 0, result.output

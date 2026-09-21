@@ -19,7 +19,7 @@ When the container starts with no arguments, it enters **daemon mode** — it st
 
 ```bash
 # The container starts in daemon mode by default
-docker run -d --name vulnscout sflinux/vulnscout:v0.21
+docker run -d --name vulnscout sflinux/vulnscout:v0.22
 
 # Then send commands to it
 docker exec vulnscout /scan/src/entrypoint.sh --serve
@@ -56,7 +56,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | Flag | Description |
 |------|-------------|
 | `--serve` | Run scan then start the interactive web UI (port 7275). Incompatible with `--match-condition` |
-| `--report <template>` | Generate a report from a template (name or path). If a path is given, the template is staged automatically |
+| `--report <template>` | Generate a report from a template (name or path). `--project` includes every project variant; adding `--variant` restricts the report to that variant. The `default` project is used when `--project` is omitted. Unknown scopes fail rather than broadening the report. If a path is given, the template is staged automatically |
 | `--export-spdx` | Export project as SPDX 3.0 SBOM to `/scan/outputs/` |
 | `--export-cdx` | Export project as CycloneDX 1.6 SBOM to `/scan/outputs/` |
 | `--export-openvex` | Export project as OpenVEX document to `/scan/outputs/` |
@@ -66,7 +66,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--export-custom-openvex-assessments` | Export custom assessments for the selected `--variant` as an OpenVEX `.json` file |
 | `--import-custom-openvex-assessments <path>` | Import an OpenVEX `.json` file into the selected `--variant` |
 | `--use-current-timestamps` | With either custom import, use the current system time |
-| `--match-condition <expr>` | Exit with code 2 if expression matches any vulnerability. Incompatible with `--serve` |
+| `--match-condition <expr>` | Exit with code 2 if expression matches stored data for any in-scope vulnerability; it does not refresh EPSS. A project without a variant includes all its variants. Incompatible with `--serve` |
 | `--delete-scan <id>` | Delete a past scan by its ID |
 
 ### Data Retrieval Commands
@@ -120,7 +120,7 @@ When multiple flags are provided in a single invocation, the entrypoint processe
    - sbom-cve-check scan (if `--perform-sbom-cve-check-scan`)
    - Vulnerability processing (NVD enrichment, EPSS scoring)
    - Input files cleaned up after processing
-3. **Reports** — Templates specified with `--report` are generated
+3. **Reports** — Templates specified with `--report` are generated for every variant in the selected project, or only the selected `--variant`
 4. **Exports** — SBOM formats specified with `--export-*` are written
 5. **Custom assessments** — Export/import of review assessments
 
@@ -160,19 +160,23 @@ docker exec vulnscout /scan/src/entrypoint.sh \
 **Run a CI scan with a match condition:**
 ```bash
 docker exec vulnscout /scan/src/entrypoint.sh \
-  --project demo --variant x86 \
+  --project demo \
   --add-spdx /scan/inputs/sbom.spdx.json \
   --match-condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
 ```
 
+This evaluates all variants in `demo`. Add `--variant x86` to evaluate only that variant. With neither option, matching uses `default/default`.
+
 **Generate reports and export SBOMs without a new scan:**
 ```bash
 docker exec vulnscout /scan/src/entrypoint.sh \
-  --project demo \
+  --project demo --variant x86 \
   --report summary.adoc \
   --report all_assessments.adoc \
   --export-spdx --export-cdx
 ```
+
+Omit `--variant x86` to include every variant in `demo`.
 
 **Run a sbom-cve-check scan:**
 ```bash

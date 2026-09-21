@@ -230,16 +230,22 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
     scan export in particular — need the package to round-trip it faithfully.
     They are appended last so existing positional access stays valid.
 
+    Custom (manually-created) and pending-AI assessments are excluded at the
+    SQL level, matching the equivalent guard in ``_scan_diff.py``.
+
     The query logic:
       - Start FROM observation
       - JOIN finding ON finding.id = observation.finding_id
-      - JOIN assessment ON assessment.finding_id = finding.id
+      - JOIN assessment_targets ON assessment_targets.finding_id = finding.id
+      - JOIN assessment ON assessment.id = assessment_targets.assessment_id
       - JOIN scan ON scan.id = observation.scan_id
       - JOIN package ON package.id = finding.package_id
       - WHERE observation.scan_id IN (scan_ids)
-            AND assessment.variant_id = scan.variant_id
+            AND assessment_targets.variant_id = scan.variant_id
+            AND (assessment.origin IS NULL OR assessment.origin NOT IN ('custom', 'ai'))
     """
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     if not scan_ids:
         return []
@@ -262,12 +268,14 @@ def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[Ass
         )
         .select_from(Observation)
         .join(Finding, Finding.id == Observation.finding_id)
-        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(AssessmentTarget, AssessmentTarget.finding_id == Finding.id)
+        .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
         .join(Scan, Scan.id == Observation.scan_id)
         .join(Package, Package.id == Finding.package_id)
         .where(
             Observation.scan_id.in_(scan_ids),
-            Assessment.variant_id == Scan.variant_id,
+            AssessmentTarget.variant_id == Scan.variant_id,
+            db.or_(Assessment.origin.is_(None), Assessment.origin.notin_(("custom", "ai"))),
         )
     ).all()
 
@@ -420,25 +428,37 @@ def _assessments_detail_for_scan(
     """
     rows = _assessment_rows_for_scans([scan.id])
 
-    # Deduplicate by assessment id (row[1])
+    # Aggregate by assessment id. The query returns one row per target, and a
+    # multi-package assessment must remain one assessment carrying every
+    # package target rather than retaining an arbitrary first row.
     # Exclude custom (manually-created) and pending AI assessments —
     # only automated sources (sbom, grype, osv, nvd, etc.) are shown
     # in scan diff.
-    seen: Dict[uuid_module.UUID, AssessmentRow] = {}
+    seen: Dict[uuid_module.UUID, tuple[AssessmentRow, list[Dict[str, str]]]] = {}
     for row in rows:
         aid = row[1]
         origin = row[9]
         if origin in ("custom", "ai"):
             continue
+        target = {
+            "package_name": row[10] or "",
+            "package_version": row[11] or "",
+            "package_supplier": row[12] or "",
+        }
         if aid not in seen:
-            seen[aid] = row
+            seen[aid] = (row, [target])
+        elif target not in seen[aid][1]:
+            seen[aid][1].append(target)
 
     scan_ts = scan.timestamp
-    added: List[Dict[str, str]] = []
-    unchanged_list: List[Dict[str, str]] = []
+    added: List[Dict[str, object]] = []
+    unchanged_list: List[Dict[str, object]] = []
 
-    for row in seen.values():
+    for row, targets in seen.values():
         ats = row[2]  # assessment timestamp
+        targets.sort(key=lambda target: (
+            target["package_name"], target["package_version"], target["package_supplier"]
+        ))
         entry = {
             "vulnerability_id": row[8],
             "status": row[3] or "under_investigation",
@@ -451,6 +471,7 @@ def _assessments_detail_for_scan(
             "package_name": row[10] or "",
             "package_version": row[11] or "",
             "package_supplier": row[12] or "",
+            "targets": targets,
         }
         # "Added" = created during this scan's window [scan_ts, next_scan_ts)
         is_added = False
@@ -470,31 +491,42 @@ def _assessments_detail_for_scan(
             unchanged_list.append(entry)
 
     # Sort by vulnerability_id for stable output
-    added.sort(key=lambda e: e["vulnerability_id"])
-    unchanged_list.sort(key=lambda e: e["vulnerability_id"])
+    added.sort(key=lambda e: str(e["vulnerability_id"]))
+    unchanged_list.sort(key=lambda e: str(e["vulnerability_id"]))
 
     # Total
     if next_scan_ts is not None:
-        total = sum(1 for row in seen.values() if row[2] is None or row[2] < next_scan_ts)
+        total = sum(1 for row, _targets in seen.values()
+                    if row[2] is None or row[2] < next_scan_ts)
     else:
         total = len(seen)
 
     # Removed = assessments in previous scan but not in this scan
-    removed_list: List[Dict[str, str]] = []
+    removed_list: List[Dict[str, object]] = []
     if prev_scan is not None:
         prev_rows = _assessment_rows_for_scans([prev_scan.id])
-        prev_seen: Dict[uuid_module.UUID, AssessmentRow] = {}
+        prev_seen: Dict[uuid_module.UUID, tuple[AssessmentRow, list[Dict[str, str]]]] = {}
         for row in prev_rows:
             aid = row[1]
             origin = row[9]
             if origin in ("custom", "ai"):
                 continue
+            target = {
+                "package_name": row[10] or "",
+                "package_version": row[11] or "",
+                "package_supplier": row[12] or "",
+            }
             if aid not in prev_seen:
-                prev_seen[aid] = row
+                prev_seen[aid] = (row, [target])
+            elif target not in prev_seen[aid][1]:
+                prev_seen[aid][1].append(target)
 
         curr_ids = set(seen.keys())
-        for aid, row in prev_seen.items():
+        for aid, (row, targets) in prev_seen.items():
             if aid not in curr_ids:
+                targets.sort(key=lambda target: (
+                    target["package_name"], target["package_version"], target["package_supplier"]
+                ))
                 removed_list.append({
                     "vulnerability_id": row[8],
                     "status": row[3] or "under_investigation",
@@ -505,8 +537,9 @@ def _assessments_detail_for_scan(
                     "package_name": row[10] or "",
                     "package_version": row[11] or "",
                     "package_supplier": row[12] or "",
+                    "targets": targets,
                 })
-        removed_list.sort(key=lambda e: e["vulnerability_id"])
+        removed_list.sort(key=lambda e: str(e["vulnerability_id"]))
 
     added_count = len(added)
     removed_count = len(removed_list)

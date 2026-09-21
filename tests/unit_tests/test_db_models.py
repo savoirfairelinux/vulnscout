@@ -690,3 +690,5 @@ def test_batch_session_exception_propagates(app):
     with pytest.raises(ValueError, match="test error"):
         with batch_session():
             raise ValueError("test error")
+
+

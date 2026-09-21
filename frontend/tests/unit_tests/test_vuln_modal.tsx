@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -9,8 +9,11 @@ import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import Assessments from "../../src/handlers/assessments";
+import type { Assessment } from "../../src/handlers/assessments";
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import VulnModal from '../../src/components/VulnModal';
+import AssessmentReviews from "../../src/handlers/assessmentReviews";
+import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
 
 
 describe('Vulnerability Modal', () => {
@@ -205,12 +208,14 @@ describe('Vulnerability Modal', () => {
             ...vulnerability.assessments[0],
             id: 'same-day-first',
             packages: ['first@1.0.0'],
+            targets: [{ variant_id: null, package: 'first@1.0.0', outdated: false }],
             timestamp: '2026-07-28T09:00:00Z',
         };
         const second = {
             ...vulnerability.assessments[0],
             id: 'same-day-second',
             packages: ['second@1.0.0'],
+            targets: [{ variant_id: null, package: 'second@1.0.0', outdated: false }],
             timestamp: '2026-07-28T15:00:00Z',
         };
         fetchMock.resetMocks();
@@ -259,8 +264,10 @@ describe('Vulnerability Modal', () => {
 
     test('adding assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
@@ -301,8 +308,10 @@ describe('Vulnerability Modal', () => {
         await user.type(inputWorkaround, 'upgrade layer version');
         await user.click(btn);
 
-        // ASSERT
-        expect(thisFetch).toHaveBeenCalledTimes(3);
+        // ASSERT: 4 mount fetches (adds the reviews fetch) + the create POST +
+        // the rows refresh that makes the new assessment appear in history
+        // immediately.
+        expect(thisFetch).toHaveBeenCalledTimes(6);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
@@ -313,8 +322,10 @@ describe('Vulnerability Modal', () => {
      */
     const submitAssessment = async (postResponse: object) => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify(postResponse)); // POST assessment
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -332,8 +343,12 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
-                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v2', packages: ['pkgB@1.0'] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_id: null, variant_ids: ['v1', 'v2'],
+                    packages: ['pkgA@1.0', 'pkgB@1.0'],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 2 packages across 2 variants.')).toBeInTheDocument();
@@ -345,22 +360,26 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_id: 'v1', variant_ids: ['v1'],
+                    packages: ['pkgA@1.0'],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 1 package across 1 variant.')).toBeInTheDocument();
         alertSpy.mockRestore();
     })
 
-    test('an invalid batch adds nothing and displays only the API error', async () => {
+    test('an invalid create adds nothing and displays only the API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
-            status: 'error',
-            assessments: [],
-            count: 0,
-            errors: [{error: 'Invalid package version for vulnerability and variant: pkgB@1.0'}],
+            error: 'Invalid package version for vulnerability and variant: pkgB@1.0',
         }), {status: 400});
 
         const appendAssessment = jest.fn();
@@ -383,7 +402,11 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: ['pkgA@1.0', 'pkgB@1.0'] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_ids: [], packages: ['pkgA@1.0', 'pkgB@1.0'],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 2 packages.')).toBeInTheDocument();
@@ -395,7 +418,11 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: [] },
+                {
+                    id: 'a1', vuln_id: vulnerability.id, status: 'fixed',
+                    timestamp: '2021-01-02T00:00:00Z',
+                    variant_id: 'v1', variant_ids: ['v1'], packages: [],
+                },
             ],
         });
         expect(await screen.findByText('Successfully added assessment to 1 variant.')).toBeInTheDocument();
@@ -407,11 +434,10 @@ describe('Vulnerability Modal', () => {
         await submitAssessment({
             status: 'success',
             assessments: [
-                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
-                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_ids: [], packages: [] },
             ],
         });
-        expect(await screen.findByText('Successfully added 2 assessments.')).toBeInTheDocument();
+        expect(await screen.findByText('Successfully added assessment.')).toBeInTheDocument();
         alertSpy.mockRestore();
     })
 
@@ -438,6 +464,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit effort estimations', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             {
                 id: 'variant-1',
@@ -446,6 +473,7 @@ describe('Vulnerability Modal', () => {
             }
         ])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch (variantPackageMap effect)
         fetchMock.mockResponseOnce(JSON.stringify({
             id: vulnerability.id,
@@ -478,14 +506,16 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock).toHaveBeenCalledTimes(6);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
     test('invalid custom CVSS vector triggers alert and no network call', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
 
@@ -504,7 +534,7 @@ describe('Vulnerability Modal', () => {
         await user.click(addBtn);
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
-        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledTimes(4);
 
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/the vector string is invalid/i);
@@ -515,8 +545,10 @@ describe('Vulnerability Modal', () => {
 
     test('custom CVSS API error shows alert (error branch lines 80-93)', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -543,7 +575,7 @@ describe('Vulnerability Modal', () => {
         await user.click(await screen.getByRole('button', { name: /^add$/i }));
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
 
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/failed to save cvss/i);
@@ -556,8 +588,10 @@ describe('Vulnerability Modal', () => {
 
     test('custom CVSS success updates vulnerability and closes (lines 83-89)', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -594,7 +628,7 @@ describe('Vulnerability Modal', () => {
         await user.type(vectorInput, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
         await user.click(await screen.getByRole('button', { name: /^add$/i }));
 
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
         expect(patchVuln).toHaveBeenCalledTimes(1);
 
         // Check for success banner instead of alert
@@ -608,8 +642,10 @@ describe('Vulnerability Modal', () => {
         // vulnerability in the current (project) scope. This guards that
         // refresh path (commit "fix CVSS refresh").
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -712,32 +748,25 @@ describe('Vulnerability Modal', () => {
         expect(closeCb).not.toHaveBeenCalled();
     });
 
-    test('clicking the padding area around the modal box closes it without unsaved changes', async () => {
-        // The padding wrapper (between the outer backdrop and the modal content
-        // box) also closes the modal when clicked directly, matching the outer
-        // backdrop's behavior.
+    test('clicking the empty dialog surface closes it without unsaved changes', async () => {
         const closeCb = jest.fn();
-        const { container } = render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
-        expect(paddingWrapper).not.toBeNull();
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        await user.click(paddingWrapper as HTMLElement);
+        await user.click(screen.getByRole('dialog', { name: vulnerability.id }));
 
         expect(closeCb).toHaveBeenCalledTimes(1);
     });
 
-    test('clicking the padding area around the modal box shows confirmation when unsaved changes exist', async () => {
+    test('clicking the empty dialog surface shows confirmation when unsaved changes exist', async () => {
         const closeCb = jest.fn();
-        const { container } = render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const optimistic = screen.getByPlaceholderText(/shortest estimate/i);
         await user.type(optimistic, '5h');
 
-        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
-        await user.click(paddingWrapper as HTMLElement);
+        await user.click(screen.getByRole('dialog', { name: vulnerability.id }));
 
         expect(await screen.findByText(/are you sure you want to close without saving/i)).toBeInTheDocument();
         expect(closeCb).not.toHaveBeenCalled();
@@ -777,8 +806,10 @@ describe('Vulnerability Modal', () => {
 
     test('addAssessment API failure shows error banner', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             message: 'Database connection failed'
@@ -799,12 +830,83 @@ describe('Vulnerability Modal', () => {
         await user.type(inputStatus, 'patched');
         await user.click(btn);
 
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
         expect(updateCb).not.toHaveBeenCalled();
         expect(patchVuln).not.toHaveBeenCalled();
 
         const errorBanner = await screen.findByText(/assessment not added/i);
         expect(errorBanner).toBeInTheDocument();
+    });
+
+    test('a newly added assessment shows in history right away when server rows already exist', async () => {
+        fetchMock.resetMocks();
+        const existingRow = {
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            status: 'affected',
+            simplified_status: 'active',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            responses: [],
+            origin: 'custom',
+            timestamp: '2021-01-01T00:00:00Z',
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
+        };
+        const newRow = {
+            ...existingRow,
+            id: 'assessment-2',
+            status: 'fixed',
+            simplified_status: 'fixed',
+            justification: '',
+            impact_statement: '',
+            status_notes: 'freshly written note',
+            workaround: '',
+            timestamp: '2026-01-01T00:00:00Z',
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
+        };
+        let posted = false;
+        fetchMock.mockResponse(async req => {
+            if (req.method !== 'POST' && req.url.includes('/api/vulnerabilities/') && req.url.includes('/assessments')) {
+                return JSON.stringify(posted ? [newRow, existingRow] : [existingRow]);
+            }
+            if (req.method === 'POST' && req.url.includes('/assessments') && !req.url.includes('/batch')) {
+                posted = true;
+                return JSON.stringify({
+                    status: 'success',
+                    assessments: [{
+                        id: 'assessment-2',
+                        vuln_id: 'CVE-2010-1234',
+                        packages: ['aaabbbccc@1.0.0'],
+                        status: 'fixed',
+                        simplified_status: 'fixed',
+                        justification: '',
+                        impact_statement: '',
+                        status_notes: 'freshly written note',
+                        workaround: '',
+                        timestamp: '2026-01-01T00:00:00Z',
+                        origin: 'custom',
+                        responses: []
+                    }]
+                });
+            }
+            return JSON.stringify([]);
+        });
+
+        render(<VulnModal vuln={{...vulnerability, assessments: [...vulnerability.assessments]}} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        // Wait for the server-built rows to land before submitting.
+        expect(await screen.findByText(/this is a fictive status note/i)).toBeInTheDocument();
+
+        const selects = screen.getAllByRole('combobox');
+        const selectSource = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectSource, 'fixed');
+        await user.type(screen.getByPlaceholderText(/notes/i), 'freshly written note');
+        await user.click(screen.getByText(/add assessment/i));
+
+        expect(await screen.findByText(/freshly written note/i)).toBeInTheDocument();
     });
 
     test('edit button toggle functionality', async () => {
@@ -882,8 +984,10 @@ describe('Vulnerability Modal', () => {
     test('save estimation failure triggers alert (lines 121-122)', async () => {
         fetchMock.resetMocks();
 
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 status: 500,
@@ -910,7 +1014,7 @@ describe('Vulnerability Modal', () => {
         const saveBtn = await screen.getByText(/save estimation/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
 
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/failed to save estimation/i);
@@ -1428,8 +1532,10 @@ describe('Vulnerability Modal', () => {
 
     test('delete assessment API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Server error', { status: 500 });
 
         const vulnWithAssessment = {
@@ -1470,8 +1576,10 @@ describe('Vulnerability Modal', () => {
 
     test('delete assessment network error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockRejectOnce(new Error('Network error'));
 
         const vulnWithAssessment = {
@@ -1544,28 +1652,197 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Delete Assessment')).not.toBeInTheDocument();
     });
 
-    test('edit assessment success', async () => {
+    test('deleting an assessment calls remove with the assessment id', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            responses: [],
+            origin: 'custom',
+            timestamp: '2021-01-01T00:00:00Z',
+            targets: [{ variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false }],
+        }])); // assessment rows mount fetch
+
+        const removeSpy = jest.spyOn(Assessments, 'remove').mockResolvedValue(undefined);
+        const patchVuln = jest.fn();
+
+        // A fresh assessments array, isolated from whatever prior tests left
+        // mutated on the shared `vulnerability` fixture (VulnModal writes
+        // vuln.assessments in place), so this test sees exactly one entry.
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [vulnerability.assessments[0]] }} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        // Wait for the real assessment-rows response (assessment-1, rendered
+        // status "Exploitable") to replace the initial client-side fallback
+        // (rendered status "active") before deleting.
+        await screen.findByText(/Exploitable/);
+        const deleteBtn = screen.getByTitle(/delete assessment/i);
+        await user.click(deleteBtn);
+        await user.click(screen.getByText(/yes, delete/i));
+
+        await waitFor(() => {
+            expect(removeSpy).toHaveBeenCalledWith('assessment-1');
+        });
+        expect(patchVuln).toHaveBeenCalled();
+
+        removeSpy.mockRestore();
+    });
+
+    test('clearing a variant-scoped assessment requires deletion confirmation', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'variant-1', name: 'Variant A', project_id: 'proj-1' }
+        ])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            responses: [],
+            origin: 'custom',
+            timestamp: '2021-01-01T00:00:00Z',
+            targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+        }])); // assessment rows mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            variant_id: 'variant-1',
+            active_packages: ['aaabbbccc@1.0.0'],
+            findings: [{
+                finding_id: 'finding-1',
+                package: 'aaabbbccc@1.0.0',
+                outdated: false,
+            }],
+        }])); // variant-active-packages
+
+        const reconcileSpy = jest.spyOn(Assessments, 'reconcile').mockResolvedValue({
             status: 'success',
-            assessment: {
+            updated: [{
+                id: 'assessment-1',
+                vuln_id: 'CVE-2010-1234',
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: 'because 42',
+                impact_statement: 'may impact or not',
+                status_notes: 'this is a fictive status note',
+                workaround: 'update dependency',
+                responses: [],
+                origin: 'custom',
+                timestamp: '2021-01-01T00:00:00Z',
+                targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+            }],
+            created: [],
+            deleted: [],
+        });
+
+        const vulnWithVariantAssessment = {
+            ...vulnerability,
+            assessments: [{
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
-                packages_current: [],
-                status: 'fixed',
-                simplified_status: 'resolved',
-                justification: 'updated justification',
-                impact_statement: 'updated impact',
-                status_notes: 'updated notes',
-                workaround: 'updated workaround',
+                status: 'affected',
+                simplified_status: 'active',
+                justification: 'because 42',
+                impact_statement: 'may impact or not',
+                status_notes: 'this is a fictive status note',
+                workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
                 origin: 'custom',
-                responses: []
+                responses: [],
+                variant_id: 'variant-1',
+            }]
+        };
+
+        render(<VulnModal vuln={vulnWithVariantAssessment} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        // Wait for the real assessment-rows response (assessment-1, rendered
+        // status "Exploitable") to replace the initial client-side fallback
+        // (rendered status "active") before editing.
+        await screen.findByText(/Exploitable/);
+        const editBtn = screen.getByTitle(/edit assessment/i);
+        await user.click(editBtn);
+        const saveBtn = screen.getByText(/save changes/i);
+        const editPanel = saveBtn.closest('.bg-gray-800');
+        expect(editPanel).not.toBeNull();
+        await user.click(within(editPanel as HTMLElement).getByRole(
+            'checkbox', { name: 'Variant A / aaabbbccc@1.0.0' }));
+        await user.click(saveBtn);
+
+        expect(await screen.findByText(/No targets remain/)).toBeInTheDocument();
+        expect(reconcileSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', {name: 'Keep editing'}));
+        expect(screen.getByText(/Edit Assessment/)).toBeInTheDocument();
+        expect(reconcileSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByText(/save changes/i));
+        await user.click(await screen.findByRole('button', {name: 'Yes, delete'}));
+        await waitFor(() => {
+            expect(reconcileSpy).toHaveBeenCalledWith('assessment-1', expect.objectContaining({
+                vuln_id: 'CVE-2010-1234',
+                variant_ids: [],
+                targets: [],
+            }));
+        });
+
+        reconcileSpy.mockRestore();
+    });
+
+    test('status-only edit preserves a variantless assessment', async () => {
+        fetchMock.resetMocks();
+        const variantlessAssessment = {
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            packages: ['aaabbbccc@1.0.0'],
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            timestamp: '2021-01-01T00:00:00Z',
+            origin: 'custom',
+            responses: [],
+            targets: [{
+                variant_id: null,
+                package: 'aaabbbccc@1.0.0',
+                outdated: false,
+            }],
+        };
+        fetchMock.mockResponse(req => {
+            if (req.url.includes('/api/assessment-reviews')) {
+                return Promise.resolve(JSON.stringify({}));
             }
-        }), { status: 200 });
+            if (req.url.includes('/variants')) {
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (req.url.includes('/api/vulnerabilities/CVE-2010-1234/assessments')) {
+                return Promise.resolve(JSON.stringify([variantlessAssessment]));
+            }
+            if (req.url.includes('/api/assessments/assessment-1')) {
+                return Promise.resolve(JSON.stringify({
+                    status: 'success',
+                    assessment: { ...variantlessAssessment, status: 'fixed', simplified_status: 'resolved' },
+                }));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
 
         const patchVuln = jest.fn();
         const vulnWithAssessment = {
@@ -1596,6 +1873,11 @@ describe('Vulnerability Modal', () => {
 
         // The default keeps the current history position and timestamp.
         expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toBeChecked();
+        const statusSelect = document.querySelector<HTMLSelectElement>(
+            'select[name="edit_assessment_status"]'
+        );
+        expect(statusSelect).not.toBeNull();
+        await user.selectOptions(statusSelect!, 'fixed');
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
@@ -1606,9 +1888,11 @@ describe('Vulnerability Modal', () => {
         const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
         const putBody = JSON.parse(String(putCall?.[1]?.body));
         expect(putBody).toEqual(expect.objectContaining({
+            status: 'fixed',
             update_timestamp: false,
             timestamp: '2021-01-01T00:00:00Z',
         }));
+        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
         expect(patchVuln).toHaveBeenCalled();
 
         // Check for success banner
@@ -1618,8 +1902,10 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Server error', { status: 500 });
 
         const vulnWithAssessment = {
@@ -1660,8 +1946,10 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment invalid response', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             message: 'Invalid data'
@@ -1705,8 +1993,10 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment network error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockRejectOnce(new Error('Network failure'));
 
         const vulnWithAssessment = {
@@ -1806,7 +2096,7 @@ describe('Vulnerability Modal', () => {
         expect(placeholder).toBeInTheDocument();
     });
 
-    test('assessment without status notes shows placeholder', async () => {
+    test('assessment without status notes omits the field', async () => {
         const vulnWithAssessment = {
             ...vulnerability,
             assessments: [{
@@ -1828,12 +2118,11 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // Should show placeholder for missing status notes
-        const placeholder = screen.getByText(/no status notes/i);
-        expect(placeholder).toBeInTheDocument();
+        expect(screen.queryByText(/no status notes/i)).not.toBeInTheDocument();
+        expect(screen.getByText(/update dependency/i)).toBeInTheDocument();
     });
 
-    test('assessment without workaround shows placeholder', async () => {
+    test('assessment without workaround omits the field', async () => {
         const vulnWithAssessment = {
             ...vulnerability,
             assessments: [{
@@ -1855,9 +2144,8 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // Should show placeholder for missing workaround
-        const placeholder = screen.getByText(/no workaround available/i);
-        expect(placeholder).toBeInTheDocument();
+        expect(screen.queryByText(/no workaround available/i)).not.toBeInTheDocument();
+        expect(screen.getByText(/some notes/i)).toBeInTheDocument();
     });
 
     test('renders empty CVSS array', async () => {
@@ -1969,8 +2257,10 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment invalid assessment data', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: ['invalid', 'array', 'instead', 'of', 'object']
@@ -2014,8 +2304,10 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment data mismatch', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: {
@@ -2077,6 +2369,22 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Edit Assessment')).not.toBeInTheDocument();
     });
 
+    test('keeps the upstream-main VulnModal background colors', () => {
+        render(<VulnModal vuln={vulnerability} isEditing={false} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(screen.getByTestId('vuln-modal-backdrop')).toHaveClass('!bg-gray-900/90');
+        expect(screen.getByRole('dialog')).toHaveClass(
+            '!border-gray-600', '!bg-gray-700',
+            '!h-[calc(100vh-6rem)]', '!max-w-[calc(100vw-6rem)]',
+        );
+        expect(screen.getByRole('heading', { name: vulnerability.id }).closest('.border-b')).toHaveClass('!border-gray-600');
+        expect(document.getElementById('vulnerability_modal_body')?.parentElement?.parentElement).toHaveClass('!bg-gray-700');
+        expect(screen.getByRole('button', { name: 'Close' })).toHaveClass(
+            '!border-gray-600', '!bg-gray-800', '!text-gray-400',
+            'hover:!bg-gray-700', 'hover:!text-white',
+        );
+    });
+
     test('renders yocto description when available', () => {
         // To avoid breaking other tests, we create a new vulnerability object with the yocto description added to the texts array
         let vulnWithYoctoDesc = {
@@ -2111,10 +2419,27 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
     });
 
+    test('Escape closes the shortcut helper before the vulnerability dialog', async () => {
+        const user = userEvent.setup();
+        const onClose = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={onClose} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await user.click(screen.getByRole('button', { name: /shortcut helper/i }));
+        expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
+
+        await user.keyboard('{Escape}');
+
+        expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
     test('delete assessment with remaining assessments updates status from most recent', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
 
         const patchVuln = jest.fn();
@@ -2171,8 +2496,10 @@ describe('Vulnerability Modal', () => {
 
     test('recomputes the status summary after deleting an assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
 
         const patchVuln = jest.fn();
@@ -2218,7 +2545,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithTwoVariants} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        // The most recent group (var-2 / Exploitable) sorts first in the history.
+        // The most recent assessment (var-2 / Exploitable) sorts first in the history.
         const deleteBtns = screen.getAllByTitle(/delete assessment/i);
         await user.click(deleteBtns[0]);
         await user.click(screen.getByText(/yes, delete/i));
@@ -2239,6 +2566,7 @@ describe('Vulnerability Modal', () => {
 
     test('breaks down the current status by variant and package', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' }
         ]));
@@ -2258,6 +2586,7 @@ describe('Vulnerability Modal', () => {
                 timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
             }
         ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
         // Finding rows carry their own package/variant outdated state.
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -2304,12 +2633,166 @@ describe('Vulnerability Modal', () => {
         expect(within(current).getByText('Exploitable')).toBeInTheDocument();
         expect(within(current).queryByText('pkgOld@0.9.0')).not.toBeInTheDocument();
 
+        for (const column of ['Variant', 'Package', 'Status', 'Justification', 'Impact', 'Notes', 'Workaround']) {
+            const headers = screen.getAllByRole('columnheader', {name: new RegExp(column)});
+            fireEvent.click(headers[0]);
+        }
+        fireEvent.click(screen.getAllByRole('columnheader', {name: /Package/})[0]);
+        fireEvent.click(screen.getAllByRole('columnheader', {name: /Package/})[0]);
+
         const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
         const outdatedHistoryTag = within(history).getByText('pkgOld@0.9.0').closest('span');
         expect(outdatedHistoryTag).toHaveTextContent(/pkgOld@0\.9\.0.*Production.*Outdated/);
         const currentHistoryTag = within(history).getByText('pkgA@1.0.0').closest('span');
         expect(currentHistoryTag).toHaveTextContent(/pkgA@1\.0\.0.*Production/);
         expect(currentHistoryTag).not.toHaveTextContent('Outdated');
+    });
+
+    test('shows a verdict only on the pairs a sparse assessment actually covers', async () => {
+        // One assessment covering (Production, pkgA) and (Staging, pkgB) only.
+        // Crossing its variant_ids with its packages would also claim
+        // (Production, pkgB) and (Staging, pkgA), which nobody assessed.
+        const sparseAssessment = {
+            id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            variant_ids: ['var-1', 'var-2'],
+            targets: [
+                { variant_id: 'var-1', package: 'pkgA@1.0.0' },
+                { variant_id: 'var-2', package: 'pkgB@2.0.0' },
+            ],
+            status: 'fixed', simplified_status: 'Fixed', justification: '',
+            impact_statement: '', status_notes: '', workaround: '',
+            timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [],
+            variant_id: null,
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/variant-active-packages')) {
+                return Promise.resolve(JSON.stringify([
+                    {
+                        variant_id: 'var-1', active_packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+                        findings: [
+                            {finding_id: 'f-a1', package: 'pkgA@1.0.0', outdated: false},
+                            {finding_id: 'f-b1', package: 'pkgB@2.0.0', outdated: false},
+                        ],
+                    },
+                    {
+                        variant_id: 'var-2', active_packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+                        findings: [
+                            {finding_id: 'f-a2', package: 'pkgA@1.0.0', outdated: false},
+                            {finding_id: 'f-b2', package: 'pkgB@2.0.0', outdated: false},
+                        ],
+                    },
+                ]));
+            }
+            if (url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([sparseAssessment]));
+            }
+            if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'var-1', name: 'Production', project_id: 'proj1' },
+                    { id: 'var-2', name: 'Staging', project_id: 'proj1' },
+                ]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const sparseVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            packages_current: [],
+            assessments: [sparseAssessment as any],
+        };
+
+        render(<VulnModal vuln={sparseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+
+        const current = (await screen.findByText('Assessments on current SBOM packages and variants')).parentElement as HTMLElement;
+        const rowFor = (variant: string, pkg: string) => within(current)
+            .getAllByRole('row')
+            .find(row => within(row).queryByText(variant) && within(row).queryByText(pkg));
+
+        await waitFor(() => expect(rowFor('Production', 'pkgA@1.0.0')).toBeTruthy());
+        // The assessed pairs carry the verdict...
+        expect(rowFor('Production', 'pkgA@1.0.0')).toHaveTextContent('Fixed');
+        expect(rowFor('Staging', 'pkgB@2.0.0')).toHaveTextContent('Fixed');
+        // ...and the cross-product pairs do not.
+        expect(rowFor('Production', 'pkgB@2.0.0')).not.toHaveTextContent('Fixed');
+        expect(rowFor('Staging', 'pkgA@1.0.0')).not.toHaveTextContent('Fixed');
+    });
+
+    test('edits disjoint compatible targets without enabling cross-pairs', async () => {
+        const targets = [
+            { variant_id: 'var-1', package: 'pkgA@1.0.0', outdated: false, assessment_id: 'assess-sparse' },
+            { variant_id: 'var-2', package: 'pkgB@2.0.0', outdated: false, assessment_id: 'assess-sparse' },
+        ];
+        const sparseAssessment = {
+            id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            variant_ids: ['var-1', 'var-2'],
+            targets,
+            status: 'fixed', simplified_status: 'Fixed', justification: '',
+            impact_statement: '', status_notes: '', workaround: '',
+            timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [],
+            variant_id: null,
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/variant-active-packages')) {
+                return Promise.resolve(JSON.stringify([
+                    {
+                        variant_id: 'var-1', active_packages: ['pkgA@1.0.0'],
+                        findings: [{finding_id: 'f-a1', package: 'pkgA@1.0.0', outdated: false}],
+                    },
+                    {
+                        variant_id: 'var-2', active_packages: ['pkgB@2.0.0'],
+                        findings: [{finding_id: 'f-b2', package: 'pkgB@2.0.0', outdated: false}],
+                    },
+                ]));
+            }
+            if (url.includes('/assessment-groups')) {
+                return Promise.resolve(JSON.stringify([{
+                    group_id: 'assess-sparse', vuln_id: 'CVE-2010-1234',
+                    status: 'fixed', simplified_status: 'Fixed', justification: '',
+                    impact_statement: '', status_notes: '', workaround: '', responses: [],
+                    origin: 'custom', timestamp: '2025-06-01T00:00:00Z',
+                    targets, assessment_ids: ['assess-sparse'],
+                }]));
+            }
+            if (url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([sparseAssessment]));
+            }
+            if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'var-1', name: 'Production', project_id: 'proj1' },
+                    { id: 'var-2', name: 'Staging', project_id: 'proj1' },
+                ]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const sparseVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            packages_current: [],
+            assessments: [sparseAssessment as any],
+        };
+        render(<VulnModal vuln={sparseVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+
+        await screen.findByText('Assessment history');
+        await userEvent.setup().click(await screen.findByTitle('Edit assessment'));
+        const exactTargetSections = await screen.findAllByText('Apply to exact targets:');
+        const editSection = exactTargetSections
+            .map(element => element.closest('.rounded-lg') as HTMLElement | null)
+            .find(section => section && within(section).queryByRole<HTMLInputElement>(
+                'checkbox', {name: 'Production / pkgA@1.0.0'})?.checked);
+        expect(editSection).toBeDefined();
+
+        expect(within(editSection!).getByRole('checkbox', {name: 'Production / pkgA@1.0.0'})).toBeChecked();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Staging / pkgB@2.0.0'})).toBeChecked();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Production / pkgB@2.0.0'})).toBeDisabled();
+        expect(within(editSection!).getByRole('checkbox', {name: 'Staging / pkgA@1.0.0'})).toBeDisabled();
     });
 
     const pendingAiAssessment = {
@@ -2369,17 +2852,55 @@ describe('Vulnerability Modal', () => {
     test('renders pending AI review panel at all times, with approve and reject actions only in edit mode', async () => {
         renderWithPendingAiAssessment();
 
-        expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
+        const aiPanel = (await screen.findByText(/AI-generated/i)).closest('.mb-6');
+        expect(aiPanel).toBeInTheDocument();
         expect(screen.getByText(/Pending review/i)).toBeInTheDocument();
+        expect(aiPanel).toHaveTextContent('ai notes');
+        expect(aiPanel).toHaveTextContent('ai workaround');
         expect(screen.queryByRole('button', { name: /Approve/i })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
 
-    test('approving a pending AI review calls approveAi and removes the panel', async () => {
+    test('pending AI review omits empty status notes and workaround', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([{
+                    ...pendingAiAssessment,
+                    status_notes: '',
+                    workaround: '   ',
+                }]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{ ...vulnerability, assessments: [] }}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
+        expect(screen.getByText('ai impact statement')).toBeInTheDocument();
+        expect(screen.queryByText('ai notes')).not.toBeInTheDocument();
+        expect(screen.queryByText('ai workaround')).not.toBeInTheDocument();
+    });
+
+    test('approving a pending AI review calls approveAi with the assessment id', async () => {
         const patchVuln = jest.fn();
-        const approveSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
             { ...pendingAiAssessment, origin: 'custom' }
         ]);
+        // The panel's disappearance also depends on the post-approve refresh
+        // of the server-built listing; reflect the approval there too so the
+        // real (non-fallback) path is exercised, not just allVulnAssessments.
+        const listByVulnSpy = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment])
+            .mockResolvedValue([]);
 
         renderWithPendingAiAssessment({ patchVuln, isEditing: true });
         const user = userEvent.setup();
@@ -2388,18 +2909,22 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Approve/i }));
 
         await waitFor(() => {
-            expect(approveSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
+            expect(approveAiSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         });
         expect(patchVuln).toHaveBeenCalled();
 
-        approveSpy.mockRestore();
+        approveAiSpy.mockRestore();
+        listByVulnSpy.mockRestore();
     });
 
-    test('rejecting a pending AI review calls rejectAi and removes the panel', async () => {
-        const rejectSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
+    test('rejecting a pending AI review calls rejectAi with the assessment id', async () => {
+        const rejectAiSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
+        const listByVulnSpy = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment])
+            .mockResolvedValue([]);
 
         renderWithPendingAiAssessment({ isEditing: true });
         const user = userEvent.setup();
@@ -2408,13 +2933,14 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Reject/i }));
 
         await waitFor(() => {
-            expect(rejectSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
+            expect(rejectAiSpy).toHaveBeenCalledWith('assessment-ai-1');
         });
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         });
 
-        rejectSpy.mockRestore();
+        rejectAiSpy.mockRestore();
+        listByVulnSpy.mockRestore();
     });
 
     test('readOnly mode still shows the pending AI review panel but without approve/reject actions', async () => {
@@ -2425,22 +2951,213 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
 
+    test('approving a pending AI review fetched from the server calls approveAi with its id', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes('/variants')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'variant-1', name: 'Variant Alpha', project_id: 'proj-1' }
+                ]));
+            }
+            if (req.url.includes('/assessments') && req.url.includes(encodeURIComponent(vulnerability.id))) {
+                return Promise.resolve(JSON.stringify([{
+                    id: 'assessment-ai-1',
+                    vuln_id: 'CVE-2010-1234',
+                    status: pendingAiAssessment.status,
+                    simplified_status: pendingAiAssessment.simplified_status,
+                    justification: pendingAiAssessment.justification,
+                    impact_statement: pendingAiAssessment.impact_statement,
+                    status_notes: pendingAiAssessment.status_notes,
+                    workaround: pendingAiAssessment.workaround,
+                    responses: [],
+                    origin: 'ai',
+                    timestamp: pendingAiAssessment.timestamp,
+                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+                }]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
+            { ...pendingAiAssessment, origin: 'custom' }
+        ]);
+
+        render(
+            <VulnModal
+                vuln={{ ...vulnerability, assessments: [] }}
+                isEditing={true}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(screen.getByRole('button', { name: /Approve/i }));
+
+        await waitFor(() => {
+            expect(approveAiSpy).toHaveBeenCalledWith('assessment-ai-1');
+        });
+
+        approveAiSpy.mockRestore();
+    });
+
+    test('rejecting a pending AI review fetched from the server calls rejectAi with its id', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes('/variants')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'variant-1', name: 'Variant Alpha', project_id: 'proj-1' }
+                ]));
+            }
+            if (req.url.includes('/assessments') && req.url.includes(encodeURIComponent(vulnerability.id))) {
+                return Promise.resolve(JSON.stringify([{
+                    id: 'assessment-ai-1',
+                    vuln_id: 'CVE-2010-1234',
+                    status: pendingAiAssessment.status,
+                    simplified_status: pendingAiAssessment.simplified_status,
+                    justification: pendingAiAssessment.justification,
+                    impact_statement: pendingAiAssessment.impact_statement,
+                    status_notes: pendingAiAssessment.status_notes,
+                    workaround: pendingAiAssessment.workaround,
+                    responses: [],
+                    origin: 'ai',
+                    timestamp: pendingAiAssessment.timestamp,
+                    targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
+                }]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const rejectAiSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
+
+        render(
+            <VulnModal
+                vuln={{ ...vulnerability, assessments: [] }}
+                isEditing={true}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(screen.getByRole('button', { name: /Reject/i }));
+
+        await waitFor(() => {
+            expect(rejectAiSpy).toHaveBeenCalledWith('assessment-ai-1');
+        });
+
+        rejectAiSpy.mockRestore();
+    });
+
+    test('copy assessment id button copies the plain assessment id for a single-target history entry', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch (empty -> fallback)
+
+        const vulnWithAssessment = {
+            ...vulnerability,
+            assessments: [{
+                id: 'assessment-1',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'active',
+                justification: 'because 42',
+                impact_statement: 'may impact or not',
+                status_notes: 'this is a fictive status note',
+                workaround: 'update dependency',
+                timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
+                responses: []
+            }]
+        };
+
+        render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // user-event's setup() installs its own clipboard stub on
+        // navigator.clipboard (overwriting anything set beforehand), so the
+        // spy must be attached to that stub after setup() runs.
+        const user = userEvent.setup();
+        const writeText = jest.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+        const copyBtn = await screen.findByLabelText('Copy assessment id');
+        await user.click(copyBtn);
+
+        expect(writeText).toHaveBeenCalledWith('assessment-1');
+        // The clipboard itself gives no visible feedback, so the button must.
+        expect(await screen.findByText('Copied')).toBeInTheDocument();
+        writeText.mockRestore();
+    });
+
+    test('copy multi-target id button copies the plain assessment id when the assessment endpoint returns a multi-target assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            id: 'assessment-42',
+            vuln_id: 'CVE-2010-1234',
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            responses: [],
+            origin: 'custom',
+            timestamp: '2021-01-01T00:00:00Z',
+            // Two targets makes this a "multi-target" assessment in the
+            // user-facing sense; a single target is just an assessment.
+            targets: [
+                { variant_id: null, package: 'aaabbbccc@1.0.0', outdated: false },
+                { variant_id: null, package: 'dddeeefff@2.0.0', outdated: false },
+            ],
+        }])); // assessment rows mount fetch
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const writeText = jest.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+        const copyBtn = await screen.findByLabelText('Copy multi-target id');
+        await user.click(copyBtn);
+
+        expect(writeText).toHaveBeenCalledWith('assessment-42');
+
+        const rowItem = copyBtn.closest('li[data-assessment-id]');
+        expect(rowItem).toHaveAttribute('data-assessment-id', 'assessment-42');
+        writeText.mockRestore();
+    });
+
     test('adding assessment to multiple variants shows multi-variant success message', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Variants endpoint returns two variants
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
             { id: 'v2', name: 'Variant Beta', project_id: 'proj1' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
-        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-active-packages (single request for variantPackageMap)
-        // Single batch POST returns one record per (package, variant) pair
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {variant_id: 'v1', active_packages: ['aaabbbccc@1.0.0']},
+            {variant_id: 'v2', active_packages: ['aaabbbccc@1.0.0']},
+        ])); // variant-active-packages (single request for variantPackageMap)
+        // Single fused POST returns one row covering both variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessments: [
                 {
-                    id: 'new-assess-v1',
+                    id: 'new-assess-fused',
                     vuln_id: 'CVE-2010-1234',
                     packages: ['aaabbbccc@1.0.0'],
                     status: 'affected',
@@ -2452,24 +3169,26 @@ describe('Vulnerability Modal', () => {
                     timestamp: '2026-01-01T00:00:00Z',
                     origin: 'custom',
                     responses: [],
-                    variant_id: 'v1'
-                },
-                {
-                    id: 'new-assess-v2',
-                    vuln_id: 'CVE-2010-1234',
-                    packages: ['aaabbbccc@1.0.0'],
-                    status: 'affected',
-                    simplified_status: 'Exploitable',
-                    justification: '',
-                    impact_statement: '',
-                    status_notes: 'multi test',
-                    workaround: '',
-                    timestamp: '2026-01-01T00:00:00Z',
-                    origin: 'custom',
-                    responses: [],
-                    variant_id: 'v2'
+                    variant_id: null,
+                    variant_ids: ['v1', 'v2'],
                 }
-            ]
+            ],
+            assessment: {
+                id: 'new-assess-fused',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: '',
+                impact_statement: '',
+                status_notes: 'multi test',
+                workaround: '',
+                timestamp: '2026-01-01T00:00:00Z',
+                origin: 'custom',
+                responses: [],
+                variant_id: null,
+                variant_ids: ['v1', 'v2'],
+            }
         }));
 
         const appendCb = jest.fn();
@@ -2479,14 +3198,13 @@ describe('Vulnerability Modal', () => {
 
         // Wait for variants to load, then select both
         expect((await screen.findAllByText('Variant Alpha')).length).toBeGreaterThan(0);
-        const variantCheckboxes = screen.getAllByRole('checkbox');
-        // Select both variants
-        for (const cb of variantCheckboxes) {
-            const label = cb.closest('label');
-            if (label?.textContent?.includes('Variant Alpha') || label?.textContent?.includes('Variant Beta')) {
-                await user.click(cb);
-            }
-        }
+        await screen.findByText('Apply to exact targets:');
+        await user.click(screen.getByRole('checkbox', {
+            name: 'Variant Alpha / aaabbbccc@1.0.0',
+        }));
+        await user.click(screen.getByRole('checkbox', {
+            name: 'Variant Beta / aaabbbccc@1.0.0',
+        }));
 
         const selectSource = screen.getAllByRole('combobox').find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
         await user.selectOptions(selectSource, 'affected');
@@ -2498,12 +3216,13 @@ describe('Vulnerability Modal', () => {
         // Should show multi-variant success message
         const successMsg = await screen.findByText(/successfully added assessment to 1 package across 2 variants/i);
         expect(successMsg).toBeInTheDocument();
-        expect(appendCb).toHaveBeenCalledTimes(2);
+        expect(appendCb).toHaveBeenCalledTimes(1);
         expect(patchCb).toHaveBeenCalledTimes(1);
     });
 
     test('renders variant tags on assessments when variants are available', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Return variants for this vuln
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' },
@@ -2568,15 +3287,17 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
 
         const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
+        // The variant name shows up on each row's package badge row.
         await waitFor(() => {
-            expect(within(history).getByText(/Production/)).toBeInTheDocument();
-            expect(within(history).getByText(/Staging/)).toBeInTheDocument();
+            expect(within(history).getAllByText(/Production/).length).toBeGreaterThan(0);
+            expect(within(history).getAllByText(/Staging/).length).toBeGreaterThan(0);
         });
         expect(fetchMock.mock.calls.some(([url]) => String(url).includes('assessments?project_id=proj1'))).toBe(true);
     });
 
     test('recap shows the latest status for each variant', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' },
             { id: 'var-2', name: 'Staging', project_id: 'proj1' }
@@ -2625,6 +3346,7 @@ describe('Vulnerability Modal', () => {
 
     test('recap shows "No status" for affected variants without an assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' },
             { id: 'var-2', name: 'Staging', project_id: 'proj1' }
@@ -2660,6 +3382,7 @@ describe('Vulnerability Modal', () => {
 
     test('projectId prop filters variants to only show those from the current project', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Variants endpoint returns variants from two different projects
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'v1', name: 'Variant A', project_id: 'proj-alpha' },
@@ -2667,6 +3390,7 @@ describe('Vulnerability Modal', () => {
             { id: 'v3', name: 'Variant Other', project_id: 'proj-beta' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         render(<VulnModal
             vuln={{...vulnerability, assessments: []}}
@@ -2687,12 +3411,14 @@ describe('Vulnerability Modal', () => {
 
     test('without projectId prop all variants are shown', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Variants endpoint returns variants from two different projects
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'v1', name: 'Variant A', project_id: 'proj-alpha' },
             { id: 'v2', name: 'Variant Other', project_id: 'proj-beta' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         render(<VulnModal
             vuln={{...vulnerability, assessments: []}}
@@ -2710,8 +3436,10 @@ describe('Vulnerability Modal', () => {
 
     test('packages_current scopes available packages to current project', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         // vuln.packages has all packages (cross-project), packages_current has only project-scoped
         const vulnMultiProject = {
@@ -2739,8 +3467,10 @@ describe('Vulnerability Modal', () => {
 
     test('falls back to all packages when packages_current is empty', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
 
         const vulnEmptyCurrent = {
             ...vulnerability,
@@ -2823,8 +3553,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('calls patchVuln with updated vulnerability on successful refresh', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -2856,8 +3588,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -2883,8 +3617,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows "Updated" success cue after a successful refresh', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -2900,8 +3636,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows error message when NVD and EPSS refresh APIs are unavailable', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
         fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
 
@@ -2917,8 +3655,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows rate-limit hint with NVD_API_KEY suggestion when server returns 429 and no key', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(
             JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
             { status: 429 }
@@ -2937,8 +3677,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows exhausted-key hint when 429 and api key is already configured', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(
             JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: true }),
             { status: 429 }
@@ -2957,8 +3699,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('single refresh always sends mode "api" to the nvd-refresh endpoint', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -2982,8 +3726,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows API-key-rejected message when NVD returns unauthorized', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(
             JSON.stringify({ error: 'unauthorized', error_code: 'unauthorized' }),
             { status: 401 }
@@ -3002,8 +3748,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows API-unavailable hint when NVD is unavailable', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
@@ -3031,7 +3779,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         expect(screen.queryByText(/NVD.*unavailable/i)).not.toBeInTheDocument();
     });
 
-    test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
+    test('builds variantPackageMap and disables incompatible exact target pairs', async () => {
         fetchMock.resetMocks();
         // Route fetches by URL so the single variant-active-packages lookup
         // resolves regardless of effect ordering.
@@ -3063,38 +3811,15 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
-        const user = userEvent.setup();
 
-        // Wait for the variants to render inside the StatusEditor.
-        await screen.findByText('Apply to variants:');
-
-        // Scope checkbox lookups to the StatusEditor sections so we do not match
-        // the TimeEstimateEditor / CVSS target-variant selectors that reuse the
-        // same variant names.
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
-
-        // Both packages are reachable before any variant is selected.
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
-        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
-
-        // Select Variant Alpha, which only contains pkgA.
-        await user.click(variantCheckbox('Variant Alpha'));
-
-        // pkgB is absent from Variant Alpha → its checkbox becomes disabled.
-        await waitFor(() => {
-            expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(true);
-        });
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
+        await screen.findByText('Apply to exact targets:');
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgA@1.0.0'})).not.toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgB@1.0.0'})).not.toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgB@1.0.0'})).toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgA@1.0.0'})).toBeDisabled();
     });
 
-    test('omits variantPackageMap so all packages stay enabled when package lookups fail', async () => {
+    test('keeps exact target mode blocked when package compatibility lookup fails', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             const url = req.url;
@@ -3119,25 +3844,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
-        const user = userEvent.setup();
-
-        await screen.findByText('Apply to variants:');
-
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
-
-        // With an empty map (all lookups failed), no incompatibility filtering
-        // applies: selecting a variant leaves every package enabled.
-        await user.click(variantCheckbox('Variant Alpha'));
-
-        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
-        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
+        expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load target compatibility. Try again.');
+        expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to packages:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to exact targets:')).not.toBeInTheDocument();
     });
 
     test('navigating between vulns fetches each variant endpoint once per vuln', async () => {
@@ -3255,8 +3965,10 @@ describe('Refresh button', () => {
 
     test('NVD + EPSS refresh success calls patchVuln and shows Updated badge', async () => {
         // Mount fetches
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // NVD refresh
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: true, status: 200,
@@ -3284,8 +3996,10 @@ describe('Refresh button', () => {
     });
 
     test('NVD rate-limited shows error message', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // NVD refresh → rate limited
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: false, status: 429,
@@ -3309,8 +4023,10 @@ describe('Refresh button', () => {
     });
 
     test('NVD + EPSS both unavailable shows combined error', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // NVD refresh → 503
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: false, status: 503,
@@ -3341,8 +4057,10 @@ describe('Refresh button', () => {
             namespace: 'github:advisory',
         };
 
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // GHSA refresh
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: true, status: 200,
@@ -3373,8 +4091,10 @@ describe('Refresh button', () => {
             namespace: 'github:advisory',
         };
 
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
         // GHSA refresh → not ok → returns null → triggers error
         fetchMock.mockImplementationOnce(() => Promise.resolve({
             ok: false, status: 503,
@@ -3391,5 +4111,214 @@ describe('Refresh button', () => {
             expect(screen.getByText(/GitHub Advisory Database refresh failed/i)).toBeInTheDocument();
         });
         expect(patchVuln).not.toHaveBeenCalled();
+    });
+});
+
+describe("VulnModal AI review block", () => {
+    const baseVulnerability: Vulnerability = {
+        id: 'CVE-2020-0001',
+        aliases: [],
+        related_vulnerabilities: [],
+        namespace: 'nvd:cve',
+        found_by: ['hardcoded'],
+        datasource: '',
+        packages: ['pkgA@1.0.0'],
+        packages_current: [],
+        urls: [],
+        texts: [],
+        severity: {
+            severity: 'low',
+            min_score: 3,
+            max_score: 3,
+            cvss: []
+        },
+        epss: {
+            score: undefined,
+            percentile: undefined
+        },
+        effort: {
+            optimistic: new Iso8601Duration('PT4H'),
+            likely: new Iso8601Duration('P1DT2H'),
+            pessimistic: new Iso8601Duration('P1W2D')
+        },
+        fix: {
+            state: 'unknown'
+        },
+        simplified_status: 'active',
+        variants: [],
+        assessments: []
+    };
+
+    let currentReviews: Record<string, AssessmentReview[]> = {};
+
+    // Sets the review payload the next render will receive from the
+    // vulnerability-filtered /api/assessment-reviews route.
+    const mockReviews = (data: Record<string, AssessmentReview[]>) => {
+        currentReviews = data;
+    };
+
+    // Renders VulnModal with a single assessment, wiring the file's fetch-mock
+    // conventions (per-URL responses) so the reviews loader and assessment
+    // history both resolve deterministically.
+    const renderModalWithAssessment = async (overrides: Partial<Assessment> & { id: string; origin: string }) => {
+        const assessment: Assessment = {
+            vuln_id: baseVulnerability.id,
+            packages: ['pkgA@1.0.0'],
+            status: 'affected',
+            simplified_status: 'active',
+            justification: '',
+            impact_statement: '',
+            status_notes: '',
+            workaround: '',
+            timestamp: '2026-08-06T09:00:00Z',
+            responses: [],
+            targets: [{ variant_id: null, package: 'pkgA@1.0.0' }],
+            ...overrides,
+        };
+
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes('/api/assessment-reviews')) {
+                return Promise.resolve(JSON.stringify(currentReviews));
+            }
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(baseVulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([assessment]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{ ...baseVulnerability, assessments: [assessment] }}
+                isEditing={true}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        await screen.findByText(baseVulnerability.id);
+    };
+
+    const review = {
+        id: "r1",
+        assessment_id: "assess-1",
+        variant_id: "v1",
+        package: "pkgA@1.0.0",
+        status: "affected",
+        status_notes: "reachable from the network. confidence level: high",
+        justification: "",
+        impact_statement: "",
+        workaround: "",
+        responses: [],
+        rationale: "openssl 3.0.8 ships in the rootfs",
+        timestamp: "2026-08-06T10:00:00Z",
+        verdict: "differs" as const,
+        is_stale: false,
+    };
+
+    test("renders the review beneath its assessment with the differs verdict", async () => {
+        // Arrange
+        mockReviews({ "assess-1": [review] });
+
+        // Act
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        // Assert
+        expect(await screen.findByText(/AI review/i)).toBeInTheDocument();
+        expect(screen.getByText(/differs/i)).toBeInTheDocument();
+        expect(screen.getByText(/openssl 3.0.8 ships in the rootfs/)).toBeInTheDocument();
+    });
+
+    test("requests reviews only for the displayed vulnerability", async () => {
+        mockReviews({ "assess-1": [review] });
+
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        const reviewRequest = fetchMock.mock.calls.find(([request]) =>
+            String(request).includes("/api/assessment-reviews")
+        );
+        expect(reviewRequest).toBeDefined();
+        const url = new URL(String(reviewRequest![0]));
+        expect(url.searchParams.get("vulnerability_id")).toBe(baseVulnerability.id);
+    });
+
+    test("renders proposed response tags in the review card", async () => {
+        mockReviews({
+            "assess-1": [{...review, responses: ["update", "will_not_fix"]}],
+        });
+
+        await renderModalWithAssessment({id: "assess-1", origin: "custom"});
+
+        expect(await screen.findByText(/responses: update, will_not_fix/i)).toBeInTheDocument();
+    });
+
+    test("labels the sole reviewed target of a multi-target assessment", async () => {
+        mockReviews({"assess-1": [review]});
+
+        await renderModalWithAssessment({
+            id: "assess-1",
+            origin: "custom",
+            packages: ["pkgA@1.0.0", "zlib@1.2.13"],
+            targets: [
+                {variant_id: "v1", package: "pkgA@1.0.0"},
+                {variant_id: "v2", package: "zlib@1.2.13"},
+            ],
+        });
+
+        expect(await screen.findByText(/pkgA@1\.0\.0 @ v1/)).toBeInTheDocument();
+    });
+
+    test("shows the stale banner when the assessment changed after the review", async () => {
+        mockReviews({ "assess-1": [{ ...review, is_stale: true }] });
+
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        expect(await screen.findByText(/edited after this review/i)).toBeInTheDocument();
+    });
+
+    test("renders no review block for an assessment without one", async () => {
+        mockReviews({});
+
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument();
+    });
+
+    test("discarding a review removes the block", async () => {        // Arrange
+        mockReviews({ "assess-1": [review] });
+        const removeSpy = jest.spyOn(AssessmentReviews, "remove").mockResolvedValue(undefined);
+
+        // Act
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+        await userEvent.click(await screen.findByRole("button", { name: /discard review/i }));
+        await userEvent.click(await screen.findByRole("button", { name: /confirm/i }));
+
+        // Assert
+        expect(removeSpy).toHaveBeenCalledWith("assess-1", review.variant_id, review.package);
+        await waitFor(() => expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument());
+
+        removeSpy.mockRestore();
+    });
+
+    test("renders one block per target when an assessment has several reviews", async () => {
+        // Arrange
+        const otherReview = {
+            ...review,
+            id: "r2",
+            variant_id: "v2",
+            package: "zlib@1.2.13",
+            status: "fixed",
+            rationale: "zlib 1.2.13 patches it",
+        };
+        mockReviews({ "assess-1": [review, otherReview] });
+
+        // Act
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        // Assert
+        expect(await screen.findByText(/openssl 3.0.8 ships in the rootfs/)).toBeInTheDocument();
+        expect(screen.getByText(/zlib 1.2.13 patches it/)).toBeInTheDocument();
     });
 });

@@ -19,7 +19,7 @@ from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
-from ..helpers.verbose import verbose
+from ..helpers.verbose import verbose, warn
 from ..helpers.env_vars import get_bool_env
 from ..extensions import batch_session, db as _db
 import click
@@ -28,7 +28,7 @@ import os
 from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
-from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
+from ._common import DEFAULT_VARIANT_NAME, resolve_project, resolve_project_variant
 from ..controllers.projects import ProjectController
 from ..helpers.export_scope import compute_export_scope
 
@@ -146,6 +146,7 @@ def evaluate_condition(
             "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
             "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,
             "effort_max": False if vuln.effort["pessimistic"] is None else vuln.effort["pessimistic"].total_seconds,
+            "known_exploitable": bool(vuln.euvd_known_exploited),
             "fixed": False,
             "ignored": False,
             "affected": False,
@@ -326,12 +327,22 @@ def create_project_context(
 @click.option(
     "--refresh-vulnerability-data",
     is_flag=True,
-    help="Refresh EPSS, NVD, EUVD, and GHSA data for imported vulnerabilities.",
+    help="Refresh stored EPSS, NVD, EUVD, and GHSA data.",
 )
+@click.option("--project", "project_name", default=None, help="Evaluate conditions in this project.")
+@click.option("--variant", "variant_name", default=None, help="Evaluate conditions in this project variant.")
 @with_appcontext
-def process_command(refresh_vulnerability_data: bool) -> None:
+def process_command(
+    refresh_vulnerability_data: bool,
+    project_name: str | None,
+    variant_name: str | None,
+) -> None:
     """Parse all SBOM inputs, persist results to the DB and generate output files."""
-    _run_main(refresh_vulnerability_data=refresh_vulnerability_data)
+    _run_main(
+        refresh_vulnerability_data=refresh_vulnerability_data,
+        project_name=project_name,
+        variant_name=variant_name,
+    )
 
 
 @click.command("refresh-vulnerability-data")
@@ -433,7 +444,35 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
         print(f"Warning: could not populate observations table: {e}")
 
 
-def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
+def _condition_scope(project_name: str | None, variant_name: str | None):
+    project = project_name or "default"
+    if project_name is not None and variant_name is None:
+        project_obj = resolve_project(project)
+        return compute_export_scope(project_id=project_obj.id)
+
+    _, variant_obj = resolve_project_variant(project, variant_name)
+    return compute_export_scope(variant_id=variant_obj.id)
+
+
+def _evaluate_condition_in_scope(scope, condition: str) -> list[str]:
+    matched_vulns: list[str] = []
+    for variant_id in sorted(scope.variant_ids, key=str):
+        variant_controllers = ControllersCache(
+            scope=compute_export_scope(variant_id=variant_id)
+        )
+        matched_vulns.extend(evaluate_condition(
+            variant_controllers.vulnerabilities,
+            variant_controllers.assessments,
+            condition,
+        ))
+    return list(dict.fromkeys(matched_vulns))
+
+
+def _run_main(
+    refresh_vulnerability_data: bool = False,
+    project_name: str | None = None,
+    variant_name: str | None = None,
+) -> ControllersCache:
     """Core processing logic (usable both from the CLI command and directly)."""
     controllers = ControllersCache()
     vulnCtrl: VulnerabilitiesController = controllers.vulnerabilities
@@ -442,6 +481,15 @@ def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
     if latest_scan:
         assessCtrl.current_variant_id = latest_scan.variant_id
         vulnCtrl.current_variant_id = latest_scan.variant_id
+    else:
+        # Assessments are stored against (variant, finding) targets, and the
+        # variant comes from the scan being ingested. Without one, every
+        # parsed assessment is dropped -- warn once here rather than leaving
+        # the user to infer it from the per-assessment messages.
+        warn(
+            "merger_ci: no scan found, so there is no variant to attach"
+            " assessments to -- parsed assessments will not be stored"
+        )
 
     # Wrap all ingestion + post-treatment inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a
@@ -458,12 +506,14 @@ def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
     # ← single COMMIT happens here
     verbose("merger_ci: DB commit done")
 
+    match_condition = os.getenv("MATCH_CONDITION", "")
+
     # In interactive (serve) mode the webapp background thread handles all
     # enrichment after the loading screen clears.  Running it here too would
     # block the shell from writing the __END_OF_SCAN_SCRIPT__ marker, keeping
     # the frontend stuck at Step 1.
-    # In batch / CI mode (INTERACTIVE_MODE != "true") we run it here so that
-    # EPSS scores are available for --match-condition evaluation.
+    # Match-condition evaluates stored data; refreshing it requires the
+    # explicit --refresh-vulnerability-data option.
     interactive_mode = get_bool_env("INTERACTIVE_MODE", False)
     observations_populated = False
     if refresh_vulnerability_data:
@@ -482,6 +532,8 @@ def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
                 f"{', '.join(unique_failed)} vulnerability-data refresh failed."
             )
         click.echo("Vulnerability data refresh complete.")
+    elif match_condition:
+        verbose("merger_ci: Skipping automatic EPSS enrichment for match-condition")
     elif not interactive_mode:
         verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
         post_treatment(controllers)
@@ -489,11 +541,13 @@ def _run_main(refresh_vulnerability_data: bool = False) -> ControllersCache:
     else:
         verbose("merger_ci: Skipping CLI enrichment in interactive mode (webapp background thread will handle it)")
 
-    match_condition = os.getenv("MATCH_CONDITION", "")
     failed_vulns = []
     if match_condition:
         verbose("merger_ci: Start evaluating conditions")
-        failed_vulns = evaluate_condition(controllers.vulnerabilities, controllers.assessments, match_condition)
+        failed_vulns = _evaluate_condition_in_scope(
+            _condition_scope(project_name, variant_name),
+            match_condition,
+        )
         verbose("merger_ci: Finished evaluating conditions")
         # Cache result so flask report can reuse it without re-evaluating
         try:

@@ -23,7 +23,7 @@ run_scan() {
 
     export MATCH_CONDITION="$condition"
     local rc=0
-    flask --app src.bin.webapp process || rc=$?
+    flask --app src.bin.webapp process --project ci || rc=$?
 
     unset MATCH_CONDITION FLASK_SQLALCHEMY_DATABASE_URI IGNORE_PARSING_ERRORS
     rm -rf "$tmp_db"

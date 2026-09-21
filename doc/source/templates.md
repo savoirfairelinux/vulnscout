@@ -47,7 +47,7 @@ All templates can also be run on-demand from the web interface using the export 
 | `unfiltered_assessments` | dict | All assessments, bypassing any active export filter. Keyed by assessment ID. |
 | `failed_vulns` | list[string] | List of vulnerability IDs that triggered the `--match-condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
 | `projects` | dict | All projects, keyed by UUID. Use `projects \| as_list` to get a list. Each value has the fields described in the Project Object section below. |
-| `variants` | dict | All variants, keyed by UUID. Use `variants \| as_list` to get a list. Each value has the fields described in the Variant Object section below. |
+| `variants` | dict | All in-scope variants, keyed by UUID. A variant-scoped report contains only its selected variant. Use `variants \| as_list` to get a list. Each value has the fields described in the Variant Object section below. |
 | `scans` | dict | All scans, keyed by UUID. Use `scans \| as_list` to get a list. Each value has the fields described in the Scan Object section below. |
 | `sbom_documents` | dict | All SBOM documents, keyed by UUID. Use `sbom_documents \| as_list` to get a list. Each value has the fields described in the SBOM Document Object section below. |
 

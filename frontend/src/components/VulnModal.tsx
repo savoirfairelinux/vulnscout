@@ -1,8 +1,8 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
-import type { Assessment } from "../handlers/assessments";
-import Assessments, { asAssessment } from "../handlers/assessments";
+import type { Assessment, AssessmentTargetPair } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -14,10 +14,13 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
+import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
+import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
+import HelpPopover from "./HelpPopover";
 import Variants from '../handlers/variant';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
@@ -27,6 +30,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
+import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
 type Props = {
     vuln: Vulnerability;
@@ -44,6 +48,11 @@ type Props = {
     variantId?: string;
     projectId?: string;
 };
+
+// How long the inline "Copied" confirmation stays next to a copy button.
+const COPIED_FEEDBACK_MS = 2000;
+
+const hasAssessmentText = (value: string | null | undefined): boolean => Boolean(value?.trim());
 
 const dt_options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
@@ -106,13 +115,6 @@ const originBadgeClass = (origin: string): string => {
 
 
 
-type AssessmentGroup = {
-    key: string;
-    assessments: Assessment[];
-    timestamp: string;
-    packages: string[];
-};
-
 type StatusSortKey = 'variant' | 'package' | 'status' | 'justification' | 'impact' | 'notes' | 'workaround';
 
 type VariantFinding = {
@@ -145,13 +147,14 @@ type VariantScopedSnapshot = {
     const [pendingNavigation, setPendingNavigation] = useState<number | null>(null);
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
+    const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showCpeHint, setShowCpeHint] = useState(false);
     const [showCpeList, setShowCpeList] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [variantsLoadedForVulnId, setVariantsLoadedForVulnId] = useState<string | null>(null);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
+    const [assessmentRows, setAssessmentRows] = useState<Assessment[]>([]);
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
     const [variantPackageMap, setVariantPackageMap] = useState<Record<string, string[]>>({});
@@ -159,10 +162,21 @@ type VariantScopedSnapshot = {
     // True once the active-SBOM package list has been fetched for every variant,
     // so deprecated packages can reliably be split into their own table.
     const [variantPackageMapLoaded, setVariantPackageMapLoaded] = useState(false);
+    const [variantPackageMapError, setVariantPackageMapError] = useState<string | null>(null);
     const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
-    const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
+    const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
+    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
+    // Whether editingAssessment came from the server's assessment listing (whose
+    // targets are real AssessmentTarget rows, always variant-scoped) rather
+    // than the client-side fallback used before that response lands (whose
+    // targets are synthesized and may have no variant at all). Reconcile only
+    // applies to a real variant scope; an assessment with none must still go
+    // through the legacy per-row PUT below.
+    const [editingAssessmentIsServerConfirmed, setEditingAssessmentIsServerConfirmed] = useState(false);
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
+    const [reviewToDiscard, setReviewToDiscard] = useState<AssessmentReview | null>(null);
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
@@ -180,6 +194,25 @@ type VariantScopedSnapshot = {
         }
         return () => document.removeEventListener('mousedown', closeCpeHint);
     }, [showCpeHint]);
+
+    // Reviews are keyed by assessment ID and rendered beneath their assessment.
+    // Re-run after any assessment mutation, not just on scope change: a
+    // review's `is_stale` flag is derived server-side from the assessment's
+    // current content, so an edit/delete/approve leaves the previously
+    // fetched review stale-flag stale (pun intended) until this refetches.
+    const refreshReviews = useCallback(() => {
+        AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
+            .then(data => setReviews(data))
+            .catch(() => setReviews({}));
+    }, [variantId, projectId, vuln.id]);
+
+    useEffect(() => {
+        let cancelled = false;
+        AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
+            .then(data => { if (!cancelled) setReviews(data); })
+            .catch(() => { if (!cancelled) setReviews({}); });
+        return () => { cancelled = true; };
+    }, [variantId, projectId, vuln.id]);
 
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
@@ -221,6 +254,59 @@ type VariantScopedSnapshot = {
         return () => controller.abort();
     }, [vuln, projectId]);
 
+    // Re-fetch the full assessment list after an assessment mutation (reconcile,
+    // approve/reject, delete) so vuln.assessments/allVulnAssessments — and
+    // therefore the status table above the history — reflect the write.
+    // vuln.assessments is rebuilt from the returned list rather than patched
+    // by id, because a reconcile can create and delete rows: a merge by id
+    // would keep deleted records and miss the new ones. Returns the list
+    // scoped the way the modal is scoped, which is what callers must use to
+    // recompute the vulnerability status summary.
+    const refreshAllVulnAssessments = useCallback(async (): Promise<Assessment[] | null> => {
+        const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        try {
+            const r = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments${projectQuery}`, { mode: 'cors' });
+            const data = await r.json();
+            if (Array.isArray(data)) {
+                const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
+                const scopedAssessments = variantId
+                    ? fullAssessments.filter(a => appliesToVariant(a, variantId))
+                    : fullAssessments;
+                vuln.assessments = scopedAssessments;
+                setAllVulnAssessments(fullAssessments);
+                return scopedAssessments;
+            }
+        } catch {
+            // Keep whatever was previously loaded.
+        }
+        return null;
+    }, [vuln, projectId, variantId]);
+
+    // Fetch server-built assessment rows for this vulnerability (Task 8/11),
+    // replacing the old client-side grouping heuristic. When this request is
+    // still pending, empty, or fails, the render below falls back to building
+    // rows from allVulnAssessments/vuln.assessments locally so history still renders.
+    const refreshAssessmentRows = useCallback(async () => {
+        try {
+            const rows = await Assessments.listByVuln(vuln.id, projectId);
+            setAssessmentRows(Array.isArray(rows) ? rows : []);
+        } catch {
+            // Keep whatever was previously loaded; the render's fallback path
+            // covers the case where nothing ever loaded successfully.
+        }
+    }, [vuln.id, projectId]);
+
+    useEffect(() => {
+        const controller = new AbortController();
+        setAssessmentRows([]);
+        Assessments.listByVuln(vuln.id, projectId)
+            .then(rows => {
+                if (!controller.signal.aborted) setAssessmentRows(Array.isArray(rows) ? rows : []);
+            })
+            .catch(() => {});
+        return () => controller.abort();
+    }, [vuln.id, projectId]);
+
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
     useEffect(() => {
         if (variantId || availableVariants.length === 0) {
@@ -232,6 +318,11 @@ type VariantScopedSnapshot = {
 
     const variantIdsKey = useMemo(
         () => availableVariants.map(v => v.id).sort().join(','),
+        [availableVariants]
+    );
+
+    const variantNameById = useMemo(
+        () => new Map(availableVariants.map(v => [v.id, v.name])),
         [availableVariants]
     );
 
@@ -247,8 +338,6 @@ type VariantScopedSnapshot = {
         if (variantsLoadedForVulnId !== vuln.id) {
             return;
         }
-
-        const variantNameById = new Map(availableVariants.map(v => [v.id, v.name]));
 
         (async () => {
             try {
@@ -318,6 +407,8 @@ type VariantScopedSnapshot = {
         const controller = new AbortController();
         const signal = controller.signal;
         setVariantPackageMapLoaded(false);
+        setVariantPackageMapError(null);
+        setVariantPackageMap({});
         setVariantFindingsMap({});
         if (availableVariants.length === 0) {
             // Only mark as loaded once we know variants have been resolved.
@@ -344,35 +435,37 @@ type VariantScopedSnapshot = {
                     url.searchParams.set('project_id', projectId);
                 }
                 const response = await fetch(url.toString(), { mode: 'cors', signal });
-                const data = response.ok ? await response.json() : [];
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (!Array.isArray(data)) throw new Error("Invalid compatibility response");
                 const map: Record<string, string[]> = {};
                 const findingsMap: Record<string, VariantFinding[]> = {};
-                if (Array.isArray(data)) {
-                    for (const entry of data) {
-                        if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
-                            map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
-                            if (Array.isArray(entry.findings)) {
-                                findingsMap[entry.variant_id] = entry.findings.flatMap((finding: any): VariantFinding[] => {
-                                    if (typeof finding?.finding_id !== 'string' || typeof finding?.package !== 'string') return [];
-                                    return [{
-                                        findingId: finding.finding_id,
-                                        pkg: finding.package,
-                                        outdated: finding.outdated === true,
-                                    }];
-                                });
-                            }
+                for (const entry of data) {
+                    if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
+                        map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
+                        if (Array.isArray(entry.findings)) {
+                            findingsMap[entry.variant_id] = entry.findings.flatMap((finding: any): VariantFinding[] => {
+                                if (typeof finding?.finding_id !== 'string' || typeof finding?.package !== 'string') return [];
+                                return [{
+                                    findingId: finding.finding_id,
+                                    pkg: finding.package,
+                                    outdated: finding.outdated === true,
+                                }];
+                            });
                         }
                     }
                 }
                 if (!signal.aborted) {
                     setVariantPackageMap(map);
                     setVariantFindingsMap(findingsMap);
+                    setVariantPackageMapError(null);
                     setVariantPackageMapLoaded(true);
                 }
             } catch {
                 if (!signal.aborted) {
                     setVariantPackageMap({});
                     setVariantFindingsMap({});
+                    setVariantPackageMapError("Unable to load target compatibility. Try again.");
                     setVariantPackageMapLoaded(true);
                 }
             }
@@ -394,27 +487,11 @@ type VariantScopedSnapshot = {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
+    // Identifies which copy button was last used, so only that one confirms.
+    const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
 
+    const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const modalRef = useRef<HTMLDivElement>(null);
-    const shortcutButtonRef = useRef<HTMLButtonElement>(null);
-    const dropdownRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (dropdownRef.current && shortcutButtonRef.current &&
-                !dropdownRef.current.contains(event.target as Node) &&
-                !shortcutButtonRef.current.contains(event.target as Node)) {
-                setShowShortcutHelper(false);
-            }
-        };
-
-        if (showShortcutHelper) {
-            document.addEventListener('mousedown', handleClickOutside);
-        }
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [showShortcutHelper]);
 
     useEffect(() => {
         // force focus the modal content when the modal opens such that keyboard users can interact with it immediately
@@ -569,26 +646,63 @@ type VariantScopedSnapshot = {
         }
     }, [vuln, patchVuln]);
 
-    const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
+    const copyRowId = async (row: Assessment) => {
+        try {
+            await navigator.clipboard.writeText(row.id);
+            // Confirm the copy inline: the clipboard gives no visible feedback of
+            // its own, so without this the button looks inert.
+            setCopiedRowId(row.id);
+            if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+            copiedResetTimer.current = setTimeout(() => setCopiedRowId(null), COPIED_FEEDBACK_MS);
+        } catch {
+            // Clipboard access can be denied by the browser; nothing more to do.
+        }
+    };
+
+    // Drop the pending reset if the modal closes while the confirmation shows.
+    useEffect(() => () => {
+        if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+    }, []);
+
+    const handleEditAssessment = (assessmentId: string, row: Assessment, isServerConfirmed: boolean) => {
         setEditingAssessmentId(assessmentId);
-        setEditingGroup(group);
+        setEditingAssessment(row);
+        setEditingAssessmentIsServerConfirmed(isServerConfirmed);
     };
 
     const handleCancelEdit = () => {
         setEditingAssessmentId(null);
-        setEditingGroup(null);
+        setEditingAssessment(null);
+        setEditingAssessmentIsServerConfirmed(false);
     };
 
-    const handleDeleteAssessment = (group: AssessmentGroup) => {
-        setGroupToDelete(group);
+    const handleDeleteAssessment = (row: Assessment) => {
+        setAssessmentToDelete(row);
         setShowDeleteConfirm(true);
     };
 
-    const handleApproveAiAssessment = async (group: AssessmentGroup) => {
-        const firstId = group.assessments[0].id;
+    const handleDiscardReview = async (review: AssessmentReview) => {
         try {
-            const approved = await Assessments.approveAi(firstId, group.assessments.map(a => a.id));
-            const approvedIds = new Set(group.assessments.map(a => a.id));
+            await AssessmentReviews.remove(review.assessment_id, review.variant_id, review.package);
+            setReviews(prev => {
+                const next = { ...prev };
+                const remaining = (next[review.assessment_id] ?? []).filter(r => r.id !== review.id);
+                if (remaining.length > 0) next[review.assessment_id] = remaining;
+                else delete next[review.assessment_id];
+                return next;
+            });
+            showMessage("Review discarded.", "success");
+        } catch (e) {
+            showMessage(`Failed to discard review: ${escape(String(e))}`, "error");
+        } finally {
+            setReviewToDiscard(null);
+        }
+    };
+
+    const handleApproveAiAssessment = async (row: Assessment) => {
+        try {
+            const approved = await Assessments.approveAi(row.id);
+            const approvedIds = new Set([row.id]);
             const approvedById = new Map(approved.map(a => [a.id, a]));
 
             setAllVulnAssessments(prev => prev.map(a => {
@@ -610,18 +724,20 @@ type VariantScopedSnapshot = {
             if (latest.length > 0) vuln.simplified_status = latest[0].simplified_status;
 
             patchVuln(vuln.id, vuln);
+            refreshAssessmentRows();
+            refreshReviews();
             showMessage("AI assessment approved!", "success");
         } catch (e) {
             showMessage(`Failed to approve AI assessment: ${escape(String(e))}`, "error");
         }
     };
 
-    const handleRejectAiAssessment = async (group: AssessmentGroup) => {
-        const firstId = group.assessments[0].id;
+    const handleRejectAiAssessment = async (row: Assessment) => {
         try {
-            await Assessments.rejectAi(firstId, group.assessments.map(a => a.id));
-            const rejectedIds = new Set(group.assessments.map(a => a.id));
-            setAllVulnAssessments(prev => prev.filter(a => !rejectedIds.has(a.id)));
+            await Assessments.rejectAi(row.id);
+            setAllVulnAssessments(prev => prev.filter(a => a.id !== row.id));
+            refreshAssessmentRows();
+            refreshReviews();
             showMessage("AI assessment rejected.", "success");
         } catch (e) {
             showMessage(`Failed to reject AI assessment: ${escape(String(e))}`, "error");
@@ -629,37 +745,22 @@ type VariantScopedSnapshot = {
     };
 
     const handleConfirmDelete = async () => {
-        if (groupToDelete) {
-            const idsToDelete = groupToDelete.assessments.map(a => a.id);
+        if (assessmentToDelete) {
             let anyError = false;
 
-            for (const id of idsToDelete) {
-                try {
-                    const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`, {
-                        method: 'DELETE',
-                        mode: 'cors',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        }
-                    });
-
-                    if (response.ok) {
-                        vuln.assessments = vuln.assessments.filter(a => a.id !== id);
-                        setAllVulnAssessments(prev => prev.filter(a => a.id !== id));
-                    } else {
-                        anyError = true;
-                        const errorData = await response.text();
-                        showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
-                    }
-                } catch (error) {
-                    anyError = true;
-                    showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
-                }
+            try {
+                await Assessments.remove(assessmentToDelete.id);
+                vuln.assessments = vuln.assessments.filter(a => a.id !== assessmentToDelete.id);
+                setAllVulnAssessments(prev => prev.filter(a => a.id !== assessmentToDelete.id));
+            } catch (error) {
+                anyError = true;
+                showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
             }
 
             if (!anyError) {
                 const updatedAssessments = [...vuln.assessments];
-                const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                const statusSummary = buildStatusSummary(
+                    updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
                 vuln.simplified_status = statusSummary.dominant_status;
                 vuln.status_summary = statusSummary;
 
@@ -669,51 +770,107 @@ type VariantScopedSnapshot = {
                     simplified_status: statusSummary.dominant_status,
                     status_summary: statusSummary,
                 });
+                refreshAssessmentRows();
+                refreshReviews();
                 showMessage("Assessment deleted successfully!", "success");
             }
         }
         setShowDeleteConfirm(false);
-        setGroupToDelete(null);
+        setAssessmentToDelete(null);
     };
 
     const handleCancelDelete = () => {
         setShowDeleteConfirm(false);
-        setGroupToDelete(null);
+        setAssessmentToDelete(null);
     };
 
-    const saveEditedAssessment = async (data: EditAssessmentData) => {
-        if (!editingGroup) return;
+    const persistEditedAssessment = async (data: EditAssessmentData) => {
+        if (!editingAssessment) return;
         setSubmittingMessage('Editing assessment...');
 
-        // Keep every row affected by this edit in one history group. Depending
-        // on the user's choice, reuse the group's timestamp or move the whole
-        // group to the top with one shared current timestamp.
+        // Keep every row affected by this edit in one history entry. Depending
+        // on the user's choice, reuse the assessment's timestamp or move the
+        // whole assessment to the top with one shared current timestamp.
         const editSharedTimestamp = data.update_timestamp === false
-            ? editingGroup.timestamp
+            ? editingAssessment.timestamp
             : new Date().toISOString();
 
-        // Build target (package × variantId) combos from form selection
-        const targetVariantIds: Array<string | undefined> =
-            data.variant_ids && data.variant_ids.length > 0
-                ? data.variant_ids
-                : [undefined];
         const targetPackages: string[] =
-            data.packages && data.packages.length > 0
-                ? data.packages
-                : editingGroup.packages;
+            data.packages ?? [...new Set((editingAssessment.targets ?? []).map(t => t.package))];
 
-        // Index existing group assessments by (pkg, vid) key
+        // A reconcile call needs at least one variant target — the backend
+        // rejects an empty ``variant_ids`` list. When the user has a variant
+        // to target, reconcile the assessment in a single request. Otherwise
+        // fall back to the legacy per-row PUT/POST/DELETE flow below, which is
+        // the only way to edit an assessment that isn't scoped to any variant.
+        const targetVariantIds: string[] =
+            data.variant_ids ?? [];
+
+        const hasVariantTargets = (editingAssessment.targets ?? []).some(
+            target => target.variant_id !== null
+        );
+        if (editingAssessmentIsServerConfirmed && hasVariantTargets && data.variant_ids !== undefined) {
+            try {
+                const body: Record<string, unknown> = {
+                    vuln_id: vuln.id,
+                    packages: targetPackages,
+                    variant_ids: targetVariantIds,
+                    targets: data.targets ?? reconcileTargetPairs(
+                        editingAssessment.targets ?? [], targetPackages, targetVariantIds),
+                    status: data.status,
+                    justification: data.justification,
+                    impact_statement: data.impact_statement,
+                    status_notes: data.status_notes,
+                    workaround: data.workaround,
+                    update_timestamp: data.update_timestamp !== false,
+                    timestamp: editSharedTimestamp,
+                };
+                await Assessments.reconcile(editingAssessment.id, body);
+                const reconciledAssessments = await refreshAllVulnAssessments();
+                await refreshAssessmentRows();
+                refreshReviews();
+
+                const updatedAssessments = [...(reconciledAssessments ?? vuln.assessments)];
+                const statusSummary = buildStatusSummary(
+                    updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
+                vuln.simplified_status = statusSummary.dominant_status;
+                vuln.status_summary = statusSummary;
+                patchVuln(vuln.id, {
+                    ...vuln,
+                    assessments: updatedAssessments,
+                    simplified_status: statusSummary.dominant_status,
+                    status_summary: statusSummary,
+                });
+                showMessage('Assessment updated successfully!', 'success');
+            } catch (e) {
+                showMessage(`Failed to update assessment: ${escape(String(e))}`, 'error');
+            }
+
+            setSubmittingMessage(null);
+            setEditingAssessmentId(null);
+            setEditingAssessment(null);
+            return;
+        }
+
+        // Legacy per-row path (no variant target selected). Index the
+        // underlying Assessment record — sourced from allVulnAssessments/
+        // vuln.assessments, the same data the row itself was built from —
+        // by (pkg, vid) key.
+        const editingAssessmentRecords = (allVulnAssessments.length > 0 ? allVulnAssessments : vuln.assessments)
+            .filter(a => a.id === editingAssessment.id);
         const existingByKey = new Map<string, Assessment>();
-        for (const a of editingGroup.assessments) {
+        for (const a of editingAssessmentRecords) {
             const pkg = a.packages[0] ?? '';
             const vid = a.variant_id ?? '';
             existingByKey.set(`${pkg}::${vid}`, a);
         }
 
-        // Build the desired target key set
+        // Build the desired target key set. This branch only runs when no
+        // variant was selected, so every target is scoped to "no variant".
+        const legacyVariantIds: Array<string | undefined> = [undefined];
         const targetKeys = new Set<string>();
         for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
+            for (const vid of legacyVariantIds) {
                 targetKeys.add(`${pkg}::${vid ?? ''}`);
             }
         }
@@ -797,7 +954,7 @@ type VariantScopedSnapshot = {
         //    all Assessment rows share the exact same timestamp.
         const newPkgsByVariant = new Map<string | undefined, string[]>();
         for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
+            for (const vid of legacyVariantIds) {
                 const key = `${pkg}::${vid ?? ''}`;
                 if (!existingByKey.has(key)) {
                     const arr = newPkgsByVariant.get(vid) ?? [];
@@ -807,29 +964,27 @@ type VariantScopedSnapshot = {
             }
         }
 
-        for (const [vid, pkgs] of newPkgsByVariant) {
-            if (pkgs.length === 0) continue;
+        // One submit is one request: the backend then assigns one assessment per
+        // vulnerability. Posting per variant would create one assessment per variant.
+        const batchItems = [...newPkgsByVariant.entries()]
+            .filter(([, pkgs]) => pkgs.length > 0)
+            .map(([vid, pkgs]) => ({
+                vuln_id: vuln.id,
+                packages: pkgs,
+                status: data.status,
+                justification: data.justification,
+                impact_statement: data.impact_statement,
+                status_notes: data.status_notes,
+                workaround: data.workaround,
+                timestamp: editSharedTimestamp,
+                ...(vid ? { variant_id: vid } : {}),
+            }));
+
+        if (batchItems.length > 0) {
             try {
-                const body: Record<string, unknown> = {
-                    vuln_id: vuln.id,
-                    packages: pkgs,
-                    status: data.status,
-                    justification: data.justification,
-                    impact_statement: data.impact_statement,
-                    status_notes: data.status_notes,
-                    workaround: data.workaround,
-                    timestamp: editSharedTimestamp,
-                };
-                if (vid) body.variant_id = vid;
-                const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-                    method: 'POST', mode: 'cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const rd = await res.json();
-                if (rd?.status === 'success') {
-                    const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
-                    for (const raw of rawList) {
+                const result = await Assessments.createBatch(batchItems);
+                if (result.status === 'success') {
+                    for (const raw of result.assessments) {
                         const casted = normalise(raw);
                         if (casted) {
                             vuln.assessments.push(casted);
@@ -838,7 +993,7 @@ type VariantScopedSnapshot = {
                     }
                 } else {
                     anyError = true;
-                    showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
+                    showMessage('Failed to create assessment', 'error');
                 }
             } catch (e) {
                 anyError = true;
@@ -848,7 +1003,8 @@ type VariantScopedSnapshot = {
 
         if (!anyError) {
             const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+            const statusSummary = buildStatusSummary(
+                updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
             vuln.simplified_status = statusSummary.dominant_status;
             vuln.status_summary = statusSummary;
             patchVuln(vuln.id, {
@@ -857,12 +1013,22 @@ type VariantScopedSnapshot = {
                 simplified_status: statusSummary.dominant_status,
                 status_summary: statusSummary,
             });
+            refreshAssessmentRows();
+            refreshReviews();
             showMessage('Assessment updated successfully!', 'success');
         }
 
         setSubmittingMessage(null);
         setEditingAssessmentId(null);
-        setEditingGroup(null);
+        setEditingAssessment(null);
+    };
+
+    const saveEditedAssessment = (data: EditAssessmentData) => {
+        if (data.targets !== undefined && data.targets.length === 0) {
+            setPendingEmptyTargetEdit(data);
+            return;
+        }
+        void persistEditedAssessment(data);
     };
 
     // Handle keyboard navigation (ESC to close, arrow keys to navigate)
@@ -898,59 +1064,66 @@ type VariantScopedSnapshot = {
         };
     }, [hasUnsavedChanges, onClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex]);
 
-    const groupAssessments = (assessments: Assessment[]) => {
-        const groups: { [key: string]: Assessment[] } = {};
-
-        assessments.forEach(assess => {
-            // Rows created by one user action share the exact timestamp. Keep
-            // separate actions distinct even when their content is identical.
-            const contentKey = `${assess.simplified_status}|${assess.justification || ''}|${assess.impact_statement || ''}|${assess.status_notes || ''}|${assess.workaround || ''}`;
-            const groupKey = `${assess.timestamp}::${contentKey}`;
-
-            if (!groups[groupKey]) {
-                groups[groupKey] = [];
-            }
-            groups[groupKey].push(assess);
-        });
-
-        // Convert groups to array and sort by most recent timestamp
-        return Object.entries(groups)
-            .map(([key, assessments]) => ({
-                key,
-                assessments,
-                timestamp: assessments[0].timestamp, // Use first assessment's timestamp for sorting
-                packages: [...new Set(assessments.flatMap(a => a.packages))].sort() // Collect unique packages
-            }))
+    // Decorate raw assessments with per-target ``outdated``, mirroring what
+    // the server's annotated listing returns (src/controllers/assessment_targets.py).
+    // Used as a fallback whenever assessmentRows has no entry yet — most
+    // commonly because Assessments.listByVuln is still in flight on mount
+    // (assessmentRows starts at [] and this fallback fills the gap using
+    // vuln.assessments/allVulnAssessments, which render synchronously), and
+    // it self-corrects on the next render once the real response lands. It
+    // also engages if the request errors, or if the server genuinely returns
+    // zero assessments — both cases where the fallback's own computation is
+    // also empty, so nothing is shown either way.
+    const buildFallbackRows = (assessments: Assessment[]): Assessment[] => {
+        return assessments
+            .map((assess): Assessment => {
+                // Build from the stored pairs, not from packages x variant_id:
+                // that scalar is null for a genuine cross-variant assessment,
+                // which would pair every package with no variant at all.
+                const pairs: AssessmentTargetPair[] = assess.targets && assess.targets.length > 0
+                    ? assess.targets
+                    : assess.packages.map(pkg => ({ variant_id: assess.variant_id ?? null, package: pkg }));
+                const targets: AssessmentTargetPair[] = pairs.map(({ variant_id, package: pkg, outdated: knownOutdated }) => {
+                    if (typeof knownOutdated === "boolean") return { variant_id, package: pkg, outdated: knownOutdated };
+                    const finding = variant_id
+                        ? variantFindingsMap[variant_id]?.find(item => item.pkg === pkg)
+                        : undefined;
+                    const outdated = finding?.outdated ?? (
+                        variantPackageMapLoaded
+                        && !!variant_id
+                        && variantPackageMap[variant_id] !== undefined
+                        && !variantPackageMap[variant_id].includes(pkg)
+                    );
+                    return { variant_id, package: pkg, outdated };
+                });
+                return { ...assess, targets };
+            })
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     };
 
     // Prefer the project-wide response so history includes every variant. The
     // scoped vulnerability rows remain a fallback for unavailable or empty
     // history responses.
-    const groupedAssessments = groupAssessments(
-        (allVulnAssessments.length > 0 ? allVulnAssessments : vuln.assessments)
-            .filter(assessment => assessment.origin !== 'ai')
-    );
+    const effectiveAssessments = allVulnAssessments.length > 0 ? allVulnAssessments : vuln.assessments;
+
+    const nonAiServerRows = assessmentRows.filter(g => g.origin !== 'ai');
+    const nonAiRows = nonAiServerRows.length > 0
+        ? nonAiServerRows
+        : buildFallbackRows(effectiveAssessments.filter(assessment => assessment.origin !== 'ai'));
+
     const pendingAiAssessments = allVulnAssessments.filter(a =>
-        a.origin === "ai" && (!variantId || a.variant_id === variantId));
-    const pendingAiByVariant = new Map<string, Assessment[]>();
-    for (const a of pendingAiAssessments) {
-        const key = a.variant_id ?? "__none__";
-        if (!pendingAiByVariant.has(key)) pendingAiByVariant.set(key, []);
-        pendingAiByVariant.get(key)!.push(a);
-    }
-    const pendingAiGroups: AssessmentGroup[] = [...pendingAiByVariant.entries()].map(
-        ([key, assessments]) => ({
-            key,
-            assessments,
-            timestamp: assessments[0].timestamp,
-            packages: [...new Set(assessments.flatMap(a => a.packages))].sort(),
-        })
-    );
+        a.origin === "ai" && (!variantId || appliesToVariant(a, variantId)));
+    const aiServerRows = assessmentRows.filter(g =>
+        g.origin === 'ai' && (!variantId || (g.targets ?? []).some(t => t.variant_id === variantId)));
+    const aiRows = aiServerRows.length > 0
+        ? aiServerRows
+        : buildFallbackRows(pendingAiAssessments);
 
     const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
         allVulnAssessments
-            .filter(a => a.origin !== "ai" && a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
+            .filter(a => a.origin !== "ai" && (pkg === null
+                ? appliesToVariant(a, variantIdValue)
+                : coversTarget(a, variantIdValue, pkg)))
             .reduce<Assessment | null>((best, a) => {
                 if (!best) return a;
                 return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
@@ -967,8 +1140,8 @@ type VariantScopedSnapshot = {
         // now-deprecated versions that are no longer in the active SBOM.
         const assessmentPkgs = [...new Set(
             allVulnAssessments
-                .filter(a => a.origin !== "ai" && a.variant_id === variant.id)
-                .flatMap(a => a.packages)
+                .filter(a => a.origin !== "ai")
+                .flatMap(a => assessmentPackagesInVariant(a, variant.id))
         )];
         const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];
         const hasActivePkgData = variantPackageMapLoaded && variantActivePkgs !== undefined;
@@ -1081,9 +1254,9 @@ type VariantScopedSnapshot = {
     // Get the default status for new assessments
     // Use the most recent assessment's status, or "under_investigation" if no assessments exist
     const getDefaultStatus = () => {
-        if (groupedAssessments.length > 0) {
-            // Get the most recent assessment's status (groupedAssessments are already sorted by most recent first)
-            return groupedAssessments[0].assessments[0].status;
+        if (nonAiRows.length > 0) {
+            // Get the most recent assessment's status (nonAiRows are already sorted by most recent first)
+            return nonAiRows[0].status;
         }
         return "under_investigation";
     };
@@ -1100,110 +1273,93 @@ type VariantScopedSnapshot = {
         // Determine which variants to post to.
         // Prefer explicit selections from the form; fall back to the current
         // variantId context so the assessment is never stored without a variant.
-        const variantIds: Array<string | undefined> =
+        const variantIds: string[] =
             content.variant_ids && content.variant_ids.length > 0
                 ? content.variant_ids
                 : variantId
                 ? [variantId]
-                : [undefined];
+                : [];
 
         const { variant_ids: _, ...baseContent } = content;
-
-        // Share a single timestamp across all variant requests so grouped
-        // assessment rows get the exact same value in the database.
         const sharedTimestamp = new Date().toISOString();
-
-        let successCount = 0;
-        let lastCasted: Assessment | null = null;
-        const touchedVariantIds = new Set<string>();
-        const touchedPackages = new Set<string>();
 
         setSubmittingMessage('Adding assessment...');
         try {
-        // Post every variant in a single batch request
-        const items = variantIds.map(vid =>
-            vid
-                ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp }
-                : { ...baseContent, timestamp: sharedTimestamp }
-        );
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/batch`, {
-            method: 'POST',
-            mode: 'cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ assessments: items })
-        });
-        const data = await response.json();
-        if (response.ok !== false && data?.status === 'success') {
-            // Backend returns one record per (package, variant) pair.
-            const rawList: unknown[] = Array.isArray(data?.assessments) ? data.assessments : [];
-            for (const raw of rawList) {
-                const casted = asAssessment(raw);
+            // One user action -> one request -> one fused Assessment row,
+            // whose target_rows cover every selected (package, variant) combo.
+            const response = await fetch(
+                import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`,
+                {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ...baseContent,
+                        variant_ids: variantIds,
+                        timestamp: sharedTimestamp,
+                    }),
+                }
+            );
+            const data = await response.json();
+            const row = data?.assessment ?? (Array.isArray(data?.assessments) ? data.assessments[0] : undefined);
+            if (response.ok !== false && data?.status === 'success' && row) {
+                const casted = asAssessment(row);
                 if (!Array.isArray(casted) && typeof casted === 'object') {
-                    successCount++;
-                    lastCasted = casted;
-                    if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
-                    for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
-
-                    // Highlight the very first created assessment
-                    if (successCount === 1) {
-                        setNewAssessmentIds(prev => new Set(prev).add(casted.id));
-                        setTimeout(() => {
-                            setNewAssessmentIds(prev => {
-                                const newSet = new Set(prev);
-                                newSet.delete(casted.id);
-                                return newSet;
-                            });
-                        }, 5500);
-                    }
+                    setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                    setTimeout(() => {
+                        setNewAssessmentIds(prev => {
+                            const newSet = new Set(prev);
+                            newSet.delete(casted.id);
+                            return newSet;
+                        });
+                    }, 5500);
 
                     appendAssessment(casted);
                     vuln.assessments.push(casted);
                     // Keep allVulnAssessments in sync so variant tags appear immediately
                     setAllVulnAssessments(prev => [...prev, casted]);
                     vuln.simplified_status = casted.simplified_status;
+
+                    // History renders from the server-built rows, so
+                    // refresh them or the assessment just created stays
+                    // invisible until the modal is reopened.
+                    await refreshAssessmentRows();
+
+                    const updatedAssessments = [...vuln.assessments];
+                    const statusSummary = buildStatusSummary(
+                        updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
+                    patchVuln(vuln.id, {
+                        ...vuln,
+                        assessments: updatedAssessments,
+                        simplified_status: statusSummary.dominant_status,
+                        status_summary: statusSummary,
+                    });
+
+                    const variantCount = casted.variant_ids?.length ?? 0;
+                    const packageCount = casted.packages.length;
+                    const variantPart = variantCount > 0
+                        ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
+                        : '';
+                    const packagePart = packageCount > 0
+                        ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
+                        : '';
+
+                    let msg = 'Successfully added assessment.';
+                    if (packagePart && variantPart) {
+                        msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
+                    } else if (packagePart) {
+                        msg = `Successfully added assessment to ${packagePart}.`;
+                    } else if (variantPart) {
+                        msg = `Successfully added assessment to ${variantPart}.`;
+                    }
+                    showMessage(msg, 'success');
+                    setClearAssessmentFields(true);
+                    setTimeout(() => setClearAssessmentFields(false), 100);
                 }
+            } else {
+                const detail = String(data?.error ?? 'The selected package versions are not valid for every selected variant.');
+                showMessage(`Assessment not added: ${escape(detail)}`, 'error');
             }
-        } else {
-            const errors = Array.isArray(data?.errors)
-                ? data.errors.map((entry: {error?: unknown}) => String(entry?.error ?? '')).filter(Boolean).join('; ')
-                : '';
-            const detail = errors || String(data?.error ?? 'The selected package versions are not valid for every selected variant.');
-            showMessage(`Assessment not added: ${escape(detail)}`, 'error');
-        }
-
-        if (lastCasted) {
-            const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
-            patchVuln(vuln.id, {
-                ...vuln,
-                assessments: updatedAssessments,
-                simplified_status: statusSummary.dominant_status,
-                status_summary: statusSummary,
-            });
-
-            const variantCount = touchedVariantIds.size;
-            const packageCount = touchedPackages.size;
-            const variantPart = variantCount > 0
-                ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
-                : '';
-            const packagePart = packageCount > 0
-                ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
-                : '';
-
-            let msg = 'Successfully added assessment.';
-            if (packagePart && variantPart) {
-                msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
-            } else if (packagePart) {
-                msg = `Successfully added assessment to ${packagePart}.`;
-            } else if (variantPart) {
-                msg = `Successfully added assessment to ${variantPart}.`;
-            } else if (successCount > 1) {
-                msg = `Successfully added ${successCount} assessments.`;
-            }
-            showMessage(msg, 'success');
-            setClearAssessmentFields(true);
-            setTimeout(() => setClearAssessmentFields(false), 100);
-        }
         } finally {
             setSubmittingMessage(null);
         }
@@ -1358,17 +1514,112 @@ type VariantScopedSnapshot = {
         }
     };
 
+    const headerActions = (
+        <>
+            <div className="relative flex items-center gap-2 px-2 py-2">
+                <HelpPopover
+                    ariaLabel="shortcut helper"
+                    title="View keyboard shortcuts"
+                    heading="Keyboard Shortcuts"
+                    open={showShortcutHelper}
+                    onOpenChange={setShowShortcutHelper}
+                    surfaceClassName="w-[300px]"
+                >
+                    <div className="space-y-2 text-neutral-200">
+                        <div className="flex justify-between gap-4"><span className="font-semibold text-neutral-300">← / →</span><span>Previous/Next vulnerability</span></div>
+                        <div className="flex justify-between gap-4"><span className="font-semibold text-neutral-300">Esc</span><span>Close shortcuts</span></div>
+                    </div>
+                </HelpPopover>
+                <a
+                    href={docUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="documentation"
+                    title="Open documentation"
+                    className="transition-colors hover:text-blue-400"
+                >
+                    <FontAwesomeIcon icon={faBook} size="lg" />
+                </a>
+            </div>
+            {!readOnly && (
+                <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        onClick={handleRefresh}
+                        disabled={refreshing}
+                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
+                        type="button"
+                        className={`rounded-lg border bg-transparent px-3 py-2 text-sm font-medium transition-colors focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
+                            bothRefreshed
+                                ? "border-green-600 text-green-400 hover:bg-green-900"
+                                : partialRefreshed
+                                    ? "border-yellow-600 text-yellow-400 hover:bg-yellow-900"
+                                    : "border-gray-600 text-gray-300 hover:bg-gray-600 hover:text-white"
+                        }`}
+                    >
+                        <FontAwesomeIcon icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate} className={refreshing ? "animate-spin" : ""} />
+                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
+                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
+                    </button>
+                    {refreshError && <span className="text-xs text-red-400">{refreshError}</span>}
+                </div>
+            )}
+            {!readOnly && (
+                <button
+                    onClick={() => setIsEditing(!isEditing)}
+                    type="button"
+                    className={`rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${isEditing ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-600 hover:bg-blue-700"}`}
+                    title={isEditing ? "Exit editing mode" : "Enter editing mode"}
+                >
+                    <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
+                    {isEditing ? "Exit editing" : "Edit"}
+                </button>
+            )}
+        </>
+    );
+
+    const footer = (
+        <ModalActions align="between">
+            {vulnerabilities && currentIndex !== undefined ? (
+                <div className="flex items-center space-x-2">
+                    <button onClick={() => navigateTo(currentIndex - 1)} disabled={!canNavigatePrevious} type="button" aria-label="Previous vulnerability" className="rounded-lg border border-gray-600 bg-gray-800 px-5 py-2.5 text-sm font-medium text-gray-400 hover:bg-gray-700 hover:text-white focus:outline-none focus:ring-4 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
+                        <FontAwesomeIcon icon={faChevronLeft} className="mr-2 h-3 w-3" />
+                    </button>
+                    <button onClick={() => navigateTo(currentIndex + 1)} disabled={!canNavigateNext} type="button" aria-label="Next vulnerability" className="rounded-lg border border-gray-600 bg-gray-800 px-5 py-2.5 text-sm font-medium text-gray-400 hover:bg-gray-700 hover:text-white focus:outline-none focus:ring-4 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
+                        <FontAwesomeIcon icon={faChevronRight} className="ml-2 h-3 w-3" />
+                    </button>
+                    {navigationInfo && <span className="px-3 text-sm text-gray-400" id="navigation-info">{navigationInfo}</span>}
+                </div>
+            ) : <div />}
+            <ModalButton
+                onClick={handleClose}
+                className="!border-gray-600 !bg-gray-800 !text-gray-400 hover:!bg-gray-700 hover:!text-white"
+            >
+                Close
+            </ModalButton>
+        </ModalActions>
+    );
+
     return (
-        <div
+        <>
+        <ModalShell
             key={vuln.id}
-            data-testid="vuln-modal-backdrop"
-            tabIndex={-1}
-            onMouseDown={(event) => {
-                if (event.target === event.currentTarget) {
-                    handleClose();
-                }
-            }}
-            className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
+            isOpen={true}
+            title={vuln.id}
+            size="fullscreen"
+            titleId="vulnerability_modal_title"
+            onClose={handleClose}
+            closeLabel="Close modal"
+            closeOnEscape={false}
+            closeOnPanel={true}
+            testId="vuln-modal-backdrop"
+            panelRef={modalRef}
+            panelTabIndex={-1}
+            headerActions={headerActions}
+            backdropClassName="!bg-gray-900/90"
+            panelClassName="!h-[calc(100vh-6rem)] !max-w-[calc(100vw-6rem)]"
+            surfaceClassName="!border-gray-600 !bg-gray-700"
+            contentClassName="relative flex min-h-0 flex-1 flex-col p-0 md:p-0"
+            footer={footer}
         >
             {submittingMessage && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -1378,121 +1629,6 @@ type VariantScopedSnapshot = {
                     </div>
                 </div>
             )}
-            <div
-                className="relative p-16 h-full"
-                onMouseDown={(event) => {
-                    if (event.target === event.currentTarget) {
-                        handleClose();
-                    }
-                }}
-            >
-                <div
-                    ref={modalRef}
-                    tabIndex={-1}
-                    className="relative rounded-lg shadow bg-gray-700 h-full flex flex-col overflow-hidden">
-
-                    {/* Modal header */}
-                    <div className="shrink-0 flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
-                        <h3 id="vulnerability_modal_title" className="text-xl font-semibold text-gray-900 dark:text-white">
-                            {vuln.id}
-                        </h3>
-                        <div className="flex items-center space-x-2">
-                            {/* Keyboard Shortcut Helper */}
-                            <div className="px-2 py-2 flex items-center gap-2 relative">
-                                <button
-                                    ref={shortcutButtonRef}
-                                    aria-label='shortcut helper'
-                                    title='View keyboard shortcuts'
-                                    type='button'
-                                    className='hover:text-blue-400 transition-colors'
-                                    onClick={() => setShowShortcutHelper(!showShortcutHelper)}
-                                >
-                                    <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
-                                </button>
-                                <a
-                                    href={docUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    aria-label="documentation"
-                                    title="Open documentation"
-                                    className="hover:text-blue-400 transition-colors"
-                                >
-                                    <FontAwesomeIcon icon={faBook} size='lg' />
-                                </a>
-                                {showShortcutHelper && (
-                                    <div
-                                        ref={dropdownRef}
-                                        className="absolute top-full mt-1 right-0 bg-cyan-900 border border-cyan-700 rounded-lg shadow-lg p-4 z-50 w-[300px] text-sm"
-                                    >
-                                        <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
-                                        <div className="space-y-2 text-gray-100">
-                                            <div className="flex justify-between">
-                                                <span className="font-semibold text-cyan-300">← / →</span>
-                                                <span>Previous/Next vulnerability</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="font-semibold text-cyan-300">Esc</span>
-                                                <span>Close modal</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            {!readOnly && (
-                                <div className="flex items-center gap-2 flex-wrap">
-                                    <button
-                                        onClick={handleRefresh}
-                                        disabled={refreshing}
-                                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
-                                        type="button"
-                                        className={`px-3 py-2 text-sm font-medium focus:outline-none rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                                            bothRefreshed
-                                                ? 'text-green-400 border-green-600 hover:bg-green-900 bg-transparent'
-                                                : partialRefreshed
-                                                    ? 'text-yellow-400 border-yellow-600 hover:bg-yellow-900 bg-transparent'
-                                                    : 'border-gray-600 hover:bg-gray-600 hover:text-white bg-transparent text-gray-300'
-                                        }`}
-                                    >
-                                        <FontAwesomeIcon
-                                            icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate}
-                                            className={refreshing ? "animate-spin" : ""}
-                                        />
-                                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
-                                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
-                                    </button>
-                                    {refreshError && (
-                                        <span className="text-xs text-red-400">{refreshError}</span>
-                                    )}
-                                </div>
-                            )}
-
-                            {!readOnly && <button
-                                onClick={() => setIsEditing(!isEditing)}
-                                type="button"
-                                className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-                                    isEditing
-                                        ? "bg-blue-700 hover:bg-blue-800 text-white"
-                                        : "bg-blue-600 hover:bg-blue-700 text-white"
-                                }`}
-                                title={isEditing ? "Exit editing mode" : "Enter editing mode"}
-                            >
-                                <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
-                                {isEditing ? "Exit editing" : "Edit"}
-                            </button>}
-                            <button
-                                onClick={handleClose}
-                                type="button"
-                                className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors"
-                            >
-                                <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
-                                    <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
-                                </svg>
-                                <span className="sr-only">Close modal</span>
-                            </button>
-                        </div>
-                    </div>
-
                     {/* Scrollable content region (only the body scrolls) */}
                     <div className="flex-1 overflow-y-auto min-h-0">
 
@@ -1793,18 +1929,25 @@ type VariantScopedSnapshot = {
                                             variants={availableVariants}
                                             availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
-                                            variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                            variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
                                             variantFindingsMap={variantFindingsMap}
                                             findingsLoading={!variantPackageMapLoaded}
+                                            findingsError={variantPackageMapError ?? undefined}
+                                            exactTargetSelection={true}
                                         />
                                     </li>
                                 )}
 
-                                {pendingAiGroups.map(group => {
-                                    const firstAssess = group.assessments[0];
+                                {aiRows.map(row => {
+                                    const rowKey = row.id;
+                                    const targets = row.targets ?? [];
+                                    const firstTarget = targets[0];
+                                    const hasStatusNotes = hasAssessmentText(row.status_notes);
+                                    const hasWorkaround = hasAssessmentText(row.workaround);
                                     return (
                                         <div
-                                            key={`ai-${encodeURIComponent(group.key)}`}
+                                            key={`ai-${encodeURIComponent(rowKey)}`}
+                                            data-assessment-id={row.id}
                                             className="mb-6 p-4 rounded-lg border-2 border-amber-500 bg-amber-950/30"
                                         >
                                             <div className="flex items-center justify-between mb-2">
@@ -1812,44 +1955,58 @@ type VariantScopedSnapshot = {
                                                     <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
                                                     AI-generated · Pending review
                                                     {(() => {
-                                                        const v = availableVariants.find(v => v.id === firstAssess.variant_id);
+                                                        const v = availableVariants.find(v => v.id === firstTarget?.variant_id);
                                                         return v ? <span className="ml-1 opacity-80 text-xs">({v.name})</span> : null;
                                                     })()}
                                                 </span>
-                                                {isEditing && (
-                                                <div className="flex gap-2">
+                                                <div className="flex items-center gap-2">
+                                                    {isEditing && (
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleApproveAiAssessment(row)}
+                                                            className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-sm"
+                                                        >
+                                                            Approve
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRejectAiAssessment(row)}
+                                                            className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-sm"
+                                                        >
+                                                            Reject
+                                                        </button>
+                                                    </div>
+                                                    )}
                                                     <button
                                                         type="button"
-                                                        onClick={() => handleApproveAiAssessment(group)}
-                                                        className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-sm"
+                                                        onClick={() => copyRowId(row)}
+                                                        aria-label={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
+                                                        title={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
+                                                        className="text-amber-300 hover:text-amber-100 transition-colors"
                                                     >
-                                                        Approve
+                                                        <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
                                                     </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleRejectAiAssessment(group)}
-                                                        className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-sm"
-                                                    >
-                                                        Reject
-                                                    </button>
+                                                    {copiedRowId === row.id && (
+                                                        <span role="status" className="inline-flex items-center gap-1 text-xs text-amber-300">
+                                                            <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                                                            Copied
+                                                        </span>
+                                                    )}
                                                 </div>
-                                                )}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                {group.packages.map(pkg => {
-                                                    const { nameVersion, supplier } = splitPkgId(pkg);
+                                                {targets.map(target => {
+                                                    const { nameVersion, supplier } = splitPkgId(target.package);
                                                     const supplierName = extractSupplierName(supplier);
-                                                    const variant = availableVariants.find(v => v.id === firstAssess.variant_id);
-                                                    const finding = firstAssess.variant_id
-                                                        ? variantFindingsMap[firstAssess.variant_id]?.find(item => item.pkg === pkg)
-                                                        : undefined;
+                                                    const variant = availableVariants.find(v => v.id === target.variant_id);
                                                     return (
-                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                                        <span key={`${target.variant_id ?? ''}::${target.package}`} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
                                                             {nameVersion}
                                                             {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
                                                             {variant && <span className="ml-1.5 opacity-80">· {variant.name}</span>}
-                                                            {finding?.outdated && (
+                                                            {target.outdated && (
                                                                 <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-200 text-amber-900 dark:bg-amber-700 dark:text-amber-100">
                                                                     Outdated
                                                                 </span>
@@ -1859,70 +2016,71 @@ type VariantScopedSnapshot = {
                                                 })}
                                             </div>
                                             <h3 className="text-lg font-semibold text-white mb-1">
-                                                {firstAssess.simplified_status}
-                                                {firstAssess.justification && <> - {firstAssess.justification}</>}
+                                                {row.simplified_status}
+                                                {row.justification && <> - {row.justification}</>}
                                             </h3>
-                                            <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                                {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
-                                                {firstAssess.status_notes ?? 'no status notes'}<br/>
-                                                {firstAssess.workaround ?? 'no workaround available'}
-                                            </p>
+                                            {(row.impact_statement || hasStatusNotes || hasWorkaround) && (
+                                                <p className="text-base font-normal text-gray-300 whitespace-pre-line">
+                                                    {row.impact_statement && <>{row.impact_statement}<br/></>}
+                                                    {hasStatusNotes && <>{row.status_notes}<br/></>}
+                                                    {hasWorkaround && row.workaround}
+                                                </p>
+                                            )}
                                         </div>
                                     );
                                 })}
 
-                                {groupedAssessments.map(group => {
-                                    const dt = new Date(group.timestamp);
-                                    const firstAssess = group.assessments[0]; // Use first assessment for content
-                                    const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
-                                    const isBeingEdited = editingAssessmentId === firstAssess.id;
-                                    const groupOrigins = [...new Set(group.assessments.map(a => a.origin).filter(Boolean))];
-                                    const groupAssessmentIds = new Set(group.assessments.map(a => a.id));
-                                    const matchingAssessmentsFromApi = allVulnAssessments.filter(a =>
-                                        groupAssessmentIds.has(a.id)
-                                    );
-                                    const matchingAssessments = matchingAssessmentsFromApi.length > 0
-                                        ? matchingAssessmentsFromApi
-                                        : group.assessments;
-                                    const findingTags = [...new Map(
-                                        matchingAssessments.flatMap(assessment => assessment.packages.map(pkg => {
-                                            const variant = availableVariants.find(v => v.id === assessment.variant_id);
-                                            const finding = assessment.variant_id
-                                                ? variantFindingsMap[assessment.variant_id]?.find(item => item.pkg === pkg)
-                                                : undefined;
-                                            const outdated = finding?.outdated ?? (
-                                                variantPackageMapLoaded
-                                                && !!assessment.variant_id
-                                                && variantPackageMap[assessment.variant_id] !== undefined
-                                                && !variantPackageMap[assessment.variant_id].includes(pkg)
-                                            );
-                                            const key = `${assessment.variant_id ?? ''}::${pkg}`;
-                                            return [key, {key, pkg, variant, outdated}] as const;
-                                        }))
-                                    ).values()];
+                                {nonAiRows.map(row => {
+                                    const dt = new Date(row.timestamp);
+                                    const rowKey = row.id;
+                                    const targets = row.targets ?? [];
+                                    const firstId = row.id;
+                                    const isNewlyAdded = newAssessmentIds.has(row.id);
+                                    const isBeingEdited = editingAssessmentId === firstId;
+                                    const hasStatusNotes = hasAssessmentText(row.status_notes);
+                                    const hasWorkaround = hasAssessmentText(row.workaround);
+                                    const rowPackages = [...new Set(targets.map(t => t.package))];
+                                    // Build a synthetic Assessment for EditAssessment, which still expects
+                                    // one Assessment object rather than a row.
+                                    const assessmentForEdit: Assessment = {
+                                        id: firstId,
+                                        vuln_id: vuln.id,
+                                        packages: rowPackages,
+                                        variant_id: targets[0]?.variant_id ?? undefined,
+                                        origin: row.origin,
+                                        status: row.status,
+                                        simplified_status: row.simplified_status,
+                                        status_notes: row.status_notes,
+                                        justification: row.justification,
+                                        impact_statement: row.impact_statement,
+                                        workaround: row.workaround,
+                                        timestamp: row.timestamp,
+                                        responses: row.responses,
+                                    };
 
                                     return (
-                                        <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
+                                        <li key={rowKey} data-assessment-id={row.id} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
                                             <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                             <div className="mb-2 flex flex-wrap items-center gap-2">
                                                 <time className="text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
-                                                {groupOrigins.map(origin => (
-                                                    <span key={origin} className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${originBadgeClass(origin)}`} title={`Assessment origin: ${origin}`}>
-                                                        {originLabel(origin)}
+                                                {row.origin && (
+                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${originBadgeClass(row.origin)}`} title={`Assessment origin: ${row.origin}`}>
+                                                        {originLabel(row.origin)}
                                                     </span>
-                                                ))}
+                                                )}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                {findingTags.map(({key, pkg, variant, outdated}) => {
-                                                    const { nameVersion, supplier } = splitPkgId(pkg);
+                                                {targets.map(target => {
+                                                    const { nameVersion, supplier } = splitPkgId(target.package);
                                                     const supplierName = extractSupplierName(supplier);
+                                                    const variant = availableVariants.find(v => v.id === target.variant_id);
                                                     return (
-                                                        <span key={key} className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium ${outdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'}`} title={supplierName ? `Supplier: ${supplierName}` : undefined}>
+                                                        <span key={`${target.variant_id ?? ''}::${target.package}`} className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium ${target.outdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'}`} title={supplierName ? `Supplier: ${supplierName}` : undefined}>
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
                                                             {nameVersion}
                                                             {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
                                                             {variant && <span className="ml-1.5 opacity-80">· {variant.name}</span>}
-                                                            {outdated && (
+                                                            {target.outdated && (
                                                                 <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-200 text-amber-900 dark:bg-amber-700 dark:text-amber-100">
                                                                     Outdated
                                                                 </span>
@@ -1934,54 +2092,135 @@ type VariantScopedSnapshot = {
                                             <div className="flex items-start justify-between">
                                                 <div className="flex-1">
                                                     <h3 className="text-lg font-semibold text-white mb-2 flex items-center">
-                                                        {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
-                                                        {isEditing && (
-                                                            <div className="flex items-center ml-3 gap-2">
-                                                                <button
-                                                                    onClick={() => handleEditAssessment(firstAssess.id, group)}
-                                                                    className="text-blue-400 hover:text-blue-300 transition-colors"
-                                                                    title="Edit assessment"
-                                                                >
-                                                                    <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => handleDeleteAssessment(group)}
-                                                                    className="text-red-400 hover:text-red-300 transition-colors"
-                                                                    title="Delete assessment"
-                                                                >
-                                                                    <FontAwesomeIcon icon={faTrash} className="w-4 h-4" />
-                                                                </button>
-                                                            </div>
-                                                        )}
+                                                        {row.simplified_status}{row.justification && <> - {row.justification}</>}
+                                                        <div className="flex items-center ml-3 gap-2">
+                                                            {isEditing && (
+                                                                <>
+                                                                    <button
+                                                                        onClick={() => handleEditAssessment(firstId, row, nonAiServerRows.length > 0)}
+                                                                        className="text-blue-400 hover:text-blue-300 transition-colors"
+                                                                        title="Edit assessment"
+                                                                    >
+                                                                        <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleDeleteAssessment(row)}
+                                                                        className="text-red-400 hover:text-red-300 transition-colors"
+                                                                        title="Delete assessment"
+                                                                    >
+                                                                        <FontAwesomeIcon icon={faTrash} className="w-4 h-4" />
+                                                                    </button>
+                                                                </>
+                                                            )}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => copyRowId(row)}
+                                                                aria-label={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
+                                                                title={isMultiTarget(targets) ? "Copy multi-target id" : "Copy assessment id"}
+                                                                className="text-gray-400 hover:text-gray-200 transition-colors"
+                                                            >
+                                                                <FontAwesomeIcon icon={faCopy} className="w-4 h-4" />
+                                                            </button>
+                                                            {copiedRowId === row.id && (
+                                                                <span role="status" className="inline-flex items-center gap-1 text-xs text-green-400">
+                                                                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                                                                    Copied
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </h3>
-                                                    {!isBeingEdited && (
+                                                    {!isBeingEdited && (row.impact_statement || row.status === 'not_affected' || hasStatusNotes || hasWorkaround) && (
                                                         <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                                            {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
-                                                            {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
-                                                            {firstAssess.status_notes ?? 'no status notes'}<br/>
-                                                            {firstAssess.workaround ?? 'no workaround available'}
+                                                            {row.impact_statement && <>{row.impact_statement}<br/></>}
+                                                            {!row.impact_statement && row.status == 'not_affected' && <>no impact statement<br/></>}
+                                                            {hasStatusNotes && <>{row.status_notes}<br/></>}
+                                                            {hasWorkaround && row.workaround}
                                                         </p>
                                                     )}
                                                 </div>
                                             </div>
+                                            {row.origin === "custom" && (() => {
+                                                const assessmentId = row.id;
+                                                const rowReviews = reviews[assessmentId] ?? [];
+                                                const multiTarget = isMultiTarget(targets);
+                                                return (
+                                                    <div key={`review-${assessmentId}`} className="mt-3">
+                                                        {rowReviews.map(review => {
+                                                            const verdict = verdictOf(review);
+                                                            const variantName = variantNameById.get(review.variant_id) ?? review.variant_id;
+                                                            return (
+                                                                <div
+                                                                    key={review.id}
+                                                                    className="mt-2 ml-4 p-3 rounded-lg border border-sky-700 bg-sky-950/30"
+                                                                >
+                                                                    <div className="flex items-center justify-between mb-2">
+                                                                        <span className="inline-flex items-center gap-2 text-sky-300 font-semibold text-sm">
+                                                                            <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
+                                                                            AI review
+                                                                            {multiTarget && (
+                                                                                <span className="text-gray-400 font-normal">
+                                                                                    · {review.package} @ {variantName}
+                                                                                </span>
+                                                                            )}
+                                                                            <span className={verdict === "agrees" ? "text-green-400" : "text-amber-400"}>
+                                                                                · {verdict === "agrees" ? "✓ agrees" : verdict === "stale" ? "⚠ stale" : "⚠ differs"}
+                                                                            </span>
+                                                                        </span>
+                                                                        {isEditing && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => setReviewToDiscard(review)}
+                                                                                className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                                                                            >
+                                                                                Discard review
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="text-sm text-gray-200 whitespace-pre-line">
+                                                                        <strong>{review.status}</strong>
+                                                                        {review.justification && <> · {review.justification}</>}<br/>
+                                                                        {review.impact_statement && <>{review.impact_statement}<br/></>}
+                                                                        {review.status_notes && <>{review.status_notes}<br/></>}
+                                                                        {review.workaround && <>{review.workaround}<br/></>}
+                                                                        {review.responses.length > 0 && <>
+                                                                            responses: {review.responses.join(', ')}<br/>
+                                                                        </>}
+                                                                        <span className="text-gray-400">why: {review.rationale}</span>
+                                                                    </p>
+                                                                    {review.is_stale && (
+                                                                        <p className="mt-2 text-xs text-amber-400">
+                                                                            ⚠ Assessment was edited after this review was generated.
+                                                                        </p>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                );
+                                            })()}
                                             {isBeingEdited && (
                                                 <div className="mt-3">
                                                     <EditAssessment
-                                                        assessment={firstAssess}
+                                                        assessment={assessmentForEdit}
                                                         onSaveAssessment={saveEditedAssessment}
                                                         onCancel={handleCancelEdit}
                                                         triggerBanner={showMessage}
                                                         availableVariants={availableVariants}
                                                         defaultSelectedVariantIds={[...new Set(
-                                                            group.assessments
-                                                                .map(a => a.variant_id)
+                                                            targets
+                                                                .map(t => t.variant_id)
                                                                 .filter((v): v is string => !!v)
                                                         )]}
                                                         availablePackages={projectPackages}
-                                                        defaultSelectedPackages={group.packages}
-                                                        variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                                        defaultSelectedPackages={rowPackages}
+                                                        defaultSelectedTargets={targets.map(target => ({
+                                                            variant_id: target.variant_id,
+                                                            package: target.package,
+                                                        }))}
+                                                        variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
                                                         variantFindingsMap={variantFindingsMap}
                                                         findingsLoading={!variantPackageMapLoaded}
+                                                        findingsError={variantPackageMapError ?? undefined}
                                                     />
                                                 </div>
                                             )}
@@ -1993,48 +2232,7 @@ type VariantScopedSnapshot = {
                     </div>
 
                     </div>
-                    {/* Modal footer */}
-                    <div className="shrink-0 flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
-                        {vulnerabilities && currentIndex !== undefined ? (
-                            <div className="flex items-center space-x-2">
-                                <button
-                                    onClick={() => navigateTo(currentIndex - 1)}
-                                    disabled={!canNavigatePrevious}
-                                    type="button"
-                                    aria-label="Previous vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
-                                >
-                                    <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
-                                </button>
-                                <button
-                                    onClick={() => navigateTo(currentIndex + 1)}
-                                    disabled={!canNavigateNext}
-                                    type="button"
-                                    aria-label="Next vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
-                                >
-                                    <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
-                                </button>
-                                {navigationInfo && (
-                                    <span className="text-sm text-gray-400 px-3" id="navigation-info">
-                                        {navigationInfo}
-                                    </span>
-                                )}
-                            </div>
-                        ) : (
-                            <div />
-                        )}
-                        <button
-                            onClick={handleClose}
-                            type="button"
-                            className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800"
-                        >
-                            Close
-                        </button>
-                    </div>
-
-                </div>
-            </div>
+        </ModalShell>
 
             <ConfirmationModal
                 isOpen={showConfirmClose}
@@ -2052,6 +2250,22 @@ type VariantScopedSnapshot = {
             />
 
             <ConfirmationModal
+                isOpen={pendingEmptyTargetEdit !== null}
+                title="Delete Assessment"
+                message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
+                confirmText="Yes, delete"
+                cancelText="Keep editing"
+                showTitleIcon={true}
+                onConfirm={() => {
+                    if (!pendingEmptyTargetEdit) return;
+                    const data = pendingEmptyTargetEdit;
+                    setPendingEmptyTargetEdit(null);
+                    void persistEditedAssessment(data);
+                }}
+                onCancel={() => setPendingEmptyTargetEdit(null)}
+            />
+
+            <ConfirmationModal
                 isOpen={showDeleteConfirm}
                 title="Delete Assessment"
                 message={`Are you sure you want to delete this assessment? This action cannot be undone.`}
@@ -2061,7 +2275,18 @@ type VariantScopedSnapshot = {
                 onConfirm={handleConfirmDelete}
                 onCancel={handleCancelDelete}
             />
-        </div>
+
+            <ConfirmationModal
+                isOpen={reviewToDiscard !== null}
+                title="Discard AI review?"
+                message="The review will be removed. The assessment itself is unchanged."
+                confirmText="Confirm"
+                cancelText="Cancel"
+                showTitleIcon={true}
+                onConfirm={() => reviewToDiscard && handleDiscardReview(reviewToDiscard)}
+                onCancel={() => setReviewToDiscard(null)}
+            />
+        </>
     );
 }
 

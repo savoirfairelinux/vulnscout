@@ -312,6 +312,10 @@ For CI pipelines or automated scans, use the `--match-condition` argument instea
 
 If vulnerabilities match the condition, the script exits with **code 2**, allowing CI systems to fail the pipeline.
 
+Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Add `--refresh-vulnerability-data` to the same command when the condition must use current enrichment data.
+
+When `--project demo` is supplied without `--variant`, the condition is evaluated across all variants in `demo`. Supplying both options limits evaluation to one variant. Omitting both options evaluates `default/default`; supplying only `--variant` selects that variant from the `default` project. Unknown names exit with **code 1**.
+
 See the [Match Conditions](ci_conditions.md) page for the full syntax and token reference.
 
 ---
@@ -319,10 +323,14 @@ See the [Match Conditions](ci_conditions.md) page for the full syntax and token 
 ## Report Generation
 
 Reports are generated from templates. VulnScout ships with built-in templates and also supports custom ones.
+Use `--project` to select the report scope; when omitted, the `default` project is used. A project report includes all its variants. Add `--variant` to restrict the report to one variant in that project. Unknown project or variant names exit with **code 1** instead of broadening the report scope.
 
 ```bash
 # Generate a report from a built-in template
 ./vulnscout --project demo --report summary.adoc
+
+# Generate a report for one variant only
+./vulnscout --project demo --variant x86 --report summary.adoc
 
 # Generate a match-condition report
 ./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
@@ -402,6 +410,10 @@ system time by default. Add `--use-original-timestamps` to preserve assessment
 timestamps from the file. `--use-current-timestamps` is also accepted to select
 the default explicitly.
 
+Current version 2 exports identify targets with variant names and packages,
+not instance-local variant UUIDs. Legacy version 1 files remain importable;
+unsupported future versions are rejected explicitly.
+
 ```bash
 ./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json
 
@@ -467,7 +479,7 @@ Example:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VULNSCOUT_CONTAINER` | Name of the container | `vulnscout` |
-| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.21` |
+| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.22` |
 | `VULNSCOUT_BUILD_DIR` | Root build directory on the host | `./.vulnscout` |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |

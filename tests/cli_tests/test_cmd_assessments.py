@@ -43,8 +43,7 @@ class TestExportCustomOpenVexAssessments:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="custom",
             )
             _db.session.commit()
@@ -81,8 +80,7 @@ class TestExportCustomVulnScoutData:
             finding = Finding.create(package.id, vulnerability.id)
             Assessment.create(
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=variant.id,
+                targets=[(variant.id, finding.id)],
                 origin="ai",
             )
 
@@ -333,3 +331,80 @@ class TestImportCrossInstanceVariantId:
 
         assert result.exit_code != 0
         assert foreign_variant_id in result.output
+
+    def test_future_custom_data_version_is_rejected(self, app, tmp_path):
+        from src.models.project import Project
+
+        with app.app_context():
+            project_name = Project.create("FutureVersionProject").name
+        import_file = tmp_path / "future-custom-data.json"
+        import_file.write_text(json.dumps({"version": 3, "assessments": []}))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code != 0
+        assert "Unsupported VulnScout JSON version: 3" in result.output
+
+    @pytest.mark.parametrize("legacy_version", ["1", "1.0"])
+    def test_legacy_string_versions_are_accepted(self, app, tmp_path, legacy_version):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("LegacyStringVersionProject")
+            variant = Variant.create("legacy-string-version", project.id)
+            project_name = project.name
+            variant_id = variant.id
+
+        import_file = tmp_path / "legacy-string-version.json"
+        import_file.write_text(json.dumps({
+            "version": legacy_version,
+            "assessments": [{
+                "vuln_id": "CVE-2099-LEGACY-STRING-CLI",
+                "status": "affected",
+                "packages": ["legacy-string-cli@1.0"],
+                "variant_id": str(variant_id),
+            }],
+        }))
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "Imported 1 assessments" in result.output
+
+    def test_legacy_decimal_version_is_accepted(self, app, tmp_path):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("LegacyDecimalVersionProject")
+            variant = Variant.create("legacy-decimal-version", project.id)
+            project_name = project.name
+            variant_id = variant.id
+
+        import_file = tmp_path / "legacy-decimal-version.json"
+        import_file.write_text(
+            '{"version": 1.0, "assessments": [{'
+            '"vuln_id": "CVE-2099-LEGACY-DECIMAL-CLI", '
+            '"status": "affected", '
+            '"packages": ["legacy-decimal-cli@1.0"], '
+            f'"variant_id": "{variant_id}"'
+            '}]}'
+        )
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-vulnscout-data",
+            "--project", project_name,
+            str(import_file),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "Imported 1 assessments" in result.output

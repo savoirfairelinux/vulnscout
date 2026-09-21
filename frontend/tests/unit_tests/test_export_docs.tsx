@@ -36,7 +36,7 @@ describe('Exports Page', () => {
         render(<Exports />);
 
         expect(await screen.findByRole('heading', { name: 'Export' })).toBeInTheDocument();
-        expect(screen.getByRole('region', { name: 'Create export' })).toBeInTheDocument();
+        expect(screen.getByRole('region', { name: 'Generate export' })).toBeInTheDocument();
         expect(screen.getByText(/Settings > Custom reports & assets/i)).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /upload a custom report or asset/i })).not.toBeInTheDocument();
     });
@@ -55,7 +55,8 @@ describe('Exports Page', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Next' }));
         fireEvent.click(screen.getByRole('radio', { name: /^Reports/i }));
         expect(screen.getByRole('heading', { name: 'Output layout' })).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('radio', { name: /one set per variant/i }));
+        fireEvent.click(screen.getByRole('radio', { name: /one report per variant and template/i }));
+        expect(screen.getByRole('radio', { name: /one combined report per template/i })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
         expect(screen.queryByRole('checkbox', { name: /logo\.png/i })).not.toBeInTheDocument();
@@ -116,6 +117,26 @@ describe('Exports Page', () => {
         click.mockRestore();
     });
 
+    test('uses a compact one-variant-per-line Project scope layout', async () => {
+        loadProject();
+        render(<Exports projectId="project-1" />);
+
+        await screen.findByRole('checkbox', { name: 'alpha' });
+        expect(screen.getByTestId('export-variant-grid')).toHaveClass(
+            'grid-cols-1', 'max-h-56',
+        );
+        expect(screen.getByTestId('export-variant-grid')).not.toHaveClass(
+            'sm:grid-cols-2', 'xl:grid-cols-3',
+        );
+        expect(screen.getByRole('checkbox', { name: 'alpha' }).closest('label')).toHaveClass(
+            'border-cyan-500', 'bg-cyan-950/40',
+        );
+        const region = screen.getByRole('region', { name: 'Generate export' });
+        expect(region).not.toHaveClass('[&_.text-sm]:!text-lg');
+        expect(region).toHaveClass('border-neutral-700', 'bg-neutral-900');
+        expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+    });
+
     test('focuses each step heading after wizard navigation', async () => {
         loadProject();
         render(<Exports projectId="project-1" />);
@@ -142,7 +163,7 @@ describe('Exports Page', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
         expect(screen.getByRole('heading', { name: 'Select SBOM files' })).toBeInTheDocument();
-        expect(screen.queryByRole('radio', { name: /Consolidated/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: /One combined report per template/i })).not.toBeInTheDocument();
         expect(screen.queryByRole('checkbox', { name: /summary\.adoc/i })).not.toBeInTheDocument();
         const spdx = screen.getByRole('group', { name: 'SPDX 2.3' });
         const spdxJson = within(spdx).getByRole('checkbox', { name: /json/i });

@@ -358,6 +358,41 @@ describe('ProjectVariantSelector', () => {
         expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'difference', [], '');
     });
 
+    test('reopened select scope initializes the visible compare variant', async () => {
+        const onApply = jest.fn();
+        render(
+            <ProjectVariantSelector
+                defaultProject={{id: 'proj-1', name: 'ProjectAlpha'}}
+                defaultScope={{
+                    project_id: 'proj-1',
+                    mode: 'select',
+                    variant_ids: ['var-1', 'var-2', 'var-3'],
+                    compare_base_id: 'var-1',
+                    compare_operation: 'difference',
+                    compare_variant_id: '',
+                }}
+                onApply={onApply}
+            />
+        );
+
+        await waitFor(() => expect(mockVariantsList).toHaveBeenCalledWith('proj-1'));
+        await openPanel();
+        await act(async () => {
+            fireEvent.click(screen.getByRole('radio', {name: /compare variants/i}));
+        });
+
+        const selects = screen.getAllByRole('combobox');
+        await waitFor(() => expect(selects[2]).toHaveValue('var-2'));
+        expect(screen.getByRole('button', {name: 'Apply'})).toBeEnabled();
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', {name: 'Apply'}));
+        });
+
+        expect(onApply).toHaveBeenCalledWith(
+            'proj-1', 'var-1', 'var-2', 'difference', [], '',
+        );
+    });
+
     test('Apply in compare mode with intersection operation passes correct args', async () => {
         const onApply = jest.fn();
         render(<ProjectVariantSelector onApply={onApply} />);
@@ -580,7 +615,8 @@ describe('ProjectVariantSelector', () => {
         expect(screen.getByRole('checkbox', { name: 'candidate' })).not.toBeChecked();
     });
 
-    test('restores a persisted compare scope', async () => {
+    test('restores a persisted non-first compare variant', async () => {
+        const onApply = jest.fn();
         render(
             <ProjectVariantSelector
                 defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }}
@@ -590,18 +626,27 @@ describe('ProjectVariantSelector', () => {
                     variant_ids: [],
                     compare_base_id: 'var-1',
                     compare_operation: 'intersection',
-                    compare_variant_id: 'var-2',
+                    compare_variant_id: 'var-3',
                 }}
-                onApply={jest.fn()}
+                onApply={onApply}
             />
         );
 
-        await waitFor(() => expect(screen.getByText('default ∩ release')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('default ∩ staging')).toBeInTheDocument());
         await openPanel();
         await waitFor(() => {
             expect(screen.getByRole('radio', { name: /compare variants/i })).toBeChecked();
         });
         expect(screen.getByRole('radio', { name: /intersection/i })).toBeChecked();
+        const selects = screen.getAllByRole('combobox');
+        expect(selects[2]).toHaveValue('var-3');
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', {name: 'Apply'}));
+        });
+        expect(onApply).toHaveBeenCalledWith(
+            'proj-1', 'var-1', 'var-3', 'intersection', [], '',
+        );
     });
 
     // -----------------------------------------------------------------------

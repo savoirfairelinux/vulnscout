@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -119,12 +119,59 @@ jest.mock('../../src/helpers/exportJson', () => ({
 
 import Review from '../../src/pages/Review';
 import { downloadJson } from '../../src/helpers/exportJson';
+import { STATUS_VEX_TO_GRAPH } from '../../src/handlers/assessments';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/**
+ * Simulate the server's `/api/reviews/assessments` endpoint (backed by
+ * `annotate_targets()`): one assessment in, one entry out — a "group" is now
+ * just an assessment, so there is no bucketing left to do. Each entry's
+ * `targets` are taken from the fixture's own `targets` array when it
+ * provides one (multi-target fixtures), else derived from its flat
+ * `packages`/`variant_id`. `vuln_texts` is looked up from whichever fixture
+ * (across both the custom and AI lists) carries it for that vuln_id,
+ * mirroring how the real route enriches assessments from the Vulnerability
+ * model rather than from the assessment row itself.
+ */
+function toAssessments(list: any[], vulnTextsMap: Record<string, unknown[]>): any[] {
+    return list.map((a: any) => {
+        const targets = a.targets ?? (a.packages ?? []).map((pkg: string) => ({
+            variant_id: a.variant_id ?? null,
+            package: pkg,
+            outdated: Boolean(a.outdated) || Boolean((a.superseded_map?.[pkg] ?? []).length),
+        }));
+        return {
+            id: a.id,
+            vuln_id: a.vuln_id,
+            status: a.status,
+            simplified_status: STATUS_VEX_TO_GRAPH[a.status] ?? `[invalid status] ${a.status}`,
+            justification: a.justification ?? '',
+            impact_statement: a.impact_statement ?? '',
+            status_notes: a.status_notes ?? '',
+            workaround: a.workaround ?? '',
+            responses: a.responses ?? [],
+            origin: a.origin ?? 'custom',
+            timestamp: a.timestamp,
+            targets,
+            vuln_texts: a.vuln_texts ?? vulnTextsMap[a.vuln_id] ?? [],
+        };
+    }).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+}
+
+function buildVulnTextsMap(allItems: any[]): Record<string, unknown[]> {
+    const map: Record<string, unknown[]> = {};
+    for (const item of allItems) {
+        if (item.vuln_id && !map[item.vuln_id] && item.vuln_texts) {
+            map[item.vuln_id] = item.vuln_texts;
+        }
+    }
+    return map;
+}
 
 const VARIANTS = [
     { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
@@ -146,6 +193,29 @@ const makeAssessment = (id: string, variantId: string) => ({
     timestamp: '2024-01-01T00:00:00Z',
     origin: 'custom',
     responses: [],
+});
+
+/** One assessment covering several (variant, package) targets directly —
+ *  what a real multi-target assessment row looks like, since a "group" is
+ *  now just an assessment with more than one target. */
+const makeMultiTargetAssessment = (
+    id: string,
+    vulnId: string,
+    targets: Array<{ variantId: string; pkg: string; outdated?: boolean }>,
+    extra: Record<string, unknown> = {},
+) => ({
+    id,
+    vuln_id: vulnId,
+    packages: [...new Set(targets.map(t => t.pkg))],
+    status: 'affected',
+    status_notes: 'shared note',
+    timestamp: '2024-01-01T00:00:00Z',
+    origin: 'custom',
+    responses: [],
+    targets: targets.map(t => ({
+        variant_id: t.variantId, package: t.pkg, outdated: Boolean(t.outdated),
+    })),
+    ...extra,
 });
 
 /** A fully-populated assessment exercising every column's "value present" branch. */
@@ -210,11 +280,17 @@ type NetworkOpts = {
     variants?: unknown[];
     projects?: unknown[];
     packages?: unknown[];
+    packagesByVariant?: Record<string, unknown[]>;
+    packagesGate?: Promise<void>;
+    variantsGate?: Promise<void>;
+    variantsOk?: boolean;
     mutationOk?: boolean;
     exportOk?: boolean;
     importResult?: Record<string, unknown>;
     vulnDetail?: unknown;
     vulnOk?: boolean;
+    /** Keyed by assessment id — served from the AI-review-verdict endpoint. */
+    reviews?: Record<string, unknown>;
 };
 
 /**
@@ -228,7 +304,8 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         variants = VARIANTS, projects = PROJECTS,
         // Every variant ships the shared package by default so the editor's
         // package/variant compatibility gate does not disable the checkboxes.
-        packages = [{ name: 'pkgA', version: '1.0.0' }],
+        packages = [{ name: 'pkgA', version: '1.0.0' }], packagesByVariant, packagesGate,
+        variantsGate, variantsOk = true,
         mutationOk = true, exportOk = true,
         importResult = {
             status: 'success', assessments_imported: 2, assessments_skipped: 1,
@@ -236,6 +313,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         },
         vulnDetail = { id: 'CVE-2020-1111', version: '4.0', base_score: 5 },
         vulnOk = true,
+        reviews = {},
     } = opts;
 
     fetchMock.resetMocks();
@@ -243,6 +321,12 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         const url = req.url;
         const method = req.method;
         if (method === 'GET') {
+            if (url.includes('/api/reviews/assessments')) {
+                const origin = new URL(url).searchParams.get('origin');
+                const source = origin === 'ai' ? aiReviewList : reviewList;
+                const vulnTextsMap = buildVulnTextsMap([...reviewList, ...aiReviewList]);
+                return JSON.stringify(toAssessments(source, vulnTextsMap));
+            }
             if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify(te);
             if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify(cvss);
             if (url.includes('/api/assessments/review/export-custom-data')) {
@@ -255,11 +339,21 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
                     ? JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })
                     : { status: 500, body: JSON.stringify({}) };
             }
+            if (url.includes('/api/assessment-reviews')) return JSON.stringify(reviews);
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
-            if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) return JSON.stringify(variants);
-            if (url.includes('/api/packages')) return JSON.stringify(packages);
+            if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) {
+                if (variantsGate) await variantsGate;
+                return variantsOk
+                    ? JSON.stringify(variants)
+                    : {status: 500, body: JSON.stringify({error: 'variant lookup failed'})};
+            }
+            if (url.includes('/api/packages')) {
+                if (packagesGate) await packagesGate;
+                const variant = new URL(url).searchParams.get('variant_id');
+                return JSON.stringify((variant && packagesByVariant?.[variant]) ?? packages);
+            }
             if (url.includes('/api/vulnerabilities/')) {
                 return vulnOk
                     ? JSON.stringify(vulnDetail)
@@ -282,11 +376,11 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
 const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
     const editBtn = await screen.findByTitle('Edit assessment');
     await user.click(editBtn);
-    await screen.findByText('Apply to variants:');
+    await screen.findByText('Apply to exact targets:');
 };
 
 const variantCheckbox = (name: string): HTMLInputElement =>
-    screen.getByRole('checkbox', { name }) as HTMLInputElement;
+    screen.getByRole('checkbox', { name: `${name} / pkgA@1.0.0` }) as HTMLInputElement;
 
 const putCalls = () =>
     fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'PUT');
@@ -294,6 +388,8 @@ const deleteCalls = () =>
     fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'DELETE');
 const postCalls = () =>
     fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'POST');
+const reconcileCalls = () =>
+    postCalls().filter(c => String(c[0]).includes('/api/assessments/') && String(c[0]).endsWith('/reconcile'));
 
 const fileInput = (): HTMLInputElement =>
     document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -303,7 +399,24 @@ beforeEach(() => {
 });
 
 describe('Review — editing "Apply to variants"', () => {
-    test('checking a new variant creates an assessment for it (POST) and keeps the existing one (PUT)', async () => {
+    test('Escape asks before discarding an in-progress assessment edit', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(variantCheckbox('Variant Beta'));
+        await user.keyboard('{Escape}');
+
+        expect(screen.getByText('Discard assessment changes?')).toBeInTheDocument();
+        expect(screen.getByText('Apply to exact targets:')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+        expect(screen.queryByText('Discard assessment changes?')).not.toBeInTheDocument();
+        expect(screen.getByText('Apply to exact targets:')).toBeInTheDocument();
+    });
+
+    test('checking a new variant reconciles the complete target set once', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -318,29 +431,27 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(postCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls()).toHaveLength(1);
         });
 
-        // Existing v1 assessment is updated in place.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
-
-        // A new assessment is created for the newly-selected variant v2.
-        const post = postCalls().find(c => String(c[0]).includes('/api/vulnerabilities/CVE-2020-1111/assessments'));
-        expect(post).toBeDefined();
-        const body = JSON.parse((post![1] as any).body);
-        expect(body.variant_id).toBe('v2');
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.variant_ids).toEqual(['v1', 'v2']);
         expect(body.packages).toEqual(['pkgA@1.0.0']);
-
-        // No assessments were removed.
+        expect(body.targets).toEqual([
+            { package: 'pkgA@1.0.0', variant_id: 'v1' },
+            { package: 'pkgA@1.0.0', variant_id: 'v2' },
+        ]);
+        expect(body.update_timestamp).toBe(false);
+        expect(body.timestamp).toBe('2024-01-01T00:00:00Z');
+        expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('unchecking a variant deletes its assessment (DELETE) and keeps the other (PUT)', async () => {
-        // Two assessments with identical content are merged into one row.
-        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
+    test('unchecking one target of a multi-target assessment reconciles without deleting its row', async () => {
+        mockNetwork([makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+            { variantId: 'v2', pkg: 'pkgA@1.0.0' },
+        ])]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
@@ -354,24 +465,19 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(deleteCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls()).toHaveLength(1);
         });
 
-        // v2 assessment is deleted, v1 assessment is updated.
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a2'),
-            expect.objectContaining({ method: 'DELETE' })
-        );
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
-
-        // Nothing new was created.
-        expect(postCalls()).toHaveLength(0);
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.variant_ids).toEqual(['v1']);
+        expect(body.targets).toEqual([
+            { package: 'pkgA@1.0.0', variant_id: 'v1' },
+        ]);
+        expect(putCalls()).toHaveLength(0);
+        expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('editing without changing the variant selection neither creates nor deletes assessments', async () => {
+    test('editing without changing variants reconciles exactly once', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -380,15 +486,132 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
-            expect(putCalls().length).toBeGreaterThan(0);
+            expect(reconcileCalls()).toHaveLength(1);
         });
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/a1'),
-            expect.objectContaining({ method: 'PUT' })
-        );
+        expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
-        expect(postCalls()).toHaveLength(0);
+    });
+
+    test('edits sparse disjoint targets with the exact compatibility matrix', async () => {
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                {variantId: 'v1', pkg: 'pkgA@1.0.0'},
+                {variantId: 'v2', pkg: 'pkgB@2.0.0'},
+            ]),
+        ], {
+            packages: [
+                {name: 'pkgA', version: '1.0.0'},
+                {name: 'pkgB', version: '2.0.0'},
+            ],
+            packagesByVariant: {
+                v1: [{name: 'pkgA', version: '1.0.0'}],
+                v2: [{name: 'pkgB', version: '2.0.0'}],
+            },
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgA@1.0.0'})).toBeChecked();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgB@2.0.0'})).toBeChecked();
+        expect(screen.getByRole('checkbox', {name: 'Variant Alpha / pkgB@2.0.0'})).toBeDisabled();
+        expect(screen.getByRole('checkbox', {name: 'Variant Beta / pkgA@1.0.0'})).toBeDisabled();
+
+        await user.click(screen.getByText('Save Changes'));
+        await waitFor(() => expect(reconcileCalls()).toHaveLength(1));
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.targets).toEqual([
+            {variant_id: 'v1', package: 'pkgA@1.0.0'},
+            {variant_id: 'v2', package: 'pkgB@2.0.0'},
+        ]);
+    });
+
+    test('removing every target requires deletion confirmation', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(variantCheckbox('Variant Alpha'));
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(await screen.findByText(/No targets remain/)).toBeInTheDocument();
+        expect(reconcileCalls()).toHaveLength(0);
+
+        await user.click(screen.getByRole('button', {name: 'Keep editing'}));
+        expect(screen.getByText('Apply to exact targets:')).toBeInTheDocument();
+        expect(reconcileCalls()).toHaveLength(0);
+
+        await user.click(screen.getByText('Save Changes'));
+        await user.click(await screen.findByRole('button', {name: 'Yes, delete'}));
+        await waitFor(() => expect(reconcileCalls()).toHaveLength(1));
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.variant_ids).toEqual([]);
+        expect(body.targets).toEqual([]);
+        expect(deleteCalls()).toHaveLength(0);
+    });
+
+    test('compatibility loading does not flash an error banner', async () => {
+        let releasePackages!: () => void;
+        const packagesGate = new Promise<void>(resolve => { releasePackages = resolve; });
+        mockNetwork([makeAssessment('a1', 'v1')], {packagesGate});
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByTitle('Edit assessment'));
+        expect(await screen.findByText('Checking for previous package versions…')).toBeInTheDocument();
+        expect(screen.queryByText(/Target compatibility is unavailable/)).not.toBeInTheDocument();
+
+        await act(async () => releasePackages());
+        expect(await screen.findByText('Apply to exact targets:')).toBeInTheDocument();
+        expect(screen.queryByText(/Target compatibility is unavailable/)).not.toBeInTheDocument();
+    });
+
+    test('saving before variants resolve cannot expand sparse targets', async () => {
+        let releaseVariants!: () => void;
+        const variantsGate = new Promise<void>(resolve => { releaseVariants = resolve; });
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                {variantId: 'v1', pkg: 'pkgA@1.0.0'},
+                {variantId: 'v2', pkg: 'pkgB@2.0.0'},
+            ]),
+        ], {
+            variantsGate,
+            packages: [
+                {name: 'pkgA', version: '1.0.0'},
+                {name: 'pkgB', version: '2.0.0'},
+            ],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByTitle('Edit assessment'));
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(await screen.findByText('Target compatibility is still loading')).toBeInTheDocument();
+        expect(reconcileCalls()).toHaveLength(0);
+
+        await act(async () => releaseVariants());
+        await screen.findByText('Apply to exact targets:');
+    });
+
+    test('saving after variant lookup fails cannot expand sparse targets', async () => {
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                {variantId: 'v1', pkg: 'pkgA@1.0.0'},
+                {variantId: 'v2', pkg: 'pkgB@2.0.0'},
+            ]),
+        ], {variantsOk: false});
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByTitle('Edit assessment'));
+        expect(await screen.findByText('Target compatibility is unavailable. Try again.')).toBeInTheDocument();
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(reconcileCalls()).toHaveLength(0);
+        expect(screen.getAllByText('Target compatibility is unavailable. Try again.').length).toBeGreaterThan(0);
     });
 
     test('a successful edit reports success and notifies the parent', async () => {
@@ -402,6 +625,10 @@ describe('Review — editing "Apply to variants"', () => {
 
         await screen.findByText('Assessment updated successfully!');
         expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ type: 'update', vulnId: 'CVE-2020-1111' }));
+        expect(fetchMock.mock.calls.filter(([url, init]) =>
+            String(url).includes('/api/assessment-reviews')
+            && (!init?.method || init.method === 'GET')
+        )).toHaveLength(2);
     });
 
     test('a failed edit reports an error', async () => {
@@ -424,7 +651,7 @@ describe('Review — editing "Apply to variants"', () => {
         fireEvent.keyDown(document, { key: 'Escape' });
 
         await waitFor(() => {
-            expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+            expect(screen.queryByText('Apply to exact targets:')).not.toBeInTheDocument();
         });
     });
 
@@ -434,13 +661,10 @@ describe('Review — editing "Apply to variants"', () => {
         const user = userEvent.setup();
 
         await openEditor(user);
-        // The outermost editing overlay closes on click; the heading shows the vuln id.
-        const heading = screen.getByRole('heading', { name: 'CVE-2020-1111' });
-        const backdrop = heading.closest('.fixed');
-        fireEvent.click(backdrop as Element);
+        fireEvent.mouseDown(screen.getByTestId('modal-backdrop'));
 
         await waitFor(() => {
-            expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+            expect(screen.queryByText('Apply to exact targets:')).not.toBeInTheDocument();
         });
     });
 });
@@ -463,7 +687,7 @@ describe('Review — loading and error states', () => {
             const url = req.url;
             if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify([]);
             if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify([]);
-            if (url.includes('/api/assessments/review')) return { status: 500, body: 'boom' };
+            if (url.includes('/api/reviews/assessments')) return { status: 500, body: 'boom' };
             if (url.includes('/api/variants')) return JSON.stringify(VARIANTS);
             if (url.includes('/api/projects')) return JSON.stringify(PROJECTS);
             return JSON.stringify([]);
@@ -495,14 +719,10 @@ describe('Review — rendering columns and tabs', () => {
     });
 
     test('shows outdated on the affected variant instead of the status', async () => {
-        mockNetwork([
-            {
-                ...makeAssessment('a1', 'v1'),
-                outdated: true,
-                superseded_map: {'pkgA@1.0.0': ['pkgA@2.0.0']},
-            },
-            makeAssessment('a2', 'v2'),
-        ]);
+        mockNetwork([makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v2', pkg: 'pkgA@1.0.0', outdated: false },
+        ])]);
         render(<Review projectId="proj1" />);
 
         const outdatedBadges = await screen.findAllByText('Outdated');
@@ -587,6 +807,26 @@ describe('Review — AI Assessments tab', () => {
         expect(screen.getByTitle('Reject AI suggestion')).toBeInTheDocument();
     });
 
+    test('hides the AI review filter on the AI Assessments tab but shows it on Assessments', async () => {
+        // AI-origin assessments are never reviewed (the feature is gated to
+        // origin === "custom"), so the "AI review" filter is a no-op there;
+        // it should not render on that tab. "Outdated" has no such
+        // restriction and keeps rendering on both tabs.
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        expect(screen.getByRole('button', { name: /AI review/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+
+        await user.click(screen.getByText('AI Assessments'));
+        await screen.findByTitle('Approve AI suggestion');
+
+        expect(screen.queryByRole('button', { name: /AI review/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+    });
+
     test('shows the AI assessments empty state when there are none pending', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [] });
         render(<Review projectId="proj1" />);
@@ -598,7 +838,7 @@ describe('Review — AI Assessments tab', () => {
         await screen.findByText('No AI-generated assessments found');
     });
 
-    test('approving a pending AI row calls approveAi with all grouped ids and refreshes the lists', async () => {
+    test('approving a pending AI row calls the approve endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -611,7 +851,7 @@ describe('Review — AI Assessments tab', () => {
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
     });
 
-    test('rejecting a pending AI row calls rejectAi with all grouped ids and refreshes the lists', async () => {
+    test('rejecting a pending AI row calls the reject endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -735,13 +975,15 @@ describe('Review — vulnerability modal', () => {
 // Assessments tab Previous/Next navigation (commit 144be635)
 // ===========================================================================
 
-// Two rows sharing the same vuln_id but differing in status/justification so
-// groupAssessments keeps them as two distinct rows — exercising the vuln_id
-// dedup in the display-order navigation list. A third row uses a different
-// vuln_id entirely.
+// Two rows sharing the same vuln_id but differing in status/justification,
+// each its own assessment — exercising the vuln_id dedup in the display-order
+// navigation list. A third row uses a different vuln_id entirely.
+// Timestamps are ordered newest-first to match `toAssessments`' sort
+// (mirroring the real assessment listing, which returns rows newest first),
+// so the raw array order above already equals the rendered table order.
 const NAV_DUP_A = {
     id: 'nav-a', vuln_id: 'CVE-NAV-1', packages: ['pkgA@1.0.0'], variant_id: 'v1',
-    status: 'affected', status_notes: 'note-a', timestamp: '2024-01-01T00:00:00Z',
+    status: 'affected', status_notes: 'note-a', timestamp: '2024-01-03T00:00:00Z',
     origin: 'custom', responses: [],
 };
 const NAV_DUP_B = {
@@ -751,7 +993,7 @@ const NAV_DUP_B = {
 };
 const NAV_OTHER = {
     id: 'nav-c', vuln_id: 'CVE-NAV-2', packages: ['pkgA@1.0.0'], variant_id: 'v1',
-    status: 'affected', status_notes: 'note-c', timestamp: '2024-01-03T00:00:00Z',
+    status: 'affected', status_notes: 'note-c', timestamp: '2024-01-01T00:00:00Z',
     origin: 'custom', responses: [],
 };
 
@@ -768,6 +1010,11 @@ function mockNetworkWithVulnById(
     fetchMock.resetMocks();
     fetchMock.mockResponse(async (req) => {
         const url = req.url;
+        if (url.includes('/api/reviews/assessments')) {
+            const origin = new URL(url).searchParams.get('origin');
+            const vulnTextsMap = buildVulnTextsMap(reviewList);
+            return JSON.stringify(toAssessments(origin === 'ai' ? [] : reviewList, vulnTextsMap));
+        }
         if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify(te);
         if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify(cvss);
         if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
@@ -810,6 +1057,11 @@ function mockNetworkWithDeferredVuln(
     fetchMock.resetMocks();
     fetchMock.mockResponse(async (req) => {
         const url = req.url;
+        if (url.includes('/api/reviews/assessments')) {
+            const origin = new URL(url).searchParams.get('origin');
+            const vulnTextsMap = buildVulnTextsMap(reviewList);
+            return JSON.stringify(toAssessments(origin === 'ai' ? [] : reviewList, vulnTextsMap));
+        }
         if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify([]);
         if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify([]);
         if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
@@ -1189,23 +1441,16 @@ describe('Review — filters, search and keyboard', () => {
         mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
         render(<Review projectId="proj1" />);
 
-        await screen.findByText('CVE-2020-1111');
+        await screen.findAllByText('CVE-2020-1111');
         expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     });
 
     test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
-        const mixedOutdated = {
-            ...makeAssessment('outdated', 'v1'),
-            vuln_id: 'CVE-2020-MIXED',
-            outdated: true,
-            superseded_map: { 'pkgA@1.0.0': ['pkgA@2.0.0'] },
-        };
-        const mixedCurrent = {
-            ...makeAssessment('current', 'v2'),
-            vuln_id: 'CVE-2020-MIXED',
-            packages: ['pkgB@1.0.0'],
-        };
-        mockNetwork([mixedOutdated, mixedCurrent, makeAssessment('current', 'v1')]);
+        const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
+        ]);
+        mockNetwork([mixedRow, makeAssessment('current', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
@@ -1386,6 +1631,10 @@ describe('Review — deleting an assessment', () => {
                 expect.objectContaining({ method: 'POST' }),
             );
         });
+        expect(fetchMock).not.toHaveBeenCalledWith(
+            expect.stringContaining('/api/assessments/ai-1/group'),
+            expect.anything(),
+        );
     });
 
     test('bulk deletion removes selected time estimates', async () => {
@@ -1459,6 +1708,99 @@ describe('Review — deleting an assessment', () => {
         await waitFor(() => {
             expect(deleteCalls()).toHaveLength(0);
         });
+    });
+});
+
+// ===========================================================================
+// Copying assessment ids
+// ===========================================================================
+
+describe('Review — copying assessment ids', () => {
+    /** Replace the clipboard userEvent installs so writes are observable. */
+    const stubClipboard = (writeText: jest.Mock) => {
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText },
+            configurable: true,
+        });
+    };
+
+    test('copies the assessment id of a single-target row', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(writeText).toHaveBeenCalledWith('a1');
+    });
+
+    test('copies the assessment id when the row is multi-target', async () => {
+        mockNetwork([makeMultiTargetAssessment('g1', 'CVE-2020-1111', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+            { variantId: 'v2', pkg: 'pkgA@1.0.0' },
+        ])]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy multi-target id'));
+
+        expect(writeText).toHaveBeenCalledWith('g1');
+    });
+
+    test('confirms the copy on the button itself, then reverts', async () => {
+        jest.useFakeTimers();
+        try {
+            mockNetwork([makeAssessment('a1', 'v1')]);
+            render(<Review projectId="proj1" />);
+            const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+            const writeText = jest.fn().mockResolvedValue(undefined);
+            stubClipboard(writeText);
+
+            await user.click(await screen.findByTitle('Copy assessment id'));
+
+            await screen.findByRole('status');
+            // The confirmation replaces the icon in place: nothing is added
+            // beside the button, so the neighbouring actions never reflow.
+            const button = screen.getByTitle('Copy assessment id');
+            expect(button.querySelector('[data-icon="check"]')).toBeInTheDocument();
+            expect(button.querySelector('[data-icon="copy"]')).not.toBeInTheDocument();
+
+            await act(async () => { jest.advanceTimersByTime(2000); });
+            await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+            expect(screen.getByTitle('Copy assessment id').querySelector('[data-icon="copy"]')).toBeInTheDocument();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('stays quiet when the browser denies clipboard access', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockRejectedValue(new Error('denied'));
+        stubClipboard(writeText);
+
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    test('copies ids from the AI assessments tab too', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        const writeText = jest.fn().mockResolvedValue(undefined);
+        stubClipboard(writeText);
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Copy assessment id'));
+
+        expect(writeText).toHaveBeenCalledWith('ai1');
     });
 });
 
@@ -1666,6 +2008,22 @@ describe('Review — import and export', () => {
         expect(importPayload.project_id).toBe('proj1');
     });
 
+    test('rejects unsupported VulnScout JSON versions before submission', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Import'));
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Choose file' }));
+        fireEvent.change(fileInput(), {
+            target: { files: [new File([JSON.stringify({ version: 3, assessments: [] })], 'future.json')] },
+        });
+
+        expect(await screen.findByText(/Unsupported VulnScout JSON version: 3/)).toBeInTheDocument();
+        expect(postCalls().some(call => String(call[0]).includes('/import-custom-data'))).toBe(false);
+    });
+
     test('imports OpenVEX into one selected variant without using the filename', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
@@ -1721,5 +2079,254 @@ describe('Review — import and export', () => {
         fireEvent.change(fileInput(), { target: { files: [file] } });
 
         await screen.findByText('Import failed — invalid file');
+    });
+});
+
+describe('Review page AI review column', () => {
+    // What used to be two same-content assessment records sharing a group_id
+    // is now one assessment spanning two (variant, package) targets.
+    const multiTargetAssessment = makeMultiTargetAssessment('assess-1', 'CVE-2024-0001', [
+        { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+        { variantId: 'v2', pkg: 'pkgA@1.0.0' },
+    ], { status: 'not_affected' });
+
+    const differsReview = {
+        id: 'r1',
+        assessment_id: 'assess-1',
+        variant_id: 'v1',
+        package: 'pkgA@1.0.0',
+        status: 'affected',
+        status_notes: '',
+        justification: '',
+        impact_statement: '',
+        workaround: '',
+        responses: [],
+        rationale: 'in rootfs',
+        timestamp: '2026-08-06T10:00:00Z',
+        verdict: 'differs' as const,
+        is_stale: false,
+    };
+
+    test('renders one row per server-side assessment', async () => {
+        // Arrange
+        mockNetwork([multiTargetAssessment]);
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findAllByText('CVE-2024-0001')).toHaveLength(1);
+    });
+
+    test('flags a multi-target assessment whose targets are only partly reviewed', async () => {
+        // Arrange: two targets (v1, v2), a review on just v1.
+        mockNetwork([multiTargetAssessment], { reviews: { 'assess-1': [differsReview] } });
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findByTitle('1 differ · 1 not reviewed')).toBeInTheDocument();
+    });
+
+    test('centres the verdict flags in the cell', async () => {
+        mockNetwork([multiTargetAssessment], { reviews: { 'assess-1': [differsReview] } });
+
+        render(<Review projectId="proj1" />);
+
+        const flags = await screen.findByTitle('1 differ · 1 not reviewed');
+        expect(flags.parentElement).toHaveClass('justify-center');
+    });
+
+    test('renders a dash for assessments with no review', async () => {
+        mockNetwork([multiTargetAssessment]);
+
+        render(<Review projectId="proj1" />);
+
+        expect(await screen.findByTitle(/not reviewed/i)).toBeInTheDocument();
+    });
+});
+
+describe('Review — AI review filter', () => {
+    /** One custom assessment on its own row, keyed by its own vuln id so each
+     *  verdict is identifiable in the table. */
+    const assessment = (id: string, vulnId: string) => ({
+        id, vuln_id: vulnId, status: 'not_affected',
+        origin: 'custom', packages: ['pkgA@1.0.0'], timestamp: '2024-01-01T00:00:00Z', responses: [],
+        targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
+    });
+
+    const review = (assessmentId: string, verdict: 'agrees' | 'differs', isStale = false) => ({
+        id: `rev-${assessmentId}`,
+        assessment_id: assessmentId,
+        variant_id: 'v1',
+        package: 'pkgA@1.0.0',
+        status: 'affected',
+        status_notes: '',
+        justification: '',
+        impact_statement: '',
+        workaround: '',
+        responses: [],
+        rationale: 'because',
+        timestamp: '2026-08-06T10:00:00Z',
+        verdict,
+        is_stale: isStale,
+    });
+
+    const ASSESSMENTS = [
+        assessment('ag-1', 'CVE-2024-AGREE'),
+        assessment('df-1', 'CVE-2024-DIFFER'),
+        assessment('st-1', 'CVE-2024-STALE'),
+        assessment('no-1', 'CVE-2024-NONE'),
+    ];
+
+    const REVIEWS = {
+        'ag-1': [review('ag-1', 'agrees')],
+        'df-1': [review('df-1', 'differs')],
+        'st-1': [review('st-1', 'agrees', true)],
+    };
+
+    /** Render the page with the four verdicts present and open the filter. */
+    const openFilter = async (user: ReturnType<typeof userEvent.setup>) => {
+        mockNetwork(ASSESSMENTS, { reviews: REVIEWS });
+        render(<Review projectId="proj1" />);
+        await screen.findByText('CVE-2024-AGREE');
+        await user.click(screen.getByRole('button', { name: /AI review/ }));
+    };
+
+    const expectOnly = async (vulnId: string) => {
+        await waitFor(() => {
+            expect(screen.getAllByText(/^CVE-2024-/)).toHaveLength(1);
+        });
+        expect(screen.getByText(vulnId)).toBeInTheDocument();
+    };
+
+    test('sits between the Justification and Supplier filters', async () => {
+        mockNetwork(ASSESSMENTS, { reviews: REVIEWS });
+        render(<Review projectId="proj1" />);
+
+        await screen.findByText('CVE-2024-AGREE');
+        const filters = screen.getAllByRole('button')
+            .map(b => b.textContent?.trim())
+            .filter(text => text === 'Status' || text === 'Justification' || text === 'AI review');
+        expect(filters).toEqual(['Status', 'Justification', 'AI review']);
+    });
+
+    test('filters to rows whose review agreed', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review agreed' }));
+
+        await expectOnly('CVE-2024-AGREE');
+    });
+
+    test('filters to rows whose review differed', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review differed' }));
+
+        await expectOnly('CVE-2024-DIFFER');
+    });
+
+    test('filters to rows whose review went stale, whatever it concluded', async () => {
+        // The stale row's review agreed, but it was written against an
+        // assessment that has since changed, so it belongs to "stale" only.
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review stale' }));
+
+        await expectOnly('CVE-2024-STALE');
+    });
+
+    test('filters to rows with no review at all', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'No AI review' }));
+
+        await expectOnly('CVE-2024-NONE');
+    });
+
+    test('selecting several options keeps rows matching any of them', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review agreed' }));
+        await user.click(screen.getByRole('checkbox', { name: 'AI review differed' }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2024-NONE')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-2024-AGREE')).toBeInTheDocument();
+        expect(screen.getByText('CVE-2024-DIFFER')).toBeInTheDocument();
+        expect(screen.queryByText('CVE-2024-STALE')).not.toBeInTheDocument();
+    });
+
+    test('matches every target-level state on a partially reviewed row', async () => {
+        const mixed = {
+            ...assessment('mixed-1', 'CVE-2024-MIXED'),
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            targets: [
+                {variant_id: 'v1', package: 'pkgA@1.0.0'},
+                {variant_id: 'v2', package: 'pkgB@2.0.0'},
+            ],
+        };
+        const mixedReview = review('mixed-1', 'differs');
+        mockNetwork([mixed], {reviews: {'mixed-1': [mixedReview]}});
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2024-MIXED');
+        await user.click(screen.getByRole('button', {name: /AI review/}));
+        await user.click(screen.getByRole('checkbox', {name: 'No AI review'}));
+        expect(screen.getByText('CVE-2024-MIXED')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('checkbox', {name: 'No AI review'}));
+        await user.click(screen.getByRole('checkbox', {name: 'AI review differed'}));
+        expect(screen.getByText('CVE-2024-MIXED')).toBeInTheDocument();
+    });
+
+    test('matches agreement when another target differs', async () => {
+        const mixed = {
+            ...assessment('mixed-2', 'CVE-2024-MIXED-VERDICTS'),
+            packages: ['pkgA@1.0.0', 'pkgB@2.0.0'],
+            targets: [
+                {variant_id: 'v1', package: 'pkgA@1.0.0'},
+                {variant_id: 'v2', package: 'pkgB@2.0.0'},
+            ],
+        };
+        const agreeing = review('mixed-2', 'agrees');
+        const differing = {
+            ...review('mixed-2', 'differs'),
+            id: 'rev-mixed-2-v2',
+            variant_id: 'v2',
+            package: 'pkgB@2.0.0',
+        };
+        mockNetwork([mixed], {reviews: {'mixed-2': [agreeing, differing]}});
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2024-MIXED-VERDICTS');
+        await user.click(screen.getByRole('button', {name: /AI review/}));
+        await user.click(screen.getByRole('checkbox', {name: 'AI review agreed'}));
+
+        expect(screen.getByText('CVE-2024-MIXED-VERDICTS')).toBeInTheDocument();
+    });
+
+    test('reset filters clears the AI review selection', async () => {
+        const user = userEvent.setup();
+        await openFilter(user);
+
+        await user.click(screen.getByRole('checkbox', { name: 'AI review agreed' }));
+        await expectOnly('CVE-2024-AGREE');
+
+        await user.click(screen.getByText('Reset Filters'));
+
+        await waitFor(() => {
+            expect(screen.getAllByText(/^CVE-2024-/)).toHaveLength(4);
+        });
     });
 });

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBug, faShieldHalved, faLeaf, faCrosshairs, faXmark, faArrowsRotate, faFileExport } from "@fortawesome/free-solid-svg-icons";
+import { useSyncExternalStore } from "react";
+import { faBug, faShieldHalved, faLeaf, faCrosshairs, faArrowsRotate, faFileExport } from "@fortawesome/free-solid-svg-icons";
 import OperationQueuePanel from "./OperationQueuePanel";
+import ModalShell from "./ModalShell";
 import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot, dismiss as grypeDismiss } from "../handlers/grypeScanState";
 import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot, dismiss as nvdDismiss } from "../handlers/nvdScanState";
 import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot, dismiss as osvDismiss } from "../handlers/osvScanState";
@@ -23,7 +23,6 @@ const refreshColors = { border: "border-cyan-700/60", headerBg: "bg-cyan-900/40"
 const exportColors = { border: "border-teal-700/60", headerBg: "bg-teal-900/40", iconText: "text-teal-400", titleText: "text-teal-200", subtitleText: "text-teal-300/80", bar: "bg-teal-500" };
 
 function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
-    const overlayRef = useRef<HTMLDivElement>(null);
     const grypeEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
     const nvdEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
     const osvEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
@@ -31,74 +30,46 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
     const refreshEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
     const exportEntries = useSyncExternalStore(exportSubscribe, exportGetSnapshot);
 
-    useEffect(() => {
-        if (!isOpen) return;
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") onClose();
-        };
-        document.addEventListener("keydown", handleKeyDown);
-        return () => document.removeEventListener("keydown", handleKeyDown);
-    }, [isOpen, onClose]);
-
     if (!isOpen) return null;
 
     const hasEntries = grypeEntries.length + nvdEntries.length + osvEntries.length + sccEntries.length + refreshEntries.length + exportEntries.length > 0;
 
     return (
-        <div
-            ref={overlayRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="operation-queue-title"
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
-            onMouseDown={event => {
-                if (event.target === overlayRef.current) onClose();
-            }}
+        <ModalShell
+            isOpen={isOpen}
+            title="Operation queue"
+            subtitle="This window can be safely closed. Track the operation queue in the navigation bar."
+            titleId="operation-queue-title"
+            onClose={onClose}
+            closeLabel="Close operation queue"
+            size="large"
+            contentClassName="overflow-y-auto"
         >
-            <div className="flex max-h-[min(42rem,calc(100vh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-neutral-900 shadow-xl">
-                <div className="flex items-center justify-between border-b border-neutral-700 px-4 py-3">
-                    <div>
-                        <h2 id="operation-queue-title" className="text-lg font-semibold text-white">Operation queue</h2>
-                        <p className="text-sm text-neutral-400">This window can be safely closed. Track the operation queue in the navigation bar.</p>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        aria-label="Close operation queue"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-700 hover:text-white"
-                    >
-                        <FontAwesomeIcon icon={faXmark} />
-                    </button>
+            {hasEntries ? (
+                <div className="overflow-hidden rounded-lg border border-neutral-700 divide-y divide-neutral-700">
+                    {grypeEntries.map(entry => (
+                        <OperationQueuePanel key={`grype-${entry.variantId}`} entry={entry} label="Grype Scan" icon={faBug} colors={grypeColors} onDismiss={() => grypeDismiss(entry.variantId)} />
+                    ))}
+                    {nvdEntries.map(entry => (
+                        <OperationQueuePanel key={`nvd-${entry.variantId}`} entry={entry} label="NVD Scan" icon={faShieldHalved} colors={nvdColors} onDismiss={() => nvdDismiss(entry.variantId)} />
+                    ))}
+                    {osvEntries.map(entry => (
+                        <OperationQueuePanel key={`osv-${entry.variantId}`} entry={entry} label="OSV Scan" icon={faLeaf} colors={osvColors} onDismiss={() => osvDismiss(entry.variantId)} />
+                    ))}
+                    {sccEntries.map(entry => (
+                        <OperationQueuePanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
+                    ))}
+                    {refreshEntries.map(entry => (
+                        <OperationQueuePanel key={entry.variantId} entry={entry} label="Vulnerability Data Refresh" icon={faArrowsRotate} colors={refreshColors} onDismiss={() => dismissRefreshQueueEntry(entry.variantId as RefreshType)} />
+                    ))}
+                    {exportEntries.map(entry => (
+                        <OperationQueuePanel key={entry.variantId} entry={entry} label="Export" icon={faFileExport} colors={exportColors} onDismiss={() => exportDismiss(entry.variantId)} />
+                    ))}
                 </div>
-                <div className="overflow-y-auto p-4">
-                    {hasEntries ? (
-                        <div className="overflow-hidden rounded-lg border border-neutral-700 divide-y divide-neutral-700">
-                            {grypeEntries.map(entry => (
-                                <OperationQueuePanel key={`grype-${entry.variantId}`} entry={entry} label="Grype Scan" icon={faBug} colors={grypeColors} onDismiss={() => grypeDismiss(entry.variantId)} />
-                            ))}
-                            {nvdEntries.map(entry => (
-                                <OperationQueuePanel key={`nvd-${entry.variantId}`} entry={entry} label="NVD Scan" icon={faShieldHalved} colors={nvdColors} onDismiss={() => nvdDismiss(entry.variantId)} />
-                            ))}
-                            {osvEntries.map(entry => (
-                                <OperationQueuePanel key={`osv-${entry.variantId}`} entry={entry} label="OSV Scan" icon={faLeaf} colors={osvColors} onDismiss={() => osvDismiss(entry.variantId)} />
-                            ))}
-                            {sccEntries.map(entry => (
-                                <OperationQueuePanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
-                            ))}
-                            {refreshEntries.map(entry => (
-                                <OperationQueuePanel key={entry.variantId} entry={entry} label="Vulnerability Data Refresh" icon={faArrowsRotate} colors={refreshColors} onDismiss={() => dismissRefreshQueueEntry(entry.variantId as RefreshType)} />
-                            ))}
-                            {exportEntries.map(entry => (
-                                <OperationQueuePanel key={entry.variantId} entry={entry} label="Export" icon={faFileExport} colors={exportColors} onDismiss={() => exportDismiss(entry.variantId)} />
-                            ))}
-                        </div>
-                    ) : (
-                        <p className="py-8 text-center text-sm text-neutral-400">No operations to display.</p>
-                    )}
-                </div>
-            </div>
-        </div>
+            ) : (
+                <p className="py-8 text-center text-sm text-neutral-400">No operations to display.</p>
+            )}
+        </ModalShell>
     );
 }
 

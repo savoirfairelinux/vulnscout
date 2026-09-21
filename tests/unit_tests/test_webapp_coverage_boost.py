@@ -133,3 +133,45 @@ def test_stop_handler_prints_and_exits(capsys):
 
     assert err.value.code == 0
     assert "Stopping Flask server" in capsys.readouterr().out
+
+
+def test_refresh_sqlite_stats_skips_non_sqlite_backends(monkeypatch):
+    statements: list[str] = []
+
+    stub_db = SimpleNamespace(
+        engine=SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        session=SimpleNamespace(
+            execute=lambda statement: statements.append(statement),
+            commit=lambda: statements.append("commit"),
+            rollback=lambda: statements.append("rollback"),
+        ),
+        text=str,
+    )
+    monkeypatch.setattr(webapp_mod, "db", stub_db)
+
+    webapp_mod._refresh_sqlite_stats(Flask(__name__))
+
+    assert statements == []
+
+
+def test_refresh_sqlite_stats_rolls_back_and_reports_failures(monkeypatch, capsys):
+    events: list[str] = []
+
+    def _fail(_statement):
+        raise RuntimeError("analyze failure")
+
+    stub_db = SimpleNamespace(
+        engine=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+        session=SimpleNamespace(
+            execute=_fail,
+            commit=lambda: events.append("commit"),
+            rollback=lambda: events.append("rollback"),
+        ),
+        text=str,
+    )
+    monkeypatch.setattr(webapp_mod, "db", stub_db)
+
+    webapp_mod._refresh_sqlite_stats(Flask(__name__))
+
+    assert events == ["rollback"]
+    assert "[sqlite-stats] analyze failure" in capsys.readouterr().out

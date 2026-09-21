@@ -25,11 +25,15 @@ class ControllersCache:
     def __init__(self, scope: "ExportScope | None" = None):
         """Create a cache of controllers.
 
-        When *scope* is provided the package/vulnerability/assessment
-        controllers only expose the in-scope data, so every view built from
-        this cache produces an export restricted to that project/variant.
+        When *scope* is provided, controllers and views use it to expose only
+        data belonging to the selected project or variant.
         """
         self._scope = scope
+
+    @property
+    def scope(self) -> "ExportScope | None":
+        """Return the export/report scope shared by this cache's consumers."""
+        return self._scope
 
     @cached_property
     def packages(self) -> PackagesController:

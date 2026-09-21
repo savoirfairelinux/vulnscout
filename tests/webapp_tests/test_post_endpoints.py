@@ -5,6 +5,7 @@
 
 import pytest
 import json
+import uuid
 from src.bin.webapp import create_app
 from . import write_demo_files, setup_demo_db
 
@@ -67,6 +68,56 @@ def runner(app):
     return app.test_cli_runner()
 
 
+@pytest.fixture()
+def demo_ids(app):
+    from src.extensions import db
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+    import uuid as uuid_module
+
+    with app.app_context():
+        vuln_id = "CVE-1999-12345"
+        other_vuln_id = "CVE-1999-99999"
+        for vid in (vuln_id, other_vuln_id):
+            if Vulnerability.get_by_id(vid) is None:
+                Vulnerability.create_record(id=vid)
+
+        pkg_a = Package.find_or_create("cairo", "1.16.0")
+        pkg_b = Package.find_or_create("libpng", "1.6.37")
+        db.session.commit()
+
+        variant_id = uuid_module.UUID("22222222-2222-2222-2222-222222222222")
+        other_variant = Variant(
+            id=uuid_module.uuid4(), name="other",
+            project_id=uuid_module.UUID("11111111-1111-1111-1111-111111111111"))
+        db.session.add(other_variant)
+        db.session.commit()
+
+        existing_scan_id = uuid_module.UUID("33333333-3333-3333-3333-333333333333")
+        other_scan = Scan(id=uuid_module.uuid4(), variant_id=other_variant.id)
+        db.session.add(other_scan)
+        db.session.commit()
+
+        for vid in (vuln_id, other_vuln_id):
+            for pkg in (pkg_a, pkg_b):
+                finding = Finding.get_or_create(pkg.id, vid)
+                db.session.add(Observation(finding_id=finding.id, scan_id=existing_scan_id))
+                db.session.add(Observation(finding_id=finding.id, scan_id=other_scan.id))
+        db.session.commit()
+
+        return {
+            "vuln_id": vuln_id,
+            "other_vuln_id": other_vuln_id,
+            "variant_id": str(variant_id),
+            "other_variant_id": str(other_variant.id),
+            "two_packages": [pkg_a.string_id, pkg_b.string_id],
+        }
+
+
 def test_post_minimal_assessment(client):
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
         'packages': ['cairo@1.16.0'],
@@ -80,7 +131,10 @@ def test_post_minimal_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    # The demo seed assessment has no target row (it predates variant
+    # tracking), so it is unreachable through this listing; only the
+    # newly-posted assessment appears.
+    assert len(data) == 1
     assert "CVE-1999-12345" in data_str
     assert "Disable option X in configuration" in data_str
 
@@ -105,7 +159,9 @@ def test_post_detailled_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    # See test_post_minimal_assessment: the seed assessment has no target
+    # row, so only the newly-posted assessment is reachable here.
+    assert len(data) == 1
     assert "CVE-1999-12345" in data_str
     assert "Demonstration assessment" in data_str
 
@@ -244,6 +300,46 @@ def test_post_assessment_rejects_unobserved_finding(client):
     assert "Invalid package version" in response.get_data(as_text=True)
 
 
+def test_post_assessment_rejects_unknown_requested_variant(client):
+    import uuid as uuid_module
+
+    missing_variant = str(uuid_module.uuid4())
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        "packages": ["cairo@1.16.0"],
+        "status": "exploitable",
+        "variant_ids": [
+            "22222222-2222-2222-2222-222222222222",
+            missing_variant,
+        ],
+    })
+
+    assert response.status_code == 400
+    assert missing_variant in response.get_json()["error"]
+
+
+def test_post_assessment_rejects_cross_project_requested_variants(client):
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    with client.application.app_context():
+        foreign_project = Project.create("foreign-create-project")
+        foreign_variant = Variant.create("foreign-create-variant", foreign_project.id)
+        foreign_variant_id = str(foreign_variant.id)
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        "packages": ["cairo@1.16.0"],
+        "status": "exploitable",
+        "variant_ids": [
+            "22222222-2222-2222-2222-222222222222",
+            foreign_variant_id,
+        ],
+    })
+
+    assert response.status_code == 400
+    assert "different projects" in response.get_json()["error"]
+
+
 def test_batch_missing_package_cancels_whole_batch(client):
     # A missing package cancels the complete user action, including valid items.
     from src.models.assessment import Assessment
@@ -278,6 +374,84 @@ def test_batch_missing_package_cancels_whole_batch(client):
     with client.application.app_context():
         assert Package.get_by_string_id("ghost@0.0.1") is None
         assert len(Assessment.get_by_vulnerability("CVE-1999-12345")) == before
+
+
+def test_resolve_target_set_covers_the_full_cross_product(client, demo_ids):
+    """Two packages x two variants -> up to 4 (pkg, variant) targets, keyed
+    by (package.string_id, variant_id), only for combos an observation
+    actually recorded."""
+    from src.routes._assessment_write import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        packages = [Package.get_by_string_id(p) for p in demo_ids["two_packages"]]
+        variant_ids = [
+            uuid_module.UUID(demo_ids["variant_id"]),
+            uuid_module.UUID(demo_ids["other_variant_id"]),
+        ]
+
+        resolved, unobserved = resolve_target_set(packages, demo_ids["vuln_id"], variant_ids)
+
+        assert unobserved == []
+        assert len(resolved) == 4
+        keys = set(resolved.keys())
+        assert keys == {
+            (demo_ids["two_packages"][0], variant_ids[0]),
+            (demo_ids["two_packages"][0], variant_ids[1]),
+            (demo_ids["two_packages"][1], variant_ids[0]),
+            (demo_ids["two_packages"][1], variant_ids[1]),
+        }
+
+
+def test_resolve_target_set_flags_a_package_unobserved_in_every_variant(client, demo_ids):
+    from src.routes._assessment_write import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        stray = Package.find_or_create("does-not-exist", "9.9.9")
+        from src.extensions import db
+        db.session.commit()
+        packages = [Package.get_by_string_id(demo_ids["two_packages"][0]), stray]
+        variant_ids = [uuid_module.UUID(demo_ids["variant_id"])]
+
+        resolved, unobserved = resolve_target_set(packages, demo_ids["vuln_id"], variant_ids)
+
+        assert unobserved == [stray.string_id]
+        assert all(pkg_id != stray.string_id for pkg_id, _ in resolved.keys())
+
+
+def test_resolve_target_set_rejects_unknown_variant(client, demo_ids):
+    from src.routes._assessment_write import resolve_target_set
+    from src.models.package import Package
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        packages = [Package.get_by_string_id(demo_ids["two_packages"][0])]
+        with pytest.raises(ValueError, match="Variant not found"):
+            resolve_target_set(
+                packages, demo_ids["vuln_id"],
+                [uuid_module.UUID(demo_ids["variant_id"]), uuid_module.uuid4()],
+            )
+
+
+def test_resolve_target_set_rejects_variants_from_different_projects(client, demo_ids):
+    from src.routes._assessment_write import resolve_target_set
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
+    import uuid as uuid_module
+
+    with client.application.app_context():
+        foreign_project = Project.create("foreign-target-project")
+        foreign_variant = Variant.create("foreign-target-variant", foreign_project.id)
+        packages = [Package.get_by_string_id(demo_ids["two_packages"][0])]
+        with pytest.raises(ValueError, match="different projects"):
+            resolve_target_set(
+                packages, demo_ids["vuln_id"],
+                [uuid_module.UUID(demo_ids["variant_id"]), foreign_variant.id],
+            )
 
 
 def test_patch_vulnerability_empty(client):
@@ -427,6 +601,237 @@ def test_delete_assessment(client):
 def test_delete_assessment_not_found(client):
     response = client.delete("/api/assessments/non-existent-id")
     assert response.status_code == 404
-    
+
     data = json.loads(response.data)
     assert data["error"] == "Assessment not found"
+
+
+def test_multi_package_assessment_is_one_row_with_two_targets(client, demo_ids):
+    """A multi-package write for one variant creates ONE Assessment row,
+    with one AssessmentTarget per package — never one row per package."""
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["assessments"]) == 1
+    row = body["assessments"][0]
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+    assert row["variant_ids"] == [demo_ids["variant_id"]]
+
+
+def test_multi_variant_assessment_is_one_row_covering_every_variant(client, demo_ids):
+    """Selecting multiple variants for one CVE in one create action still
+    creates exactly ONE Assessment row, with one target per (package,
+    variant) combo an observation actually recorded."""
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["assessments"]) == 1
+    row = body["assessments"][0]
+    # Spans more than one variant -> the collapsed singular field is null,
+    # but the full set is exposed via variant_ids.
+    assert row["variant_id"] is None
+    assert sorted(row["variant_ids"]) == sorted([demo_ids["variant_id"], demo_ids["other_variant_id"]])
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+
+
+def test_multi_variant_assessment_honours_exact_sparse_targets(client, demo_ids):
+    package_a, package_b = demo_ids["two_packages"]
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "fixed",
+            "packages": [package_a, package_b],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+            "targets": [
+                {"variant_id": demo_ids["variant_id"], "package": package_a},
+                {"variant_id": demo_ids["other_variant_id"], "package": package_b},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    row = response.get_json()["assessment"]
+    assert {(target["variant_id"], target["package"]) for target in row["targets"]} == {
+        (demo_ids["variant_id"], package_a),
+        (demo_ids["other_variant_id"], package_b),
+    }
+
+
+def test_multi_variant_assessment_rejects_unobserved_explicit_pair(client, demo_ids):
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    with client.application.app_context():
+        project = Project.get_by_id(uuid.UUID("11111111-1111-1111-1111-111111111111"))
+        unobserved_variant = Variant.create("no-findings", project.id)
+        unobserved_variant_id = str(unobserved_variant.id)
+
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "fixed",
+            "targets": [{
+                "variant_id": unobserved_variant_id,
+                "package": demo_ids["two_packages"][0],
+            }],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid package version" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("targets, expected", [
+    ([], "targets must be a non-empty list"),
+    ("not-a-list", "targets must be a non-empty list"),
+    (["not-an-object"], "Invalid target"),
+    ([{"variant_id": "22222222-2222-2222-2222-222222222222"}],
+     "Target package is required"),
+    ([{"package": "cairo@1.16.0"}], "Invalid variant_id"),
+    ([{"package": "cairo@1.16.0", "variant_id": "not-a-uuid"}],
+     "Invalid variant_id"),
+])
+def test_assessment_rejects_malformed_explicit_targets(
+    client, demo_ids, targets, expected,
+):
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={"status": "fixed", "targets": targets},
+    )
+
+    assert response.status_code == 400
+    assert expected in response.get_json()["error"]
+
+
+def test_multi_variant_assessment_rejects_a_package_unobserved_everywhere(client, demo_ids):
+    from src.models.package import Package
+    from src.extensions import db
+
+    with client.application.app_context():
+        stray = Package.find_or_create("does-not-exist", "9.9.9")
+        db.session.commit()
+
+    response = client.post(
+        f"/api/vulnerabilities/{demo_ids['vuln_id']}/assessments",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": [demo_ids["two_packages"][0], "does-not-exist@9.9.9"],
+            "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "does-not-exist@9.9.9" in response.get_data(as_text=True)
+
+
+def test_batch_creates_one_row_per_item_not_per_package(client, demo_ids):
+    """A batch is one user action per item: each item (however many
+    packages it lists) becomes exactly one Assessment row."""
+    response = client.post("/api/assessments/batch", json={"assessments": [
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+        {
+            "vuln_id": demo_ids["other_vuln_id"],
+            "status": "not_affected",
+            "justification": "component_not_present",
+            "packages": demo_ids["two_packages"],
+            "variant_id": demo_ids["variant_id"],
+        },
+    ]})
+
+    assert response.status_code == 200
+    rows = response.get_json()["assessments"]
+    assert len(rows) == 2
+    for row in rows:
+        assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+
+
+def test_batch_item_with_multiple_variants_creates_one_row(client, demo_ids):
+    """One batch item is one assessment across its complete target set."""
+    response = client.post("/api/assessments/batch", json={"assessments": [{
+        "vuln_id": demo_ids["vuln_id"],
+        "status": "fixed",
+        "packages": demo_ids["two_packages"],
+        "variant_ids": [demo_ids["variant_id"], demo_ids["other_variant_id"]],
+    }]})
+
+    assert response.status_code == 200
+    rows = response.get_json()["assessments"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["variant_id"] is None
+    assert sorted(row["variant_ids"]) == sorted([
+        demo_ids["variant_id"], demo_ids["other_variant_id"],
+    ])
+    assert sorted(row["packages"]) == sorted(demo_ids["two_packages"])
+    assert len(row["targets"]) == 4
+
+
+def test_batch_two_items_remain_two_independent_rows(client, demo_ids):
+    """Separate items remain separate actions even when their content matches."""
+    response = client.post("/api/assessments/batch", json={"assessments": [
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "fixed",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["variant_id"],
+        },
+        {
+            "vuln_id": demo_ids["vuln_id"],
+            "status": "fixed",
+            "packages": [demo_ids["two_packages"][0]],
+            "variant_id": demo_ids["other_variant_id"],
+        },
+    ]})
+
+    assert response.status_code == 200
+    rows = response.get_json()["assessments"]
+    assert len({row["id"] for row in rows}) == 2
+
+
+def test_batch_multi_variant_item_rejects_cross_project_variants(client, demo_ids):
+    from src.models.assessment import Assessment
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    with client.application.app_context():
+        before = len(Assessment.get_by_vulnerability(demo_ids["vuln_id"]))
+        foreign_project = Project.create("foreign-batch-project")
+        foreign_variant = Variant.create("foreign-batch-variant", foreign_project.id)
+        foreign_variant_id = str(foreign_variant.id)
+
+    response = client.post("/api/assessments/batch", json={"assessments": [{
+        "vuln_id": demo_ids["vuln_id"],
+        "status": "fixed",
+        "packages": [demo_ids["two_packages"][0]],
+        "variant_ids": [demo_ids["variant_id"], foreign_variant_id],
+    }]})
+
+    assert response.status_code == 400
+    assert "different projects" in response.get_data(as_text=True)
+    with client.application.app_context():
+        assert len(Assessment.get_by_vulnerability(demo_ids["vuln_id"])) == before

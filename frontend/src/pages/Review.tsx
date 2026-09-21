@@ -3,15 +3,17 @@ import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
-import { asAssessment } from "../handlers/assessments";
+import { asAssessment, isMultiTarget, reconcileTargetPairs } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
+import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
+import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -23,6 +25,9 @@ import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
 import ReviewTransferModal from '../components/ReviewTransferModal';
 import ExplicitSearchInput from '../components/ExplicitSearchInput';
+import ModalShell from '../components/ModalShell';
+import useDismissablePopover from '../hooks/useDismissablePopover';
+import PopoverSurface from '../components/PopoverSurface';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -46,18 +51,124 @@ type Props = {
 
 export type { AssessmentMutation };
 
-/** Extended assessment row that carries hover texts for the tooltip. */
-type ReviewRow = Assessment & {
+/** Table-friendly view of a server-returned Assessment: same content fields,
+ *  plus packages/variant_ids flattened out of `targets` for column rendering
+ *  and search, and a hover-tooltip `texts` field. */
+type ReviewRow = {
+    id: string;
+    vuln_id: string;
+    status: string;
+    simplified_status: string;
+    justification: string;
+    impact_statement: string;
+    status_notes: string;
+    workaround: string;
+    responses: string[];
+    origin: string;
+    timestamp: string;
+    targets: NonNullable<Assessment["targets"]>;
+    /** Unique packages across every target (for columns and search). */
+    packages: string[];
+    /** Unique variant ids across every target. */
+    variant_ids: string[];
     texts: { title: string; content: string }[];
-    /** All assessment IDs in this group (for bulk delete). */
-    _allIds: string[];
-    /** All variant IDs merged into this group. */
-    _variantIds: string[];
-    /** Raw assessments merged into this group (for per-variant/package edits). */
-    _assessments: Assessment[];
     /** Unique supplier display names extracted from packages (for search). */
     extractedSuppliers: string[];
 };
+
+/** Adapt a server-returned Assessment into the flattened shape the table
+ *  columns and edit/delete/approve flows consume. */
+function toReviewRow(
+    assessment: Assessment,
+    vulnDescriptions: Record<string, { title: string; content: string }[]>,
+): ReviewRow {
+    const targets = assessment.targets ?? [];
+    const packages = [...new Set(targets.map(t => t.package))];
+    const variant_ids = [...new Set(
+        targets.map(t => t.variant_id).filter((v): v is string => v !== null)
+    )];
+    return {
+        id: assessment.id,
+        vuln_id: assessment.vuln_id,
+        status: assessment.status,
+        simplified_status: assessment.simplified_status,
+        justification: assessment.justification ?? '',
+        impact_statement: assessment.impact_statement ?? '',
+        status_notes: assessment.status_notes ?? '',
+        workaround: assessment.workaround ?? '',
+        responses: assessment.responses,
+        origin: assessment.origin,
+        timestamp: assessment.timestamp,
+        targets,
+        packages,
+        variant_ids,
+        texts: vulnDescriptions[assessment.vuln_id] ?? [],
+        extractedSuppliers: [...new Set(
+            packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
+        )],
+    };
+}
+
+// How long the copy button shows its "copied" confirmation before reverting.
+const COPIED_FEEDBACK_MS = 2000;
+
+/** The AI review filter's options: one label per verdict an assessment can
+ *  carry. */
+const AI_REVIEW_LABELS: Record<ReviewVerdict, string> = {
+    agrees: 'AI review agreed',
+    differs: 'AI review differed',
+    stale: 'AI review stale',
+    none: 'No AI review',
+};
+
+const aiReviewList = [
+    AI_REVIEW_LABELS.agrees,
+    AI_REVIEW_LABELS.differs,
+    AI_REVIEW_LABELS.stale,
+    AI_REVIEW_LABELS.none,
+];
+
+/** Every AI-review state represented by a row's individual targets. */
+const rowAiReviewLabels = (row: ReviewRow, reviews: Record<string, AssessmentReview[]>) => {
+    const rowReviews = reviews[row.id] ?? [];
+    const targets = row.targets.length > 0
+        ? row.targets
+        : [{variant_id: null, package: ""}];
+    return new Set(targets.map(target => AI_REVIEW_LABELS[verdictOf(
+        rowReviews.find(review =>
+            review.variant_id === target.variant_id
+            && review.package === target.package
+        )
+    )]));
+};
+
+/** Copies a row's assessment id. The confirmation swaps the icon for a
+ *  checkmark in place rather than adding a label, so the button keeps its width
+ *  and never pushes the neighbouring actions onto a second row. */
+function CopyIdButton({ row, copiedKey, onCopy }: {
+    row: ReviewRow;
+    copiedKey: string | null;
+    onCopy: (row: ReviewRow) => void;
+}) {
+    const copied = copiedKey === row.id;
+    const label = isMultiTarget(row.targets) ? 'Copy multi-target id' : 'Copy assessment id';
+    return (
+        <>
+            <button
+                type="button"
+                onClick={() => onCopy(row)}
+                className={`transition-colors ${copied ? 'text-green-400' : 'text-gray-400 hover:text-gray-200'}`}
+                title={label}
+                aria-label={label}
+            >
+                <FontAwesomeIcon icon={copied ? faCheck : faCopy} className="w-4 h-4" />
+            </button>
+            {copied && (
+                <span role="status" className="sr-only">Copied</span>
+            )}
+        </>
+    );
+}
 
 const columnHelper = createColumnHelper<ReviewRow>();
 const teColumnHelper = createColumnHelper<ReviewTimeEstimate>();
@@ -96,54 +207,6 @@ function createSelectionColumn<DataType>() {
     };
 }
 
-/**
- * Group assessments that share the same CVE, status, justification, notes,
- * workaround and impact into a single row — merging packages, variants and
- * keeping the most recent timestamp.
- */
-function groupAssessments(assessments: Assessment[]): Assessment[] {
-    const groups = new Map<string, Assessment>();
-    const allIds = new Map<string, string[]>();
-    const variantIds = new Map<string, Set<string>>();
-    const rawAssessments = new Map<string, Assessment[]>();
-    for (const a of assessments) {
-        const key = [
-            a.vuln_id,
-            a.status,
-            a.justification ?? '',
-            a.status_notes ?? '',
-            a.impact_statement ?? '',
-            a.workaround ?? '',
-        ].join('\0');
-        const existing = groups.get(key);
-        if (existing) {
-            // Merge packages (avoid duplicates)
-            const pkgSet = new Set([...existing.packages, ...a.packages]);
-            existing.packages = [...pkgSet];
-            // Keep the most recent timestamp
-            if (a.timestamp > existing.timestamp) existing.timestamp = a.timestamp;
-            allIds.get(key)!.push(a.id);
-            rawAssessments.get(key)!.push(a);
-            if (a.variant_id) variantIds.get(key)!.add(a.variant_id);
-        } else {
-            groups.set(key, { ...a, packages: [...a.packages] });
-            allIds.set(key, [a.id]);
-            rawAssessments.set(key, [a]);
-            const vs = new Set<string>();
-            if (a.variant_id) vs.add(a.variant_id);
-            variantIds.set(key, vs);
-        }
-    }
-    const result: Assessment[] = [];
-    for (const [key, group] of groups) {
-        (group as any)._allIds = allIds.get(key)!;
-        (group as any)._variantIds = [...variantIds.get(key)!];
-        (group as any)._assessments = rawAssessments.get(key)!;
-        result.push(group);
-    }
-    return result;
-}
-
 function formatDate(iso: string): string {
     const d = new Date(iso);
     return d.toLocaleDateString(undefined, {
@@ -156,16 +219,15 @@ function formatDate(iso: string): string {
     });
 }
 
-function hasOutdatedAssessment(assessment: Assessment): boolean {
-    const rawAssessments = (assessment as Partial<ReviewRow>)._assessments ?? [assessment];
-    return rawAssessments.some(current => current.outdated);
+function hasOutdatedAssessment(row: ReviewRow): boolean {
+    return row.targets.some(t => t.outdated);
 }
 
 function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
-    const [assessments, setAssessments] = useState<Assessment[]>([]);
-    const [aiAssessments, setAiAssessments] = useState<Assessment[]>([]);
+    const [assessments, setAssessments] = useState<ReviewRow[]>([]);
+    const [aiAssessments, setAiAssessments] = useState<ReviewRow[]>([]);
     const [timeEstimates, setTimeEstimates] = useState<ReviewTimeEstimate[]>([]);
     const [customCvss, setCustomCvss] = useState<ReviewCustomCvss[]>([]);
     const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
@@ -176,7 +238,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [selectedAiReviews, setSelectedAiReviews] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -185,8 +249,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [editingRow, setEditingRow] = useState<ReviewRow | null>(null);
     const [editVariants, setEditVariants] = useState<Variant[]>([]);
     const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
+    const [editCompatibilityLoading, setEditCompatibilityLoading] = useState(false);
+    const [editCompatibilityError, setEditCompatibilityError] = useState<string | undefined>();
     const [editSubmitting, setEditSubmitting] = useState(false);
+    const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
+    const [showDiscardEditConfirmation, setShowDiscardEditConfirmation] = useState(false);
+    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
+    // Identifies which copy button was last used, so only that one confirms.
+    const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
     const [selectedAssessments, setSelectedAssessments] = useState<RowSelectionState>({});
     const [selectedAiAssessments, setSelectedAiAssessments] = useState<RowSelectionState>({});
     const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<RowSelectionState>({});
@@ -219,6 +290,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -247,14 +319,28 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     // this CVE (optionally scoped to the current project), instead of every
     // variant in the database.
     useEffect(() => {
+        let cancelled = false;
         if (!editingRow) {
             setEditVariants([]);
+            setEditCompatibilityLoading(false);
+            setEditCompatibilityError(undefined);
             return;
         }
         setEditVariants([]);
+        setEditVariantPackageMap({});
+        setEditCompatibilityLoading(true);
+        setEditCompatibilityError(undefined);
         Variants.listByVuln(editingRow.vuln_id).then(variants => {
-            setEditVariants(projectId ? variants.filter(v => v.project_id === projectId) : variants);
-        }).catch(() => {});
+            if (cancelled) return;
+            const scoped = projectId ? variants.filter(v => v.project_id === projectId) : variants;
+            setEditVariants(scoped);
+            if (scoped.length === 0) setEditCompatibilityLoading(false);
+        }).catch(() => {
+            if (cancelled) return;
+            setEditCompatibilityLoading(false);
+            setEditCompatibilityError('Unable to load target compatibility. Try again.');
+        });
+        return () => { cancelled = true; };
     }, [editingRow, projectId]);
 
     // Build the variant -> package compatibility map for the edited row so the
@@ -266,58 +352,74 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             setEditVariantPackageMap({});
             return;
         }
+        setEditCompatibilityLoading(true);
+        setEditCompatibilityError(undefined);
         (async () => {
-            const entries: [string, string[]][] = await Promise.all(
-                editVariants.map(async (variant): Promise<[string, string[]]> => {
-                    try {
+            try {
+                const entries: [string, string[]][] = await Promise.all(
+                    editVariants.map(async (variant): Promise<[string, string[]]> => {
                         const pkgs = await Packages.list(variant.id);
                         return [variant.id, pkgs.map(p =>
                             p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
                         )];
-                    } catch {
-                        return [variant.id, []];
+                    })
+                );
+                if (cancelled) return;
+                const map: Record<string, string[]> = Object.fromEntries(entries);
+                // Seed the map with (variant, package) pairs already covered by the
+                // assessment being edited. Deprecated packages are no longer in the
+                // variant's current SBOM, so Packages.list omits them; without this
+                // they would be flagged incompatible and their checkbox disabled.
+                if (editingRow) {
+                    for (const t of editingRow.targets) {
+                        if (!t.variant_id) continue;
+                        const merged = new Set(map[t.variant_id] ?? []);
+                        merged.add(t.package);
+                        map[t.variant_id] = [...merged];
                     }
-                })
-            );
-            if (cancelled) return;
-            const map: Record<string, string[]> = Object.fromEntries(entries);
-            // Seed the map with (variant, package) pairs already covered by the
-            // assessment being edited. Deprecated packages are no longer in the
-            // variant's current SBOM, so Packages.list omits them; without this
-            // they would be flagged incompatible and their checkbox disabled.
-            if (editingRow) {
-                for (const a of editingRow._assessments) {
-                    if (!a.variant_id) continue;
-                    const merged = new Set(map[a.variant_id] ?? []);
-                    for (const pkg of a.packages) merged.add(pkg);
-                    map[a.variant_id] = [...merged];
                 }
+                setEditVariantPackageMap(map);
+                setEditCompatibilityLoading(false);
+            } catch {
+                if (cancelled) return;
+                setEditVariantPackageMap({});
+                setEditCompatibilityLoading(false);
+                setEditCompatibilityError('Unable to load target compatibility. Try again.');
             }
-            setEditVariantPackageMap(map);
         })();
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
+
+    const refreshReviews = useCallback(async () => {
+        const data = await AssessmentReviews.fetchForScope(variantId, projectId);
+        setReviews(data);
+    }, [variantId, projectId]);
+
+    useEffect(() => {
+        let cancelled = false;
+        AssessmentReviews.fetchForScope(variantId, projectId)
+            .then(data => { if (!cancelled) setReviews(data); })
+            .catch(() => { if (!cancelled) setReviews({}); });
+        return () => { cancelled = true; };
+    }, [variantId, projectId]);
 
     useEffect(() => {
         setLoading(true);
         setError(null);
         Promise.all([
-            Assessments.listReview(variantId, projectId),
-            Assessments.listReviewAi(variantId, projectId),
+            Assessments.listForReview(variantId, projectId, 'custom'),
+            Assessments.listForReview(variantId, projectId, 'ai'),
             Assessments.listReviewTimeEstimates(variantId, projectId),
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
-            .then(([reviewData, aiData, teData, cvssData]) => {
-                setAssessments(groupAssessments(reviewData));
-                setAiAssessments(groupAssessments(aiData));
-                setTimeEstimates(teData);
-                setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
-                setLoading(false);
-                // Build tooltip descriptions from vuln_texts included in the response
+            .then(([reviewRows, aiRows, teData, cvssData]) => {
+                // Build tooltip descriptions from vuln_texts included in the response.
                 const descMap: Record<string, { title: string; content: string }[]> = {};
-                for (const a of [...reviewData, ...aiData]) {
+                for (const a of [...reviewRows, ...aiRows]) {
                     if (a.vuln_id && !descMap[a.vuln_id] && a.vuln_texts) {
-                        descMap[a.vuln_id] = a.vuln_texts || [{ title: "description", content: "No description available" }];
+                        descMap[a.vuln_id] = a.vuln_texts.length > 0
+                            ? a.vuln_texts
+                            : [{ title: "description", content: "No description available" }];
                     }
                 }
                 for (const te of teData) {
@@ -330,6 +432,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         descMap[c.vuln_id] = c.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
+                setAssessments(reviewRows.map(a => toReviewRow(a, descMap)));
+                setAiAssessments(aiRows.map(a => toReviewRow(a, descMap)));
+                setTimeEstimates(teData);
+                setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
+                setLoading(false);
                 setVulnDescriptions(descMap);
             })
             .catch(err => {
@@ -341,14 +448,30 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const applySearch = () => setSearch(draftSearch.trim());
 
+    const openAssessmentEditor = (row: ReviewRow) => {
+        setEditHasUnsavedChanges(false);
+        setPendingEmptyTargetEdit(null);
+        setShowBanner(false);
+        setEditingRow(row);
+    };
+
+    const closeAssessmentEditor = () => {
+        if (editSubmitting) return;
+        if (editHasUnsavedChanges) {
+            setShowDiscardEditConfirmation(true);
+            return;
+        }
+        setEditingRow(null);
+    };
+
+    const discardAssessmentEdit = () => {
+        setShowDiscardEditConfirmation(false);
+        setEditHasUnsavedChanges(false);
+        setEditingRow(null);
+    };
+
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                if (editingRow && !editSubmitting) {
-                    setEditingRow(null);
-                    return;
-                }
-            }
             if (event.target instanceof HTMLInputElement ||
                 event.target instanceof HTMLTextAreaElement) {
                 return;
@@ -360,34 +483,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         };
         document.addEventListener('keydown', handleKeyPress);
         return () => document.removeEventListener('keydown', handleKeyPress);
-    }, [editingRow, editSubmitting]);
+    }, []);
 
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (
-                shortcutDropdownRef.current &&
-                shortcutButtonRef.current &&
-                !shortcutDropdownRef.current.contains(event.target as Node) &&
-                !shortcutButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowShortcutHelper(false);
-            }
-            if (
-                searchHelperDropdownRef.current &&
-                searchHelperButtonRef.current &&
-                !searchHelperDropdownRef.current.contains(event.target as Node) &&
-                !searchHelperButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowSearchHelper(false);
-            }
-        };
-        if (showShortcutHelper || showSearchHelper) {
-            document.addEventListener('mousedown', handleClickOutside);
-        }
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [showShortcutHelper, showSearchHelper]);
+    useDismissablePopover(showShortcutHelper, [shortcutButtonRef, shortcutDropdownRef], () => setShowShortcutHelper(false));
+    useDismissablePopover(showSearchHelper, [searchHelperButtonRef, searchHelperDropdownRef], () => setShowSearchHelper(false));
 
     const statusList = useMemo(() => {
         const set = new Set<string>();
@@ -422,6 +521,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
             return false;
         }
+        if (selectedAiReviews.length) {
+            const labels = rowAiReviewLabels(a, reviews);
+            if (!selectedAiReviews.some(label => labels.has(label))) return false;
+        }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -433,7 +536,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedAiReviews, showOnlyOutdated, reviews]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -456,6 +559,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
+        setSelectedAiReviews([]);
         setShowOnlyOutdated(false);
     };
 
@@ -602,7 +706,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 .then(response => response.json() as Promise<ImportResult>)
                 .then(result => {
                     if (result.status === 'success') {
-                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                        Assessments.listForReview(variantId, projectId, 'custom')
+                            .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
                         showMessage('Assessments imported successfully!', 'success');
                     } else {
                         showMessage(`Import error: ${result.error || 'Unknown error'}`, 'error');
@@ -619,16 +724,26 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             return;
         }
 
-        // VulnScout JSON carries its own variant IDs, while the active project
-        // constrains name-based fallback for exports from other instances.
+        // VulnScout JSON carries portable variant names. The active project
+        // constrains their resolution on this instance.
         const reader = new FileReader();
         reader.onload = async () => {
             try {
                 const text = reader.result as string;
                 const parsed = JSON.parse(text);
 
-                if (!parsed?.version || !parsed?.assessments) {
-                    showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
+                try {
+                    if (detectReviewExportFormat(parsed) !== 'custom') {
+                        throw new Error('Expected a VulnScout custom data export.');
+                    }
+                } catch (error) {
+                    const detail = error instanceof Error ? error.message : '';
+                    showMessage(
+                        detail.startsWith('Unsupported VulnScout JSON version:')
+                            ? detail
+                            : 'Invalid file format. Expected a VulnScout custom data export.',
+                        'error',
+                    );
                     if (fileInputRef.current) fileInputRef.current.value = '';
                     return;
                 }
@@ -648,7 +763,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 const data = await result.json() as ImportResult;
 
                 if (data.status === 'success') {
-                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                    Assessments.listForReview(variantId, projectId, 'custom')
+                        .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
                     const assessmentsImported = data.assessments_imported ?? 0;
                     const assessmentsSkipped = data.assessments_skipped ?? 0;
                     const cvssImported = data.cvss_imported ?? 0;
@@ -676,49 +792,67 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         };
         reader.readAsText(file);
-    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy]);
+    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy, vulnDescriptions]);
+
+    /** Refetch just the handmade-assessments list (used after edits/deletes
+     * that don't touch the AI-pending list). */
+    const refreshAssessments = useCallback(async () => {
+        const rows = await Assessments.listForReview(variantId, projectId, 'custom');
+        setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions)));
+    }, [variantId, projectId, vulnDescriptions]);
+
+    /** Refetch both the handmade and AI-pending assessment lists (used after
+     * approving/rejecting a pending AI assessment from the AI Assessments
+     * table, since approving moves a row from one list to the other). */
+    const refreshAssessmentLists = useCallback(async () => {
+        const [reviewRows, aiRows] = await Promise.all([
+            Assessments.listForReview(variantId, projectId, 'custom'),
+            Assessments.listForReview(variantId, projectId, 'ai'),
+        ]);
+        setAssessments(reviewRows.map(a => toReviewRow(a, vulnDescriptions)));
+        setAiAssessments(aiRows.map(a => toReviewRow(a, vulnDescriptions)));
+    }, [variantId, projectId, vulnDescriptions]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
         let anyError = false;
-        for (const id of rowToDelete._allIds) {
-            try {
-                const res = await fetch(
-                    import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
-                    { method: 'DELETE', mode: 'cors' }
-                );
-                if (!res.ok) anyError = true;
-            } catch {
-                anyError = true;
-            }
+        try {
+            await Assessments.remove(rowToDelete.id);
+        } catch {
+            anyError = true;
         }
         if (!anyError) {
-            const updated = await Assessments.listReview(variantId, projectId);
-            setAssessments(groupAssessments(updated));
-            onAssessmentChanged?.({ type: 'delete', vulnId: rowToDelete.vuln_id, ids: rowToDelete._allIds });
+            await Promise.all([refreshAssessments(), refreshReviews()]);
+            onAssessmentChanged?.({ type: 'delete', vulnId: rowToDelete.vuln_id, ids: [rowToDelete.id] });
             showMessage('Assessment deleted successfully!', 'success');
         } else {
             showMessage('Failed to delete assessment.', 'error');
         }
 
         setRowToDelete(null);
-    }, [rowToDelete, variantId, projectId, onAssessmentChanged, showMessage]);
+    }, [rowToDelete, refreshAssessments, refreshReviews, onAssessmentChanged, showMessage]);
 
-    /** Refetch both the handmade and AI-pending assessment lists (used after
-     * approving/rejecting a pending AI assessment from the AI Assessments
-     * table, since approving moves a row from one list to the other). */
-    const refreshAssessmentLists = useCallback(async () => {
-        const [reviewData, aiData] = await Promise.all([
-            Assessments.listReview(variantId, projectId),
-            Assessments.listReviewAi(variantId, projectId),
-        ]);
-        setAssessments(groupAssessments(reviewData));
-        setAiAssessments(groupAssessments(aiData));
-    }, [variantId, projectId]);
+    const copyRowId = useCallback(async (row: ReviewRow) => {
+        try {
+            await navigator.clipboard.writeText(row.id);
+            // Confirm the copy on the button itself: the clipboard gives no
+            // visible feedback of its own, so without this it looks inert.
+            setCopiedRowKey(row.id);
+            if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+            copiedResetTimer.current = setTimeout(() => setCopiedRowKey(null), COPIED_FEEDBACK_MS);
+        } catch {
+            // Clipboard access can be denied by the browser; nothing more to do.
+        }
+    }, []);
+
+    // Drop the pending reset if the page unmounts while the confirmation shows.
+    useEffect(() => () => {
+        if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
+    }, []);
 
     const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            await Assessments.approveAi(row._allIds[0], row._allIds);
+            await Assessments.approveAi(row.id);
             await refreshAssessmentLists();
             showMessage('AI assessment approved!', 'success');
         } catch (e) {
@@ -728,7 +862,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            await Assessments.rejectAi(row._allIds[0], row._allIds);
+            await Assessments.rejectAi(row.id);
             await refreshAssessmentLists();
             showMessage('AI assessment rejected.', 'success');
         } catch (e) {
@@ -758,28 +892,18 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         try {
             if (bulkDeleteTab === 'assessments') {
                 const rows = assessments.filter(row => selectedAssessments[row.id]);
-                const ids = rows.flatMap(row => (row as ReviewRow)._allIds ?? [row.id]);
-                const responses = await Promise.all(ids.map(id => fetch(
-                    import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
-                    { method: 'DELETE', mode: 'cors' }
-                )));
-                if (responses.some(response => !response.ok)) throw new Error('Assessment deletion failed');
-                setAssessments(groupAssessments(await Assessments.listReview(variantId, projectId)));
+                await Promise.all(rows.map(row => Assessments.remove(row.id)));
+                await Promise.all([refreshAssessments(), refreshReviews()]);
                 for (const row of rows) {
-                    const assessmentRow = row as ReviewRow;
                     onAssessmentChanged?.({
                         type: 'delete',
                         vulnId: row.vuln_id,
-                        ids: assessmentRow._allIds ?? [row.id],
+                        ids: [row.id],
                     });
                 }
             } else if (bulkDeleteTab === 'ai-assessments') {
                 const rows = aiAssessments.filter(row => selectedAiAssessments[row.id]);
-                await Promise.all(rows.map(row => {
-                    const assessmentRow = row as ReviewRow;
-                    const ids = assessmentRow._allIds ?? [row.id];
-                    return Assessments.rejectAi(ids[0], ids);
-                }));
+                await Promise.all(rows.map(row => Assessments.rejectAi(row.id)));
                 await refreshAssessmentLists();
             } else if (bulkDeleteTab === 'time-estimates') {
                 const ids = Object.keys(selectedTimeEstimates);
@@ -818,7 +942,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         clearSelectedRows,
         onAssessmentChanged,
         projectId,
+        refreshAssessments,
         refreshAssessmentLists,
+        refreshReviews,
         selectedAiAssessments,
         selectedAssessments,
         selectedCustomCvss,
@@ -828,123 +954,58 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         variantId,
     ]);
 
-    const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
+    const persistEditedAssessment = useCallback(async (data: EditAssessmentData) => {
         if (!editingRow) return;
         setEditSubmitting(true);
 
-        // Share a single timestamp across all rows created in this edit action.
-        const editSharedTimestamp = new Date().toISOString();
-
-        // Target (package × variant) combos from the form selection.
-        const targetVariantIds: Array<string | undefined> =
-            data.variant_ids && data.variant_ids.length > 0 ? data.variant_ids : [undefined];
+        const targetVariantIds: string[] =
+            data.variant_ids ?? editingRow.variant_ids;
         const targetPackages: string[] =
-            data.packages && data.packages.length > 0 ? data.packages : editingRow.packages;
+            data.packages ?? editingRow.packages;
 
-        // Existing group assessments indexed by (package, variant) key.
-        const existingByKey = new Map<string, Assessment>();
-        for (const a of editingRow._assessments) {
-            const pkg = a.packages[0] ?? '';
-            const vid = a.variant_id ?? '';
-            existingByKey.set(`${pkg}::${vid}`, a);
-        }
-
-        // Desired set of (package, variant) keys after the edit.
-        const targetKeys = new Set<string>();
-        for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
-                targetKeys.add(`${pkg}::${vid ?? ''}`);
-            }
-        }
-
-        let anyError = false;
-
-        // 1. Update combos that persist, delete combos that were deselected.
-        for (const [key, existing] of existingByKey) {
-            try {
-                if (targetKeys.has(key)) {
-                    const res = await fetch(
-                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`,
-                        {
-                            method: 'PUT',
-                            mode: 'cors',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                status: data.status,
-                                justification: data.justification,
-                                impact_statement: data.impact_statement,
-                                status_notes: data.status_notes,
-                                workaround: data.workaround,
-                            }),
-                        }
-                    );
-                    if (!res.ok) anyError = true;
-                } else {
-                    const res = await fetch(
-                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`,
-                        { method: 'DELETE', mode: 'cors' }
-                    );
-                    if (!res.ok) anyError = true;
-                }
-            } catch {
-                anyError = true;
-            }
-        }
-
-        // 2. Create newly-selected combos — batch packages per variant so the
-        //    new rows share one timestamp.
-        const newPkgsByVariant = new Map<string | undefined, string[]>();
-        for (const pkg of targetPackages) {
-            for (const vid of targetVariantIds) {
-                const key = `${pkg}::${vid ?? ''}`;
-                if (!existingByKey.has(key)) {
-                    const arr = newPkgsByVariant.get(vid) ?? [];
-                    arr.push(pkg);
-                    newPkgsByVariant.set(vid, arr);
-                }
-            }
-        }
-
-        for (const [vid, pkgs] of newPkgsByVariant) {
-            if (pkgs.length === 0) continue;
-            try {
-                const body: Record<string, unknown> = {
-                    vuln_id: editingRow.vuln_id,
-                    packages: pkgs,
-                    status: data.status,
-                    justification: data.justification,
-                    impact_statement: data.impact_statement,
-                    status_notes: data.status_notes,
-                    workaround: data.workaround,
-                    timestamp: editSharedTimestamp,
-                };
-                if (vid) body.variant_id = vid;
-                const res = await fetch(
-                    import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(editingRow.vuln_id)}/assessments`,
-                    {
-                        method: 'POST',
-                        mode: 'cors',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                    }
-                );
-                if (!res.ok) anyError = true;
-            } catch {
-                anyError = true;
-            }
-        }
-
-        if (!anyError) {
-            const updated = await Assessments.listReview(variantId, projectId);
-            setAssessments(groupAssessments(updated));
+        try {
+            const editSharedTimestamp = data.update_timestamp === false
+                ? editingRow.timestamp
+                : new Date().toISOString();
+            await Assessments.reconcile(editingRow.id, {
+                vuln_id: editingRow.vuln_id,
+                packages: targetPackages,
+                variant_ids: targetVariantIds,
+                targets: data.targets ?? reconcileTargetPairs(
+                    editingRow.targets, targetPackages, targetVariantIds),
+                status: data.status,
+                justification: data.justification,
+                impact_statement: data.impact_statement,
+                status_notes: data.status_notes,
+                workaround: data.workaround,
+                update_timestamp: data.update_timestamp !== false,
+                timestamp: editSharedTimestamp,
+            });
+            await Promise.all([refreshAssessments(), refreshReviews()]);
             setEditingRow(null);
-            onAssessmentChanged?.({ type: 'update', vulnId: editingRow.vuln_id, ids: editingRow._allIds, data });
+            onAssessmentChanged?.({ type: 'update', vulnId: editingRow.vuln_id, ids: [editingRow.id], data });
             showMessage('Assessment updated successfully!', 'success');
-        } else {
+        } catch {
             showMessage('Failed to update assessment.', 'error');
+        } finally {
+            setEditSubmitting(false);
         }
-        setEditSubmitting(false);
-    }, [editingRow, variantId, projectId, onAssessmentChanged, showMessage]);
+    }, [editingRow, refreshAssessments, refreshReviews, onAssessmentChanged, showMessage]);
+
+    const handleSaveEdit = useCallback((data: EditAssessmentData) => {
+        if (data.targets !== undefined && data.targets.length === 0) {
+            setPendingEmptyTargetEdit(data);
+            return;
+        }
+        void persistEditedAssessment(data);
+    }, [persistEditedAssessment]);
+
+    const confirmEmptyTargetEdit = useCallback(() => {
+        if (!pendingEmptyTargetEdit) return;
+        const data = pendingEmptyTargetEdit;
+        setPendingEmptyTargetEdit(null);
+        void persistEditedAssessment(data);
+    }, [pendingEmptyTargetEdit, persistEditedAssessment]);
 
     const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {
@@ -1050,22 +1111,20 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             },
             enableSorting: false,
         }),
-        columnHelper.accessor("variant_id", {
+        columnHelper.accessor("variant_ids", {
+            id: 'variant_id',
             header: () => <div className="flex items-center justify-center">Variants</div>,
             size: 120,
             cell: info => {
-                const row = info.row.original as ReviewRow;
-                const vids = row._variantIds ?? (row.variant_id ? [row.variant_id] : []);
+                const row = info.row.original;
+                const vids = row.variant_ids;
                 if (vids.length === 0) return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">—</span></div>;
                 return (
                     <div className="flex flex-wrap gap-1 items-center justify-center h-full">
                         {vids.map(vid => {
                             const name = variantNames[vid] ?? vid.slice(0, 8);
-                            const variantAssessments = (row._assessments ?? [row]).filter(a => a.variant_id === vid);
-                            const isOutdated = variantAssessments.length > 0 && variantAssessments.every(a =>
-                                a.outdated === true
-                                || (a.packages.length > 0 && a.packages.every(pkg => (a.superseded_map?.[pkg]?.length ?? 0) > 0))
-                            );
+                            const variantTargets = row.targets.filter(t => t.variant_id === vid);
+                            const isOutdated = variantTargets.length > 0 && variantTargets.every(t => t.outdated);
                             return (
                                 <span
                                     key={vid}
@@ -1158,18 +1217,79 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             ),
         }),
         columnHelper.display({
+            id: "ai_review",
+            header: () => <div className="flex items-center justify-center">AI review</div>,
+            cell: ({ row }) => {
+                // One verdict per target, not per assessment: an assessment
+                // may cover several (variant, package) targets, each judged
+                // against its own context, so each gets its own review to
+                // look up here.
+                const rowReviews = reviews[row.original.id] ?? [];
+                const targets = row.original.targets.length > 0
+                    ? row.original.targets
+                    : [{ variant_id: null, package: "" }];
+                const verdicts = targets.map(t => verdictOf(
+                    rowReviews.find(r => r.variant_id === t.variant_id && r.package === t.package)
+                ));
+                const count = (v: ReviewVerdict) => verdicts.filter(x => x === v).length;
+                const summary = {
+                    total: verdicts.length,
+                    reviewed: verdicts.filter(v => v !== "none").length,
+                    agrees: count("agrees"),
+                    differs: count("differs"),
+                    stale: count("stale"),
+                };
+                const title = describeReviewSummary(summary);
+                const pending = summary.total - summary.reviewed;
+                const singleVerdict = summary.total === 1 ? verdicts[0] : null;
+                let content;
+                if (summary.reviewed === 0) {
+                    content = <span title={title} className="text-gray-500">—</span>;
+                // A single-target row has exactly one verdict, so keep the plain
+                // symbol. A multi-target row gets per-verdict counts, because its
+                // targets were reviewed against different variant/package contexts
+                // and may legitimately disagree with each other.
+                } else if (singleVerdict === "agrees") {
+                    content = <span title={title} className="text-green-400">✓</span>;
+                } else if (singleVerdict === "stale") {
+                    content = <span title={title} className="text-amber-400">⚠ stale</span>;
+                } else if (singleVerdict !== null) {
+                    content = <span title={title} className="text-amber-400">⚠</span>;
+                } else {
+                    content = (
+                        <span title={title} className="inline-flex items-center gap-1.5 text-sm">
+                            {summary.agrees > 0 && (
+                                <span className="text-green-400">✓{summary.agrees}</span>
+                            )}
+                            {summary.differs > 0 && (
+                                <span className="text-amber-400">⚠{summary.differs}</span>
+                            )}
+                            {summary.stale > 0 && (
+                                <span className="text-amber-400">⚠{summary.stale} stale</span>
+                            )}
+                            {pending > 0 && (
+                                <span className="text-gray-500">—{pending}</span>
+                            )}
+                        </span>
+                    );
+                }
+                return <div className="flex items-center justify-center h-full">{content}</div>;
+            },
+        }),
+        columnHelper.display({
             id: 'actions',
             header: () => <div className="flex items-center justify-center">Actions</div>,
-            size: 70,
+            size: 140,
             cell: info => (
-                <div className="flex items-center justify-center gap-3 h-full">
+                <div className="flex flex-wrap items-center justify-center gap-3 h-full">
                     <button
-                        onClick={() => setEditingRow(info.row.original)}
+                        onClick={() => openAssessmentEditor(info.row.original)}
                         className="text-blue-400 hover:text-blue-300 transition-colors"
                         title="Edit assessment"
                     >
                         <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
                     </button>
+                    <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
                     <button
                         onClick={() => setRowToDelete(info.row.original)}
                         className="text-red-400 hover:text-red-300 transition-colors"
@@ -1180,12 +1300,12 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClickWithNav, variantNames]);
+    ], [handleVulnClickWithNav, variantNames, copiedRowKey, copyRowId, reviews]);
 
     const aiActionsColumn = useMemo(() => columnHelper.display({
         id: 'ai-actions',
         header: () => <div className="flex items-center justify-center">Actions</div>,
-        size: 110,
+        size: 140,
         cell: info => (
             <div className="flex flex-wrap items-center justify-center gap-2 h-full">
                 <button
@@ -1204,9 +1324,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <FontAwesomeIcon icon={faXmark} className="w-3 h-3" />
                     Reject
                 </button>
+                <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
         ),
-    }), [handleApproveAiRow, handleRejectAiRow]);
+    }), [handleApproveAiRow, handleRejectAiRow, copiedRowKey, copyRowId]);
 
     const aiColumns = useMemo(
         () => columns.map(c => (c.id === 'actions' ? aiActionsColumn : c)),
@@ -1375,7 +1496,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         );
     }
 
-    const filterReviewRows = (list: Assessment[]) => list.filter((a) => {
+    const filterReviewRows = (list: ReviewRow[]) => list.filter((a) => {
         if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
             return false;
         }
@@ -1398,7 +1519,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
      * show the same empty-state shape and the same TableGeneric<ReviewRow>
      * setup, differing only in which rows/columns/copy are passed in. */
     const renderAssessmentsTable = (
-        rows: Assessment[],
+        rows: ReviewRow[],
         cols: any[],
         emptyTitle: string,
         emptyBody: string,
@@ -1414,16 +1535,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         ) : (
             <TableGeneric<ReviewRow>
                 columns={cols}
-                data={rows.map(a => ({
-                    ...a,
-                    texts: vulnDescriptions[a.vuln_id] ?? [],
-                    _allIds: (a as any)._allIds ?? [a.id],
-                    _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
-                    _assessments: (a as any)._assessments ?? [a],
-                    extractedSuppliers: [...new Set(
-                        a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
-                    )],
-                }))}
+                data={rows}
                 search={search}
                 fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
                 forAllValues={(row) => row.packages}
@@ -1464,9 +1576,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         <FontAwesomeIcon icon={faCircleInfo} />
                     </button>
                     {showSearchHelper && (
-                        <div
+                        <PopoverSurface
                             ref={searchHelperDropdownRef}
-                            className="absolute left-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                            className="left-0 right-auto w-[400px]"
                         >
                             <h3 className="font-bold text-white mb-3">Search Syntax</h3>
                             <div className="space-y-2">
@@ -1477,7 +1589,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                     </div>
                                 ))}
                             </div>
-                        </div>
+                        </PopoverSurface>
                     )}
                 </div>
 
@@ -1496,6 +1608,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             selected={selectedJustifications}
                             setSelected={setSelectedJustifications}
                         />
+
+                        {activeTab === 'assessments' && (
+                            <FilterOption
+                                label="AI review"
+                                options={aiReviewList}
+                                selected={selectedAiReviews}
+                                setSelected={setSelectedAiReviews}
+                            />
+                        )}
 
                         {hasSupplierInfo && (
                             <FilterOption
@@ -1539,9 +1660,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         <FontAwesomeIcon icon={faBook} />
                     </a>
                     {showShortcutHelper && (
-                        <div
+                        <PopoverSurface
                             ref={shortcutDropdownRef}
-                            className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                            className="w-[400px]"
                         >
                             <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
                             <div className="space-y-2 text-gray-100">
@@ -1552,7 +1673,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                     </div>
                                 ))}
                             </div>
-                        </div>
+                        </PopoverSurface>
                     )}
 
                     <button
@@ -1805,29 +1926,64 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             />
 
             {editingRow && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => !editSubmitting && setEditingRow(null)}>
-                    <div className="bg-gray-900 rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <h3 className="text-base font-bold text-gray-400 mb-4 font-mono">{editingRow.vuln_id}</h3>
-                        {editSubmitting ? (
-                            <div className="flex items-center justify-center py-8">
-                                <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-                            </div>
-                        ) : (
-                            <EditAssessment
-                                assessment={editingRow}
-                                onSaveAssessment={handleSaveEdit}
-                                onCancel={() => setEditingRow(null)}
-                                triggerBanner={showMessage}
-                                availableVariants={editVariants}
-                                defaultSelectedVariantIds={editingRow._variantIds}
-                                availablePackages={editingRow.packages}
-                                defaultSelectedPackages={editingRow.packages}
-                                variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
-                            />
-                        )}
-                    </div>
-                </div>
+                <ModalShell
+                    isOpen={true}
+                    title={editingRow.vuln_id}
+                    onClose={closeAssessmentEditor}
+                    closeLabel="Close assessment editor"
+                    closeDisabled={editSubmitting}
+                    closeOnEscape={!editSubmitting}
+                    closeOnBackdrop={!editSubmitting}
+                    size="large"
+                    contentClassName="overflow-y-auto p-6 md:p-6"
+                >
+                    {editSubmitting ? (
+                        <div className="flex items-center justify-center py-8">
+                            <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                        </div>
+                    ) : (
+                        <EditAssessment
+                            assessment={editingRow}
+                            onSaveAssessment={handleSaveEdit}
+                            onCancel={closeAssessmentEditor}
+                            onFieldsChange={setEditHasUnsavedChanges}
+                            triggerBanner={showMessage}
+                            availableVariants={editVariants}
+                            defaultSelectedVariantIds={editingRow.variant_ids}
+                            availablePackages={editingRow.packages}
+                            defaultSelectedPackages={editingRow.packages}
+                            defaultSelectedTargets={editingRow.targets.map(target => ({
+                                variant_id: target.variant_id,
+                                package: target.package,
+                            }))}
+                            variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
+                            findingsLoading={editCompatibilityLoading}
+                            findingsError={editCompatibilityError}
+                        />
+                    )}
+                </ModalShell>
             )}
+
+            <ConfirmationModal
+                isOpen={pendingEmptyTargetEdit !== null}
+                title="Delete Assessment"
+                message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
+                confirmText="Yes, delete"
+                cancelText="Keep editing"
+                showTitleIcon={true}
+                onConfirm={confirmEmptyTargetEdit}
+                onCancel={() => setPendingEmptyTargetEdit(null)}
+            />
+
+            <ConfirmationModal
+                isOpen={showDiscardEditConfirmation}
+                title="Discard assessment changes?"
+                message="Your unsaved assessment changes will be lost."
+                confirmText="Discard changes"
+                cancelText="Keep editing"
+                onConfirm={discardAssessmentEdit}
+                onCancel={() => setShowDiscardEditConfirmation(false)}
+            />
         </div>
     );
 }

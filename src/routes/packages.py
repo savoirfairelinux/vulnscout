@@ -108,7 +108,17 @@ def init_app(app: Flask) -> None:
                         .where(Package.id.in_(pkg_ids_sub))
                         .order_by(Package.name)
                     ).scalars().all())
-            active_scan_ids = []  # compare mode: do not restrict by scan
+            # Keep enrichment pairwise as well. Without this restriction the
+            # project-wide fallback below can attach an unrelated third
+            # variant that happens to contain the same package, obscuring which
+            # side of the selected comparison actually contains it.
+            compare_scan_ids = active_sbom_scan_ids_for_variant(compare_uuid)
+            active_scan_ids = compare_scan_ids
+            if operation == 'intersection':
+                active_scan_ids = [
+                    *active_sbom_scan_ids_for_variant(base_uuid),
+                    *compare_scan_ids,
+                ]
         elif variant_ids:
             # Multi-variant mode: union or intersection of the packages present
             # in two or more selected variants.

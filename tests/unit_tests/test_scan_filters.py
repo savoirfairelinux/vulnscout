@@ -1,12 +1,13 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for the scanner input filters (kernel companion package exclusion)."""
+"""Tests for scanner input package filters."""
 
 from dataclasses import dataclass
 
 from src.helpers.scan_filters import (
     is_kernel_package_name,
+    is_native_package_name,
     filter_scannable_packages,
 )
 
@@ -78,3 +79,38 @@ class TestFilterScannablePackages:
 
     def test_empty_list(self):
         assert filter_scannable_packages([]) == []
+
+    def test_native_filter_is_opt_in_and_independent(self):
+        pkgs = [
+            _FakePkg("openssl"),
+            _FakePkg("cmake-native"),
+            _FakePkg("kernel-module-usbcore"),
+        ]
+
+        assert [p.name for p in filter_scannable_packages(
+            pkgs, exclude_kernel=False, exclude_native=False
+        )] == ["openssl", "cmake-native", "kernel-module-usbcore"]
+        assert [p.name for p in filter_scannable_packages(
+            pkgs, exclude_kernel=False, exclude_native=True
+        )] == ["openssl", "kernel-module-usbcore"]
+        assert [p.name for p in filter_scannable_packages(
+            pkgs, exclude_kernel=True, exclude_native=True
+        )] == ["openssl"]
+
+
+class TestIsNativePackageName:
+    def test_native_suffix(self):
+        assert is_native_package_name("cmake-native") is True
+
+    def test_case_and_whitespace(self):
+        assert is_native_package_name("  CMAKE-NATIVE  ") is True
+
+    def test_native_inside_name_is_kept(self):
+        assert is_native_package_name("native-tools") is False
+
+    def test_versioned_display_value_is_not_a_package_name(self):
+        assert is_native_package_name("cmake-native@3.28") is False
+
+    def test_none_and_empty(self):
+        assert is_native_package_name(None) is False
+        assert is_native_package_name("") is False

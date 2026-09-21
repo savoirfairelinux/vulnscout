@@ -93,10 +93,10 @@ export type {
 };
 
 class Variants {
-    static async list(projectId: string): Promise<Variant[]> {
+    static async list(projectId: string, signal?: AbortSignal): Promise<Variant[]> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/projects/${encodeURIComponent(projectId)}/variants`,
-            { mode: "cors" }
+            { mode: "cors", signal }
         );
         if (!response.ok) return [];
         const data = await response.json();
@@ -109,10 +109,10 @@ class Variants {
         ) as Variant[];
     }
 
-    static async listAll(): Promise<Variant[]> {
+    static async listAll(signal?: AbortSignal): Promise<Variant[]> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/variants`,
-            { mode: "cors" }
+            { mode: "cors", signal }
         );
         if (!response.ok) throw new Error(`Failed to load variants (${response.status})`);
         const data = await response.json();

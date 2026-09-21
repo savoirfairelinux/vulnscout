@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	wget \
 	xz-utils \
 	zstd \
-	&& gem install asciidoctor-pdf --version 2.3.15 \
+    && gem install asciidoctor-pdf --version 2.3.24 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements/dev.txt /tmp/dev.txt

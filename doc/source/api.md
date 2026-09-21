@@ -405,7 +405,28 @@ GET /api/assessments
 GET /api/assessments/<assessment_id>
 ```
 
-**Response:** Assessment object. `404` if not found.
+**Response:** Assessment object, `404` if not found. Its `targets` array holds
+every `(variant_id, package)` pair the assessment covers, each annotated with
+`outdated`:
+
+```json
+{
+  "id": "uuid",
+  "vuln_id": "CVE-2024-1234",
+  "status": "not_affected",
+  "simplified_status": "not_affected",
+  "status_notes": "",
+  "justification": "vulnerable_code_not_present",
+  "impact_statement": "",
+  "workaround": "",
+  "origin": "custom",
+  "responses": [],
+  "timestamp": "2024-01-01T00:00:00+00:00",
+  "targets": [
+    { "variant_id": "uuid", "package": "pkg@1.0::supplier", "outdated": false }
+  ]
+}
+```
 
 ### List Assessments for a Vulnerability
 
@@ -413,7 +434,31 @@ GET /api/assessments/<assessment_id>
 GET /api/vulnerabilities/<vuln_id>/assessments
 ```
 
-**Query parameters:** `format` (`"list"` or `"dict"`).
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `format` | string | `"list"` (default) or `"dict"` |
+| `project_id` | UUID | Restrict results to variants of one project |
+
+**Response:** array of assessment objects in the shape above, newest first.
+
+### List Assessments for Review
+
+```
+GET /api/reviews/assessments
+```
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | Restrict results to one variant |
+| `project_id` | UUID | Restrict results to variants of one project |
+| `origin` | string | Restrict results to one origin (e.g. `custom`, `ai`) |
+
+**Response:** array of assessment objects, each enriched with a `vuln_texts`
+array holding the vulnerability texts of its CVE for front-end tooltips.
 
 ### List Variants for a Vulnerability
 
@@ -429,6 +474,98 @@ Returns all distinct variants that have a finding for this vulnerability.
   { "id": "...", "name": "x86_64", "project_id": "..." }
 ]
 ```
+
+### Reconcile an Assessment
+
+Brings an assessment to the requested state in a single transaction: its
+targets are added or removed so it ends up covering exactly the given
+packages and variants, and its content is updated at the same time.
+
+```
+POST /api/assessments/<assessment_id>/reconcile
+```
+
+**Request body:**
+```json
+{
+  "vuln_id": "CVE-2024-1234",
+  "packages": ["pkg@1.0::supplier"],
+  "variant_ids": ["uuid"],
+  "targets": [
+    { "package": "pkg@1.0::supplier", "variant_id": "uuid" }
+  ],
+  "status": "not_affected",
+  "status_notes": "",
+  "justification": "vulnerable_code_not_present",
+  "impact_statement": "",
+  "workaround": "",
+  "responses": [],
+  "update_timestamp": true,
+  "timestamp": "2024-01-01T00:00:00+00:00"
+}
+```
+
+When present, `targets` is the authoritative exact list of package/variant
+pairs. This preserves sparse scopes without implicitly creating the
+cross-product of the flattened fields. An explicitly empty `targets` list
+removes every target and deletes the now-empty assessment. Legacy clients may
+omit `targets` and provide non-empty `packages` and `variant_ids`; those fields
+retain their cross-product behavior. `vuln_id` must match the assessment's
+vulnerability. `responses` is only applied when the key is present, so
+omitting it preserves the stored VEX responses. `update_timestamp` defaults to
+`true`.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "updated": [],
+  "created": [],
+  "deleted": []
+}
+```
+
+`400` on an invalid payload, a `vuln_id` that does not match the assessment, or
+a request that would delete a target from a pending AI assessment. `404` if
+the assessment does not exist.
+
+### Approve an AI Assessment
+
+Converts a pending AI assessment to `custom` origin.
+
+```
+POST /api/assessments/<assessment_id>/approve
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "assessments": [ { } ]
+}
+```
+
+`400` if the assessment is not a pending AI assessment. `404` if it does not
+exist.
+
+### Reject an AI Assessment
+
+Deletes a pending AI assessment.
+
+```
+POST /api/assessments/<assessment_id>/reject
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "deleted": ["uuid"]
+}
+```
+
+`400` if the assessment is not a pending AI assessment. `404` if it does not
+exist.
 
 ### Create Assessment
 
@@ -469,20 +606,39 @@ POST /api/assessments/batch
 ```json
 {
   "assessments": [
-    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "status": "affected" },
-    { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "status": "not_affected", "justification": "code_not_reachable" }
+    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_ids": ["uuid-a", "uuid-b"], "status": "affected" },
+    { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "variant_id": "uuid", "status": "not_affected", "justification": "code_not_reachable" }
   ]
 }
 ```
 
+Each item requires either `variant_id` or a non-empty `variant_ids` array. The
+plural form takes precedence when both are present. One item creates one
+assessment row covering every observed package/variant target; separate items
+remain separate rows. If any item is invalid, nothing in the batch is written.
+
 **Response:**
-```
+```json
 {
   "status": "success",
-  "assessments": [...],
+  "assessments": [],
   "count": 2,
-  "errors": [],
-  "error_count": 0
+  "vuln_count": 2
+}
+```
+
+On failure (`400` for an invalid payload, `500` for a database error) the same
+shape is returned with `status` `"error"`, empty `assessments`, and the failures
+listed:
+
+```json
+{
+  "status": "error",
+  "assessments": [],
+  "count": 0,
+  "vuln_count": 0,
+  "errors": [ { "vuln_id": "CVE-2024-1234", "error": "variant_id is required" } ],
+  "error_count": 1
 }
 ```
 
@@ -605,13 +761,20 @@ from the **AI Assessments** tab after import.
 
 ```json
 {
-  "version": "1.0",
+  "version": 2,
   "assessments": [...],
   "ai_assessments": [...],
   "cvss": [...],
   "time_estimates": [...]
 }
 ```
+
+Version 2 assessment records store their scope exclusively as exact target
+pairs such as `{"variant": "x86", "package": "openssl@3.0"}`. Exported
+records do not contain database variant UUIDs, so files can be transferred to
+another VulnScout instance. CVSS and time-estimate records likewise identify
+their variant by name. Legacy version 1 files remain importable; unsupported
+future versions are rejected explicitly.
 
 Returns `404` if there is no custom data to export.
 
@@ -630,9 +793,9 @@ Accepts either:
 - `multipart/form-data` with a `file` field containing a `.json` file.
 - `application/json` body with the custom-data payload directly.
 
-The JSON body must include the destination `project_id` UUID. Variant IDs in
-the file are resolved only within that project; a foreign ID falls back to its
-variant name in the selected project.
+The JSON body must include the destination `project_id` UUID. Version 2 variant
+names are resolved only within that project. Version 1 retains its legacy
+variant ID/name resolution for existing backups.
 
 **Response:**
 ```json
