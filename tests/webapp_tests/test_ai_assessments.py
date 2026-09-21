@@ -89,14 +89,95 @@ def test_ai_post_creates_ai_origin(client):
     assert all(a["origin"] == "ai" for a in body["assessments"])
 
 
-def test_ai_post_duplicate_rejected(client):
-    first = _post_ai(client)
-    assert first.status_code == 200
+def _ai_rows(app, vuln_id=VULN_ID):
+    with app.app_context():
+        return [
+            (str(a.id), sorted(str(t.variant_id) for t in a.target_rows))
+            for a in DBAssessment.get_by_vulnerability(vuln_id)
+            if a.origin == "ai"
+        ]
 
-    second = _post_ai(client)
-    assert second.status_code == 409
+
+def test_ai_post_replaces_pending_on_same_variant(client, app):
+    first = _post_ai(client, packages=[PKG], status="affected")
+    assert first.status_code == 200
+    first_id = json.loads(first.data)["assessment"]["id"]
+
+    second = _post_ai(client, packages=[PKG2], status="not_affected",
+                      justification="component_not_present")
+    assert second.status_code == 200
     body = json.loads(second.data)
-    assert body["error"] == "A pending AI assessment already exists for this variant"
+    assert body["assessment"]["id"] != first_id
+    assert body["replaced"] == [
+        {"id": first_id, "action": "deleted", "variant_ids": [str(VARIANT_UUID)]}]
+
+    rows = _ai_rows(app)
+    assert [r[0] for r in rows] == [body["assessment"]["id"]]
+
+
+def test_ai_post_without_pending_reports_nothing_replaced(client):
+    body = json.loads(_post_ai(client).data)
+    assert "replaced" not in body
+
+
+def test_ai_post_replace_leaves_approved_and_sbom_untouched(client, app):
+    approved_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+    assert _approve_id(client, approved_id).status_code == 200
+
+    with app.app_context():
+        before = sorted(str(a.id) for a in DBAssessment.get_by_vulnerability(VULN_ID)
+                        if a.origin != "ai")
+
+    resp = _post_ai(client, status="under_investigation")
+    assert resp.status_code == 200
+    assert "replaced" not in json.loads(resp.data)
+
+    with app.app_context():
+        after = sorted(str(a.id) for a in DBAssessment.get_by_vulnerability(VULN_ID)
+                       if a.origin != "ai")
+    assert after == before
+    assert approved_id in after
+
+
+def test_ai_post_failed_create_keeps_pending(client, app):
+    first_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+
+    resp = _post_ai(client, packages=["nonexistent@9.9.9"])
+    assert resp.status_code == 400
+    assert [r[0] for r in _ai_rows(app)] == [first_id]
+
+
+def test_ai_post_create_failure_rolls_back_the_replacement(client, app, monkeypatch):
+    """The create fails AFTER the old row was removed; the removal must roll back."""
+    from src.routes import assessments as routes
+
+    first_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated create failure")
+
+    monkeypatch.setattr(routes, "create_assessment_record", boom)
+    resp = _post_ai(client, status="not_affected", justification="component_not_present")
+    assert resp.status_code == 500
+    assert [r[0] for r in _ai_rows(app)] == [first_id]
+
+
+def test_ai_post_multi_variant_replaces_separate_pending_rows(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    first_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+    second_id = json.loads(_post_ai(client, variant_id=other_variant).data)["assessment"]["id"]
+
+    resp = client.post(
+        f"/api/vulnerabilities/{VULN_ID}/assessments",
+        json={"packages": [PKG], "status": "affected", "ai_generated": True,
+              "variant_ids": [str(VARIANT_UUID), other_variant]},
+    )
+    assert resp.status_code == 200
+    body = json.loads(resp.data)
+    assert {r["id"] for r in body["replaced"]} == {first_id, second_id}
+    assert all(r["action"] == "deleted" for r in body["replaced"])
+    assert [r[0] for r in _ai_rows(app)] == [body["assessment"]["id"]]
 
 
 def test_ai_post_second_variant_allowed(client, app):
@@ -132,6 +213,9 @@ def _get_first_ai_id(client):
 
 def _approve(client, assessment_id):
     return client.post(f"/api/assessments/{assessment_id}/approve")
+
+
+_approve_id = _approve
 
 
 def _reject(client, assessment_id):
