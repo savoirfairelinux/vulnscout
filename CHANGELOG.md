@@ -10,6 +10,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.22.0] - 2026-09-21
+
+### Added
+- Assessments: replace assessment groups with multi-target assessments, add exact target selection when creating or editing assessments, and create one pending assessment per target.
+- AI review: add per-target assessment reviews with verdicts and staleness tracking, expose them in the vulnerability modal and Review page, filter assessments by review verdict, and add an assessment-review skill.
+- Match conditions: add a known exploitable (KEV) match condition and support project-wide match conditions.
+- Reports: add granular CLI report export scopes and support variant-scoped reports.
+- Scans: optionally exclude native packages.
+- UI: add a shared modal foundation and a copy button on Review page actions.
+
+### Changed
+- Performance: compress and compact the vulnerabilities payload, reuse the loaded package list, simplify Explorer package queries, scope review requests, and keep SQLite index statistics up to date.
+- UI: unify fullscreen detail dialogs, workflow dialogs, and dismissable help popovers, compact the export wizard, and remove unused frontend components.
+- EPSS: stop refreshing EPSS for match conditions.
+- Containers: upgrade dependencies and remove unused scanner binaries.
+
+### Fixed
+- Imports and exports: make review data portable, scope OpenVEX products to the exported variants, resolve portable variants by name, and preserve legacy and integral numeric versions.
+- Scans and packages: scope current packages and Explorer loading by variant, honor the selected variant scope, ignore stale scoped loads, avoid caching arbitrary scopes, exclude native packages by default, and repair variant comparisons.
+- Assessments: preserve multi-target, sparse, empty, and variantless target semantics across read paths, imports, cleanup, and edits, and show new assessments immediately in the vulnerability modal.
+- Review: reject stale review writes, require a justification for not-affected reviews, and validate combined review scope.
+- UI: restore vulnerability modal styling and hide unavailable assessment details.
+
+---
+
 ## [0.21.0] - 2026-08-24
 
 ### Added
