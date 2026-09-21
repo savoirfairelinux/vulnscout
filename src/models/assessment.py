@@ -127,6 +127,11 @@ class Assessment(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     responses: Mapped[list[str] | None] = mapped_column(JSON)
 
     target_rows: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
@@ -642,6 +647,7 @@ class Assessment(Base):
         if not resolved_targets:
             raise GroupInvariantError("An assessment must have at least one target")
         validate_targets(resolved_targets)
+        effective_timestamp = timestamp or datetime.now(timezone.utc)
         assessment = Assessment(
             status=status,
             source=source,
@@ -652,9 +658,9 @@ class Assessment(Base):
             impact_statement=impact_statement,
             workaround=workaround,
             responses=responses or [],
+            timestamp=effective_timestamp,
+            created_at=effective_timestamp,
         )
-        if timestamp is not None:
-            assessment.timestamp = timestamp
         if assessment_id is not None:
             assessment.id = assessment_id
         assessment._init_transient()  # ensure transient attrs initialised on new objects
