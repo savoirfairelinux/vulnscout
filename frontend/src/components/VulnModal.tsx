@@ -1958,6 +1958,14 @@ type VariantScopedSnapshot = {
                                                         const v = availableVariants.find(v => v.id === firstTarget?.variant_id);
                                                         return v ? <span className="ml-1 opacity-80 text-xs">({v.name})</span> : null;
                                                     })()}
+                                                    {row.context_outdated && (
+                                                        <span
+                                                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300"
+                                                            title="The variant's AI context was modified after this assessment was generated"
+                                                        >
+                                                            Context outdated
+                                                        </span>
+                                                    )}
                                                 </span>
                                                 <div className="flex items-center gap-2">
                                                     {isEditing && (
