@@ -108,6 +108,33 @@ class TestVariantContextModel:
         vc = VariantContext.upsert(variant.id, codebase_path=None)
         assert vc.codebase_path is None
 
+    def test_updated_at_none_for_empty_context(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id)
+        assert vc.updated_at is None
+        assert vc.to_dict()["updated_at"] is None
+
+    def test_updated_at_set_on_creation_with_content(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, threat_model="x")
+        assert vc.updated_at is not None
+        assert vc.to_dict()["updated_at"] is not None
+
+    def test_updated_at_bumped_only_on_real_change(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, threat_model="x")
+        first = vc.updated_at
+        vc = VariantContext.upsert(variant.id, threat_model="x")
+        assert vc.updated_at == first
+        vc = VariantContext.upsert(variant.id, threat_model="y")
+        assert vc.updated_at > first
+
+    def test_updated_at_set_when_first_filled(self, app, variant):
+        from src.models.variant_context import VariantContext
+        VariantContext.upsert(variant.id)
+        vc = VariantContext.upsert(variant.id, risks="r")
+        assert vc.updated_at is not None
+
     def test_get_by_variant(self, app, variant):
         from src.models.variant_context import VariantContext
         assert VariantContext.get_by_variant(variant.id) is None

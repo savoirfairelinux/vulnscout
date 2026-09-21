@@ -6,9 +6,11 @@ import uuid
 import shutil
 import logging
 import typing
+from datetime import datetime, timezone
 
 from ..extensions import db, Base
-from sqlalchemy import ForeignKey, UniqueConstraint, Text, event
+from ..helpers.datetime_utils import ensure_utc_iso
+from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, Text, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
@@ -116,6 +118,9 @@ class VariantContext(Base):
     threat_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     risks: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bumped only when a field's value actually changes; AI assessments older
+    # than this were written against a previous context.  NULL = never modified.
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     variant: Mapped["Variant"] = relationship(back_populates="context")
     files: Mapped[list["ContextFile"]] = relationship(
@@ -132,6 +137,7 @@ class VariantContext(Base):
             "threat_model": self.threat_model,
             "risks": self.risks,
             "other_info": self.other_info,
+            "updated_at": ensure_utc_iso(self.updated_at) if self.updated_at else None,
             "files": [f.to_dict() for f in self.files],
         }
 
@@ -158,15 +164,28 @@ class VariantContext(Base):
     ) -> "VariantContext":
         existing = VariantContext.get_by_variant(variant_id)
         if existing is not None:
-            existing.variant_description = variant_description
-            existing.codebase_path = codebase_path
-            existing.environment = environment
-            existing.threat_model = threat_model
-            existing.risks = risks
-            existing.other_info = other_info
+            new_values = {
+                "variant_description": variant_description,
+                "codebase_path": codebase_path,
+                "environment": environment,
+                "threat_model": threat_model,
+                "risks": risks,
+                "other_info": other_info,
+            }
+            changed = False
+            for name, value in new_values.items():
+                if getattr(existing, name) != value:
+                    setattr(existing, name, value)
+                    changed = True
+            if changed:
+                existing.updated_at = datetime.now(timezone.utc)
             if commit:
                 db.session.commit()
             return existing
+        has_content = any(
+            v is not None
+            for v in (variant_description, codebase_path, environment, threat_model, risks, other_info)
+        )
         vc = VariantContext(
             variant_id=variant_id,
             variant_description=variant_description,
@@ -175,6 +194,7 @@ class VariantContext(Base):
             threat_model=threat_model,
             risks=risks,
             other_info=other_info,
+            updated_at=datetime.now(timezone.utc) if has_content else None,
         )
         db.session.add(vc)
         if commit:

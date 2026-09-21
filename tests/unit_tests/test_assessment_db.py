@@ -156,6 +156,45 @@ class TestAssessmentAddPackage:
         assert assess.packages.count("pkg@1.0") == 1
 
 
+class TestAssessmentCreationTime:
+    def test_create_sets_created_at_from_explicit_timestamp(
+        self, app, db_variant, db_finding
+    ):
+        from datetime import datetime, timezone
+        from src.models.assessment import Assessment
+
+        written = datetime(2026, 9, 1, 12, 30, tzinfo=timezone.utc)
+        assessment = Assessment.create(
+            status="affected",
+            origin="ai",
+            targets=[(db_variant.id, db_finding.id)],
+            timestamp=written,
+        )
+
+        assert assessment.timestamp.replace(tzinfo=timezone.utc) == written
+        assert assessment.created_at.replace(tzinfo=timezone.utc) == written
+
+    def test_update_does_not_change_created_at(
+        self, app, db_variant, db_finding
+    ):
+        from datetime import datetime, timezone
+        from src.models.assessment import Assessment
+
+        created = datetime(2026, 9, 1, 12, 30, tzinfo=timezone.utc)
+        edited = datetime(2026, 9, 2, 12, 30, tzinfo=timezone.utc)
+        assessment = Assessment.create(
+            status="affected",
+            origin="ai",
+            targets=[(db_variant.id, db_finding.id)],
+            timestamp=created,
+        )
+
+        assessment.update(status_notes="revised", timestamp=edited)
+
+        assert assessment.timestamp.replace(tzinfo=timezone.utc) == edited
+        assert assessment.created_at.replace(tzinfo=timezone.utc) == created
+
+
 # ---------------------------------------------------------------------------
 # Lines 162-164: vuln_id property exception path
 # ---------------------------------------------------------------------------
