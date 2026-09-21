@@ -36,7 +36,11 @@ Pending AI assessment (origin = "ai")
 Human review in the web UI  ──▶  Approve (becomes official) / Reject (deleted)
 ```
 
-Only one pending AI assessment is allowed per vulnerability **and** variant.
+A vulnerability has at most one pending AI assessment per variant. Submitting a
+new AI assessment **replaces** the pending one on the same variant(s), without
+any confirmation. If the old pending assessment also covered other variants, it
+keeps those and only loses the overlapping ones. Approved assessments are never
+replaced.
 
 ---
 
@@ -126,11 +130,12 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | Tool                       | Description                                                  |
 | -------------------------- | ----------------------------------------------------------- |
 | `write_assessment`         | Create a VEX assessment for a CVE on one or more packages   |
-| `update_ai_assessment`     | Revise an existing pending AI assessment instead of duplicating it |
+| `update_ai_assessment`     | Revise the content of an existing pending AI assessment (its targets cannot change) |
 | `get_assessment`           | Retrieve a single VEX assessment by ID                      |
 | `list_assessments_by_vuln` | List all VEX assessments recorded for a CVE                 |
-| `has_ai_assessment`        | Check whether a pending AI assessment already exists        |
+| `has_ai_assessment`        | Check whether a pending AI assessment exists for a variant (informational; a new write replaces it automatically) |
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
+| `list_variants`            | List every variant across all projects                      |
 | `get_merged_context`       | Fetch the merged project + variant context for an assessment |
 | `get_variant_context` / `update_variant_context` | Read / update variant context     |
 
@@ -152,10 +157,10 @@ Assess CVE-2024-XXXXX for project "my-product", variant "production".
 
 The skill resolves platform context using three tiers:
 
-1. **MCP fetch** — if you provide a `project_name` (and optional
-   `variant_name`, defaulting to `"default"`), the skill fetches the variant
-   context from VulnScout via the MCP tools. The resolved `variant_id` is
-   required to submit the assessment.
+1. **MCP fetch** — if you provide a `project_name` (and optionally one or more
+   variant names), the skill fetches each variant's context from VulnScout via
+   the MCP tools. The resolved `variant_id`s are required to submit the
+   assessment.
 2. **Inline context** — if you describe the platform (package manager, build
    system, deployment environment) directly in the prompt, the skill uses that.
 3. **Default fallback** — otherwise it proceeds with generic default
@@ -164,6 +169,24 @@ The skill resolves platform context using three tiers:
 The skill then researches the vulnerability, evaluates it against the project's
 security objectives, assigns a status, and submits it via
 `vulnscout-write_assessment` as a pending AI assessment.
+
+### Assessing several variants at once
+
+The skill can assess more than one variant of a project in a single run:
+
+- **Named variants** — list them in the prompt (for example, *variants
+  "production" and "staging"*) and only those are assessed.
+- **No variants named** — every variant of the project is assessed. This
+  requires a `project_name`; the skill never guesses a project.
+
+The CVE research is done once, but the component analysis and confidence score
+are done **per variant**, using each variant's own context, because the same CVE
+can have a different verdict in different variants. Variants that end up with
+the same status and justification are then submitted together as **one
+multi-target assessment**, not one assessment per variant. Variants with a
+different verdict get their own assessment. The skill finishes with a summary of
+every group, the assessment ids, any skipped variants, and any pending AI
+assessments it replaced.
 
 ```{note}
 The skill's **security objectives profiles** and **report templates** are
@@ -201,6 +224,11 @@ vulnerability's status, on scan history/diffs, or on any exported VEX.
 - **Submission is blocked with a missing `variant_id`** — the skill needs a
   `variant_id` to submit. Provide a `project_name`/`variant_name` (so it can be
   resolved via MCP) or a `variant_id` UUID directly in the prompt.
-- **409 Conflict on submission** — a pending AI assessment already exists for
-  that vulnerability and variant. Approve or reject the existing one first, or
-  let the skill revise it via `vulnscout-update_ai_assessment`.
+- **A pending AI assessment disappeared, or now covers fewer variants** —
+  this is expected. A new AI assessment replaces the pending one on the same
+  variant(s); if the old one also covered other variants, it keeps those. Approve
+  an assessment first if you want to keep it, since approved assessments are
+  never replaced.
+- **409 Conflict on submission** — you are running a VulnScout version from
+  before AI assessments replaced each other. Upgrade VulnScout, or approve or
+  reject the existing pending assessment first.
