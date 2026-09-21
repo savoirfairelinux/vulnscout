@@ -51,6 +51,8 @@ type Assessment = {
     responses: string[];
     vuln_texts?: VulnText[];
     outdated?: boolean;
+    /** Pending AI assessments only: the variant context changed after it was written. */
+    context_outdated?: boolean;
     superseded_by?: string[];
     stale_packages?: string[];
     superseded_map?: Record<string, string[]>;
@@ -266,6 +268,7 @@ const asAssessment = (data: any): Assessment | [] => {
     if (typeof data?.last_update === "string") item.last_update = data.last_update;
     if (Array.isArray(data?.vuln_texts)) item.vuln_texts = data.vuln_texts;
     if (data?.outdated === true) item.outdated = true;
+    if (data?.context_outdated === true) item.context_outdated = true;
     if (Array.isArray(data?.superseded_by)) item.superseded_by = data.superseded_by.filter((s: any) => typeof s === "string");
     if (Array.isArray(data?.stale_packages)) item.stale_packages = data.stale_packages.filter((s: any) => typeof s === "string");
     if (data?.superseded_map && typeof data.superseded_map === "object" && !Array.isArray(data.superseded_map)) {

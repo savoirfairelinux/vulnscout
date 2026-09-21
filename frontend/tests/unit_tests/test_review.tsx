@@ -157,6 +157,7 @@ function toAssessments(list: any[], vulnTextsMap: Record<string, unknown[]>): an
             responses: a.responses ?? [],
             origin: a.origin ?? 'custom',
             timestamp: a.timestamp,
+            ...(a.context_outdated ? { context_outdated: true } : {}),
             targets,
             vuln_texts: a.vuln_texts ?? vulnTextsMap[a.vuln_id] ?? [],
         };
@@ -805,6 +806,22 @@ describe('Review — AI Assessments tab', () => {
 
         expect(await screen.findByTitle('Approve AI suggestion')).toBeInTheDocument();
         expect(screen.getByTitle('Reject AI suggestion')).toBeInTheDocument();
+    });
+
+    test('flags AI assessments generated before the variant context changed', async () => {
+        mockNetwork([], {
+            aiReviewList: [
+                { ...makeAssessment('ai1', 'v1'), context_outdated: true },
+                makeAssessment('ai2', 'v1'),
+            ],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText('AI Assessments'));
+        await screen.findAllByTitle('Approve AI suggestion');
+
+        expect(screen.getAllByText('Context outdated')).toHaveLength(1);
     });
 
     test('hides the AI review filter on the AI Assessments tab but shows it on Assessments', async () => {

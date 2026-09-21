@@ -152,6 +152,7 @@ describe('AIContext page', () => {
             environment: null, threat_model: null,
             risks: null, other_info: null, files: [],
         }));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // pending AI assessments check
         // saveProject response
         fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
         // saveVariant response
@@ -324,6 +325,7 @@ describe('AIContext page', () => {
 
     test('shows error banner when variant save fails', async () => {
         setupWithVariant();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // pending AI assessments check
         fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'D' }));
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'Variant save failed' }), { status: 500 });
 
@@ -382,6 +384,7 @@ describe('AIContext page', () => {
             variant_description: null, codebase_path: '/existing/path', environment: null,
             threat_model: 'TM', risks: null, other_info: null, files: []
         }));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // pending AI assessments check
         fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'desc' }));
         fetchMock.mockResponseOnce(JSON.stringify({
             variant_id: 'v1', variant_description: null, codebase_path: '/updated/path',
@@ -408,6 +411,113 @@ describe('AIContext page', () => {
             );
             expect(call).toBeDefined();
             expect(JSON.parse((call![1] as any).body)).toMatchObject({ codebase_path: '/updated/path' });
+        });
+    });
+
+    describe('AI assessment outdating confirmation', () => {
+        const aiRow = {
+            id: 'a1', vuln_id: 'CVE-1', status: 'affected', timestamp: '2026-01-01T00:00:00Z',
+            origin: 'ai', packages: [], responses: [],
+        };
+
+        async function loadVariantAndEdit(aiList: unknown[], saveResponses: unknown[] = []) {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fetchMock.mockResponseOnce(JSON.stringify({
+                project_id: 'p1', description: 'Desc', variant_id: 'v1', variant_description: null,
+                environment: null, threat_model: 'TM', risks: null, other_info: null, files: [],
+            }));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+            await screen.findByRole('option', { name: 'Variant 1' });
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM'));
+            await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Desc'));
+            fetchMock.mockResponseOnce(JSON.stringify(aiList));
+            saveResponses.forEach(r => fetchMock.mockResponseOnce(JSON.stringify(r)));
+            fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'TM2' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+        }
+
+        const putCalls = () => fetchMock.mock.calls.filter(c => (c[1] as any)?.method === 'PUT');
+
+        test('asks for confirmation and saves only after confirming', async () => {
+            await loadVariantAndEdit([aiRow]);
+            expect(await screen.findByText(/mark all pending AI assessments/i)).toBeInTheDocument();
+            expect(
+                await screen.findByText(/remain outdated until they are regenerated/i)
+            ).toBeInTheDocument();
+            expect(
+                screen.queryByText(/restored to its previous content/i)
+            ).not.toBeInTheDocument();
+            expect(putCalls()).toHaveLength(0);
+
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fetchMock.mockResponseOnce(JSON.stringify({ variant_id: 'v1' }));
+            fireEvent.click(screen.getByRole('button', { name: /save and mark outdated/i }));
+            await waitFor(() => expect(putCalls().some(c => String(c[0]).includes('/api/variants/v1/context'))).toBe(true));
+        });
+
+        test('cancel leaves the context unsaved', async () => {
+            await loadVariantAndEdit([aiRow]);
+            fireEvent.click(await screen.findByRole('button', { name: /^cancel$/i }));
+            await waitFor(() => expect(screen.queryByText(/mark all pending AI assessments/i)).not.toBeInTheDocument());
+            expect(putCalls()).toHaveLength(0);
+        });
+
+        test('no confirmation when the variant has no pending AI assessments', async () => {
+            await loadVariantAndEdit([], [{ project_id: 'p1', description: 'Desc' }, { variant_id: 'v1' }]);
+            await waitFor(() => expect(putCalls().some(c => String(c[0]).includes('/api/variants/v1/context'))).toBe(true));
+            expect(screen.queryByText(/mark all pending AI assessments/i)).not.toBeInTheDocument();
+        });
+
+        test('confirms when saving normalizes whitespace from stored context', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fetchMock.mockResponseOnce(JSON.stringify({
+                project_id: 'p1', description: 'Desc', variant_id: 'v1', variant_description: null,
+                environment: null, threat_model: ' TM ', risks: null, other_info: null, files: [],
+            }));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+            await screen.findByRole('option', { name: 'Variant 1' });
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue(' TM '));
+
+            fetchMock.mockResponseOnce(JSON.stringify([aiRow]));
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+            expect(await screen.findByText(/mark all pending AI assessments/i)).toBeInTheDocument();
+            expect(putCalls()).toHaveLength(0);
+        });
+
+        test('disables saving while a newly selected variant context is loading', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([
+                { id: 'v1', name: 'Variant 1', project_id: 'p1' },
+                { id: 'v2', name: 'Variant 2', project_id: 'p1' },
+            ]));
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fetchMock.mockResponseOnce(JSON.stringify({
+                project_id: 'p1', description: 'Desc', variant_id: 'v1', variant_description: null,
+                environment: null, threat_model: 'TM1', risks: null, other_info: null, files: [],
+            }));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+            await screen.findByRole('option', { name: 'Variant 1' });
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM1'));
+            expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+
+            fetchMock.mockImplementationOnce(() => new Promise(() => {}));
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v2' } });
+
+            expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
         });
     });
 
