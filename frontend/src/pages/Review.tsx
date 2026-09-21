@@ -66,6 +66,8 @@ type ReviewRow = {
     responses: string[];
     origin: string;
     timestamp: string;
+    /** AI assessment written before the variant context was last modified. */
+    context_outdated: boolean;
     targets: NonNullable<Assessment["targets"]>;
     /** Unique packages across every target (for columns and search). */
     packages: string[];
@@ -99,6 +101,7 @@ function toReviewRow(
         responses: assessment.responses,
         origin: assessment.origin,
         timestamp: assessment.timestamp,
+        context_outdated: assessment.context_outdated === true,
         targets,
         packages,
         variant_ids,
@@ -1145,8 +1148,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             size: 110,
             cell: info => {
                 return (
-                    <div className="flex items-center justify-center h-full">
+                    <div className="flex flex-col items-center justify-center h-full gap-1">
                         <code>{info.getValue()}</code>
+                        {info.row.original.context_outdated && (
+                            <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300"
+                                title="The variant's AI context was modified after this assessment was generated"
+                            >
+                                Context outdated
+                            </span>
+                        )}
                     </div>
                 );
             },
