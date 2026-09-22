@@ -405,7 +405,28 @@ GET /api/assessments
 GET /api/assessments/<assessment_id>
 ```
 
-**Response:** Assessment object. `404` if not found.
+**Response:** Assessment object, `404` if not found. Its `targets` array holds
+every `(variant_id, package)` pair the assessment covers, each annotated with
+`outdated`:
+
+```json
+{
+  "id": "uuid",
+  "vuln_id": "CVE-2024-1234",
+  "status": "not_affected",
+  "simplified_status": "not_affected",
+  "status_notes": "",
+  "justification": "vulnerable_code_not_present",
+  "impact_statement": "",
+  "workaround": "",
+  "origin": "custom",
+  "responses": [],
+  "timestamp": "2024-01-01T00:00:00+00:00",
+  "targets": [
+    { "variant_id": "uuid", "package": "pkg@1.0::supplier", "outdated": false }
+  ]
+}
+```
 
 ### List Assessments for a Vulnerability
 
@@ -413,7 +434,31 @@ GET /api/assessments/<assessment_id>
 GET /api/vulnerabilities/<vuln_id>/assessments
 ```
 
-**Query parameters:** `format` (`"list"` or `"dict"`).
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `format` | string | `"list"` (default) or `"dict"` |
+| `project_id` | UUID | Restrict results to variants of one project |
+
+**Response:** array of assessment objects in the shape above, newest first.
+
+### List Assessments for Review
+
+```
+GET /api/reviews/assessments
+```
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | Restrict results to one variant |
+| `project_id` | UUID | Restrict results to variants of one project |
+| `origin` | string | Restrict results to one origin (e.g. `custom`, `ai`) |
+
+**Response:** array of assessment objects, each enriched with a `vuln_texts`
+array holding the vulnerability texts of its CVE for front-end tooltips.
 
 ### List Variants for a Vulnerability
 
@@ -430,97 +475,14 @@ Returns all distinct variants that have a finding for this vulnerability.
 ]
 ```
 
-### Assessment Groups
+### Reconcile an Assessment
 
-Assessments written by one user action share a **group**: the same verdict applied
-to several packages and/or variants of a vulnerability. Group endpoints read and
-edit that whole set at once, so the front-ends never reimplement grouping.
-
-**Group object:**
-```json
-{
-  "group_id": "uuid, or null for an assessment that belongs to no group",
-  "vuln_id": "CVE-2024-1234",
-  "status": "not_affected",
-  "simplified_status": "not_affected",
-  "status_notes": "",
-  "justification": "vulnerable_code_not_present",
-  "impact_statement": "",
-  "workaround": "",
-  "origin": "custom",
-  "responses": [],
-  "timestamp": "2024-01-01T00:00:00+00:00",
-  "targets": [
-    {
-      "variant_id": "uuid or null",
-      "package": "pkg@1.0::supplier",
-      "outdated": false,
-      "assessment_id": "uuid"
-    }
-  ],
-  "assessment_ids": ["uuid"]
-}
-```
-
-Groups are returned newest first. An assessment with no group is returned in the
-same shape with `group_id` set to `null` and a single target, so callers never
-branch on whether a group exists.
-
-**Group invariants.** A group is read through its first member and written as a
-whole (reconcile, approve, reject, delete), so every member must share the same
-project, the same vulnerability, the same content (status, simplified status,
-notes, justification, impact statement, workaround, origin) and the same
-`responses`. Writes that would break this — a batch spanning two projects, or
-joining a group whose content differs — are refused with `400`; such a request
-simply yields separate groups instead.
-
-#### List Assessment Groups for a Vulnerability
+Brings an assessment to the requested state in a single transaction: its
+targets are added or removed so it ends up covering exactly the given
+packages and variants, and its content is updated at the same time.
 
 ```
-GET /api/vulnerabilities/<vuln_id>/assessment-groups
-```
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `project_id` | UUID | Restrict results to variants of one project |
-
-**Response:** array of group objects.
-
-#### Get Single Assessment Group
-
-```
-GET /api/assessment-groups/<group_id>
-```
-
-**Response:** one group object. `404` if the group does not exist.
-
-#### List Assessment Groups for Review
-
-```
-GET /api/reviews/assessment-groups
-```
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `variant_id` | UUID | Restrict results to one variant |
-| `project_id` | UUID | Restrict results to variants of one project |
-| `origin` | string | Restrict results to one origin (e.g. `custom`, `ai`) |
-
-**Response:** array of group objects, each enriched with a `vuln_texts` array
-holding the vulnerability texts of its CVE for front-end tooltips.
-
-#### Reconcile an Assessment Group
-
-Brings the group to the requested state in a single transaction: rows are
-updated, created, or deleted so the group ends up covering exactly the given
-packages and variants.
-
-```
-POST /api/assessment-groups/<group_id>/reconcile
+POST /api/assessments/<assessment_id>/reconcile
 ```
 
 **Request body:**
@@ -529,7 +491,9 @@ POST /api/assessment-groups/<group_id>/reconcile
   "vuln_id": "CVE-2024-1234",
   "packages": ["pkg@1.0::supplier"],
   "variant_ids": ["uuid"],
-  "existing_ids": ["uuid"],
+  "targets": [
+    { "package": "pkg@1.0::supplier", "variant_id": "uuid" }
+  ],
   "status": "not_affected",
   "status_notes": "",
   "justification": "vulnerable_code_not_present",
@@ -541,32 +505,36 @@ POST /api/assessment-groups/<group_id>/reconcile
 }
 ```
 
-`packages` and `variant_ids` are required and must be non-empty; `vuln_id` must
-match the group's vulnerability. `responses` is only applied when the key is
-present, so omitting it preserves the stored VEX responses. `update_timestamp`
-defaults to `true`.
+When present, `targets` is the authoritative exact list of package/variant
+pairs. This preserves sparse scopes without implicitly creating the
+cross-product of the flattened fields. An explicitly empty `targets` list
+removes every target and deletes the now-empty assessment. Legacy clients may
+omit `targets` and provide non-empty `packages` and `variant_ids`; those fields
+retain their cross-product behavior. `vuln_id` must match the assessment's
+vulnerability. `responses` is only applied when the key is present, so
+omitting it preserves the stored VEX responses. `update_timestamp` defaults to
+`true`.
 
 **Response:**
 ```json
 {
   "status": "success",
-  "group_id": "uuid",
   "updated": [],
   "created": [],
   "deleted": []
 }
 ```
 
-`400` on an invalid payload, a `vuln_id` that does not match the group, or a
-request that would delete a pending AI assessment. `404` if the group does not
-exist.
+`400` on an invalid payload, a `vuln_id` that does not match the assessment, or
+a request that would delete a target from a pending AI assessment. `404` if
+the assessment does not exist.
 
-#### Approve an AI Assessment Group
+### Approve an AI Assessment
 
-Converts every assessment in the group from `ai` origin to `custom`.
+Converts a pending AI assessment to `custom` origin.
 
 ```
-POST /api/assessment-groups/<group_id>/approve
+POST /api/assessments/<assessment_id>/approve
 ```
 
 **Response:**
@@ -577,15 +545,15 @@ POST /api/assessment-groups/<group_id>/approve
 }
 ```
 
-`400` if the group holds any non-AI assessment (`Not a pending AI group`).
-`404` if the group does not exist.
+`400` if the assessment is not a pending AI assessment. `404` if it does not
+exist.
 
-#### Reject an AI Assessment Group
+### Reject an AI Assessment
 
-Deletes every assessment in the group.
+Deletes a pending AI assessment.
 
 ```
-POST /api/assessment-groups/<group_id>/reject
+POST /api/assessments/<assessment_id>/reject
 ```
 
 **Response:**
@@ -596,64 +564,8 @@ POST /api/assessment-groups/<group_id>/reject
 }
 ```
 
-`400` if the group holds any non-AI assessment. `404` if the group does not exist.
-
-#### Approve or Reject a Single AI Assessment (compatibility)
-
-Kept for clients written against the pre-group API. Both endpoints resolve the
-addressed assessment's group and behave exactly like the group endpoints above;
-an ungrouped assessment is treated as a single-member group.
-
-```
-POST /api/assessments/<assessment_id>/approve
-POST /api/assessments/<assessment_id>/reject
-```
-
-**Response:** identical to the matching group endpoint —
-`{"status": "success", "assessments": [ { } ]}` for approve and
-`{"status": "success", "deleted": ["uuid"]}` for reject.
-
-`400` if the addressed assessment is not a pending AI assessment
-(`Not a pending AI assessment`), or if its group holds a non-AI member
-(`Not a pending AI group`). `404` if the assessment does not exist.
-
-Prefer the group endpoints in new code: they address the unit that approval and
-rejection actually operate on.
-
-#### Delete an Assessment Group
-
-```
-DELETE /api/assessment-groups/<group_id>
-```
-
-**Response:**
-```json
-{
-  "status": "success",
-  "deleted_ids": ["uuid"]
-}
-```
-
-`400` if the group holds AI assessments — use the approve/reject endpoints for
-those. `404` if the group does not exist.
-
-#### Put an Assessment into a Group
-
-An assessment written on its own has no group until an edit gives it a second
-target; this endpoint creates that group lazily and is idempotent.
-
-```
-POST /api/assessments/<assessment_id>/group
-```
-
-**Response:**
-```json
-{
-  "group_id": "uuid"
-}
-```
-
-`404` if the assessment does not exist.
+`400` if the assessment is not a pending AI assessment. `404` if it does not
+exist.
 
 ### Create Assessment
 
@@ -694,16 +606,16 @@ POST /api/assessments/batch
 ```json
 {
   "assessments": [
-    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_id": "uuid", "status": "affected" },
+    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_ids": ["uuid-a", "uuid-b"], "status": "affected" },
     { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "variant_id": "uuid", "status": "not_affected", "justification": "code_not_reachable" }
   ]
 }
 ```
 
-`variant_id` is required on every item. The batch is one user action: if any
-item is invalid, nothing is written. Rows are grouped by the group invariant —
-project, vulnerability, content and responses — so one batch can produce several
-groups, and approving or deleting one never touches rows that differ from it.
+Each item requires either `variant_id` or a non-empty `variant_ids` array. The
+plural form takes precedence when both are present. One item creates one
+assessment row covering every observed package/variant target; separate items
+remain separate rows. If any item is invalid, nothing in the batch is written.
 
 **Response:**
 ```json
@@ -849,13 +761,20 @@ from the **AI Assessments** tab after import.
 
 ```json
 {
-  "version": "1.0",
+  "version": 2,
   "assessments": [...],
   "ai_assessments": [...],
   "cvss": [...],
   "time_estimates": [...]
 }
 ```
+
+Version 2 assessment records store their scope exclusively as exact target
+pairs such as `{"variant": "x86", "package": "openssl@3.0"}`. Exported
+records do not contain database variant UUIDs, so files can be transferred to
+another VulnScout instance. CVSS and time-estimate records likewise identify
+their variant by name. Legacy version 1 files remain importable; unsupported
+future versions are rejected explicitly.
 
 Returns `404` if there is no custom data to export.
 
@@ -874,9 +793,9 @@ Accepts either:
 - `multipart/form-data` with a `file` field containing a `.json` file.
 - `application/json` body with the custom-data payload directly.
 
-The JSON body must include the destination `project_id` UUID. Variant IDs in
-the file are resolved only within that project; a foreign ID falls back to its
-variant name in the selected project.
+The JSON body must include the destination `project_id` UUID. Version 2 variant
+names are resolved only within that project. Version 1 retains its legacy
+variant ID/name resolution for existing backups.
 
 **Response:**
 ```json

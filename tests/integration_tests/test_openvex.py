@@ -349,3 +349,78 @@ def test_to_dict_vuln_non_http_datasource_no_id(openvex_parser, pkg_ABC):
         if v.get("name") == "CVE-9999-NODS":
             assert "@id" not in v
             break
+
+
+# ---------------------------------------------------------------------------
+# to_dict() with a genuine multi-target assessment (DB-backed)
+# ---------------------------------------------------------------------------
+
+def _make_variant(project_id, name):
+    from src.models.variant import Variant
+    return Variant.create(f"openvex-multitarget-var-{name}", project_id)
+
+
+def _make_finding(vuln_id, pkg_name):
+    from src.models.package import Package as DBPackage
+    from src.models.vulnerability import Vulnerability as DBVulnerability
+    from src.models.finding import Finding
+    pkg = DBPackage.find_or_create(pkg_name, "1.0")
+    DBVulnerability.get_or_create(vuln_id)
+    return Finding.get_or_create(pkg.id, vuln_id)
+
+
+def test_to_dict_multi_target_assessment_emits_non_empty_products():
+    """A genuine multi-target assessment (NULL scalar variant_id/finding_id)
+    must not export a statement with empty ``products`` — its packages come
+    from ``target_rows`` via ``Assessment.packages``'s fallback."""
+    from src.models.project import Project
+    from src.models.assessment import Assessment as DBAssessment
+
+    project = Project.create("openvex-multitarget-proj")
+    variant = _make_variant(project.id, "a")
+    openssl = _make_finding("CVE-2026-7000", "openssl")
+    zlib = _make_finding("CVE-2026-7000", "zlib")
+    DBAssessment.create(
+        status="not_affected", origin="custom",
+        justification="vulnerable_code_not_present",
+        targets=[(variant.id, openssl.id), (variant.id, zlib.id)],
+        commit=True,
+    )
+
+    opvx = OpenVex(ControllersCache())
+    doc = opvx.to_dict()
+
+    stmts = [s for s in doc["statements"] if s["vulnerability"]["name"] == "CVE-2026-7000"]
+    assert len(stmts) == 1
+    product_ids = {p["@id"] for p in stmts[0]["products"]}
+    assert product_ids == {"pkg:generic/openssl@1.0", "pkg:generic/zlib@1.0"}
+
+
+def test_to_dict_scoped_export_does_not_leak_out_of_scope_package():
+    """Scoping the export to one variant must not disclose a sibling
+    variant's package from the same multi-target assessment."""
+    from src.models.project import Project
+    from src.models.assessment import Assessment as DBAssessment
+    from src.helpers.export_scope import compute_export_scope
+
+    project = Project.create("openvex-multitarget-scope-proj")
+    variant_a = _make_variant(project.id, "scope-a")
+    variant_b = _make_variant(project.id, "scope-b")
+    openssl = _make_finding("CVE-2026-7001", "openssl")
+    zlib = _make_finding("CVE-2026-7001", "zlib")
+    DBAssessment.create(
+        status="not_affected", origin="custom",
+        justification="vulnerable_code_not_present",
+        targets=[(variant_a.id, openssl.id), (variant_b.id, zlib.id)],
+        commit=True,
+    )
+
+    scope = compute_export_scope(variant_id=variant_a.id)
+    opvx = OpenVex(ControllersCache(scope=scope))
+    doc = opvx.to_dict()
+
+    stmts = [s for s in doc["statements"] if s["vulnerability"]["name"] == "CVE-2026-7001"]
+    assert len(stmts) == 1
+    product_ids = {p["@id"] for p in stmts[0]["products"]}
+    assert product_ids == {"openssl@1.0"}
+    assert "zlib@1.0" not in product_ids

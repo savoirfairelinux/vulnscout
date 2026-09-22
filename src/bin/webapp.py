@@ -18,6 +18,7 @@ import threading
 from datetime import datetime, timezone
 import signal
 from flask import request
+from flask.json.provider import DefaultJSONProvider
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
@@ -87,6 +88,25 @@ def _warm_scan_list_cache(app):
     threading.Thread(target=_warm, name="cache-warm-scan-list", daemon=True).start()
 
 
+def _refresh_sqlite_stats(app):
+    """Recompute SQLite index statistics once the imported data is in place.
+
+    The statistics gathered at boot describe the database as it was before the
+    import, and the Explorer queries that run immediately afterwards depend on
+    them to pick their join order.
+    """
+    with app.app_context():
+        if db.engine.dialect.name != "sqlite":
+            return
+        try:
+            db.session.execute(db.text("PRAGMA analysis_limit=1000"))
+            db.session.execute(db.text("ANALYZE"))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"[sqlite-stats] {e}", flush=True)
+
+
 def _schedule_background_tasks(app):
     """Start post-scan work after the initial Explorer data request burst.
 
@@ -125,6 +145,11 @@ def create_app():
         app.config["SCAN_FILE"] = SCAN_FILE
     app.config["SCAN_DATE"] = "unknown date"
 
+    # Flask pretty-prints JSON with indent=2 whenever debug is on, which both
+    # inflates large Explorer payloads and forces the pure-Python JSON encoder.
+    if isinstance(app.json, DefaultJSONProvider):
+        app.json.compact = True
+
     if "SQLALCHEMY_DATABASE_URI" not in app.config:
         app.config["SQLALCHEMY_DATABASE_URI"] = DEFAULT_DB_URI
 
@@ -157,6 +182,20 @@ def create_app():
                 db.session.commit()
             except Exception:
                 pass
+            # Without index statistics SQLite guesses join cardinalities and can
+            # pick plans orders of magnitude slower than the best one on the
+            # Explorer queries.  analysis_limit caps the sampling cost so this
+            # stays in the millisecond range even on large databases.
+            try:
+                has_stats = db.session.execute(db.text(
+                    "SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'"
+                )).first() is not None
+                if not has_stats:
+                    db.session.execute(db.text("PRAGMA analysis_limit=1000"))
+                    db.session.execute(db.text("ANALYZE"))
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
             # Serialise write transactions across threads so that
             # concurrent enrichment / request commits never trigger
             # "database is locked".
@@ -182,6 +221,7 @@ def create_app():
                     app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
                 app._INT_SCAN_FINISHED = True
                 if not app.config.get("TESTING"):
+                    _refresh_sqlite_stats(app)
                     _schedule_background_tasks(app)
                 return True
         return False

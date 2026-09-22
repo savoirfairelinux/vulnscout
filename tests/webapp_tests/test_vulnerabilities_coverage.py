@@ -4,8 +4,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
+import gzip
 import json
+from flask import Flask
 from src.bin.webapp import create_app
+from src.routes.vulnerabilities import _compact_json_response
 from . import write_demo_files, setup_demo_db
 
 
@@ -103,6 +106,7 @@ def test_match_condition_rejects_oversized_items_list(client):
     "effort == 3600",
     "effort_min <= 1800",
     "effort_max >= 7200",
+    "known_exploitable",
     "fixed",
     "not ignored",
     "affected or pending",
@@ -123,6 +127,7 @@ def test_match_condition_supports_documented_language(client, condition):
             "effort": 3600,
             "effort_min": 1800,
             "effort_max": 7200,
+            "known_exploitable": True,
             "fixed": True,
             "ignored": False,
             "affected": True,
@@ -816,6 +821,46 @@ def test_get_vulnerabilities_invalid_project_id(client):
     assert response.status_code == 400
     data = json.loads(response.data)
     assert "invalid" in data["error"].lower() or "project" in data["error"].lower()
+
+
+def test_get_vulnerabilities_reports_current_packages_per_variant(client):
+    variant_id = "22222222-2222-2222-2222-222222222222"
+
+    response = client.get(f"/api/vulnerabilities?variant_id={variant_id}")
+
+    assert response.status_code == 200
+    vulnerability = next(
+        item for item in response.get_json()
+        if item["id"] == "CVE-2020-35492"
+    )
+    assert vulnerability["packages_current_by_variant"] == {
+        variant_id: ["cairo@1.16.0"],
+    }
+
+
+def test_current_packages_per_variant_keeps_supplier_identity(app, client):
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.package import Package
+
+    variant_id = "22222222-2222-2222-2222-222222222222"
+    with app.app_context():
+        other_supplier = Package.find_or_create(
+            "cairo", "1.16.0", supplier="Other Supplier")
+        Finding.get_or_create(other_supplier.id, "CVE-2020-35492")
+        db.session.commit()
+
+    response = client.get(f"/api/vulnerabilities?variant_id={variant_id}")
+
+    assert response.status_code == 200
+    vulnerability = next(
+        item for item in response.get_json()
+        if item["id"] == "CVE-2020-35492"
+    )
+    assert vulnerability["packages_current_by_variant"] == {
+        variant_id: ["cairo@1.16.0"],
+    }
+    assert "cairo@1.16.0::Other Supplier" not in vulnerability["packages_current"]
 
 
 def test_get_vulnerability_by_id_with_variant_scope(app, client):
@@ -1790,5 +1835,66 @@ def test_get_vulnerabilities_compare_difference_with_base_ids(app, client):
     # Only compare-only vuln should appear; shared one is excluded
     assert "CVE-DIFF-COMPARE-001" in ids
     assert "CVE-DIFF-SHARED-001" not in ids
+
+
+def _large_payload():
+    return [{"id": f"CVE-2020-{i:05d}", "summary": "x" * 64} for i in range(50)]
+
+
+@pytest.mark.parametrize("accept_encoding", [
+    "gzip",
+    "GZip",
+    "br, GZIP;q=0.5",
+])
+def test_compact_response_is_gzipped_when_the_client_accepts_it(accept_encoding):
+    payload = _large_payload()
+
+    with Flask(__name__).test_request_context(headers={"Accept-Encoding": accept_encoding}):
+        response = _compact_json_response(payload)
+
+    assert response.headers["Content-Encoding"] == "gzip"
+    assert response.headers["Vary"] == "Accept-Encoding"
+    assert json.loads(gzip.decompress(response.get_data())) == payload
+
+
+def test_compact_response_stays_plain_without_gzip_support():
+    payload = _large_payload()
+
+    with Flask(__name__).test_request_context():
+        response = _compact_json_response(payload)
+
+    assert "Content-Encoding" not in response.headers
+    assert json.loads(response.get_data()) == payload
+
+
+def test_compact_response_stays_plain_when_gzip_is_rejected():
+    payload = _large_payload()
+
+    with Flask(__name__).test_request_context(headers={"Accept-Encoding": "gzip;q=0"}):
+        response = _compact_json_response(payload)
+
+    assert "Content-Encoding" not in response.headers
+    assert json.loads(response.get_data()) == payload
+
+
+def test_compact_response_leaves_small_payloads_uncompressed():
+    with Flask(__name__).test_request_context(headers={"Accept-Encoding": "gzip"}):
+        response = _compact_json_response([{"id": "CVE-2020-35492"}])
+
+    assert "Content-Encoding" not in response.headers
+    assert json.loads(response.get_data()) == [{"id": "CVE-2020-35492"}]
+
+
+def test_compact_endpoint_serves_decodable_json_to_a_gzip_client(client):
+    response = client.get(
+        "/api/vulnerabilities?format=compact",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    body = response.data
+    if response.headers.get("Content-Encoding") == "gzip":
+        body = gzip.decompress(body)
+    assert [v["id"] for v in json.loads(body)] == ["CVE-2020-35492"]
 
 

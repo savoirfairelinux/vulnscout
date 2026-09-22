@@ -64,8 +64,9 @@ describe("ScansHandler request contracts", () => {
     expect(result.ok === false && result.error).toContain("could not reach the server");
   });
 
-  test("lists scans for global, project, and variant scopes", async () => {
+  test("lists scans for global, project, variant, and subset scopes", async () => {
     const scan = { id: "scan-1", timestamp: "2026-08-07", variant_id: "variant-1", finding_count: 1 };
+    fetchSpy.mockResolvedValueOnce(response([scan]));
     fetchSpy.mockResolvedValueOnce(response([scan]));
     fetchSpy.mockResolvedValueOnce(response([scan]));
     fetchSpy.mockResolvedValueOnce(response([scan]));
@@ -73,10 +74,12 @@ describe("ScansHandler request contracts", () => {
     expect(await ScansHandler.list()).toEqual([scan]);
     expect(await ScansHandler.list(undefined, "project 1")).toEqual([scan]);
     expect(await ScansHandler.list("variant 1")).toEqual([scan]);
+    expect(await ScansHandler.list(undefined, "project 1", ["variant 1", "variant 2"])).toEqual([scan]);
     expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual(expect.arrayContaining([
       expect.stringContaining("/api/scans"),
       expect.stringContaining("/api/projects/project%201/scans"),
       expect.stringContaining("/api/variants/variant%201/scans"),
+      expect.stringMatching(/\/api\/scans\?variant_ids=variant(%20|\+)1%2Cvariant(%20|\+)2&project_id=project(%20|\+)1/),
     ]));
   });
 
@@ -99,7 +102,7 @@ describe("ScansHandler request contracts", () => {
     fetchSpy.mockResolvedValueOnce(response({}, true, 202));
     fetchSpy.mockResolvedValueOnce(response({ status: "done" }));
 
-    expect(await ScansHandler.triggerGrypeScan("variant-1", false)).toEqual({ ok: true });
+    expect(await ScansHandler.triggerGrypeScan("variant-1", false, true)).toEqual({ ok: true });
     expect(await ScansHandler.getGrypeScanStatus("variant-1")).toEqual({ status: "running" });
     expect(await ScansHandler.triggerNvdScan("variant-1")).toEqual({ ok: true });
     expect(await ScansHandler.getNvdScanStatus("variant-1")).toEqual({ status: "done" });
@@ -107,6 +110,13 @@ describe("ScansHandler request contracts", () => {
     expect(await ScansHandler.getOsvScanStatus("variant-1")).toEqual({ status: "queued" });
     expect(await ScansHandler.triggerSbomCveCheckScan("variant-1")).toEqual({ ok: true });
     expect(await ScansHandler.getSbomCveCheckScanStatus("variant-1")).toEqual({ status: "done" });
+    const triggerUrls = [0, 2, 4, 6].map(index => String(fetchSpy.mock.calls[index][0]));
+    expect(triggerUrls[0]).toContain("exclude_kernel=false&exclude_native=true");
+    expect(triggerUrls.slice(1)).toEqual(expect.arrayContaining([
+      expect.stringContaining("exclude_kernel=true&exclude_native=false"),
+      expect.stringContaining("exclude_kernel=true&exclude_native=false"),
+      expect.stringContaining("exclude_kernel=true&exclude_native=false"),
+    ]));
   });
 
   test("reads global scan results and active scanner queues", async () => {

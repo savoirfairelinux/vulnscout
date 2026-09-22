@@ -431,14 +431,275 @@ def test_export_command_openvex(app, tmp_path):
 
 def test_report_command_txt_template(app, tmp_path):
     """flask report renders vulnerability_summary.txt to output dir (lines 497-504)."""
+    _run_main()
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
+        ])
+    assert result.exit_code == 0, result.output
+    report = (tmp_path / "vulnerability_summary.txt").read_text()
+    assert "CVE-2020-35492" in report
+
+
+def test_report_command_project_scope(app, tmp_path):
+    """A project report contains data from that project's variants only."""
+    from src.extensions import db as database
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    _run_main()
+    with app.app_context():
+        project = Project.create("EmptyReportProject")
+        Variant.create("empty-variant", project.id)
+        database.session.commit()
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", project.name,
+        ])
+
+    assert result.exit_code == 0, result.output
+    report = (tmp_path / "vulnerability_summary.txt").read_text()
+    assert "Total Vulnerabilities: 0" in report
+    assert "CVE-2020-35492" not in report
+
+
+def test_report_command_requires_project(app, tmp_path):
+    """A report cannot silently broaden its scope to every project."""
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "report", "vulnerability_summary.txt",
             "--output-dir", str(tmp_path),
         ])
+
+    assert result.exit_code != 0
+    assert "Missing option '--project'" in result.output
+
+
+def test_report_command_rejects_unknown_project(app, tmp_path):
+    """Invalid report scope fails rather than broadening the exported data."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", "missing",
+        ])
+
+    assert result.exit_code != 0
+    assert "project 'missing' not found" in result.output
+
+
+def test_report_command_variant_scope_isolates_project_variants(app, tmp_path):
+    """A variant report does not expose records from sibling variants."""
+    from src.extensions import db as database
+    from src.models.project import Project
+    from src.models.variant import Variant
+
+    _run_main()
+    with app.app_context():
+        project = Project.get_by_name(_PROJECT_NAME)
+        assert project is not None
+        empty_variant = Variant.create("empty-report-variant", project.id)
+        database.session.commit()
+        runner = app.test_cli_runner()
+        empty_result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
+            "--variant", empty_variant.name,
+        ])
+
+    assert empty_result.exit_code == 0, empty_result.output
+    report = (tmp_path / "vulnerability_summary.txt").read_text()
+    assert "Total Vulnerabilities: 0" in report
+    assert "CVE-2020-35492" not in report
+
+    with app.app_context():
+        populated_result = app.test_cli_runner().invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+        ])
+
+    assert populated_result.exit_code == 0, populated_result.output
+    populated_report = (tmp_path / "vulnerability_summary.txt").read_text()
+    assert "CVE-2020-35492" in populated_report
+
+
+def test_report_custom_template_isolates_every_context_collection(app, tmp_path, monkeypatch):
+    """Scoped report templates cannot inspect records outside their scope."""
+    from src.extensions import db as database
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+
+    _run_main()
+    with app.app_context():
+        selected_project = Project.get_by_name(_PROJECT_NAME)
+        assert selected_project is not None
+        selected_variant = Variant.get_by_name_and_project(_VARIANT_NAME, selected_project.id)
+        assert selected_variant is not None
+
+        selected_scan = Scan.create("SELECTED_SCAN", selected_variant.id, scan_type="sbom")
+        selected_document = SBOMDocument.create(
+            "/SELECTED_DOCUMENT.spdx.json", "SELECTED_DOCUMENT", selected_scan.id,
+            format="spdx",
+        )
+        selected_package = Package.create("SELECTED_PACKAGE", "1.0")
+        SBOMPackage.create(selected_document.id, selected_package.id)
+        selected_vulnerability = Vulnerability.create_record("CVE-2099-0001")
+        selected_finding = Finding.create(selected_package.id, selected_vulnerability.id)
+        Assessment.create(
+            "affected",
+            targets=[(selected_variant.id, selected_finding.id)],
+            origin="custom",
+            status_notes="SELECTED_ASSESSMENT",
+        )
+
+        sibling_variant = Variant.create("SIBLING_VARIANT", selected_project.id)
+        sibling_scan = Scan.create("SIBLING_SCAN", sibling_variant.id, scan_type="sbom")
+        sibling_document = SBOMDocument.create(
+            "/SIBLING_DOCUMENT.spdx.json", "SIBLING_DOCUMENT", sibling_scan.id,
+            format="spdx",
+        )
+        sibling_package = Package.create("SIBLING_PACKAGE", "9.9")
+        SBOMPackage.create(sibling_document.id, sibling_package.id)
+        sibling_vulnerability = Vulnerability.create_record("CVE-2099-9999")
+        sibling_finding = Finding.create(sibling_package.id, sibling_vulnerability.id)
+        Assessment.create(
+            "affected",
+            targets=[(sibling_variant.id, sibling_finding.id)],
+            origin="custom",
+            status_notes="SIBLING_ASSESSMENT",
+        )
+
+        foreign_project = Project.create("FOREIGN_PROJECT")
+        foreign_variant = Variant.create("FOREIGN_VARIANT", foreign_project.id)
+        foreign_scan = Scan.create("FOREIGN_SCAN", foreign_variant.id, scan_type="sbom")
+        foreign_document = SBOMDocument.create(
+            "/FOREIGN_DOCUMENT.spdx.json", "FOREIGN_DOCUMENT", foreign_scan.id,
+            format="spdx",
+        )
+        foreign_package = Package.create("FOREIGN_PACKAGE", "8.8")
+        SBOMPackage.create(foreign_document.id, foreign_package.id)
+        foreign_vulnerability = Vulnerability.create_record("CVE-2099-8888")
+        foreign_finding = Finding.create(foreign_package.id, foreign_vulnerability.id)
+        Assessment.create(
+            "affected",
+            targets=[(foreign_variant.id, foreign_finding.id)],
+            origin="custom",
+            status_notes="FOREIGN_ASSESSMENT",
+        )
+        database.session.commit()
+
+    template_dir = tmp_path / "templates"
+    template_dir.mkdir()
+    template_name = "scope-context.txt"
+    (template_dir / template_name).write_text(
+        "PROJECT_COUNT={{ projects|length }}\n"
+        "VARIANT_COUNT={{ variants|length }}\n"
+        "SCAN_COUNT={{ scans|length }}\n"
+        "DOCUMENT_COUNT={{ sbom_documents|length }}\n"
+        "PACKAGE_COUNT={{ packages|length }}\n"
+        "VULNERABILITY_COUNT={{ vulnerabilities|length }}\n"
+        "ASSESSMENT_COUNT={{ assessments|length }}\n"
+        "{% for value in projects.values() %}PROJECT={{ value.name }}\n{% endfor %}"
+        "{% for value in variants.values() %}VARIANT={{ value.name }}\n{% endfor %}"
+        "{% for value in scans.values() %}SCAN={{ value.description }}\n{% endfor %}"
+        "{% for value in sbom_documents.values() %}DOCUMENT={{ value.path }}\n{% endfor %}"
+        "{% for key in packages %}PACKAGE={{ key }}\n{% endfor %}"
+        "{% for key in vulnerabilities %}VULNERABILITY={{ key }}\n{% endfor %}"
+        "{% for value in assessments.values() %}ASSESSMENT={{ value.status_notes }}\n{% endfor %}"
+    )
+    output_dir = tmp_path / "reports"
+    monkeypatch.chdir(tmp_path)
+
+    with app.app_context():
+        result = app.test_cli_runner().invoke(args=[
+            "report", template_name,
+            "--output-dir", str(output_dir),
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+        ])
+
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "vulnerability_summary.txt").exists()
+    report = (output_dir / template_name).read_text()
+    counts = {
+        key: int(value)
+        for key, value in (
+            line.split("=", 1) for line in report.splitlines() if "_COUNT=" in line
+        )
+    }
+    assert counts["PROJECT_COUNT"] == 1
+    assert counts["VARIANT_COUNT"] == 1
+    assert counts["SCAN_COUNT"] >= 1
+    assert counts["DOCUMENT_COUNT"] >= 1
+    assert counts["PACKAGE_COUNT"] == 1
+    assert counts["VULNERABILITY_COUNT"] == 1
+    assert counts["ASSESSMENT_COUNT"] >= 1
+    assert "PROJECT=TestProject" in report
+    assert "VARIANT=TestVariant" in report
+    for selected_marker in (
+        "SELECTED_SCAN", "SELECTED_DOCUMENT", "SELECTED_PACKAGE",
+        "CVE-2099-0001", "SELECTED_ASSESSMENT",
+    ):
+        assert selected_marker in report
+    for out_of_scope_marker in (
+        "FOREIGN_PROJECT", "FOREIGN_VARIANT", "FOREIGN_SCAN", "FOREIGN_DOCUMENT",
+        "FOREIGN_PACKAGE", "CVE-2099-8888", "FOREIGN_ASSESSMENT",
+        "SIBLING_VARIANT", "SIBLING_SCAN",
+        "SIBLING_DOCUMENT", "SIBLING_PACKAGE", "CVE-2099-9999", "SIBLING_ASSESSMENT",
+    ):
+        assert out_of_scope_marker not in report
+
+    project_output_dir = tmp_path / "project-reports"
+    with app.app_context():
+        project_result = app.test_cli_runner().invoke(args=[
+            "report", template_name,
+            "--output-dir", str(project_output_dir),
+            "--project", _PROJECT_NAME,
+        ])
+
+    assert project_result.exit_code == 0, project_result.output
+    project_report = (project_output_dir / template_name).read_text()
+    for project_marker in (
+        "PROJECT=TestProject", "VARIANT=TestVariant", "SIBLING_VARIANT",
+        "SIBLING_SCAN", "SIBLING_DOCUMENT", "SIBLING_PACKAGE",
+        "CVE-2099-9999", "SIBLING_ASSESSMENT",
+    ):
+        assert project_marker in project_report
+    for foreign_marker in (
+        "FOREIGN_PROJECT", "FOREIGN_VARIANT", "FOREIGN_SCAN", "FOREIGN_DOCUMENT",
+        "FOREIGN_PACKAGE", "CVE-2099-8888", "FOREIGN_ASSESSMENT",
+    ):
+        assert foreign_marker not in project_report
+
+
+def test_report_command_rejects_unknown_variant(app, tmp_path):
+    """An unknown variant fails rather than broadening to the project."""
+    with app.app_context():
+        result = app.test_cli_runner().invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
+            "--variant", "missing",
+        ])
+
+    assert result.exit_code != 0
+    assert "variant 'missing' not found" in result.output
 
 
 def test_report_command_nonexistent_template(app, tmp_path):
@@ -448,6 +709,7 @@ def test_report_command_nonexistent_template(app, tmp_path):
         result = runner.invoke(args=[
             "report", "does_not_exist.txt",
             "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
         ])
     # Should complete without raising, warning printed to stderr
     assert "does_not_exist.txt" in result.output or result.exit_code == 0
@@ -461,6 +723,7 @@ def test_report_command_with_extra_template_env(app, tmp_path, monkeypatch):
         result = runner.invoke(args=[
             "report", "vulnerability_summary.txt",
             "--output-dir", str(tmp_path),
+            "--project", _PROJECT_NAME,
         ])
     assert result.exit_code == 0, result.output
 
@@ -477,6 +740,7 @@ def test_report_command_with_match_condition_cache(app, tmp_path, monkeypatch):
             result = runner.invoke(args=[
                 "report", "vulnerability_summary.txt",
                 "--output-dir", str(tmp_path),
+                "--project", _PROJECT_NAME,
             ])
         assert result.exit_code == 0, result.output
     finally:
@@ -498,18 +762,21 @@ def _create_custom_assessment(app):
         from src.models.package import Package
         from src.models.vulnerability import Vulnerability
         from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.scan import Scan
         from src.models.assessment import Assessment
 
         variant = Variant.get_all()[0]
         pkg = Package.find_or_create("cairo", "1.16.0")
         vuln = Vulnerability.get_or_create("CVE-2020-35492")
         finding = Finding.get_or_create(pkg.id, "CVE-2020-35492")
+        scan = Scan.create("custom assessment fixture", variant.id)
+        Observation.create(finding.id, scan.id)
 
         db_a = Assessment.create(
             status="affected",
             simplified_status="Active",
-            finding_id=finding.id,
-            variant_id=variant.id,
+            targets=[(variant.id, finding.id)],
             origin="custom",
             status_notes="test notes",
             justification="",
@@ -570,7 +837,7 @@ def test_export_custom_vulnscout_data_success_variant(app, tmp_path):
     out_file = tmp_path / f"custom_vulnscout_data_{_VARIANT_NAME}.json"
     assert out_file.exists()
     document = json.loads(out_file.read_text())
-    assert document["version"] == 1
+    assert document["version"] == 2
     assert "openvex" not in document.get("@context", "")
 
 
@@ -777,8 +1044,18 @@ def test_export_import_openvex_roundtrip(app, tmp_path):
 
 
 def test_import_custom_openvex_assessments_skips_duplicates(app, tmp_path):
-    """Importing the same OpenVEX data twice skips duplicates."""
-    _create_custom_assessment(app)
+    """Importing the same persisted OpenVEX content twice skips duplicates."""
+    assessment, _ = _create_custom_assessment(app)
+
+    # OpenVEX represents ``affected`` impact through its action statement and
+    # has no simplified-status field. Align the existing row with the exact
+    # content the importer will persist so this remains a true duplicate.
+    with app.app_context():
+        from src.extensions import db as _db
+        _db.session.add(assessment)
+        assessment.simplified_status = "Exploitable"
+        assessment.impact_statement = ""
+        _db.session.commit()
 
     with app.app_context():
         runner = app.test_cli_runner()

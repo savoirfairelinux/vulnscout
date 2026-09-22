@@ -4,7 +4,7 @@
 import uuid
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import ForeignKey, String, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, relationship, mapped_column
 
 from ..extensions import db, Base
@@ -12,7 +12,11 @@ from ..helpers.verbose import verbose
 from .package import Package
 
 if TYPE_CHECKING:
-    from ..models import TimeEstimate, Vulnerability, Observation, Assessment
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.orm import Mapper
+
+    from ..models import TimeEstimate, Vulnerability, Observation
+    from .assessment_target import AssessmentTarget
 
 
 class Finding(Base):
@@ -34,8 +38,15 @@ class Finding(Base):
     vulnerability: Mapped["Vulnerability"] = relationship(back_populates="findings")
     observations: Mapped[list["Observation"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
-    assessments: Mapped[list["Assessment"]] = relationship(
-        back_populates="finding", cascade="all, delete-orphan")
+    assessment_targets: Mapped[list["AssessmentTarget"]] = relationship(
+        back_populates="finding",
+        # finding_id is part of AssessmentTarget's primary key, so the ORM's
+        # default "blank out the child's foreign key" raises rather than
+        # cleaning up, and delete-orphan can't cascade-null it either.
+        # ``passive_deletes="all"`` hands the job to the ``before_delete``
+        # reaper below, which clears the rows on every deletion path.
+        passive_deletes="all",
+    )
     time_estimates: Mapped[list["TimeEstimate"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
 
@@ -129,6 +140,36 @@ class Finding(Base):
         ).scalar_one_or_none()
 
     @staticmethod
+    def get_observed_by_variant(
+        package_id: uuid.UUID | str,
+        vulnerability_id: str,
+        variant_id: uuid.UUID | str,
+    ) -> Optional["Finding"]:
+        """Return a finding only when a scan observed it for *variant_id*.
+
+        Historical observations remain valid: assessment targets may refer to
+        package versions no longer present in the latest scan, but may not
+        invent a finding/variant relationship that no scan ever produced.
+        """
+        from .observation import Observation
+        from .scan import Scan
+
+        package_id = Finding._resolve_package_id(package_id)
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        return db.session.execute(
+            db.select(Finding)
+            .join(Observation, Observation.finding_id == Finding.id)
+            .join(Scan, Scan.id == Observation.scan_id)
+            .where(
+                Finding.package_id == package_id,
+                Finding.vulnerability_id == vulnerability_id.upper(),
+                Scan.variant_id == variant_id,
+            )
+            .distinct()
+        ).scalar_one_or_none()
+
+    @staticmethod
     def get_or_create(package_id: uuid.UUID | str, vulnerability_id: str) -> "Finding":
         """Return an existing finding or create a new one."""
         existing = Finding.get_by_package_and_vulnerability(package_id, vulnerability_id)
@@ -145,3 +186,20 @@ class Finding(Base):
         """Delete this finding from the database."""
         db.session.delete(self)
         db.session.commit()
+
+
+@event.listens_for(Finding, "before_delete")
+def _reap_assessment_targets(
+    mapper: "Mapper[Finding]", connection: "Connection", finding: "Finding",
+) -> None:
+    """Drop the assessment targets pointing at a finding being deleted.
+
+    Registered as a mapper event rather than written into :meth:`delete` so it
+    also fires when a finding is removed through the ORM cascade from its
+    package or its vulnerability -- those parents reach the same hazard.
+    """
+    from .assessment_target import AssessmentTarget, reap_targets
+    from .assessment_review import AssessmentReview, reap_reviews
+
+    reap_targets(connection, AssessmentTarget.finding_id == finding.id)
+    reap_reviews(connection, AssessmentReview.finding_id == finding.id)

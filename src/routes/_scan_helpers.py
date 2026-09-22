@@ -129,6 +129,7 @@ def resolve_active_packages(
     progress_dict: Optional[ProgressDict] = None,
     vid_str: Optional[str] = None,
     exclude_kernel: bool = True,
+    exclude_native: bool = False,
 ) -> Tuple[Sequence[Package], Optional[str]]:
     """Return the active ``Package`` list for *variant_uuid*.
 
@@ -145,6 +146,8 @@ def resolve_active_packages(
     thousands of entries and all inherit the base kernel CPE, so feeding
     them to the scanners attributes the entire kernel CVE set to each with
     no useful results.  Pass ``exclude_kernel=False`` to scan them anyway.
+    When *exclude_native* is ``True``, packages whose names end in
+    ``-native`` are also omitted.
     """
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
 
@@ -166,9 +169,11 @@ def resolve_active_packages(
         db.select(Package).where(Package.id.in_(all_pkg_ids))
     ).scalars().all()
 
-    if exclude_kernel:
-        return filter_scannable_packages(packages), None
-    return packages, None
+    return filter_scannable_packages(
+        packages,
+        exclude_kernel=exclude_kernel,
+        exclude_native=exclude_native,
+    ), None
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +195,7 @@ def create_observation_and_assessment(
     Both sets are mutated in-place.  Does **not** commit.
     """
     from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
 
     pair = (finding.id, scan.id)
     if pair not in observation_pairs:
@@ -200,17 +206,18 @@ def create_observation_and_assessment(
     if fv_key not in assessed_findings:
         assessed_findings.add(fv_key)
         has_assess = db.session.execute(
-            db.select(Assessment.id).where(
-                Assessment.finding_id == finding.id,
-                Assessment.variant_id == variant_uuid,
+            db.select(Assessment.id)
+            .join(AssessmentTarget, AssessmentTarget.assessment_id == Assessment.id)
+            .where(
+                AssessmentTarget.finding_id == finding.id,
+                AssessmentTarget.variant_id == variant_uuid,
             ).limit(1)
         ).scalar_one_or_none()
         if has_assess is None:
             Assessment.create(
                 status="under_investigation",
                 simplified_status="Pending Assessment",
-                finding_id=finding.id,
-                variant_id=variant_uuid,
+                targets=[(variant_uuid, finding.id)],
                 origin=origin,
                 commit=False,
             )

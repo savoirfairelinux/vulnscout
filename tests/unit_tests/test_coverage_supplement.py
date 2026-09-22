@@ -479,10 +479,15 @@ class TestAssessmentFromVulnAssessmentOrigin:
     def test_sets_origin_to_sbom_on_update(self, app, db_package, db_vuln, db_finding):
         from src.models.assessment import Assessment
         with app.app_context():
+            from src.models.project import Project
+            from src.models.variant import Variant
+            project = Project.create("coverage-supplement-proj")
+            variant = Variant.create("coverage-supplement-variant", project.id)
+
             # Create existing assessment with origin != "sbom"
             existing = Assessment.create(
                 status="under_investigation",
-                finding_id=db_finding.id,
+                targets=[(variant.id, db_finding.id)],
             )
             existing.origin = "scanner"
             from src.extensions import db
@@ -491,7 +496,8 @@ class TestAssessmentFromVulnAssessmentOrigin:
             dto = Assessment.new_dto(db_vuln.id, [db_package.string_id])
             dto.id = existing.id
             dto.set_status("affected")
-            updated = Assessment.from_vuln_assessment(dto, finding_id=db_finding.id)
+            updated = Assessment.from_vuln_assessment(
+                dto, finding_id=db_finding.id, variant_id=variant.id)
             assert updated.origin == "sbom"
 
 
@@ -927,11 +933,16 @@ class TestResolveActivePackagesExcludeKernelFalse:
             scan = Scan.create("sbom-scan", var.id, scan_type="sbom")
             doc = SBOMDocument.create("/kernel/test.spdx", "spdx", scan.id)
             pkg = Package.create("libfoo", "1.0.0")
+            native_pkg = Package.create("cmake-native", "3.28")
             SBOMPackage.create(doc.id, pkg.id)
+            SBOMPackage.create(doc.id, native_pkg.id)
 
             packages, err = resolve_active_packages(var.id, exclude_kernel=False)
+            filtered_packages, filtered_err = resolve_active_packages(
+                var.id, exclude_kernel=False, exclude_native=True)
 
         assert err is None
-        assert len(packages) == 1
-        assert packages[0].name == "libfoo"
+        assert {package.name for package in packages} == {"libfoo", "cmake-native"}
+        assert filtered_err is None
+        assert [package.name for package in filtered_packages] == ["libfoo"]
 

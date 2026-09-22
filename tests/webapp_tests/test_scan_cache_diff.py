@@ -74,8 +74,7 @@ def _build_db(app):
 
         # Assessment on the first SBOM finding (origin=sbom)
         assess_a = Assessment.create(
-            finding_id=finding_old.id,
-            variant_id=variant.id,
+            targets=[(variant.id, finding_old.id)],
             status="fixed",
             justification="test_just",
             impact_statement="test_impact",
@@ -110,8 +109,7 @@ def _build_db(app):
 
         # Assessment on the tool finding (origin=sbom, ts=tool_scan.timestamp)
         assess_tool = Assessment.create(
-            finding_id=finding_tool.id,
-            variant_id=variant.id,
+            targets=[(variant.id, finding_tool.id)],
             status="under_investigation",
             justification="",
             impact_statement="",
@@ -121,8 +119,7 @@ def _build_db(app):
         assess_tool.timestamp = tool_scan.timestamp
         # Also a custom assessment (should be excluded from scan history)
         assess_custom = Assessment.create(
-            finding_id=finding_tool_removed.id,
-            variant_id=variant.id,
+            targets=[(variant.id, finding_tool_removed.id)],
             status="not_affected",
             justification="custom_just",
             impact_statement="custom_impact",
@@ -488,6 +485,54 @@ class TestAssessmentQueries:
             assert detail["total"] >= 1
             assert detail["added_count"] >= 1
 
+    def test_assessment_detail_preserves_all_multi_package_targets(self, app, ids):
+        """One assessment entry carries every package target in the scan."""
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.routes._scan_queries import _assessments_detail_for_scan
+
+        with app.app_context():
+            scan = _db.session.get(Scan, uuid.UUID(ids["sbom_a_id"]))
+            assert scan is not None
+            document = SBOMDocument.get_by_scan(scan.id)[0]
+            first_finding = Finding.get_by_package_and_vulnerability(
+                "openssl@1.1.0", "CVE-2020-0001")
+            assert first_finding is not None
+
+            second_package = Package.find_or_create("libcrypto", "1.1.0")
+            SBOMPackage.create(document.id, second_package.id)
+            second_finding = Finding.get_or_create(
+                second_package.id, "CVE-2020-0001")
+            Observation.create(second_finding.id, scan.id)
+            assessment = Assessment.create(
+                status="affected",
+                targets=[
+                    (scan.variant_id, first_finding.id),
+                    (scan.variant_id, second_finding.id),
+                ],
+                origin="sbom",
+            )
+            assessment.timestamp = scan.timestamp
+            _db.session.commit()
+
+            detail = _assessments_detail_for_scan(scan)
+
+        matching = [
+            entry for entry in detail["added"]
+            if entry["vulnerability_id"] == "CVE-2020-0001"
+            and entry["status"] == "affected"
+        ]
+        assert len(matching) == 1
+        assert {
+            (target["package_name"], target["package_version"])
+            for target in matching[0]["targets"]
+        } == {("openssl", "1.1.0"), ("libcrypto", "1.1.0")}
+
     def test_assessments_detail_with_prev_scan(self, app, ids):
         """_assessments_detail_for_scan computes removed when prev_scan given."""
         from src.routes._scan_queries import _assessments_detail_for_scan
@@ -840,4 +885,29 @@ class TestGlobalAssessmentRowsByScan:
             # The sbom-origin assessment (on the new-version package) counts…
             assert uuid.UUID(ids["pkg_new_id"]) in pkg_ids
             # …the custom-origin assessment (on the removed package) does not.
+            assert uuid.UUID(ids["pkg_removed_id"]) not in pkg_ids
+
+    def test_excludes_ai_origin(self, app, ids):
+        """A pending AI-suggestion assessment must not leak into scan diffs.
+
+        Regression test: this call used to guard with ``origin != "custom"``,
+        which lets an "ai"-origin assessment straight through — unlike the
+        sibling functions in this module, which already excluded both
+        "custom" and "ai".
+        """
+        from src.routes._scan_diff import _global_assessment_rows_by_scan
+        from src.models.assessment import Assessment
+        with app.app_context():
+            tool = uuid.UUID(ids["tool_scan_id"])
+            # Retarget the existing custom-origin assessment (on the removed
+            # package) to origin="ai" to isolate the ai-leak from the
+            # already-covered custom-origin exclusion above.
+            assess = _db.session.execute(
+                _db.select(Assessment).where(Assessment.origin == "custom")
+            ).scalar_one()
+            assess.origin = "ai"
+            _db.session.commit()
+
+            rows = _global_assessment_rows_by_scan([tool])
+            pkg_ids = {pkg for (_aid, pkg) in rows.get(tool, [])}
             assert uuid.UUID(ids["pkg_removed_id"]) not in pkg_ids

@@ -157,6 +157,32 @@ describe('StatusEditor', () => {
         });
     });
 
+    test('exact target defaults and reset do not report unsaved changes', async () => {
+        const onFieldsChange = jest.fn();
+        const user = userEvent.setup();
+        const props = {
+            ...defaultProps,
+            onFieldsChange,
+            variants: [{id: 'v1', name: 'default', project_id: 'project'}],
+            availablePackages: ['pkg@1.0.0'],
+            defaultSelectedPackages: ['pkg@1.0.0'],
+            variantPackageMap: {v1: ['pkg@1.0.0']},
+            exactTargetSelection: true,
+        };
+        const { rerender } = render(<StatusEditor {...props} clearFields={false} />);
+
+        await waitFor(() => expect(onFieldsChange).toHaveBeenLastCalledWith(false));
+
+        await user.click(screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'}));
+        await waitFor(() => expect(onFieldsChange).toHaveBeenLastCalledWith(true));
+
+        rerender(<StatusEditor {...props} clearFields={true} />);
+        await waitFor(() => {
+            expect(screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'})).toBeChecked();
+            expect(onFieldsChange).toHaveBeenLastCalledWith(false);
+        });
+    });
+
     test('should clear fields when clearFields prop changes to true', async () => {
         const user = userEvent.setup();
         const { rerender } = render(<StatusEditor {...defaultProps} clearFields={false} />);
@@ -559,6 +585,45 @@ describe('StatusEditor', () => {
         expect(checkboxes[2].disabled).toBe(false);
     });
 
+    test('exact target mode permits disjoint pairs and disables cross-pairs', async () => {
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                onAddAssessment={defaultProps.onAddAssessment}
+                variants={[
+                    {id: 'v1', name: 'Variant One', project_id: 'project'},
+                    {id: 'v2', name: 'Variant Two', project_id: 'project'},
+                ]}
+                availablePackages={['pkg1@1.0.0', 'pkg2@2.0.0']}
+                variantPackageMap={{
+                    v1: ['pkg1@1.0.0'],
+                    v2: ['pkg2@2.0.0'],
+                }}
+                exactTargetSelection={true}
+            />
+        );
+
+        const v1p1 = screen.getByRole('checkbox', {name: 'Variant One / pkg1@1.0.0'});
+        const v1p2 = screen.getByRole('checkbox', {name: 'Variant One / pkg2@2.0.0'});
+        const v2p1 = screen.getByRole('checkbox', {name: 'Variant Two / pkg1@1.0.0'});
+        const v2p2 = screen.getByRole('checkbox', {name: 'Variant Two / pkg2@2.0.0'});
+
+        expect(v1p2).toBeDisabled();
+        expect(v2p1).toBeDisabled();
+        await user.click(v1p1);
+        await user.click(v2p2);
+        await user.click(screen.getByText('Add assessment'));
+
+        expect(defaultProps.onAddAssessment).toHaveBeenCalledWith(expect.objectContaining({
+            variant_ids: ['v1', 'v2'],
+            packages: ['pkg1@1.0.0', 'pkg2@2.0.0'],
+            targets: [
+                {variant_id: 'v1', package: 'pkg1@1.0.0'},
+                {variant_id: 'v2', package: 'pkg2@2.0.0'},
+            ],
+        }));
+    });
+
     test('should disable a package that is not available in every selected variant', async () => {
         const user = userEvent.setup();
         const variants = [
@@ -788,6 +853,31 @@ describe('StatusEditor', () => {
     test('shows historical finding discovery while scope data loads', () => {
         render(<StatusEditor {...defaultProps} availablePackages={['pkg@2.0.0']} findingsLoading={true} />);
         expect(screen.getByText('Checking for previous package versions…')).toBeInTheDocument();
+    });
+
+    test.each([
+        {findingsLoading: true, expected: 'Target compatibility is still loading'},
+        {findingsError: 'Unable to load target compatibility. Try again.', expected: 'Unable to load target compatibility. Try again.'},
+    ])('blocks exact target submission while compatibility is unavailable', async ({expected, ...state}) => {
+        const triggerBanner = jest.fn();
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                triggerBanner={triggerBanner}
+                exactTargetSelection={true}
+                variants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                availablePackages={['pkg@1.0.0']}
+                {...state}
+            />
+        );
+
+        expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+        expect(screen.queryByText('Apply to packages:')).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', {name: 'Add assessment'}));
+
+        expect(triggerBanner).toHaveBeenCalledWith(expected, 'error');
+        expect(defaultProps.onAddAssessment).not.toHaveBeenCalled();
     });
 
     test('prunes selected packages by the intersection after scope data changes', async () => {

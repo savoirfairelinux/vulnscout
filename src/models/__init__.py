@@ -12,7 +12,7 @@ from .vulnerability import Vulnerability
 from .finding import Finding
 from .observation import Observation
 from .assessment import Assessment
-from .assessment_group_member import AssessmentGroupMember
+from .assessment_target import AssessmentTarget, GroupInvariantError
 from .time_estimate import TimeEstimate
 from .metrics import Metrics
 from .cvss import CVSS
@@ -21,3 +21,4 @@ from .iso8601_duration import Iso8601Duration
 from .vuln_refresh import VulnRefresh
 from .project_context import ProjectContext
 from .variant_context import VariantContext, ContextFile
+from .assessment_review import AssessmentReview

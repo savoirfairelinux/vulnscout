@@ -23,6 +23,7 @@ from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..models.observation import Observation
 from ..models.assessment import Assessment
+from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.package import Package, _normalize_supplier
 from ..models.project import Project
@@ -32,6 +33,7 @@ from ..models.sbom_package import SBOMPackage
 from ..models.variant import Variant
 from ..models.vulnerability import Vulnerability
 from ..extensions import db
+from ..helpers.assessment_io import duplicate_multitarget_assessment_exists
 
 from ._scan_queries import (
     _packages_by_scan_ids,
@@ -198,6 +200,20 @@ def _strip_assessment(entry: dict) -> dict:
         supplier = _extract_supplier_name(entry.get("package_supplier", "") or "")
         if supplier:
             result["supplier"] = supplier
+    targets = []
+    for target in entry.get("targets", []):
+        if not isinstance(target, dict) or not target.get("package_name"):
+            continue
+        exported_target = {
+            "package_name": target["package_name"],
+            "package_version": target.get("package_version", ""),
+        }
+        supplier = _extract_supplier_name(target.get("package_supplier", "") or "")
+        if supplier:
+            exported_target["supplier"] = supplier
+        targets.append(exported_target)
+    if targets:
+        result["targets"] = targets
     return result
 
 
@@ -502,17 +518,27 @@ class _ImportAssessment(NamedTuple):
     #: The assessed package, when the export records one.  Exports written
     #: before assessments carried their package leave this ``None``, and the
     #: assessment then applies to every finding for its vulnerability.
-    package_key: PackageKey | None
+    package_keys: tuple[PackageKey, ...] | None
     values: dict[str, str]
 
 
 def _import_assessment_entry(entry: object) -> _ImportAssessment:
     if not isinstance(entry, dict):
         raise ValueError("Assessment entries must be JSON objects")
-    package_key = _import_package_key(entry) if entry.get("package_name") else None
+    raw_targets = entry.get("targets")
+    if raw_targets is not None:
+        if not isinstance(raw_targets, list):
+            raise ValueError("Assessment 'targets' must be an array")
+        package_keys = tuple(dict.fromkeys(
+            _import_package_key(target) for target in raw_targets
+        ))
+    elif entry.get("package_name"):
+        package_keys = (_import_package_key(entry),)
+    else:
+        package_keys = None
     return _ImportAssessment(
         vulnerability_id=_required_import_string(entry, "vulnerability_id").upper(),
-        package_key=package_key,
+        package_keys=package_keys,
         values={
             "status": _required_import_string(entry, "status"),
             "simplified_status": _optional_import_string(entry, "simplified_status"),
@@ -720,43 +746,6 @@ def _resolve_import_findings(
     return {pair: known[pair] for pair in pairs}
 
 
-def _assessment_identity(
-    finding_id: uuid_module.UUID, entry: dict[str, str]
-) -> tuple:
-    return (
-        finding_id,
-        entry["status"],
-        entry["simplified_status"],
-        entry["status_notes"],
-        entry["justification"],
-        entry["impact_statement"],
-    )
-
-
-def _existing_assessment_identities(
-    variant_id: uuid_module.UUID,
-    finding_ids: Sequence[uuid_module.UUID],
-) -> set[tuple]:
-    """Return identities of assessments already attached to these findings."""
-    identities: set[tuple] = set()
-    for chunk in _chunked(finding_ids, _IMPORT_QUERY_CHUNK):
-        for assessment in db.session.execute(
-            db.select(Assessment).where(
-                Assessment.variant_id == variant_id,
-                Assessment.finding_id.in_(chunk),
-            )
-        ).scalars().all():
-            identities.add((
-                assessment.finding_id,
-                assessment.status or "",
-                assessment.simplified_status or "",
-                assessment.status_notes or "",
-                assessment.justification or "",
-                assessment.impact_statement or "",
-            ))
-    return identities
-
-
 def _utc_key(value: datetime) -> str:
     """Normalise a timestamp to a UTC string that compares reliably.
 
@@ -878,34 +867,41 @@ def _persist_import_assessments(
     if not item.assessments:
         return 0
 
-    # Assessments whose origin is unset are filtered out of every export and
-    # scan diff (SQL ``NOT IN`` drops NULLs), so an imported assessment must
-    # carry the origin a natively-produced one of the same kind would have —
-    # otherwise it silently disappears the next time the data is exported.
+    # Every automatically-produced assessment records where it came from
+    # (``sbom``, ``nvd``, ``grype``, …); an imported one must carry the
+    # origin a natively-produced one of the same kind would have, so it
+    # reads the same way on the destination as it did on the source.
     origin = item.scan_source if item.scan_type == "tool" else "sbom"
-
-    finding_ids = sorted(
-        {finding.id for findings in findings_by_vulnerability.values() for finding in findings},
-        key=str,
-    )
-    seen = _existing_assessment_identities(item.variant.id, finding_ids)
 
     created = 0
     for entry in item.assessments:
-        if entry.package_key is not None:
-            finding = findings_by_pair.get((entry.package_key, entry.vulnerability_id))
-            targets = [finding] if finding is not None else []
+        if entry.package_keys is not None:
+            targets = [
+                finding
+                for package_key in entry.package_keys
+                if (finding := findings_by_pair.get(
+                    (package_key, entry.vulnerability_id))) is not None
+            ]
         else:
             targets = findings_by_vulnerability.get(entry.vulnerability_id, [])
-        for target in targets:
-            identity = _assessment_identity(target.id, entry.values)
-            if identity in seen:
-                continue
-            seen.add(identity)
+        resolved_targets = [(item.variant.id, target.id) for target in targets]
+        if not resolved_targets or duplicate_multitarget_assessment_exists(
+            resolved_targets,
+            status=entry.values["status"],
+            origin=origin or "sbom",
+            source=_IMPORT_SOURCE_LABEL,
+            simplified_status=entry.values["simplified_status"],
+            status_notes=entry.values["status_notes"],
+            justification=entry.values["justification"],
+            impact_statement=entry.values["impact_statement"],
+            workaround="",
+            responses=[],
+        ):
+            continue
+        if targets:
             Assessment.create(
                 status=entry.values["status"],
-                finding_id=target.id,
-                variant_id=item.variant.id,
+                targets=resolved_targets,
                 source=_IMPORT_SOURCE_LABEL,
                 origin=origin or "sbom",
                 simplified_status=entry.values["simplified_status"],
@@ -1076,11 +1072,44 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/scans')
     def list_all_scans() -> ResponseReturnValue:
-        """List every scan currently stored in the database.
+        """List scans, optionally restricted to selected variants.
 
         OpenAPI:
+        query variant_ids string optional Comma-separated selected variant IDs.
+        query project_id uuid optional Require selected variants to belong to this project.
         response 200 JsonObject Scan collection.
         """
+        raw_variant_ids = flask_request.args.get('variant_ids', '')
+        if raw_variant_ids:
+            raw_ids = list(dict.fromkeys(
+                value.strip() for value in raw_variant_ids.split(',') if value.strip()
+            ))
+            try:
+                variant_ids = [uuid_module.UUID(value) for value in raw_ids]
+            except ValueError:
+                return jsonify({"error": "Invalid variant_ids"}), 400
+            variants = list(db.session.execute(
+                db.select(Variant).where(Variant.id.in_(variant_ids))
+            ).scalars().all())
+            if len(variants) != len(variant_ids):
+                return jsonify({"error": "Variant not found"}), 404
+            project_id = flask_request.args.get('project_id')
+            if project_id:
+                try:
+                    project_uuid = uuid_module.UUID(project_id)
+                except ValueError:
+                    return jsonify({"error": "Invalid project_id"}), 400
+                if any(variant.project_id != project_uuid for variant in variants):
+                    return jsonify({"error": "Variant does not belong to project"}), 400
+            scans = ScanController.get_by_variants(variant_ids)
+            # Do not cache arbitrary caller-controlled subsets. A project with
+            # N variants has 2^N possible combinations, so retaining one full
+            # serialised history per combination lets requests grow this
+            # process-wide cache without bound. Fixed all/project/variant
+            # scopes below remain cached.
+            result = _serialize_list_with_diff(scans)
+            return jsonify(result)
+
         scans = ScanController.get_all()
         result = serialize_list_with_diff_cached("all", scans)
         return jsonify(result)
@@ -1146,9 +1175,11 @@ def init_app(app: Flask) -> None:
     def delete_scan(scan_id: str) -> ResponseReturnValue:
         """Delete a scan and its observations.
 
-        Findings that are no longer referenced by any observation are
-        also removed (cascade cleaned).  The response includes the
-        number of orphaned findings that were deleted.
+        Findings that are no longer referenced by any observation are also
+        removed, along with any assessment targets that pointed at them
+        (deleting an assessment outright when it was their last target).
+        The response includes the number of orphaned findings that were
+        deleted.
 
         OpenAPI:
         response 200 JsonObject Deletion summary.
@@ -1175,6 +1206,7 @@ def init_app(app: Flask) -> None:
         orphaned_count = 0
         if finding_ids:
             from sqlalchemy import exists as sa_exists
+            from ..helpers.outdated_cleanup import remove_target
             for fid in finding_ids:
                 has_obs = db.session.query(
                     sa_exists().where(Observation.finding_id == fid)
@@ -1182,6 +1214,16 @@ def init_app(app: Flask) -> None:
                 if not has_obs:
                     finding = db.session.get(Finding, fid)
                     if finding:
+                        # ``assessment_targets.finding_id`` is a non-nullable
+                        # primary-key column, so the ORM can't cascade-null
+                        # it the way it would a plain foreign key: detach
+                        # each assessment from this finding first (removing
+                        # the assessment too when it was its last target).
+                        stale_targets = db.session.execute(
+                            db.select(AssessmentTarget).where(AssessmentTarget.finding_id == fid)
+                        ).scalars().all()
+                        for target in stale_targets:
+                            remove_target(target.assessment_id, target.variant_id, fid)
                         db.session.delete(finding)
                         orphaned_count += 1
             if orphaned_count:
@@ -1568,19 +1610,32 @@ def init_app(app: Flask) -> None:
             _new_assess_ids = _after_assess_ids - _before_assess_ids
             if _new_assess_ids:
                 from ..models.finding import Finding as _Finding
+                from ..models.assessment_target import AssessmentTarget as _AssessmentTarget
                 _assess_rows = db.session.execute(
                     db.select(_Assessment.id, _Finding.vulnerability_id, _Assessment.status,
                               _Assessment.simplified_status, _Assessment.justification,
                               _Assessment.impact_statement, _Assessment.status_notes)
-                    .join(_Finding, _Finding.id == _Assessment.finding_id)
+                    .join(_AssessmentTarget, _AssessmentTarget.assessment_id == _Assessment.id)
+                    .join(_Finding, _Finding.id == _AssessmentTarget.finding_id)
                     .where(_Assessment.id.in_(_new_assess_ids))
                 ).all()
-                newly_detected_assessments_list = sorted([
-                    {"vulnerability_id": vid, "status": status or "under_investigation",
-                     "simplified_status": simp or "Pending Assessment", "justification": just or "",
-                     "impact_statement": impact or "", "status_notes": notes or ""}
-                    for _aid, vid, status, simp, just, impact, notes in _assess_rows
-                ], key=lambda a: a["vulnerability_id"])
+                # A multi-target assessment produces one row per target, so
+                # dedupe by assessment id to keep the list one entry per
+                # assessment (matching the scalar-column query it replaces).
+                _seen_new_assess: set[uuid_module.UUID] = set()
+                _new_assess_entries = []
+                for aid, vid, status, simp, just, impact, notes in _assess_rows:
+                    if aid in _seen_new_assess:
+                        continue
+                    _seen_new_assess.add(aid)
+                    _new_assess_entries.append(
+                        {"vulnerability_id": vid, "status": status or "under_investigation",
+                         "simplified_status": simp or "Pending Assessment", "justification": just or "",
+                         "impact_statement": impact or "", "status_notes": notes or ""}
+                    )
+                newly_detected_assessments_list = sorted(
+                    _new_assess_entries, key=lambda a: a["vulnerability_id"]
+                )
             else:
                 newly_detected_assessments_list = []
 

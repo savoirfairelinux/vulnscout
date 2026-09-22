@@ -718,13 +718,14 @@ describe('MultiEditBar', () => {
         });
     });
 
-    test('addAssessment fans out per variant when listByVuln returns results', async () => {
+    test('addAssessment sends variant_ids when listByVuln returns results', async () => {
         const mockTriggerBanner = jest.fn();
         const mockAppendAssessment = jest.fn();
         const mockPatchVuln = jest.fn();
-        // listByVuln returns one variant → should create 1 triple with variant_id
+        // listByVuln returns one variant → one item with variant_ids
         fetchMock.mockResponseOnce(JSON.stringify([
-            { id: 'v1', name: 'default', project_id: 'p1' }
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'foreign-v', name: 'foreign', project_id: 'p2' },
         ])); // Variants.listByVuln for vuln-1
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -744,6 +745,7 @@ describe('MultiEditBar', () => {
         const props = {
             ...mockProps,
             selectedVulns: ['vuln-1'],
+            projectId: 'p1',
             triggerBanner: mockTriggerBanner,
             appendAssessment: mockAppendAssessment,
             patchVuln: mockPatchVuln
@@ -764,16 +766,16 @@ describe('MultiEditBar', () => {
                 'success'
             );
         });
-        // The batch request body should include variant_id
+        // The batch request body should include the complete variant set.
         const batchCall = fetchMock.mock.calls.find((c: any[]) =>
             typeof c[0] === 'string' && c[0].includes('/api/assessments/batch')
         ) as any[];
         expect(batchCall).toBeDefined();
         const body = JSON.parse(batchCall[1].body);
-        expect(body.assessments[0].variant_id).toBe('v1');
+        expect(body.assessments[0].variant_ids).toEqual(['v1']);
     });
 
-    test('addAssessment intersection mode creates triples for both variants', async () => {
+    test('addAssessment intersection mode creates one item for both variants', async () => {
         const mockTriggerBanner = jest.fn();
         // Variants.listAll for panel + batch POST
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -820,16 +822,14 @@ describe('MultiEditBar', () => {
                 'success'
             );
         });
-        // Should have created 2 triples (one per variant)
+        // One vulnerability action spans both variants on one assessment.
         const batchCall = fetchMock.mock.calls.find((c: any[]) =>
             typeof c[0] === 'string' && c[0].includes('/api/assessments/batch')
         ) as any[];
         expect(batchCall).toBeDefined();
         const body = JSON.parse(batchCall[1].body);
-        expect(body.assessments).toHaveLength(2);
-        const variantIds = body.assessments.map((a: any) => a.variant_id);
-        expect(variantIds).toContain('v-cmp');
-        expect(variantIds).toContain('v-base');
+        expect(body.assessments).toHaveLength(1);
+        expect(body.assessments[0].variant_ids).toEqual(['v-cmp', 'v-base']);
     });
 
     // ---- addAssessment: errors array and catch paths (using variantId to bypass listByVuln) ----

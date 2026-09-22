@@ -119,18 +119,20 @@ class TestBuildCustomDataExport:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="custom",
             )
             db.session.commit()
 
             result = build_custom_data_export(variant_ids=[var.id])
 
-        assert result["version"] == 1
+        assert result["version"] == 2
         assert len(result["assessments"]) == 1
-        # variant name should be resolved on the exported assessment
-        assert result["assessments"][0]["variant"] == "io-cov-var"
+        assert result["assessments"][0]["targets"] == [{
+            "variant": "io-cov-var", "package": "te-pkg@1.0.0",
+        }]
+        assert "variant" not in result["assessments"][0]
+        assert "variant_id" not in result["assessments"][0]
 
     def test_pending_ai_assessments_are_exported(self, app, variant_and_project):
         """Pending AI rows are emitted separately for the Review page AI tab."""
@@ -147,8 +149,7 @@ class TestBuildCustomDataExport:
             finding = Finding.create(pkg.id, vuln.id)
             Assessment.create(
                 status="under_investigation",
-                finding_id=finding.id,
-                variant_id=var.id,
+                targets=[(var.id, finding.id)],
                 origin="ai",
             )
 
@@ -165,8 +166,9 @@ class TestBuildCustomDataExport:
             "workaround": None,
             "timestamp": result["ai_assessments"][0]["timestamp"],
             "packages": ["ai-pkg@1.0.0"],
-            "variant_id": str(var.id),
-            "variant": "io-cov-var",
+            "targets": [
+                {"variant": "io-cov-var", "package": "ai-pkg@1.0.0"},
+            ],
         }]
 
 
@@ -321,7 +323,7 @@ class TestImportCustomDataAssessments:
     def test_missing_vuln_id_appends_error(self, app, variant_and_project):
         """Line 698: missing vuln_id → error appended."""
         _, var = variant_and_project
-        data = {"assessments": [{"status": "affected", "packages": ["p@1"]}]}
+        data = {"version": 1, "assessments": [{"status": "affected", "packages": ["p@1"]}]}
         with app.app_context():
             result = import_custom_data(data, {}, variant_id=var.id)
         assert any("Missing vuln_id" in e.get("error", "") for e in result["errors"])
@@ -329,7 +331,7 @@ class TestImportCustomDataAssessments:
     def test_missing_status_appends_error(self, app, variant_and_project):
         """Line 698: missing status → error appended."""
         _, var = variant_and_project
-        data = {"assessments": [{"vuln_id": "CVE-2099-X", "packages": ["p@1"]}]}
+        data = {"version": 1, "assessments": [{"vuln_id": "CVE-2099-X", "packages": ["p@1"]}]}
         with app.app_context():
             result = import_custom_data(data, {}, variant_id=var.id)
         assert any("Missing vuln_id or status" in e.get("error", "") for e in result["errors"])
@@ -337,7 +339,7 @@ class TestImportCustomDataAssessments:
     def test_no_packages_appends_error(self, app, variant_and_project):
         """Line 706: no packages → error appended."""
         _, var = variant_and_project
-        data = {"assessments": [{"vuln_id": "CVE-2099-NP", "status": "affected", "packages": []}]}
+        data = {"version": 1, "assessments": [{"vuln_id": "CVE-2099-NP", "status": "affected", "packages": []}]}
         with app.app_context():
             result = import_custom_data(data, {}, variant_id=var.id)
         assert any("No packages" in e.get("error", "") for e in result["errors"])
@@ -346,6 +348,7 @@ class TestImportCustomDataAssessments:
         """Lines 710-714, 740: successful import → assessments_imported += 1."""
         _, var = variant_and_project
         data = {
+            "version": 1,
             "assessments": [{
                 "vuln_id": "CVE-2099-IMP",
                 "status": "not_affected",
@@ -362,6 +365,7 @@ class TestImportCustomDataAssessments:
         """Lines 717-721: package string with '::' is split correctly."""
         _, var = variant_and_project
         data = {
+            "version": 1,
             "assessments": [{
                 "vuln_id": "CVE-2099-SUP",
                 "status": "affected",
@@ -378,6 +382,7 @@ class TestImportCustomDataAssessments:
         """Line 734: importing same assessment twice → second is skipped."""
         _, var = variant_and_project
         data = {
+            "version": 1,
             "assessments": [{
                 "vuln_id": "CVE-2099-DUP",
                 "status": "not_affected",
@@ -395,6 +400,7 @@ class TestImportCustomDataAssessments:
         _, var = variant_and_project
         variant_by_name = {"io-cov-var": var}
         data = {
+            "version": 1,
             "assessments": [{
                 "vuln_id": "CVE-2099-NAME",
                 "status": "not_affected",
@@ -412,6 +418,7 @@ class TestImportCustomDataAssessments:
 
         _, var = variant_and_project
         data = {
+            "version": 1,
             "ai_assessments": [{
                 "vuln_id": "CVE-2099-AI02",
                 "status": "affected",
@@ -442,6 +449,7 @@ class TestImportCustomDataCvss:
         """Lines 772-773: vuln not in DB → error appended."""
         _, var = variant_and_project
         data = {
+            "version": 1,
             "cvss": [{
                 "vuln_id": "CVE-2099-NOCVSS",
                 "base_score": 7.5,
@@ -460,6 +468,7 @@ class TestImportCustomDataCvss:
         with app.app_context():
             Vulnerability.create_record("CVE-2099-CVSSVAR")
             data = {
+                "version": 1,
                 "cvss": [{
                     "vuln_id": "CVE-2099-CVSSVAR",
                     "variant_id": "no-such-variant",
@@ -478,6 +487,7 @@ class TestImportCustomDataCvss:
         with app.app_context():
             Vulnerability.create_record("CVE-2099-CVSSOK")
             data = {
+                "version": 1,
                 "cvss": [{
                     "vuln_id": "CVE-2099-CVSSOK",
                     "variant_id": str(var.id),
@@ -500,7 +510,7 @@ class TestImportCustomDataTimeEstimates:
     def test_te_vuln_not_found_appends_error(self, app, variant_and_project):
         """Lines 833-835: vuln not in DB → error appended."""
         _, var = variant_and_project
-        data = {"time_estimates": [{"vuln_id": "CVE-2099-NOTD", "optimistic": "PT1H", "likely": "PT2H", "pessimistic": "PT4H"}]}
+        data = {"version": 1, "time_estimates": [{"vuln_id": "CVE-2099-NOTD", "optimistic": "PT1H", "likely": "PT2H", "pessimistic": "PT4H"}]}
         with app.app_context():
             result = import_custom_data(data, {})
         assert any("not found" in e.get("error", "").lower() for e in result["errors"])
@@ -511,7 +521,7 @@ class TestImportCustomDataTimeEstimates:
         _, var = variant_and_project
         with app.app_context():
             Vulnerability.create_record("CVE-2099-TEEFF")
-            data = {"time_estimates": [{"vuln_id": "CVE-2099-TEEFF", "optimistic": "not-a-duration"}]}
+            data = {"version": 1, "time_estimates": [{"vuln_id": "CVE-2099-TEEFF", "optimistic": "not-a-duration"}]}
             result = import_custom_data(data, {})
         assert any(e.get("vuln_id") == "CVE-2099-TEEFF" for e in result["errors"])
 
@@ -522,6 +532,7 @@ class TestImportCustomDataTimeEstimates:
         with app.app_context():
             Vulnerability.create_record("CVE-2099-TEBADVAR")
             data = {
+                "version": 1,
                 "time_estimates": [{
                     "vuln_id": "CVE-2099-TEBADVAR",
                     "variant_id": "no-such-variant",
@@ -540,6 +551,7 @@ class TestImportCustomDataTimeEstimates:
         with app.app_context():
             Vulnerability.create_record("CVE-2099-TEOK")
             data = {
+                "version": 1,
                 "time_estimates": [{
                     "vuln_id": "CVE-2099-TEOK",
                     "variant_id": str(var.id),
@@ -554,7 +566,7 @@ class TestImportCustomDataTimeEstimates:
     def test_final_status_error_when_only_errors(self, app, variant_and_project):
         """Line 882: status set to 'error' when nothing imported but errors exist."""
         _, var = variant_and_project
-        data = {"assessments": [{"vuln_id": "CVE-X", "status": "affected", "packages": []}]}
+        data = {"version": 1, "assessments": [{"vuln_id": "CVE-X", "status": "affected", "packages": []}]}
         with app.app_context():
             result = import_custom_data(data, {})
         assert result["status"] == "error"

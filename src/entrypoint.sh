@@ -112,8 +112,7 @@ Commands without --project or --variant:
         Development and web interface:
         --serve                         Run scan then start web UI (port 7275)
 
-        Reports and assets:
-        --report <template|path>        Generate a report from a template
+        Report assets:
         --add-asset <path>              Stage an image asset for report templates
 
         Data maintenance:
@@ -137,6 +136,10 @@ Commands without --project or --variant:
         Import or export AI assessment context for a project:
         --export-context                Export AI assessment context
         --import-context <path>         Import AI assessment context
+
+Report generation by project (uses "default" if --project is omitted):
+        --report <template|path>        Generate a report from a template
+                    Includes all variants in the selected project
 
 Commands with optional --project and --variant (uses "default" project and variant if not specified):
 
@@ -565,8 +568,12 @@ cmd_report() {
     local template="$1"
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    local -a scope_args=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        scope_args+=(--variant "$VARIANT_NAME")
+    fi
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp report "$template" --output-dir "$output_dir"
+    flask --app src.bin.webapp report "$template" --output-dir "$output_dir" "${scope_args[@]}"
     setup_user
 }
 

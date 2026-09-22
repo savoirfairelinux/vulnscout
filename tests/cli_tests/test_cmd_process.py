@@ -132,6 +132,25 @@ class TestCmdProcessCoverage:
 
         assert len(scope.variant_ids) == 1
 
+    def test_condition_matches_euvd_known_exploitable(self, app):
+        from src.bin.cmd_process import evaluate_condition
+        from src.controllers import ControllersCache
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            vulnerability = Vulnerability.get_or_create("CVE-2026-0001")
+            vulnerability.euvd_known_exploited = True
+            controllers = ControllersCache()
+
+            matched = evaluate_condition(
+                controllers.vulnerabilities,
+                controllers.assessments,
+                "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) or "
+                "known_exploitable and (pending or affected))",
+            )
+
+        assert matched == [vulnerability.id]
+
     def test_project_condition_matches_each_variant_independently(self, app):
         from src.bin.cmd_process import _condition_scope, _evaluate_condition_in_scope
         from src.models.assessment import Assessment
@@ -161,14 +180,12 @@ class TestCmdProcessCoverage:
             now = datetime.now(timezone.utc)
             Assessment.create(
                 "affected",
-                finding_id=finding.id,
-                variant_id=first_variant.id,
+                targets=[(first_variant.id, finding.id)],
                 timestamp=now - timedelta(days=1),
             )
             Assessment.create(
                 "not_affected",
-                finding_id=finding.id,
-                variant_id=second_variant.id,
+                targets=[(second_variant.id, finding.id)],
                 timestamp=now,
             )
 
@@ -426,6 +443,30 @@ class TestCmdProcessCoverage:
                 from src.bin.cmd_process import _run_main
                 _run_main()
         mock_pt.assert_not_called()
+
+    def test_run_main_match_condition_skips_post_treatment(self, app, monkeypatch):
+        monkeypatch.setenv("MATCH_CONDITION", "cvss > 5")
+        with patch("src.bin.cmd_process.post_treatment") as post_treatment_call, \
+             patch("src.bin.cmd_process.read_inputs"), \
+             patch("src.bin.cmd_process.populate_observations"), \
+             patch("src.bin.cmd_process._evaluate_condition_in_scope", return_value=[]):
+            with app.app_context():
+                from src.bin.cmd_process import _run_main
+                _run_main()
+
+        post_treatment_call.assert_not_called()
+
+    def test_run_main_match_condition_preserves_explicit_refresh(self, app, monkeypatch):
+        monkeypatch.setenv("MATCH_CONDITION", "cvss > 5")
+        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh, \
+             patch("src.bin.cmd_process.read_inputs"), \
+             patch("src.bin.cmd_process.populate_observations"), \
+             patch("src.bin.cmd_process._evaluate_condition_in_scope", return_value=[]):
+            with app.app_context():
+                from src.bin.cmd_process import _run_main
+                _run_main(refresh_vulnerability_data=True)
+
+        refresh.assert_called_once()
 
     def test_run_main_json_cache_write_exception_swallowed(self, app, monkeypatch):
         """IO error writing JSON cache is silently swallowed (lines 360-361)."""

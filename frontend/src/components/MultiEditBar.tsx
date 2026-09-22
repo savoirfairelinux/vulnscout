@@ -19,6 +19,7 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     triggerBanner: (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => void;
     hideBanner: () => void;
+    projectId?: string;
     variantId?: string;
     /** Origin variant when compare mode is active */
     baseVariantId?: string;
@@ -26,7 +27,7 @@ type Props = {
     compareOperation?: string;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, projectId, variantId, baseVariantId, compareOperation} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -125,43 +126,40 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         const pkg_vulns = pkg_for_vulns();
         setIsLoading(true);
 
-        // Build (vuln_id, variant_id | undefined, packages[]) triples.
-        // - variantId set  → use that single variant for every vuln
-        // - variantId unset → fetch all variants per vuln and fan out
-        type Triple = { vuln_id: string; variant_id?: string; packages: string[] };
-        const triples: Triple[] = [];
+        // Build one request item per vulnerability. A multi-variant selection
+        // stays one item so the backend can persist its complete target set on
+        // one Assessment row rather than splitting the user action by variant.
+        type RequestTarget = { vuln_id: string; variant_ids?: string[]; packages: string[] };
+        const targets: RequestTarget[] = [];
 
         if (variantId) {
-            // Compare or specific variant — one item per vuln for the compared variant
+            const selectedVariantIds = [variantId];
+            if (compareOperation === 'intersection' && baseVariantId && baseVariantId !== variantId) {
+                selectedVariantIds.push(baseVariantId);
+            }
             for (const vuln_id of selectedVulns) {
                 const pkgs = pkg_vulns[vuln_id] ?? [];
-                triples.push({ vuln_id, variant_id: variantId, packages: pkgs });
-            }
-            // Intersection mode: also create triples for the base (origin) variant
-            if (compareOperation === 'intersection' && baseVariantId) {
-                for (const vuln_id of selectedVulns) {
-                    const pkgs = pkg_vulns[vuln_id] ?? [];
-                    triples.push({ vuln_id, variant_id: baseVariantId, packages: pkgs });
-                }
+                targets.push({ vuln_id, variant_ids: selectedVariantIds, packages: pkgs });
             }
         } else {
-            // All-variants context — one item per (vuln, variant, pkg)
+            // All-variants context — one item per vulnerability, covering all
+            // variants where its selected packages were historically observed.
             await Promise.all(selectedVulns.map(async (vuln_id) => {
                 const variants = await Variants.listByVuln(vuln_id).catch(() => []);
                 const pkgs = pkg_vulns[vuln_id] ?? [];
-                if (variants.length === 0) {
-                    // No variant data — create without variant_id
-                    triples.push({ vuln_id, packages: pkgs });
-                } else {
-                    for (const v of variants) {
-                        triples.push({ vuln_id, variant_id: v.id, packages: pkgs });
-                    }
-                }
+                const variant_ids = variants
+                    .filter(variant => !projectId || variant.project_id === projectId)
+                    .map(variant => variant.id);
+                targets.push({
+                    vuln_id,
+                    packages: pkgs,
+                    ...(variant_ids.length > 0 ? { variant_ids } : {}),
+                });
             }));
         }
 
         // Build batch request payload
-        const assessmentRequests = triples.map(({ vuln_id, variant_id, packages }) => ({
+        const assessmentRequests = targets.map(({ vuln_id, variant_ids, packages }) => ({
             vuln_id,
             packages,
             status: content.status,
@@ -169,7 +167,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             justification: content.justification,
             impact_statement: content.impact_statement,
             workaround: content.workaround,
-            ...(variant_id ? { variant_id } : {})
+            ...(variant_ids ? { variant_ids } : {})
         }));
 
         try {
@@ -203,7 +201,8 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     const vuln = vulnerabilities.find(v => v.id === vuln_id);
                     if (vuln) {
                         const updatedAssessments = [...vuln.assessments, ...newAssessments];
-                        const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                        const statusSummary = buildStatusSummary(
+                            updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
                         patchVuln(vuln_id, {
                             ...vuln,
                             assessments: updatedAssessments,
@@ -260,7 +259,8 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         } else {
             await Promise.all(selectedVulns.map(async (vuln_id) => {
                 const variants = await Variants.listByVuln(vuln_id).catch(() => []);
-                for (const variant of variants) {
+                for (const variant of variants.filter(
+                    item => !projectId || item.project_id === projectId)) {
                     vulnerabilityUpdates.push({
                         id: vuln_id,
                         variant_id: variant.id,

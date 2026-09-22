@@ -11,6 +11,10 @@ feeding them to the vulnerability scanners (Grype, NVD CPE, OSV) attributes the
 entire kernel CVE set to every one of them — slow and useless.  They are kept
 as-is in the SBOM views, but excluded from scanner inputs; the real kernel recipe
 (named ``linux-*``, e.g. ``linux-stm32mp``) is unaffected and still scanned.
+
+Yocto ``*-native`` packages are build-host tools rather than target runtime
+components.  They remain included by default for backward compatibility, but
+scanner callers may exclude them when target-only analysis is desired.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from typing import Iterable, List, TypeVar
 # ``kernel-6.6.116`` … without catching the real kernel recipe (``linux-*``) or
 # unrelated names such as ``kernelshark``.
 KERNEL_PACKAGE_PREFIX = "kernel-"
+NATIVE_PACKAGE_SUFFIX = "-native"
 
 T = TypeVar("T")
 
@@ -34,9 +39,28 @@ def is_kernel_package_name(name: str | None) -> bool:
     return name.strip().lower().startswith(KERNEL_PACKAGE_PREFIX)
 
 
-def filter_scannable_packages(packages: Iterable[T]) -> List[T]:
-    """Drop kernel companion packages from *packages* before scanning.
+def is_native_package_name(name: str | None) -> bool:
+    """Return ``True`` when *name* denotes a Yocto native build package."""
+    if not name:
+        return False
+    return name.strip().lower().endswith(NATIVE_PACKAGE_SUFFIX)
+
+
+def filter_scannable_packages(
+    packages: Iterable[T],
+    *,
+    exclude_kernel: bool = True,
+    exclude_native: bool = False,
+) -> List[T]:
+    """Apply enabled package exclusions before scanning.
 
     Each item must expose a ``name`` attribute (e.g. a ``Package``).
     """
-    return [pkg for pkg in packages if not is_kernel_package_name(getattr(pkg, "name", None))]
+    return [
+        pkg for pkg in packages
+        if not (
+            exclude_kernel and is_kernel_package_name(getattr(pkg, "name", None))
+        ) and not (
+            exclude_native and is_native_package_name(getattr(pkg, "name", None))
+        )
+    ]

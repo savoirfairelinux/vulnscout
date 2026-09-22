@@ -20,6 +20,8 @@ import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.models.assessment import Assessment
+from src.models.assessment_review import AssessmentReview, fingerprint_assessment
+from src.models.assessment_target import AssessmentTarget
 from src.models.finding import Finding
 from src.models.metrics import Metrics
 from src.models.observation import Observation
@@ -127,11 +129,14 @@ def _build_outdated_db(app, *, include_v2_finding: bool = True, include_v2_in_ac
             impact_statement="",
             responses=[],
             workaround="",
-            finding_id=finding_v1.id,
-            variant_id=VARIANT_ID,
             timestamp=datetime(2024, 1, 2, tzinfo=timezone.utc),
         )
         _db.session.add(assessment)
+        # Direct construction bypasses Assessment.create()'s dual write, so
+        # the target row that makes this assessment reachable through the
+        # listing routes must be added explicitly.
+        _db.session.add(AssessmentTarget(
+            assessment_id=assess_id, variant_id=VARIANT_ID, finding_id=finding_v1.id))
         _db.session.commit()
 
         if include_v2_in_active:
@@ -285,11 +290,12 @@ class TestOutdatedFlag:
                 impact_statement="",
                 responses=[],
                 workaround="",
-                finding_id=finding.id,
-                variant_id=other_variant_id,
                 timestamp=datetime(2024, 1, 3, tzinfo=timezone.utc),
             )
             _db.session.add_all([other_project, other_variant, other_assessment])
+            # Direct construction bypasses Assessment.create()'s dual write.
+            _db.session.add(AssessmentTarget(
+                assessment_id=other_assessment_id, variant_id=other_variant_id, finding_id=finding.id))
             _db.session.commit()
 
         resp = self.client.get(f"/api/vulnerabilities/{CVE_ID}/assessments?project_id={PROJECT_ID}")
@@ -331,6 +337,34 @@ class TestOutdatedFlag:
         )
         assert package_response.status_code == 200
         assert json.loads(package_response.data) == []
+
+    def test_delete_outdated_data_cascades_to_assessment_review(self):
+        """The bulk-delete cleanup path also removes the assessment's AI review.
+
+        ``delete_outdated_data`` removes ``Assessment`` rows via a Core-level
+        bulk ``DELETE`` (``_delete_in_chunks``), which bypasses the ORM
+        ``delete-orphan`` cascade wired on ``Assessment.reviews``. Exercise
+        that exact path (not ``db.session.delete()``) to confirm reviews
+        don't leak.
+        """
+        with self.app.app_context():
+            target = _db.session.execute(
+                _db.select(AssessmentTarget).where(AssessmentTarget.assessment_id == self.assess_id)
+            ).scalars().one()
+            AssessmentReview.upsert(
+                assessment_id=self.assess_id, variant_id=target.variant_id, finding_id=target.finding_id,
+                reviewed_fingerprint=fingerprint_assessment(target.assessment),
+                status="not_affected", rationale="agrees with analyst"
+            )
+            assert AssessmentReview.get_all_for_assessment(self.assess_id) != []
+
+        response = self._delete_outdated_data()
+
+        assert response.status_code == 200
+        assert json.loads(response.data)["assessments_deleted"] == 1
+        with self.app.app_context():
+            assert _db.session.get(Assessment, self.assess_id) is None
+            assert AssessmentReview.get_all_for_assessment(self.assess_id) == []
 
     def test_outdated_data_preview_lists_the_records_to_delete(self):
         """The preview exposes the same stale package data and assessment."""
@@ -588,9 +622,12 @@ class TestOutdatedFlag:
                 id=orphaned_assessment_id,
                 origin="custom",
                 status="not_affected",
-                finding_id=finding.id,
-                variant_id=VARIANT_ID,
             ))
+            # Direct construction bypasses Assessment.create()'s dual write, so
+            # the target row that makes this assessment reachable through
+            # assessment_targets must be added explicitly.
+            _db.session.add(AssessmentTarget(
+                assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
             _db.session.commit()
 
         preview = self.client.get("/api/orphaned-vulnerabilities")
@@ -610,6 +647,47 @@ class TestOutdatedFlag:
             assert _db.session.get(Vulnerability, orphaned_cve) is None
             assert _db.session.get(Assessment, orphaned_assessment_id) is None
             assert _db.session.get(Vulnerability, CVE_ID) is not None
+
+    def test_delete_orphaned_vulnerabilities_cascades_to_assessment_review(self):
+        """The orphaned-vulnerability cleanup path also removes AI reviews.
+
+        ``delete_orphaned_vulnerabilities`` removes an emptied assessment
+        through ``remove_target``, which deletes it via the ORM so
+        ``cascade="all, delete-orphan"`` on ``Assessment.reviews`` fires.
+        Exercise that path directly to confirm reviews don't leak.
+        """
+        orphaned_cve = "CVE-2024-00005"
+        orphaned_assessment_id = uuid.UUID("15151515-1515-1515-1515-151515151515")
+        with self.app.app_context():
+            Vulnerability.create_record(id=orphaned_cve, description="Orphaned with review", status="low")
+            package = Package.find_or_create("orphaned-reviewed", "1.0", [], [], "")
+            finding = Finding.get_or_create(package.id, orphaned_cve)
+            _db.session.add(Assessment(
+                id=orphaned_assessment_id,
+                origin="custom",
+                status="not_affected",
+            ))
+            # Direct construction bypasses Assessment.create()'s dual write, so
+            # the target row that makes this assessment reachable through
+            # assessment_targets must be added explicitly.
+            _db.session.add(AssessmentTarget(
+                assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
+            _db.session.commit()
+            AssessmentReview.upsert(
+                assessment_id=orphaned_assessment_id, variant_id=VARIANT_ID, finding_id=finding.id,
+                reviewed_fingerprint=fingerprint_assessment(
+                    _db.session.get(Assessment, orphaned_assessment_id)
+                ),
+                status="not_affected", rationale="agrees"
+            )
+            assert AssessmentReview.get_all_for_assessment(orphaned_assessment_id) != []
+
+        response = self._delete_orphaned_vulnerabilities()
+        assert response.status_code == 200
+        assert json.loads(response.data)["assessments_deleted"] == 1
+        with self.app.app_context():
+            assert _db.session.get(Assessment, orphaned_assessment_id) is None
+            assert AssessmentReview.get_all_for_assessment(orphaned_assessment_id) == []
 
     def test_orphaned_vulnerabilities_preserve_variant_owned_data(self):
         """Variant metrics and time estimates keep their CVEs out of cleanup."""
@@ -653,9 +731,11 @@ class TestOutdatedFlag:
             vulnerabilities = []
             findings = []
             assessments = []
+            assessment_targets = []
             for index in range(candidate_count):
                 vulnerability_id = f"CVE-2099-{index:05d}"
                 finding_id = uuid.UUID(int=index + 1000)
+                assessment_id = uuid.UUID(int=index + 2000)
                 vulnerabilities.append(Vulnerability(
                     id=vulnerability_id,
                     description="Batched orphan",
@@ -667,15 +747,20 @@ class TestOutdatedFlag:
                     vulnerability_id=vulnerability_id,
                 ))
                 assessments.append(Assessment(
-                    id=uuid.UUID(int=index + 2000),
+                    id=assessment_id,
                     origin="custom",
                     status="not_affected",
-                    finding_id=finding_id,
-                    variant_id=VARIANT_ID,
                 ))
+                # Direct construction bypasses Assessment.create()'s dual
+                # write, so the target row that makes each assessment
+                # reachable through assessment_targets must be added
+                # explicitly.
+                assessment_targets.append(AssessmentTarget(
+                    assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=finding_id))
             _db.session.add_all(vulnerabilities)
             _db.session.add_all(findings)
             _db.session.add_all(assessments)
+            _db.session.add_all(assessment_targets)
             _db.session.commit()
 
         preview = self.client.get("/api/orphaned-vulnerabilities")
@@ -807,6 +892,41 @@ class TestHelperEdgeCases:
         assert dicts[0]["outdated"] is False
         assert dicts[0]["superseded_by"] == []
 
+    def test_assessment_without_packages_is_left_current(self):
+        """An empty package list has nothing that could be superseded.
+
+        It is checked alongside a real reference so the annotation actually
+        reaches the per-assessment step instead of short-circuiting.
+        """
+        empty = self._base_dict(id="empty", packages=[])
+        stale = self._base_dict(id="stale", packages=["firefox@1.0"])
+        self._annotate([empty, stale])
+        assert empty["outdated"] is False
+        assert empty["superseded_by"] == []
+        assert stale["outdated"] is True
+
+    def test_variant_without_an_active_sbom_scan_is_skipped(self):
+        """A variant with no active SBOM has no active versions to compare against."""
+        unknown_variant = self._base_dict(
+            id="unknown-variant", variant_id=str(uuid.uuid4()))
+        self._annotate([unknown_variant])
+        assert unknown_variant["outdated"] is False
+
+    def test_target_only_assessment_without_an_id_is_skipped(self):
+        """Targets are resolved by assessment id; a dict without one has none."""
+        no_id = self._base_dict(packages=["firefox@1.0"])
+        no_id.pop("id")
+        no_id.pop("variant_id")
+        self._annotate([no_id])
+        assert no_id["outdated"] is False
+
+    def test_target_only_assessment_with_a_non_uuid_id_is_skipped(self):
+        """A malformed id cannot address any target row and must not raise."""
+        bad_id = self._base_dict(id="not-a-uuid")
+        bad_id.pop("variant_id")
+        self._annotate([bad_id])
+        assert bad_id["outdated"] is False
+
     def test_invalid_variant_id_is_skipped(self):
         """A malformed variant_id doesn't raise and leaves defaults."""
         dicts = [self._base_dict(variant_id="not-a-uuid")]
@@ -818,6 +938,57 @@ class TestHelperEdgeCases:
         dicts = [self._base_dict(packages=[])]
         self._annotate(dicts)
         assert dicts[0]["outdated"] is False
+
+    def _make_target_only_dict(self, finding_pkg_name, finding_pkg_version):
+        """Persist a genuine multi-target assessment (no scalar variant_id/
+        finding_id — as Assessment.create(targets=[...]) alone leaves them)
+        and return the plain dict a scalar-less to_dict() would produce for it."""
+        from src.extensions import db as _db2
+        from src.models.assessment import Assessment
+        from src.models.assessment_target import AssessmentTarget
+        from src.models.package import Package
+
+        with self.app.app_context():
+            pkg = _db2.session.execute(
+                _db2.select(Package).where(
+                    Package.name == finding_pkg_name, Package.version == finding_pkg_version)
+            ).scalar_one()
+            finding = _db2.session.execute(
+                _db2.select(Finding).where(
+                    Finding.package_id == pkg.id, Finding.vulnerability_id == CVE_ID)
+            ).scalar_one()
+            assessment_id = uuid.uuid4()
+            _db2.session.add(Assessment(
+                id=assessment_id, status="not_affected", origin="custom", source="analyst",
+                status_notes="", justification="", impact_statement="", responses=[], workaround="",
+            ))
+            _db2.session.add(AssessmentTarget(
+                assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=finding.id))
+            _db2.session.commit()
+        return {
+            "id": str(assessment_id),
+            "origin": "custom",
+            "vuln_id": CVE_ID,
+            "packages": [],
+            "variant_id": None,
+        }
+
+    def test_multi_target_assessment_with_no_scalar_variant_is_still_checked(self):
+        """A genuine multi-target assessment (no scalar variant_id/packages)
+        resolves its variant and package from AssessmentTarget rows instead
+        of being skipped outright."""
+        d = self._make_target_only_dict("firefox", "1.0")
+        self._annotate([d])
+        assert d["outdated"] is True
+        assert d["superseded_by"] == ["firefox@2.0"]
+        assert d["stale_packages"] == ["firefox@1.0"]
+
+    def test_multi_target_assessment_with_no_scalar_variant_stays_current(self):
+        """Same fallback path, but the targeted package is still active."""
+        d = self._make_target_only_dict("firefox", "2.0")
+        self._annotate([d])
+        assert d["outdated"] is False
+        assert d["superseded_by"] == []
 
     def test_mixed_current_and_stale_packages_is_current(self):
         """A name referenced at several versions stays current while any is active."""

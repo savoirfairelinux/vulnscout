@@ -259,16 +259,26 @@ class ScansHandler {
         return { ok: true, result: data as ScanImportResult };
     }
 
-    static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
+    static async list(
+        variantId?: string,
+        projectId?: string,
+        variantIds?: string[],
+        signal?: AbortSignal,
+    ): Promise<Scan[]> {
         let url: string;
         if (variantId) {
             url = import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/scans`;
+        } else if (variantIds && variantIds.length > 0) {
+            const scopedUrl = new URL(import.meta.env.VITE_API_URL + '/api/scans', window.location.href);
+            scopedUrl.searchParams.set('variant_ids', variantIds.join(','));
+            if (projectId) scopedUrl.searchParams.set('project_id', projectId);
+            url = scopedUrl.toString();
         } else if (projectId) {
             url = import.meta.env.VITE_API_URL + `/api/projects/${encodeURIComponent(projectId)}/scans`;
         } else {
             url = import.meta.env.VITE_API_URL + `/api/scans`;
         }
-        const response = await fetch(url, { mode: 'cors' });
+        const response = await fetch(url, { mode: 'cors', signal });
         if (!response.ok) return [];
         const data = await response.json();
         if (!Array.isArray(data)) return [];
@@ -305,9 +315,9 @@ class ScansHandler {
         return response.ok;
     }
 
-    static async triggerGrypeScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
+    static async triggerGrypeScan(variantId: string, excludeKernel: boolean = true, excludeNative: boolean = false): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan?exclude_kernel=${excludeKernel}`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan?exclude_kernel=${excludeKernel}&exclude_native=${excludeNative}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };
@@ -335,9 +345,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerNvdScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
+    static async triggerNvdScan(variantId: string, excludeKernel: boolean = true, excludeNative: boolean = false): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan?exclude_kernel=${excludeKernel}`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan?exclude_kernel=${excludeKernel}&exclude_native=${excludeNative}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };
@@ -354,9 +364,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerOsvScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
+    static async triggerOsvScan(variantId: string, excludeKernel: boolean = true, excludeNative: boolean = false): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan?exclude_kernel=${excludeKernel}`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan?exclude_kernel=${excludeKernel}&exclude_native=${excludeNative}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };
@@ -373,9 +383,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerSbomCveCheckScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
+    static async triggerSbomCveCheckScan(variantId: string, excludeKernel: boolean = true, excludeNative: boolean = false): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan?exclude_kernel=${excludeKernel}`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan?exclude_kernel=${excludeKernel}&exclude_native=${excludeNative}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };

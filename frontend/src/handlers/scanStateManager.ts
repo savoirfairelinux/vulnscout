@@ -31,6 +31,8 @@ export type ScanManagerSnapshot = readonly ScanEntryState[];
 export type ScanTriggerOptions = {
     /** Exclude kernel companion packages from scanner inputs (default true). */
     excludeKernel?: boolean;
+    /** Exclude Yocto package names ending in -native (default false). */
+    excludeNative?: boolean;
 };
 
 // Status response shape returned by the backend polling endpoints
