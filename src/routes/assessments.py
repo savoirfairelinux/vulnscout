@@ -1042,6 +1042,18 @@ def init_app(app: Flask) -> None:
 
         rows = _assessments_for_vulnerability(vuln_id, project_variant_ids)
         assessments = annotate_targets(rows)
+
+        ai_rows = [row for row in rows if row.origin == "ai"]
+        if ai_rows:
+            context_updates = _current_context_updates(ai_rows)
+            outdated_by_id = {
+                str(row.id): _is_context_outdated(row, context_updates)
+                for row in ai_rows
+            }
+            for a in assessments:
+                if a.get("origin") == "ai":
+                    a["context_outdated"] = outdated_by_id.get(str(a["id"]), False)
+
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments, 200
