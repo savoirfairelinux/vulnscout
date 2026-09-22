@@ -23,7 +23,7 @@ from ..helpers.active_scans import active_package_ids_for_scans, active_scan_ids
 from ..models import Finding, Observation, Scan, Vulnerability
 from .epss_db import EPSS_DB
 from .euvd_db import EUVD_DB
-from .job_context import JobContext
+from .job_context import JobContext, OperationError
 from .nvd_apply import apply_cvss_update, apply_nvd_update
 from .nvd_db import NVD_DB
 from .nvd_extract import extract_cve_details
@@ -100,6 +100,8 @@ def _scoped_vulnerability_ids(variant_ids: List[str]) -> Set[str]:
         return set()
 
     package_ids = active_package_ids_for_scans(scan_ids)
+    if not package_ids:
+        return set()
     query = (
         db.select(Vulnerability.id)
         .join(Finding, Vulnerability.id == Finding.vulnerability_id)
@@ -107,12 +109,11 @@ def _scoped_vulnerability_ids(variant_ids: List[str]) -> Set[str]:
         .join(Scan, Observation.scan_id == Scan.id)
         .where(Observation.scan_id.in_(scan_ids))
     )
-    if package_ids:
-        query = query.where(db.or_(
-            Scan.scan_type.is_(None),
-            Scan.scan_type == "sbom",
-            Finding.package_id.in_(package_ids),
-        ))
+    query = query.where(db.or_(
+        Scan.scan_type.is_(None),
+        Scan.scan_type == "sbom",
+        Finding.package_id.in_(package_ids),
+    ))
     return set(db.session.execute(query.distinct()).scalars().all())
 
 
@@ -141,7 +142,7 @@ def run_deferred_refresh(ctx: JobContext) -> None:
         if source == "epss":
             ids = known_cve_ids(ids)
         if source == "nvd" and ctx.options.get("mode") == "api" and len(ids) > MAX_CVE_IDS:
-            raise RuntimeError(
+            raise OperationError(
                 f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode"
             )
 
@@ -198,7 +199,7 @@ def run_nvd_refresh(ctx: JobContext) -> None:
         try:
             _get_scc_engine(progress=lambda message: ctx.report(0, total, message))
         except Exception as exc:
-            raise RuntimeError(f"Failed to load local NVD database: {exc}")
+            raise OperationError("Failed to load local NVD database") from exc
 
     done = 0
     for cve_id in cve_ids:
@@ -323,7 +324,7 @@ def run_ghsa_refresh(ctx: JobContext) -> None:
         except urllib.error.HTTPError as exc:
             if exc.code in (403, 429):
                 _safe_commit("bulk GHSA refresh rate-limited")
-                raise RuntimeError(
+                raise OperationError(
                     f"GitHub rate limit reached after {done} IDs (HTTP {exc.code})."
                     " Set GITHUB_TOKEN env var to increase quota."
                 )
@@ -405,7 +406,7 @@ def run_euvd_refresh(ctx: JobContext) -> None:
     euvd = EUVD_DB()
     full_map = euvd.get_full_mapping()
     if not full_map:
-        raise RuntimeError("ENISA EUVD CVE mapping unavailable or empty")
+        raise OperationError("ENISA EUVD CVE mapping unavailable or empty")
     kev_map = euvd.get_mapping()
 
     now = datetime.datetime.now(datetime.timezone.utc)

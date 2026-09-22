@@ -14,7 +14,7 @@ from flask import Flask
 from src.controllers.event_bus import EventBus
 from src.controllers import job_context as context_mod
 from src.controllers import operation_queue as queue_mod
-from src.controllers.job_context import CancelledError, JobContext
+from src.controllers.job_context import CancelledError, JobContext, OperationError
 from src.controllers.operation_queue import OperationQueue
 from src.controllers.operation_registry import (
     LANE_PIPELINE,
@@ -61,6 +61,15 @@ def test_event_bus_replay_close_and_backlog_paths():
     full._queue.put_nowait({"seq": 1})
     full.close()
     assert full.overflowed is False
+    assert full.closed
+    assert full.drain(timeout=0) == [{"seq": 1}]
+
+    full_bus = EventBus(client_backlog=1)
+    full_on_shutdown = full_bus.subscribe()
+    full_on_shutdown._queue.put_nowait({"seq": 1})
+    full_bus.close_all()
+    assert full_on_shutdown.closed
+    assert full_on_shutdown.drain(timeout=0) == [{"seq": 1}]
 
     with EventBus().subscribe() as scoped:
         assert scoped.closed is False
@@ -116,7 +125,7 @@ def test_upload_lane_pending_ids_and_pre_cancelled_execution(monkeypatch):
     assert registry.get("scan:cancelled")["status"] == "cancelled"
 
 
-def test_operation_queue_records_runner_outcomes(monkeypatch):
+def test_operation_queue_records_runner_outcomes(monkeypatch, caplog):
     registry = OperationRegistry()
     monkeypatch.setattr(queue_mod, "registry", registry)
     monkeypatch.setattr(context_mod, "registry", registry)
@@ -134,10 +143,14 @@ def test_operation_queue_records_runner_outcomes(monkeypatch):
     def failed(_ctx):
         raise RuntimeError("failed operation")
 
+    def expected_failure(_ctx):
+        raise OperationError("Invalid scan configuration")
+
     cases = (
         ("scan:done", successful, STATUS_DONE),
         ("scan:cancelled", cancelled, STATUS_CANCELLED),
         ("scan:error", failed, STATUS_ERROR),
+        ("scan:expected-error", expected_failure, STATUS_ERROR),
     )
     for op_id, runner, expected_status in cases:
         registry.create(op_id, "scan", "nvd", "NVD", LANE_PIPELINE)
@@ -152,7 +165,10 @@ def test_operation_queue_records_runner_outcomes(monkeypatch):
 
     assert registry.get("scan:done")["logs"] == ["finished"]
     assert registry.get("scan:cancelled")["logs"] == ["Operation cancelled"]
-    assert registry.get("scan:error")["error"] == "failed operation"
+    assert registry.get("scan:error")["error"] == "Operation failed; check server logs"
+    assert registry.get("scan:expected-error")["error"] == "Invalid scan configuration"
+    assert "failed operation" in caplog.text
+    assert "failed operation" not in registry.get("scan:error")["logs"]
 
 
 def test_operation_queue_cancels_pending_and_running_jobs(monkeypatch):

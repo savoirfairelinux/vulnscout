@@ -37,6 +37,8 @@ class Subscription:
         self.closed = False
 
     def _offer(self, event: dict) -> None:
+        if self.closed:
+            return
         try:
             self._queue.put_nowait(event)
         except queue.Full:
@@ -44,6 +46,7 @@ class Subscription:
 
     def close(self) -> None:
         self._bus.unsubscribe(self)
+        self.closed = True
         try:
             self._queue.put_nowait(None)
         except queue.Full:
@@ -132,6 +135,7 @@ class EventBus:
             targets = list(self._subscribers)
             self._subscribers.clear()
         for sub in targets:
+            sub.closed = True
             try:
                 sub._queue.put_nowait(None)
             except queue.Full:
