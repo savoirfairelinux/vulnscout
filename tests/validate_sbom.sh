@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# BOM Export & Schema Validation Script
+# Export & Schema Validation Script
 # Loads test SBOM data into the Flask app, exports all supported formats
 # (CycloneDX 1.4/1.5/1.6, SPDX 2.3, SPDX 3.0, OpenVEX), and validates
-# each exported file against official JSON schemas.
+# each exported file against official JSON schemas. VulnScout custom-data
+# versions 1 and 2 are validated against their checked-in schemas and examples.
 #
 # Tools used:
 #   - Flask CLI: for data loading (merge, process) and export
@@ -26,6 +27,9 @@
 #
 # OpenVEX (from openvex/spec repo):
 # openvex_json_schema.json = https://raw.githubusercontent.com/openvex/spec/main/openvex_json_schema.json
+#
+# VulnScout custom data:
+# vulnscout-1.schema.json and vulnscout-2.schema.json are maintained in this repository.
 
 set -euo pipefail
 
@@ -35,6 +39,7 @@ SCHEMA_DIR="${SCRIPT_DIR}/schemas"
 CDX_SCHEMA_DIR="${SCHEMA_DIR}/cyclonedx"
 SPDX_SCHEMA_DIR="${SCHEMA_DIR}/spdx"
 OPENVEX_SCHEMA_DIR="${SCHEMA_DIR}/openvex"
+VULNSCOUT_SCHEMA_DIR="${SCHEMA_DIR}/vulnscout"
 NPM_PREFIX="${SCHEMA_DIR}/.npm"
 
 PASS_COUNT=0
@@ -118,6 +123,13 @@ detect_format() {
         return 0
     fi
 
+    # Check for VulnScout custom data (has a supported version and assessments).
+    if jq -e '(.version != null) and (.assessments | type == "array")' "$file" > /dev/null 2>&1; then
+        FORMAT="vulnscout"
+        VERSION=$(jq -r '.version | tostring' "$file")
+        return 0
+    fi
+
     FORMAT="unknown"
     VERSION=""
     return 1
@@ -152,6 +164,13 @@ select_schema() {
             ;;
         openvex)
             echo "${OPENVEX_SCHEMA_DIR}/openvex_json_schema.json"
+            ;;
+        vulnscout)
+            case "${version}" in
+                1|1.0) echo "${VULNSCOUT_SCHEMA_DIR}/vulnscout-1.schema.json" ;;
+                2)     echo "${VULNSCOUT_SCHEMA_DIR}/vulnscout-2.schema.json" ;;
+                *)     echo ""; return 1 ;;
+            esac
             ;;
         *)
             echo ""; return 1
@@ -190,7 +209,7 @@ validate_with_ajv() {
             ajv_args+=(--spec=draft2020)
             ajv_args+=(-s "${schema}")
             ;;
-        openvex)
+        openvex|vulnscout)
             ajv_args+=(--spec=draft2020)
             ajv_args+=(-s "${schema}")
             ;;
@@ -251,11 +270,23 @@ validate_invalid_spdx() {
     fi
 }
 
+validate_invalid_vulnscout() {
+    local file="$1"
+    local version="$2"
+    local rel_path="${file#"${REPO_ROOT}/"}"
+
+    if validate_with_ajv "${file}" "vulnscout" "${version}" > /dev/null 2>&1; then
+        print_fail "${rel_path} (expected validation to fail, but it passed)"
+    else
+        print_pass "${rel_path} (correctly rejected as invalid VulnScout v${version})"
+    fi
+}
+
 # ============================================================================
 # Main
 # ============================================================================
 
-echo -e "${BOLD}BOM Export & Schema Validation${NC}"
+echo -e "${BOLD}Export & Schema Validation${NC}"
 echo "Schemas: ${SCHEMA_DIR}"
 echo ""
 
@@ -327,6 +358,16 @@ for fmt in "${FORMATS[@]}"; do
         continue
     fi
     validate_expect_pass "${file}"
+done
+
+# --- Phase 4: Validate the versioned VulnScout custom-data contract ---
+print_header "Phase 4: VulnScout custom-data schema validation"
+
+for version in 1 2; do
+    validate_expect_pass "${VULNSCOUT_SCHEMA_DIR}/examples/v${version}.valid.json"
+    validate_invalid_vulnscout \
+        "${VULNSCOUT_SCHEMA_DIR}/examples/v${version}.invalid.json" \
+        "${version}"
 done
 
 # --- Summary ---
