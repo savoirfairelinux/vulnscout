@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [Backend, Frontend, CI, Docker, Podman]
+        target: [Backend, Frontend, CI, Schema, Docker, Podman]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
@@ -42,6 +42,10 @@ jobs:
       - name: Run CI Tests in the container
         if: matrix.target == 'CI'
         run: cqfd -b test_ci
+
+      - name: Run Schema Conformity Tests in the container
+        if: matrix.target == 'Schema'
+        run: cqfd -b validate_sbom
 
       - name: Docker Build
         if: matrix.target == 'Docker'
