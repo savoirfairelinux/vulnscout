@@ -75,6 +75,35 @@ def test_known_ids_and_refresh_helper_edge_cases(monkeypatch):
     jobs._apply_epss_score("CVE-2024-0001", "0.1", datetime.datetime.now(datetime.timezone.utc))
 
 
+def test_scoped_vulnerability_ids_with_and_without_active_packages(monkeypatch):
+    monkeypatch.setattr(jobs, "active_scan_ids_for_variant", lambda _variant_id: [])
+    assert jobs._scoped_vulnerability_ids(["00000000-0000-0000-0000-000000000001"]) == set()
+
+    monkeypatch.setattr(
+        jobs,
+        "active_scan_ids_for_variant",
+        lambda _variant_id: ["00000000-0000-0000-0000-000000000002"],
+    )
+    package_ids = [["00000000-0000-0000-0000-000000000003"], []]
+    monkeypatch.setattr(jobs, "active_package_ids_for_scans", lambda _scan_ids: package_ids.pop(0))
+
+    class ScalarResult:
+        def all(self):
+            return ["CVE-2024-0001", "CVE-2024-0002"]
+
+    class QueryResult:
+        def scalars(self):
+            return ScalarResult()
+
+    session = SimpleNamespace(execute=lambda _query: QueryResult())
+    monkeypatch.setattr(jobs.db, "session", session)
+
+    expected = {"CVE-2024-0001", "CVE-2024-0002"}
+    variant_ids = ["00000000-0000-0000-0000-000000000001"]
+    assert jobs._scoped_vulnerability_ids(variant_ids) == expected
+    assert jobs._scoped_vulnerability_ids(variant_ids) == expected
+
+
 def test_deferred_refresh_resolves_new_ids_when_it_starts(monkeypatch):
     ctx = job_context(
         [], source="epss", variant_ids=["variant-a"],
