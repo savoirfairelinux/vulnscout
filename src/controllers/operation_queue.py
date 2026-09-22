@@ -21,6 +21,7 @@ Three lanes reproduce the concurrency the frontend used to enforce by hand:
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ from typing import Callable, Deque, Dict, List, Optional
 
 from flask import Flask
 
-from .job_context import CancelledError, JobContext
+from .job_context import CancelledError, JobContext, OperationError
 from .operation_registry import (
     LANE_EXPORT,
     LANE_PIPELINE,
@@ -41,6 +42,7 @@ from .operation_registry import (
 )
 
 JobRunner = Callable[[JobContext], None]
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -214,9 +216,14 @@ class OperationQueue:
                 progress={"current": 0, "total": 0, "message": "Cancelled"},
                 append_logs=["Operation cancelled"],
             )
-        except Exception as error:  # noqa: BLE001 - surfaced to the client verbatim
+        except Exception as error:  # noqa: BLE001 - operation boundary
             job.ctx.flush()
-            message = str(error)[:500] or error.__class__.__name__
+            _logger.exception("Operation %s failed", job.op_id)
+            message = (
+                str(error)[:500]
+                if isinstance(error, OperationError)
+                else "Operation failed; check server logs"
+            )
             registry.update(
                 job.op_id,
                 status=STATUS_ERROR,

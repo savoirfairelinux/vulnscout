@@ -17,10 +17,11 @@ import shutil
 import subprocess
 import tempfile
 import uuid as uuid_module
-from typing import Callable, Dict, List, Sequence, Set, Tuple
+from contextlib import contextmanager
+from typing import Callable, Dict, Iterator, List, Sequence, Set, Tuple
 
 from ..extensions import db
-from ..helpers.scan_filters import is_kernel_package_name
+from ..helpers.scan_filters import is_kernel_package_name, is_native_package_name
 from ..models.finding import Finding
 from ..models.package import Package
 from ..models.project import Project
@@ -33,7 +34,7 @@ from ..routes._scan_helpers import (
     resolve_active_packages,
 )
 from ..views.grype_vulns import GrypeVulns
-from .job_context import JobContext
+from .job_context import JobContext, OperationError
 
 GRYPE_EXPORT_TIMEOUT = 120
 GRYPE_SCAN_TIMEOUT = 600
@@ -66,13 +67,44 @@ def _exclude_kernel(ctx: JobContext) -> bool:
     return bool(ctx.options.get("exclude_kernel", True))
 
 
+def _exclude_native(ctx: JobContext) -> bool:
+    return bool(ctx.options.get("exclude_native", False))
+
+
 def _active_packages(ctx: JobContext) -> Sequence[Package]:
     packages, error = resolve_active_packages(
-        _variant_uuid(ctx), exclude_kernel=_exclude_kernel(ctx)
+        _variant_uuid(ctx),
+        exclude_kernel=_exclude_kernel(ctx),
+        exclude_native=_exclude_native(ctx),
     )
     if error:
-        raise RuntimeError(error)
+        safe_errors = {
+            "No SBOM scan found for variant",
+            "No packages found for variant",
+        }
+        raise OperationError(
+            error if error in safe_errors else "Unable to resolve active packages"
+        )
     return packages
+
+
+@contextmanager
+def _tool_scan(variant_uuid: uuid_module.UUID, source: str) -> Iterator[Scan]:
+    scan = Scan.create(
+        description=EMPTY_DESCRIPTION,
+        variant_id=variant_uuid,
+        scan_type="tool",
+        scan_source=source,
+    )
+    try:
+        yield scan
+    except Exception:
+        db.session.rollback()
+        persisted_scan = db.session.get(Scan, scan.id)
+        if persisted_scan is not None:
+            db.session.delete(persisted_scan)
+            db.session.commit()
+        raise
 
 
 def _detect_memory_ceiling() -> int:
@@ -147,7 +179,10 @@ def _variant_sbom_packages(variant_uuid: uuid_module.UUID) -> Set[Tuple[str, str
 
 
 def _deduplicate_cyclonedx(
-    ctx: JobContext, export_path: str, exclude_kernel: bool
+    ctx: JobContext,
+    export_path: str,
+    exclude_kernel: bool,
+    exclude_native: bool = False,
 ) -> None:
     """Collapse supplier-duplicated components before handing the SBOM to Grype.
 
@@ -171,6 +206,8 @@ def _deduplicate_cyclonedx(
         if exclude_kernel and is_kernel_package_name(name):
             kernel_dropped += 1
             continue
+        if exclude_native and is_native_package_name(name):
+            continue
         if (name, version) in seen:
             continue
         seen.add((name, version))
@@ -192,7 +229,10 @@ def _deduplicate_cyclonedx(
 
 
 def _filter_grype_matches(
-    ctx: JobContext, results_path: str, sbom_packages: Set[Tuple[str, str]]
+    ctx: JobContext,
+    results_path: str,
+    sbom_packages: Set[Tuple[str, str]],
+    exclude_native: bool = False,
 ) -> None:
     """Drop matches for artifacts Grype synthesised outside the variant SBOM."""
     with open(results_path, "r") as handle:
@@ -205,6 +245,8 @@ def _filter_grype_matches(
         name = GrypeVulns._normalize_artifact_name(
             artifact.get("name", ""), artifact.get("purl")
         )
+        if exclude_native and is_native_package_name(name):
+            continue
         if (name, artifact.get("version", "")) in sbom_packages:
             kept.append(match)
     data["matches"] = kept
@@ -228,7 +270,7 @@ def _run_cancellable(
     )
     ctx.set_cancel_hook(process.terminate)
     try:
-        _, stderr = process.communicate(timeout=timeout)
+        process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.kill()
         process.communicate()
@@ -237,25 +279,25 @@ def _run_cancellable(
         ctx.set_cancel_hook(None)
     ctx.check_cancelled()
     if process.returncode != 0:
-        detail = (stderr or "")[:500] or f"exit code {process.returncode}"
-        raise RuntimeError(f"Command failed: {detail}")
+        raise OperationError("Scanner command failed")
 
 
 def run_grype_scan(ctx: JobContext) -> None:
     """Export the variant as CycloneDX, run Grype on it, merge the results."""
     if shutil.which("grype") is None:
-        raise RuntimeError("grype binary not found on this system")
+        raise OperationError("Grype is not available on this system")
 
     variant_uuid = _variant_uuid(ctx)
     variant = db.session.get(Variant, variant_uuid)
     if variant is None:
-        raise RuntimeError("Variant not found")
+        raise OperationError("Variant not found")
     project = db.session.get(Project, variant.project_id)
     project_name = project.name if project else "unknown"
     vid_str = str(variant_uuid)
 
     sbom_packages = _variant_sbom_packages(variant_uuid)
     exclude_kernel = _exclude_kernel(ctx)
+    exclude_native = _exclude_native(ctx)
     base_dir = os.environ.get(
         "BASE_DIR",
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -277,11 +319,13 @@ def run_grype_scan(ctx: JobContext) -> None:
 
         exported_cdx = os.path.join(grype_tmp, "sbom_cyclonedx_v1_6.cdx.json")
         if not os.path.isfile(exported_cdx):
-            raise RuntimeError("CycloneDX export produced no file")
+            raise OperationError("CycloneDX export produced no file")
         ctx.log("[1/4] CycloneDX export complete")
 
         if sbom_packages:
-            _deduplicate_cyclonedx(ctx, exported_cdx, exclude_kernel)
+            _deduplicate_cyclonedx(
+                ctx, exported_cdx, exclude_kernel, exclude_native
+            )
 
         ctx.check_cancelled()
         ctx.report(1, 4, "2/4 Running Grype")
@@ -300,11 +344,13 @@ def run_grype_scan(ctx: JobContext) -> None:
         ctx.report(2, 4, "2/4 Running Grype")
 
         if not os.path.isfile(grype_out) or os.path.getsize(grype_out) == 0:
-            raise RuntimeError("Grype produced no output")
+            raise OperationError("Grype produced no output")
         ctx.log("[2/4] Grype scan complete")
 
         if sbom_packages:
-            _filter_grype_matches(ctx, grype_out, sbom_packages)
+            _filter_grype_matches(
+                ctx, grype_out, sbom_packages, exclude_native
+            )
 
         ctx.check_cancelled()
         ctx.report(2, 4, "3/4 Merging results")
@@ -325,7 +371,7 @@ def run_grype_scan(ctx: JobContext) -> None:
         ctx.report(4, 4, "Scan complete")
         ctx.log("✓ Grype scan complete")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Grype scan timed out")
+        raise OperationError("Grype scan timed out")
     finally:
         shutil.rmtree(grype_tmp, ignore_errors=True)
 
@@ -343,29 +389,26 @@ def _run_nvd_scan_local(ctx: JobContext, packages: List[Package]) -> None:
     try:
         engine = get_engine(progress=_engine_progress(ctx))
     except Exception as error:
-        raise RuntimeError(f"Failed to load local NVD database: {error}")
+        raise OperationError("Failed to load local NVD database") from error
 
-    scan = Scan.create(
-        description=EMPTY_DESCRIPTION, variant_id=variant_uuid,
-        scan_type="tool", scan_source="nvd",
-    )
-    total = len(packages)
-    writer = _SccBulkWriter(scan.id, variant_uuid, packages)
-    seen_keys: set = set()
+    with _tool_scan(variant_uuid, "nvd") as scan:
+        total = len(packages)
+        writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+        seen_keys: set = set()
 
-    for index, package in enumerate(packages, 1):
-        ctx.check_cancelled()
-        ctx.report(index, total, f"{index}/{total} packages")
-        try:
-            for computed, status in engine.applicable_vulns(package):
-                writer.add(package, computed, status, seen_keys)
-        except Exception as error:
-            ctx.log(f"[{index}/{total}] ERROR {package.name}: {str(error)[:200]}")
+        for index, package in enumerate(packages, 1):
+            ctx.check_cancelled()
+            ctx.report(index, total, f"{index}/{total} packages")
+            try:
+                for computed, status in engine.applicable_vulns(package):
+                    writer.add(package, computed, status, seen_keys)
+            except Exception as error:
+                ctx.log(f"[{index}/{total}] ERROR {package.name}: {str(error)[:200]}")
 
-    writer.flush()
-    found = len(seen_keys)
-    ctx.report(total, total, f"Found {found} CVEs across {total} packages")
-    ctx.log(f"✓ Scan complete — found {found} unique CVEs across {total} packages")
+        writer.flush()
+        found = len(seen_keys)
+        ctx.report(total, total, f"Found {found} CVEs across {total} packages")
+        ctx.log(f"✓ Scan complete — found {found} unique CVEs across {total} packages")
 
 
 def _query_cpe(ctx: JobContext, nvd, cpe_name: str) -> List[dict] | None:
@@ -430,51 +473,48 @@ def _run_nvd_scan_api(ctx: JobContext, packages: List[Package]) -> None:
     cpe_to_packages = _collect_cpes(packages)
 
     if not cpe_to_packages:
-        raise RuntimeError("No packages with valid CPE identifiers")
+        raise OperationError("No packages with valid CPE identifiers")
 
     total = len(cpe_to_packages)
     ctx.log(f"Found {len(packages)} packages with {total} unique CPEs to query")
 
-    scan = Scan.create(
-        description=EMPTY_DESCRIPTION, variant_id=variant_uuid,
-        scan_type="tool", scan_source="nvd",
-    )
-    cves_found: Set[str] = set()
-    observation_pairs: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
-    assessed_findings: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
+    with _tool_scan(variant_uuid, "nvd") as scan:
+        cves_found: Set[str] = set()
+        observation_pairs: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
+        assessed_findings: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
 
-    for index, (cpe_name, matched) in enumerate(cpe_to_packages.items(), 1):
-        ctx.check_cancelled()
-        ctx.report(index - 1, total, f"{index}/{total} CPEs")
-        ctx.log(f"[{index}/{total}] Querying {cpe_name}…")
-        nvd_vulns = _query_cpe(ctx, nvd, cpe_name)
-        ctx.report(index, total, f"{index}/{total} CPEs")
-        if nvd_vulns is None:
-            continue
+        for index, (cpe_name, matched) in enumerate(cpe_to_packages.items(), 1):
+            ctx.check_cancelled()
+            ctx.report(index - 1, total, f"{index}/{total} CPEs")
+            ctx.log(f"[{index}/{total}] Querying {cpe_name}…")
+            nvd_vulns = _query_cpe(ctx, nvd, cpe_name)
+            ctx.report(index, total, f"{index}/{total} CPEs")
+            if nvd_vulns is None:
+                continue
 
-        cve_ids = [
-            vuln.get("cve", {}).get("id", "")
-            for vuln in nvd_vulns
-            if vuln.get("cve", {}).get("id")
-        ]
-        if cve_ids:
-            ctx.log(
-                f"[{index}/{total}] {cpe_name} → {len(cve_ids)} CVE(s): "
-                f"{_preview(cve_ids)}"
+            cve_ids = [
+                vuln.get("cve", {}).get("id", "")
+                for vuln in nvd_vulns
+                if vuln.get("cve", {}).get("id")
+            ]
+            if cve_ids:
+                ctx.log(
+                    f"[{index}/{total}] {cpe_name} → {len(cve_ids)} CVE(s): "
+                    f"{_preview(cve_ids)}"
+                )
+            else:
+                ctx.log(f"[{index}/{total}] {cpe_name} → no CVEs")
+
+            cves_found |= _persist_nvd_records(
+                nvd_vulns, matched, scan, variant_uuid,
+                observation_pairs, assessed_findings,
             )
-        else:
-            ctx.log(f"[{index}/{total}] {cpe_name} → no CVEs")
 
-        cves_found |= _persist_nvd_records(
-            nvd_vulns, matched, scan, variant_uuid,
-            observation_pairs, assessed_findings,
+        db.session.commit()
+        ctx.report(total, total, f"Found {len(cves_found)} CVEs across {total} CPEs")
+        ctx.log(
+            f"✓ Scan complete — found {len(cves_found)} unique CVEs across {total} CPEs"
         )
-
-    db.session.commit()
-    ctx.report(total, total, f"Found {len(cves_found)} CVEs across {total} CPEs")
-    ctx.log(
-        f"✓ Scan complete — found {len(cves_found)} unique CVEs across {total} CPEs"
-    )
 
 
 def run_nvd_scan(ctx: JobContext) -> None:
@@ -577,7 +617,7 @@ def run_osv_scan(ctx: JobContext) -> None:
         purl_to_packages, packages_with_purls = _collect_purls(packages)
 
         if not purl_to_packages:
-            raise RuntimeError("No packages with valid PURL identifiers")
+            raise OperationError("No packages with valid PURL identifiers")
 
         total = len(purl_to_packages)
         ctx.log(
@@ -585,52 +625,49 @@ def run_osv_scan(ctx: JobContext) -> None:
             f"PURL identifiers ({total} unique PURLs to query)"
         )
 
-        scan = Scan.create(
-            description=EMPTY_DESCRIPTION, variant_id=variant_uuid,
-            scan_type="tool", scan_source="osv",
-        )
-        vulns_found: Set[str] = set()
-        observation_pairs: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
-        assessed_findings: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
+        with _tool_scan(variant_uuid, "osv") as scan:
+            vulns_found: Set[str] = set()
+            observation_pairs: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
+            assessed_findings: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
 
-        for index, (purl_str, matched) in enumerate(purl_to_packages.items(), 1):
-            ctx.check_cancelled()
-            ctx.report(index - 1, total, f"{index}/{total} PURLs")
-            ctx.log(f"[{index}/{total}] Querying {purl_str}…")
-            try:
-                osv_vulns = osv.query_by_purl(purl_str)
-            except Exception as error:
-                ctx.log(f"[{index}/{total}] ERROR {purl_str}: {str(error)[:200]}")
+            for index, (purl_str, matched) in enumerate(purl_to_packages.items(), 1):
+                ctx.check_cancelled()
+                ctx.report(index - 1, total, f"{index}/{total} PURLs")
+                ctx.log(f"[{index}/{total}] Querying {purl_str}…")
+                try:
+                    osv_vulns = osv.query_by_purl(purl_str)
+                except Exception as error:
+                    ctx.log(f"[{index}/{total}] ERROR {purl_str}: {str(error)[:200]}")
+                    ctx.report(index, total, f"{index}/{total} PURLs")
+                    continue
+
+                vuln_ids = [vuln.get("id", "") for vuln in osv_vulns if vuln.get("id")]
+                if vuln_ids:
+                    ctx.log(
+                        f"[{index}/{total}] {purl_str} → {len(vuln_ids)} vuln(s): "
+                        f"{_preview(vuln_ids)}"
+                    )
+                else:
+                    ctx.log(f"[{index}/{total}] {purl_str} → no vulnerabilities")
                 ctx.report(index, total, f"{index}/{total} PURLs")
-                continue
 
-            vuln_ids = [vuln.get("id", "") for vuln in osv_vulns if vuln.get("id")]
-            if vuln_ids:
-                ctx.log(
-                    f"[{index}/{total}] {purl_str} → {len(vuln_ids)} vuln(s): "
-                    f"{_preview(vuln_ids)}"
-                )
-            else:
-                ctx.log(f"[{index}/{total}] {purl_str} → no vulnerabilities")
-            ctx.report(index, total, f"{index}/{total} PURLs")
+                for osv_vuln in osv_vulns:
+                    recorded = _persist_osv_vulnerability(
+                        osv_vuln, matched, scan, variant_uuid,
+                        observation_pairs, assessed_findings,
+                    )
+                    if recorded:
+                        vulns_found.add(recorded)
 
-            for osv_vuln in osv_vulns:
-                recorded = _persist_osv_vulnerability(
-                    osv_vuln, matched, scan, variant_uuid,
-                    observation_pairs, assessed_findings,
-                )
-                if recorded:
-                    vulns_found.add(recorded)
-
-        db.session.commit()
-        ctx.report(
-            total, total,
-            f"Found {len(vulns_found)} vulnerabilities across {total} PURLs",
-        )
-        ctx.log(
-            f"✓ Scan complete — found {len(vulns_found)} unique vulnerabilities "
-            f"across {total} PURLs ({len(packages_with_purls)} packages)"
-        )
+            db.session.commit()
+            ctx.report(
+                total, total,
+                f"Found {len(vulns_found)} vulnerabilities across {total} PURLs",
+            )
+            ctx.log(
+                f"✓ Scan complete — found {len(vulns_found)} unique vulnerabilities "
+                f"across {total} PURLs ({len(packages_with_purls)} packages)"
+            )
     except Exception:
         db.session.rollback()
         raise
@@ -665,7 +702,7 @@ def _load_scc_engine(ctx: JobContext):
     try:
         return get_engine(progress=_engine_progress(ctx))
     except Exception as error:
-        raise RuntimeError(f"Failed to load CVE databases: {str(error)[:300]}")
+        raise OperationError("Failed to load CVE databases") from error
     finally:
         scc_logger.removeHandler(forwarder)
         scc_logger.setLevel(previous_level)
@@ -718,28 +755,25 @@ def run_scc_scan(ctx: JobContext) -> None:
             engine = _load_scc_engine(ctx)
             ctx.log("Index ready — scanning packages")
 
-            scan = Scan.create(
-                description=EMPTY_DESCRIPTION, variant_id=variant_uuid,
-                scan_type="tool", scan_source="scc",
-            )
-            writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+            with _tool_scan(variant_uuid, "scc") as scan:
+                writer = _SccBulkWriter(scan.id, variant_uuid, packages)
 
-            for index, package in enumerate(packages, 1):
-                ctx.check_cancelled()
-                _scan_package_with_engine(ctx, engine, writer, package, index, total)
-                # Bulk-insert in chunks to bound transaction size.
-                writer.maybe_flush()
+                for index, package in enumerate(packages, 1):
+                    ctx.check_cancelled()
+                    _scan_package_with_engine(ctx, engine, writer, package, index, total)
+                    # Bulk-insert in chunks to bound transaction size.
+                    writer.maybe_flush()
 
-            writer.flush()
-            found = len(writer.cves_found)
-            ctx.report(
-                total, total,
-                f"Found {found} vulnerabilities across {total} packages",
-            )
-            ctx.log(
-                f"✓ Scan complete — found {found} unique vulnerabilities "
-                f"across {total} packages"
-            )
+                writer.flush()
+                found = len(writer.cves_found)
+                ctx.report(
+                    total, total,
+                    f"Found {found} vulnerabilities across {total} packages",
+                )
+                ctx.log(
+                    f"✓ Scan complete — found {found} unique vulnerabilities "
+                    f"across {total} packages"
+                )
         except Exception:
             db.session.rollback()
             raise

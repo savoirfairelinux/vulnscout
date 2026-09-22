@@ -25,6 +25,10 @@ class CancelledError(Exception):
     """Raised by :meth:`JobContext.check_cancelled` when a stop was requested."""
 
 
+class OperationError(RuntimeError):
+    """An expected operation failure whose message is safe to show clients."""
+
+
 class JobContext:
     """Progress channel and cancellation signal for one operation."""
 
