@@ -821,7 +821,7 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByText('AI Assessments'));
         await screen.findAllByTitle('Approve AI suggestion');
 
-        expect(screen.getAllByText('Context outdated')).toHaveLength(1);
+        expect(screen.getAllByTitle(/Context outdated/)).toHaveLength(1);
     });
 
     test('hides the AI review filter on the AI Assessments tab but shows it on Assessments', async () => {
