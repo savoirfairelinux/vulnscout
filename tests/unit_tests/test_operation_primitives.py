@@ -77,9 +77,9 @@ def test_registry_prunes_logs_and_expired_operations(monkeypatch):
 
     registry.update("scan:test", status=STATUS_DONE)
     monkeypatch.setattr(time, "monotonic", lambda: 10_000_000)
-    registry.prune()
+    registry.create("scan:new", "scan", "nvd", "NVD", LANE_PIPELINE)
     assert registry.get("scan:test") is None
-    assert published[-1][0] == "operation_removed"
+    assert published[-2][0] == "operation_removed"
 
 
 def test_upload_lane_pending_ids_and_pre_cancelled_execution(monkeypatch):
@@ -333,3 +333,9 @@ def test_context_cancel_hook_empty_flush_and_null_reporter(monkeypatch):
     assert NULL_REPORTER.report(1, 2, "working") is None
     assert NULL_REPORTER.log("entry") is None
     assert NULL_REPORTER.is_cancelled() is False
+
+    late_ctx = JobContext("scan:late-hook")
+    late_ctx.request_cancel()
+    terminated = []
+    late_ctx.set_cancel_hook(lambda: terminated.append(True))
+    assert terminated == [True]

@@ -44,7 +44,8 @@ def test_normalisers_sleep_interval_and_safe_commit(monkeypatch):
 
     session.reset_mock()
     session.commit.side_effect = RuntimeError("database unavailable")
-    jobs._safe_commit("failure")
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        jobs._safe_commit("failure")
     session.rollback.assert_called_once()
     session.expunge_all.assert_called_once()
 

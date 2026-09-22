@@ -46,15 +46,20 @@ class JobContext:
 
     def request_cancel(self) -> None:
         with self._lock:
+            self._cancel.set()
             on_cancel = self._on_cancel
-        self._cancel.set()
         if on_cancel is not None:
             on_cancel()
 
     def set_cancel_hook(self, hook: Optional[Callable[[], None]]) -> None:
         """Register a callback that aborts blocking work (e.g. kills a subprocess)."""
+        invoke_now: Optional[Callable[[], None]] = None
         with self._lock:
             self._on_cancel = hook
+            if hook is not None and self._cancel.is_set():
+                invoke_now = hook
+        if invoke_now is not None:
+            invoke_now()
 
     def is_cancelled(self) -> bool:
         return self._cancel.is_set()

@@ -38,3 +38,20 @@ class NullReporter:
 
 
 NULL_REPORTER: ProgressReporter = NullReporter()
+
+
+class TrackerReporter:
+    """Adapt a legacy progress tracker to the operation reporter interface."""
+
+    def __init__(self, tracker, phase: str) -> None:
+        self._tracker = tracker
+        self._phase = phase
+
+    def report(self, current: int, total: int, message: str) -> None:
+        self._tracker.update(self._phase, current, total, message)
+
+    def log(self, line: str) -> None:
+        return None
+
+    def is_cancelled(self) -> bool:
+        return self._tracker.is_cancelled()
