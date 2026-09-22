@@ -78,6 +78,7 @@ class OperationRegistry:
         cancellable: bool = False,
     ) -> dict:
         """Register a new operation in ``queued`` state and publish it."""
+        self.prune()
         operation: Dict[str, Any] = {
             "op_id": op_id,
             "kind": kind,

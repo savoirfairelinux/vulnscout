@@ -131,10 +131,51 @@ class TestFetchPublishedDates:
         with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("no such file")):
             vuln_ctrl.fetch_published_dates()  # must not raise
 
-    # ---------------------------------------------------------------------------
-    # fetch_published_dates — GHSA thread-pool path (lines 346-359)
-    # ---------------------------------------------------------------------------
 
+class TestLegacyEnrichmentProgress:
+    @pytest.mark.parametrize(
+        ("method_name", "tracker_path", "phase"),
+        [
+            ("fetch_epss_scores", "src.controllers.epss_progress.EPSSProgressTracker", "epss_enrichment"),
+            ("fetch_nvd_data", "src.controllers.nvd_progress.NVDProgressTracker", "nvd_enrichment"),
+        ],
+    )
+    def test_no_argument_uses_legacy_tracker(self, app, method_name, tracker_path, phase):
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        controller = VulnerabilitiesController(PackagesController())
+        tracker = MagicMock()
+        with patch(tracker_path, tracker):
+            getattr(controller, method_name)()
+
+        tracker.start.assert_called_once_with(phase)
+        tracker.update.assert_called()
+        tracker.complete.assert_called_once_with()
+
+    @pytest.mark.parametrize("method_name", ["fetch_epss_scores", "fetch_nvd_data"])
+    def test_explicit_reporter_does_not_touch_legacy_tracker(self, app, method_name):
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        controller = VulnerabilitiesController(PackagesController())
+        reporter = MagicMock()
+        with (
+            patch("src.controllers.epss_progress.EPSSProgressTracker") as epss_tracker,
+            patch("src.controllers.nvd_progress.NVDProgressTracker") as nvd_tracker,
+        ):
+            getattr(controller, method_name)(reporter)
+
+        reporter.report.assert_called()
+        epss_tracker.start.assert_not_called()
+        nvd_tracker.start.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# fetch_published_dates — GHSA thread-pool path (lines 346-359)
+# ---------------------------------------------------------------------------
+
+class TestFetchPublishedDatesThreadPool:
     def test_ghsa_published_date_returned(self, app):
         """GHSA vulns use the ThreadPoolExecutor path; a mocked date is applied (lines 346-347)."""
         from src.controllers.vulnerabilities import VulnerabilitiesController

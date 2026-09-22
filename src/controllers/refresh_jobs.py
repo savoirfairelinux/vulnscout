@@ -60,6 +60,7 @@ def _safe_commit(label: str) -> None:
     except Exception as exc:
         print(f"[{label}] commit error: {exc}", flush=True)
         db.session.rollback()
+        raise
     finally:
         db.session.expunge_all()
 

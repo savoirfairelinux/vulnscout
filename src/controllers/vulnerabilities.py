@@ -20,7 +20,7 @@ from ..controllers.scc_engine import get_cve_json
 from ..controllers.nvd_extract import api_weaknesses_to_list_str, api_references_filter_patches
 from ..helpers.verbose import verbose
 from ._base import to_dict_with_fallback
-from .progress_reporter import NULL_REPORTER, ProgressReporter
+from .progress_reporter import ProgressReporter, TrackerReporter
 from ..models.cvss import CVSS
 from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
@@ -346,7 +346,13 @@ class VulnerabilitiesController:
             return True
         return False
 
-    def fetch_epss_scores(self, reporter: ProgressReporter = NULL_REPORTER) -> EnrichmentResult:
+    def fetch_epss_scores(self, reporter: Optional[ProgressReporter] = None) -> EnrichmentResult:
+        tracker = None
+        if reporter is None:
+            from ..controllers.epss_progress import EPSSProgressTracker
+            tracker = EPSSProgressTracker
+            tracker.start("epss_enrichment")
+            reporter = TrackerReporter(tracker, "epss_enrichment")
         start_time = time.time()
         nb_vuln = 0
         failed = 0
@@ -432,6 +438,8 @@ class VulnerabilitiesController:
             db.session.rollback()
             failed += 1
 
+        if tracker is not None:
+            tracker.complete()
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
         return EnrichmentResult(successful=nb_vuln, failed=failed)
 
@@ -555,7 +563,7 @@ class VulnerabilitiesController:
                     except Exception:
                         pass
 
-    def fetch_nvd_data(self, reporter: ProgressReporter = NULL_REPORTER) -> EnrichmentResult:
+    def fetch_nvd_data(self, reporter: Optional[ProgressReporter] = None) -> EnrichmentResult:
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
         CVE-prefixed IDs are looked up via the NVD API. GHSA-prefixed IDs use
@@ -566,6 +574,12 @@ class VulnerabilitiesController:
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        tracker = None
+        if reporter is None:
+            from ..controllers.nvd_progress import NVDProgressTracker
+            tracker = NVDProgressTracker
+            tracker.start("nvd_enrichment")
+            reporter = TrackerReporter(tracker, "nvd_enrichment")
         start_time = time.time()
         nb_vuln = 0
         failed = 0
@@ -689,6 +703,8 @@ class VulnerabilitiesController:
             verbose(f"[fetch_nvd_data final commit] {e}")
             db.session.rollback()
             failed += 1
+        if tracker is not None:
+            tracker.complete()
         print(
             f"=== NVD: done — enriched {nb_vuln}/{total} vulnerabilities in {time.time() - start_time:.1f}s.",
             flush=True,
