@@ -11,6 +11,7 @@ VulnScout Documentation
    container-entrypoint
    interactive-mode
    ai-assessments
+   custom-data-format
    templates
    ci_conditions
    api
