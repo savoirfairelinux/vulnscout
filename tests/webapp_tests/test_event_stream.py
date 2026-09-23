@@ -227,6 +227,7 @@ def test_overloaded_stream_resnapshots_and_keeps_receiving_updates(open_stream, 
     _create("scan:grype:v1")
     _create("scan:grype:v2")
     snapshot = reader.next_frame_of("snapshot")
+    assert snapshot["id"] == f"{operation_events.epoch}:{snapshot['data']['seq']}"
     assert {item["op_id"] for item in snapshot["data"]["operations"]} == {
         "scan:grype:v1", "scan:grype:v2",
     }
