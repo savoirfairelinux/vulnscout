@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,81 @@ from src.controllers.operation_registry import (
     new_queue_id,
 )
 from src.controllers.progress_reporter import NULL_REPORTER
+
+
+def test_event_bus_delivers_concurrent_publications_in_sequence(monkeypatch):
+    bus = EventBus()
+    subscriber = bus.subscribe()
+    first_offered = threading.Event()
+    release_first = threading.Event()
+    second_done = threading.Event()
+    original_offer = subscriber._offer
+
+    def pause_first(event):
+        if event["seq"] == 1:
+            first_offered.set()
+            assert release_first.wait(2)
+        original_offer(event)
+
+    monkeypatch.setattr(subscriber, "_offer", pause_first)
+    first = threading.Thread(target=lambda: bus.publish("operation", {"id": 1}))
+    second = threading.Thread(target=lambda: (bus.publish("operation", {"id": 2}), second_done.set()))
+    try:
+        first.start()
+        assert first_offered.wait(2)
+        second.start()
+        assert not second_done.wait(0.05)
+    finally:
+        release_first.set()
+        first.join(timeout=2)
+        if second.ident is not None:
+            second.join(timeout=2)
+    assert not first.is_alive() and not second.is_alive()
+    assert [event["seq"] for event in subscriber.drain(timeout=0)] == [1, 2]
+
+
+def test_registry_publishes_mutations_in_order(monkeypatch):
+    registry = OperationRegistry()
+    registry.create("scan:test", "scan", "nvd", "NVD", LANE_PIPELINE)
+    published = []
+    first_publishing = threading.Event()
+    release_first = threading.Event()
+    second_done = threading.Event()
+
+    def publish(_event_type, state):
+        if state.get("status") == "running":
+            first_publishing.set()
+            assert release_first.wait(2)
+        published.append(state["status"])
+
+    monkeypatch.setattr("src.controllers.operation_registry.operation_events.publish", publish)
+    first = threading.Thread(target=lambda: registry.update("scan:test", status="running"))
+    second = threading.Thread(target=lambda: (registry.update("scan:test", status=STATUS_DONE), second_done.set()))
+    try:
+        first.start()
+        assert first_publishing.wait(2)
+        second.start()
+        assert not second_done.wait(0.05)
+    finally:
+        release_first.set()
+        first.join(timeout=2)
+        if second.ident is not None:
+            second.join(timeout=2)
+    assert not first.is_alive() and not second.is_alive()
+    assert published == ["running", STATUS_DONE]
+    assert registry.get("scan:test")["status"] == STATUS_DONE
+
+
+def test_snapshot_expires_terminal_operations_after_first_completion(monkeypatch):
+    registry = OperationRegistry()
+    clock = [0.0]
+    monkeypatch.setattr("src.controllers.operation_registry.time.monotonic", lambda: clock[0])
+    registry.create("scan:test", "scan", "nvd", "NVD", LANE_PIPELINE)
+    registry.update("scan:test", status=STATUS_DONE)
+    clock[0] = 1800
+    registry.update("scan:test", append_logs=["late log"])
+    clock[0] = 3601
+    assert registry.snapshot() == []
 
 
 def test_event_bus_replay_close_and_backlog_paths():

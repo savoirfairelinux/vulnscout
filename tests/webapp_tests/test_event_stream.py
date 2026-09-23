@@ -219,6 +219,23 @@ def test_idle_stream_emits_heartbeats(open_stream):
     assert reader.next_frame_of("heartbeat")["event"] == "heartbeat"
 
 
+def test_overloaded_stream_resnapshots_and_keeps_receiving_updates(open_stream, monkeypatch):
+    monkeypatch.setattr(operation_events, "_client_backlog", 1)
+    reader = open_stream()
+    reader.next_frame_of("snapshot")
+
+    _create("scan:grype:v1")
+    _create("scan:grype:v2")
+    snapshot = reader.next_frame_of("snapshot")
+    assert snapshot["id"] == f"{operation_events.epoch}:{snapshot['data']['seq']}"
+    assert {item["op_id"] for item in snapshot["data"]["operations"]} == {
+        "scan:grype:v1", "scan:grype:v2",
+    }
+
+    _create("scan:grype:v3")
+    assert reader.next_frame_of("operation")["data"]["op_id"] == "scan:grype:v3"
+
+
 @pytest.mark.parametrize("shutdown_signal", [signal.SIGINT, signal.SIGTERM])
 def test_shutdown_handler_sends_bye_to_active_stream(open_stream, shutdown_signal):
     reader = open_stream()
@@ -323,6 +340,11 @@ def test_stream_count_is_capped_because_each_one_holds_a_thread(client, open_str
     refused = client.get("/api/events/stream")
     assert refused.status_code == 503
     assert "Too many concurrent event streams" in refused.get_json()["error"]
+
+
+def test_invalid_stream_limit_uses_default(monkeypatch):
+    monkeypatch.setenv("VULNSCOUT_SSE_MAX_STREAMS", "not-a-number")
+    assert events_module._max_streams() == events_module.DEFAULT_MAX_STREAMS
 
 
 def test_client_disconnect_releases_the_subscription_and_the_stream_slot(open_stream):

@@ -116,9 +116,8 @@ class EventBus:
             self._seq += 1
             event = {"seq": self._seq, "event": event_type, "data": data}
             self._replay.append(event)
-            targets = list(self._subscribers)
-        for sub in targets:
-            sub._offer(event)
+            for sub in self._subscribers:
+                sub._offer(event)
         return event
 
     def subscribe(self) -> Subscription:

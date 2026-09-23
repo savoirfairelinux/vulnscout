@@ -247,7 +247,7 @@ def _filter_grype_matches(
         )
         if exclude_native and is_native_package_name(name):
             continue
-        if (name, artifact.get("version", "")) in sbom_packages:
+        if not sbom_packages or (name, artifact.get("version", "")) in sbom_packages:
             kept.append(match)
     data["matches"] = kept
     with open(results_path, "w") as handle:
@@ -326,7 +326,7 @@ def run_grype_scan(ctx: JobContext) -> None:
             raise OperationError("CycloneDX export produced no file")
         ctx.log("[1/4] CycloneDX export complete")
 
-        if sbom_packages:
+        if sbom_packages or exclude_native:
             _deduplicate_cyclonedx(
                 ctx, exported_cdx, exclude_kernel, exclude_native
             )
@@ -351,7 +351,7 @@ def run_grype_scan(ctx: JobContext) -> None:
             raise OperationError("Grype produced no output")
         ctx.log("[2/4] Grype scan complete")
 
-        if sbom_packages:
+        if sbom_packages or exclude_native:
             _filter_grype_matches(
                 ctx, grype_out, sbom_packages, exclude_native
             )
