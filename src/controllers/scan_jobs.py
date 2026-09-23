@@ -520,6 +520,7 @@ def _run_nvd_scan_api(ctx: JobContext, packages: List[Package]) -> None:
             f"✓ Scan complete — found {len(cves_found)} unique CVEs across {total} CPEs"
         )
 
+
 def run_nvd_scan(ctx: JobContext) -> None:
     """Match package CPEs against NVD, locally or through the REST API."""
     from .scc_engine import serialized_engine_operation
