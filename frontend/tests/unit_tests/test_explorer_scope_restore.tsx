@@ -482,7 +482,7 @@ describe('Explorer saved-scope validation', () => {
         expect(screen.getByText('ai context page')).toBeInTheDocument();
     });
 
-    test('an unknown URL falls back to the metrics page', async () => {
+    test('an unknown URL shows the 404 page', async () => {
         mockGetFrontendScope.mockReturnValue(null);
         mockProjectsList.mockResolvedValue([]);
 
@@ -491,7 +491,8 @@ describe('Explorer saved-scope validation', () => {
         ) });
         await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
 
-        expect(screen.getByRole('button', { name: 'filter vulnerabilities' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: '404' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'filter vulnerabilities' })).not.toBeInTheDocument();
     });
 
     test('a filter applied via goToVulnsTabWithFilter survives the navigation, but a plain nav-bar click to Vulnerabilities resets it', async () => {

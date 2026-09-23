@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
-import { useLocation, useNavigate, Routes, Route, Navigate } from "react-router-dom";
+import { useLocation, useNavigate, Routes, Route } from "react-router-dom";
 import { ROUTES, tabForPath } from "../routes";
 import type { TabKey } from "../routes";
 import NavigationBar from "../components/NavigationBar";
+import NotFound from "./NotFound";
 import OperationQueueModal from "../components/OperationQueueModal";
 import { subscribe as exportSubscribe, getSnapshot as exportGetSnapshot } from "../handlers/exportQueue";
 import MessageBanner from "../components/MessageBanner";
@@ -622,7 +623,7 @@ function Explorer() {
                     }} />
                 } />
                 <Route path={ROUTES.ai} element={<AIContext />} />
-                <Route path="*" element={<Navigate to={ROUTES.metrics} replace />} />
+                <Route path="*" element={<NotFound />} />
                 </Routes>
             </div>
             </main>
