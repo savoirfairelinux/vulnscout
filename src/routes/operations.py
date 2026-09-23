@@ -56,6 +56,7 @@ SCAN_ORDER = ["grype", "nvd", "osv", "scc"]
 REFRESH_ORDER = ["nvd", "epss", "ghsa", "euvd"]
 
 VALID_MODES = ("local", "api")
+MAX_BATCH_OPERATIONS = 100
 
 # Serialises the conflict check and the registry writes so two simultaneous
 # requests cannot both pass the check and double-submit the same operation.
@@ -145,6 +146,53 @@ def _plan_scan_job(job: dict) -> List[dict]:
             "runner": SCAN_JOBS[source],
         })
     return planned
+
+
+def _canonical_variant_id(raw_id: object) -> str:
+    try:
+        return str(uuid_module.UUID(str(raw_id)))
+    except (ValueError, AttributeError):
+        raise _PlanError(f"Invalid variant id: {raw_id}")
+
+
+def _preflight_job(job: dict) -> List[str]:
+    source = job.get("source")
+    if job.get("kind") == KIND_SCAN and isinstance(source, str) and source in SCAN_JOBS:
+        variant_ids = job.get("variant_ids")
+        if not isinstance(variant_ids, list) or not variant_ids:
+            raise _PlanError(f"{source} scan requires a non-empty variant_ids list")
+        return [scan_op_id(source, _canonical_variant_id(raw_id)) for raw_id in variant_ids]
+    if job.get("kind") == KIND_REFRESH and isinstance(source, str) and source in REFRESH_JOBS:
+        variant_ids = job.get("variant_ids")
+        if isinstance(variant_ids, list):
+            if len(variant_ids) > MAX_BATCH_OPERATIONS:
+                raise _PlanError(f"variant_ids accepts at most {MAX_BATCH_OPERATIONS} entries")
+            canonical_ids = [_canonical_variant_id(raw_id) for raw_id in variant_ids]
+            if len(set(canonical_ids)) != len(canonical_ids):
+                raise _PlanError("Duplicate variant id in deferred refresh")
+        return [refresh_op_id(source)]
+    return []
+
+
+def _preflight(jobs: List[dict]) -> List[str]:
+    """Bound expansion and detect repeated operations before database lookups."""
+    if len(jobs) > MAX_BATCH_OPERATIONS:
+        raise _PlanError(f"jobs accepts at most {MAX_BATCH_OPERATIONS} operations")
+    seen: set[str] = set()
+    duplicated: List[str] = []
+    count = 0
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise _PlanError("Each job must be an object")
+        operation_ids = _preflight_job(job)
+        count += len(operation_ids)
+        if count > MAX_BATCH_OPERATIONS:
+            raise _PlanError(f"jobs accepts at most {MAX_BATCH_OPERATIONS} operations")
+        for op_id in operation_ids:
+            if op_id in seen:
+                duplicated.append(op_id)
+            seen.add(op_id)
+    return duplicated
 
 
 def _deferred_refresh_options(source: str, job: dict, mode: str) -> dict:
@@ -346,6 +394,12 @@ def init_app(app: Flask) -> None:
             return jsonify({"error": "jobs must be a non-empty list"}), 400
 
         try:
+            duplicated = _preflight(jobs)
+            if duplicated:
+                return jsonify({
+                    "error": "jobs contain duplicate operations",
+                    "operations": duplicated,
+                }), 400
             planned = _plan(jobs)
         except _PlanError as error:
             return jsonify({"error": error.message}), error.status

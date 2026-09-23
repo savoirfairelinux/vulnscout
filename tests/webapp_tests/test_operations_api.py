@@ -11,6 +11,7 @@ import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.controllers.operation_registry import STATUS_DONE, registry
+from src.routes.operations import MAX_BATCH_OPERATIONS
 
 
 def _build_db(app):
@@ -272,6 +273,52 @@ def test_the_same_operation_twice_in_one_batch_is_rejected(client, ids):
     ]})
     assert response.status_code == 400
     assert response.get_json()["operations"] == [f"scan:grype:{ids['variant_a']}"]
+
+
+def test_oversized_scan_batch_is_rejected_before_variant_lookup(client, ids):
+    with patch("src.routes.operations.VariantController.get") as lookup:
+        response = client.post("/api/operations", json={"jobs": [
+            {"kind": "scan", "source": "grype",
+             "variant_ids": [ids["variant_a"]] * (MAX_BATCH_OPERATIONS + 1)},
+        ]})
+    assert response.status_code == 400
+    lookup.assert_not_called()
+    assert registry.snapshot() == []
+
+
+def test_expansion_across_jobs_is_bounded_before_variant_lookup(client, ids):
+    with patch("src.routes.operations.VariantController.get") as lookup:
+        response = client.post("/api/operations", json={"jobs": [
+            {"kind": "scan", "source": "grype", "variant_ids": [ids["variant_a"]]},
+            {"kind": "scan", "source": "nvd",
+             "variant_ids": [ids["variant_b"]] * MAX_BATCH_OPERATIONS},
+        ]})
+    assert response.status_code == 400
+    lookup.assert_not_called()
+    assert registry.snapshot() == []
+
+
+def test_repeated_canonical_variant_is_rejected_before_lookup(client, ids):
+    with patch("src.routes.operations.VariantController.get") as lookup:
+        response = client.post("/api/operations", json={"jobs": [
+            {"kind": "scan", "source": "grype",
+             "variant_ids": [ids["variant_a"], ids["variant_a"].upper()]},
+        ]})
+    assert response.status_code == 400
+    assert response.get_json()["operations"] == [f"scan:grype:{ids['variant_a']}"]
+    lookup.assert_not_called()
+
+
+def test_deferred_refresh_limits_and_deduplicates_variant_ids_before_lookup(client, ids):
+    for variant_ids in ([ids["variant_a"]] * (MAX_BATCH_OPERATIONS + 1),
+                        [ids["variant_a"], ids["variant_a"].upper()]):
+        with patch("src.routes.operations.VariantController.get") as lookup:
+            response = client.post("/api/operations", json={"jobs": [
+                {"kind": "refresh", "source": "epss", "variant_ids": variant_ids},
+            ]})
+        assert response.status_code == 400
+        lookup.assert_not_called()
+    assert registry.snapshot() == []
 
 
 def test_relaunching_an_active_operation_conflicts(client, ids):

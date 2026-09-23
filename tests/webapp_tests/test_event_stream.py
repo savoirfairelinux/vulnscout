@@ -11,7 +11,7 @@ import pytest
 
 from src.bin.webapp import create_app
 from src.bin import webapp as webapp_module
-from src.controllers.event_bus import operation_events
+from src.controllers.event_bus import EventBus, operation_events
 from src.controllers.operation_registry import (
     LANE_PIPELINE,
     STATUS_DONE,
@@ -98,7 +98,7 @@ def parse_frame(raw):
     for line in raw.strip().splitlines():
         key, _, value = line.partition(": ")
         if key == "id":
-            parsed["id"] = int(value)
+            parsed["id"] = value
         elif key == "event":
             parsed["event"] = value
         elif key == "data":
@@ -238,7 +238,7 @@ def test_shutdown_handler_sends_bye_to_active_stream(open_stream, shutdown_signa
 
 def test_reconnect_with_last_event_id_replays_instead_of_resnapshotting(open_stream):
     _create("scan:grype:v1")
-    baseline = operation_events.seq
+    baseline = f"{operation_events.epoch}:{operation_events.seq}"
     registry.update("scan:grype:v1", status=STATUS_DONE)
 
     frame = open_stream(headers={"Last-Event-ID": str(baseline)}).next_frame()
@@ -251,9 +251,58 @@ def test_reconnect_resnapshots_when_the_gap_is_too_wide(open_stream):
     _create("scan:grype:v1")
 
     # A sequence far beyond anything published cannot be bridged from the buffer.
-    frame = open_stream(headers={"Last-Event-ID": "999999999"}).next_frame()
+    frame = open_stream(headers={"Last-Event-ID": f"{operation_events.epoch}:999999999"}).next_frame()
 
     assert frame["event"] == "snapshot"
+    assert frame["id"] == f"{operation_events.epoch}:{frame['data']['seq']}"
+
+
+def test_reconnect_after_replay_gap_uses_snapshot_cursor(open_stream, monkeypatch):
+    bus = EventBus(replay_size=1)
+    monkeypatch.setattr(events_module, "operation_events", bus)
+    bus.publish("operation", {"op_id": "old"})
+    bus.publish("operation", {"op_id": "current"})
+
+    reader = open_stream(headers={"Last-Event-ID": f"{bus.epoch}:0"})
+    snapshot = reader.next_frame()
+    assert snapshot["event"] == "snapshot"
+    assert snapshot["id"] == f"{bus.epoch}:2"
+    reader.close()
+
+    bus.publish("operation", {"op_id": "next"})
+    replay = open_stream(headers={"Last-Event-ID": snapshot["id"]}).next_frame()
+    assert replay["event"] == "operation"
+    assert replay["data"] == {"op_id": "next"}
+
+
+def test_reconnect_after_overflow_uses_snapshot_cursor(open_stream, monkeypatch):
+    bus = EventBus(client_backlog=1)
+    monkeypatch.setattr(events_module, "operation_events", bus)
+    reader = open_stream()
+    reader.next_frame_of("snapshot")
+    bus.publish("operation", {"op_id": "first"})
+    bus.publish("operation", {"op_id": "second"})
+
+    snapshot = reader.next_frame_of("snapshot")
+    assert snapshot["id"] == f"{bus.epoch}:2"
+    reader.close()
+
+    bus.publish("operation", {"op_id": "next"})
+    replay = open_stream(headers={"Last-Event-ID": snapshot["id"]}).next_frame()
+    assert replay["event"] == "operation"
+    assert replay["data"] == {"op_id": "next"}
+
+
+def test_reconnect_after_restart_resnapshots_even_when_sequence_catches_up(open_stream, monkeypatch):
+    old_cursor = f"{operation_events.epoch}:2"
+    new_bus = EventBus()
+    monkeypatch.setattr(events_module, "operation_events", new_bus)
+    new_bus.publish("operation", {"op_id": "boot-1"})
+    new_bus.publish("operation", {"op_id": "boot-2"})
+
+    frame = open_stream(headers={"Last-Event-ID": old_cursor}).next_frame()
+    assert frame["event"] == "snapshot"
+    assert frame["id"] == f"{new_bus.epoch}:2"
 
 
 def test_unparsable_last_event_id_falls_back_to_a_snapshot(open_stream):
