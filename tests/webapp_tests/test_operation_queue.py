@@ -165,7 +165,7 @@ def test_failing_job_records_the_error(op_queue):
     op_queue.submit("scan:grype:v1", LANE_PIPELINE, runner, JobContext("scan:grype:v1"))
 
     operation = _wait_for("scan:grype:v1", STATUS_ERROR)
-    assert operation["error"] == "grype binary not found on this system"
+    assert operation["error"] == "Operation failed; check server logs"
     assert operation["logs"][-1].startswith("ERROR:")
 
 

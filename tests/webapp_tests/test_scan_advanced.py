@@ -458,14 +458,15 @@ class TestGrypeScanJob:
 
     @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_failing_subprocess_surfaces_its_stderr(
-        self, which, popen, grype_app
+    def test_failing_subprocess_logs_stderr_without_exposing_it(
+        self, which, popen, grype_app, caplog
     ):
         popen.return_value = _FakeProcess(returncode=1, stderr="something failed")
 
         ctx = _context("grype", grype_app._test_ids["variant_id"])
-        with pytest.raises(RuntimeError, match="Command failed: something failed"):
+        with pytest.raises(RuntimeError, match="Scanner command failed"):
             _run_job(grype_app, run_grype_scan, ctx)
+        assert "something failed" in caplog.text
 
     @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
