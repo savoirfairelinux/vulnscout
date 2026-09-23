@@ -103,8 +103,8 @@ def test_scoped_vulnerability_ids_with_and_without_active_packages(monkeypatch):
     expected = {"CVE-2024-0001", "CVE-2024-0002"}
     variant_ids = ["00000000-0000-0000-0000-000000000001"]
     assert jobs._scoped_vulnerability_ids(variant_ids) == expected
-    assert jobs._scoped_vulnerability_ids(variant_ids) == set()
-    execute.assert_called_once()
+    assert jobs._scoped_vulnerability_ids(variant_ids) == expected
+    assert execute.call_count == 2
 
 
 def test_deferred_refresh_resolves_new_ids_when_it_starts(monkeypatch):

@@ -91,30 +91,26 @@ def known_cve_ids(cve_ids: List[str]) -> List[str]:
 
 def _scoped_vulnerability_ids(variant_ids: List[str]) -> Set[str]:
     """Return vulnerability IDs visible in the active scans for the variants."""
-    scan_ids = [
-        scan_id
-        for variant_id in variant_ids
-        for scan_id in active_scan_ids_for_variant(uuid.UUID(variant_id))
-    ]
-    if not scan_ids:
-        return set()
-
-    package_ids = active_package_ids_for_scans(scan_ids)
-    if not package_ids:
-        return set()
-    query = (
-        db.select(Vulnerability.id)
-        .join(Finding, Vulnerability.id == Finding.vulnerability_id)
-        .join(Observation, Finding.id == Observation.finding_id)
-        .join(Scan, Observation.scan_id == Scan.id)
-        .where(Observation.scan_id.in_(scan_ids))
-    )
-    query = query.where(db.or_(
-        Scan.scan_type.is_(None),
-        Scan.scan_type == "sbom",
-        Finding.package_id.in_(package_ids),
-    ))
-    return set(db.session.execute(query.distinct()).scalars().all())
+    scoped_ids: Set[str] = set()
+    for variant_id in variant_ids:
+        scan_ids = active_scan_ids_for_variant(uuid.UUID(variant_id))
+        if not scan_ids:
+            continue
+        package_ids = active_package_ids_for_scans(scan_ids)
+        query = (
+            db.select(Vulnerability.id)
+            .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+            .join(Observation, Finding.id == Observation.finding_id)
+            .join(Scan, Observation.scan_id == Scan.id)
+            .where(Observation.scan_id.in_(scan_ids))
+            .where(db.or_(
+                Scan.scan_type.is_(None),
+                Scan.scan_type == "sbom",
+                Finding.package_id.in_(package_ids),
+            ))
+        )
+        scoped_ids.update(db.session.execute(query.distinct()).scalars().all())
+    return scoped_ids
 
 
 def run_deferred_refresh(ctx: JobContext) -> None:
