@@ -188,6 +188,23 @@ def test_empty_job_list_is_rejected(client):
     assert client.post("/api/operations", json={"jobs": []}).status_code == 400
 
 
+@pytest.mark.parametrize("job", [
+    {"kind": "scan", "source": "nvd", "variant_ids": []},
+    {"kind": "refresh", "source": "nvd", "ids": ["CVE-2024-1111"],
+     "variant_ids": ["00000000-0000-0000-0000-000000000001"]},
+    {"kind": "refresh", "source": "epss", "variant_ids": []},
+    {"kind": "refresh", "source": "nvd", "variant_ids": ["invalid"]},
+    {"kind": "refresh", "source": "nvd", "variant_ids": [
+        "00000000-0000-0000-0000-000000000001"]},
+    [],
+    {"kind": "unknown"},
+])
+def test_invalid_batch_job_does_not_enqueue_anything(client, job):
+    response = client.post("/api/operations", json={"jobs": [job]})
+    assert response.status_code in (400, 404)
+    assert registry.snapshot() == []
+
+
 @pytest.mark.parametrize("body", [[], "text", 7])
 def test_non_object_body_is_rejected(client, body):
     response = client.post("/api/operations", json=body)
@@ -256,6 +273,27 @@ def test_ghsa_refresh_rejects_cve_identifiers(client):
         {"kind": "refresh", "source": "ghsa", "ids": ["CVE-2024-1111"]},
     ]})
     assert response.status_code == 400
+
+
+def test_ghsa_refresh_accepts_identifiers_but_rejects_oversized_batch(client):
+    from src.controllers.refresh_jobs import MAX_GHSA_IDS
+
+    job = {"kind": "refresh", "source": "ghsa", "ids": ["GHSA-AAAA-BBBB-0000"]}
+    assert client.post("/api/operations", json={"jobs": [job]}).status_code == 202
+    registry.clear()
+    job["ids"] = [f"GHSA-AAAA-BBBB-{index:04d}" for index in range(MAX_GHSA_IDS + 1)]
+    assert client.post("/api/operations", json={"jobs": [job]}).status_code == 400
+    assert registry.snapshot() == []
+
+
+def test_nvd_api_rejects_more_than_allowed_identifiers(client):
+    from src.controllers.refresh_jobs import MAX_CVE_IDS
+
+    job = {"kind": "refresh", "source": "nvd",
+           "ids": [f"CVE-2024-{index:04d}" for index in range(MAX_CVE_IDS + 1)],
+           "options": {"mode": "api"}}
+    assert client.post("/api/operations", json={"jobs": [job]}).status_code == 400
+    assert registry.snapshot() == []
 
 
 def test_nothing_is_queued_when_planning_fails(client, ids):

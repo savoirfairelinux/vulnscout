@@ -7,6 +7,7 @@ computation in scan list serialisation."""
 import json
 import os
 import subprocess
+import builtins
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -14,12 +15,76 @@ from src.bin.webapp import create_app
 from src.controllers.job_context import JobContext
 from src.controllers.operation_registry import KIND_SCAN, LANE_PIPELINE, registry
 from src.controllers.scan_jobs import (
+    _detect_memory_ceiling,
+    _deduplicate_cyclonedx,
+    _filter_grype_matches,
     _resolve_grype_memlimit,
     run_grype_scan,
     run_nvd_scan,
     run_osv_scan,
 )
 from src.extensions import db as _db
+
+
+def test_grype_excludes_native_components_and_matches(tmp_path):
+    ctx = JobContext("scan:grype:test")
+    export_path = tmp_path / "sbom.json"
+    export_path.write_text(json.dumps({
+        "components": [
+            {"name": "cmake-native", "version": "1", "bom-ref": "native"},
+            {"name": "openssl", "version": "3", "bom-ref": "target"},
+        ],
+        "dependencies": [{"ref": "native"}, {"ref": "target"}],
+    }))
+
+    _deduplicate_cyclonedx(ctx, str(export_path), False, exclude_native=True)
+    exported = json.loads(export_path.read_text())
+    assert [component["name"] for component in exported["components"]] == ["openssl"]
+    assert exported["dependencies"] == [{"ref": "target"}]
+
+    results_path = tmp_path / "grype.json"
+    results_path.write_text(json.dumps({"matches": [
+        {"artifact": {"name": "cmake-native", "version": "1"}},
+        {"artifact": {"name": "openssl", "version": "3"}},
+    ]}))
+    _filter_grype_matches(
+        ctx, str(results_path), {("cmake-native", "1"), ("openssl", "3")},
+        exclude_native=True,
+    )
+    matches = json.loads(results_path.read_text())["matches"]
+    assert [match["artifact"]["name"] for match in matches] == ["openssl"]
+
+    results_path.write_text(json.dumps({"matches": [
+        {"artifact": {"name": "cmake-native", "version": "1"}},
+        {"artifact": {"name": "openssl", "version": "3"}},
+    ]}))
+    _filter_grype_matches(ctx, str(results_path), set(), exclude_native=True)
+    assert [match["artifact"]["name"] for match in json.loads(results_path.read_text())["matches"]] == [
+        "openssl"
+    ]
+
+
+def test_grype_missing_binary_is_reported_before_export(app, ids, monkeypatch):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda binary: None)
+    ctx = _context("grype", ids["variant_id"])
+    with app.app_context(), pytest.raises(RuntimeError, match="grype binary not found"):
+        run_grype_scan(ctx)
+
+
+def test_memory_ceiling_falls_back_to_cgroup_v1(monkeypatch, tmp_path):
+    cgroup_file = tmp_path / "memory.limit_in_bytes"
+    cgroup_file.write_text("536870912\n")
+    original_open = builtins.open
+
+    def open_cgroup(path, *args, **kwargs):
+        if str(path) == "/sys/fs/cgroup/memory/memory.limit_in_bytes":
+            return original_open(cgroup_file, *args, **kwargs)
+        raise OSError("cgroup v2 unavailable")
+
+    monkeypatch.setattr(builtins, "open", open_cgroup)
+    assert _detect_memory_ceiling() == 536870912
 
 
 # ---------------------------------------------------------------------------
