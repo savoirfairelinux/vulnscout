@@ -61,7 +61,7 @@ def _release_slot() -> None:
 def _frame(event_type: str, data: dict, seq: Optional[int] = None) -> str:
     lines = []
     if seq is not None:
-        lines.append(f"id: {seq}")
+        lines.append(f"id: {operation_events.epoch}:{seq}")
     lines.append(f"event: {event_type}")
     lines.append(f"data: {json.dumps(data, default=str)}")
     return "\n".join(lines) + "\n\n"
@@ -69,7 +69,7 @@ def _frame(event_type: str, data: dict, seq: Optional[int] = None) -> str:
 
 def _snapshot_frame() -> tuple[str, int]:
     seq = operation_events.seq
-    return _frame("snapshot", {"seq": seq, "operations": registry.snapshot()}), seq
+    return _frame("snapshot", {"seq": seq, "operations": registry.snapshot()}, seq), seq
 
 
 def _parse_last_event_id() -> Optional[int]:
@@ -77,7 +77,8 @@ def _parse_last_event_id() -> Optional[int]:
     if not raw:
         return None
     try:
-        return int(raw)
+        epoch, seq = raw.split(":", 1)
+        return int(seq) if epoch == operation_events.epoch and int(seq) >= 0 else None
     except ValueError:
         return None
 
@@ -137,7 +138,7 @@ def init_app(app: Flask) -> None:
         are replayed from the buffer, or resnapshotted when the gap is too wide.
 
         OpenAPI:
-        header Last-Event-ID string optional Resume from this sequence number.
+        header Last-Event-ID string optional Resume from this instance-scoped cursor.
         response 200 string Server-sent event stream.
         response 503 Error Too many concurrent streams.
         """
