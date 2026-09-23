@@ -69,7 +69,7 @@ def test_grype_missing_binary_is_reported_before_export(app, ids, monkeypatch):
 
     monkeypatch.setattr(shutil, "which", lambda binary: None)
     ctx = _context("grype", ids["variant_id"])
-    with app.app_context(), pytest.raises(RuntimeError, match="grype binary not found"):
+    with app.app_context(), pytest.raises(RuntimeError, match="Grype is not available on this system"):
         run_grype_scan(ctx)
 
 
