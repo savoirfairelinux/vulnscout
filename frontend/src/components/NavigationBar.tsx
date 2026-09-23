@@ -1,7 +1,9 @@
+import { NavLink } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
+import { ROUTES } from '../routes';
 import VersionDisplay from './VersionDisplay';
 
 const greenTheme = true;
@@ -10,8 +12,6 @@ const bgHoverColor = greenTheme ? 'hover:bg-cyan-700' : 'dark:hover:bg-neutral-7
 const bgActiveColor = greenTheme ? 'bg-cyan-900' : 'dark:bg-neutral-800';
 
 type Props = {
-  tab: string;
-  changeTab: (tab: string) => void;
   defaultProject?: { id: string; name: string } | null;
   defaultVariant?: { id: string; name: string } | null;
   defaultScope?: FrontendScope | null;
@@ -22,100 +22,113 @@ type Props = {
   onOpenOperationQueue?: () => void;
 };
 
-function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue }: Readonly<Props>) {
+function navLiClass({ isActive }: { isActive: boolean }) {
+  return [bgHoverColor, isActive && bgActiveColor].join(' ');
+}
+
+function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue }: Readonly<Props>) {
   return (
   <nav aria-label="Main navigation">
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
       {/* === VulnScout (Logo + text) === */}
-      <li className={[bgHoverColor, tab == 'metrics' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('metrics')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'metrics' ? 'page' : undefined}
+      <li>
+        <NavLink
+          to={ROUTES.metrics}
+          end
+          className={navLiClass}
+          style={{ display: 'flex' }}
         >
-          <img
-            src="/vulnscout_logo.png"
-            alt="VulnScout Logo"
-            className="w-8 h-8 mr-2 align-middle"
-          />
-          <span className="flex flex-col items-start gap-0.5">
-            <span>VulnScout</span>
-            <span className="self-start">
-              <VersionDisplay inline showName={false} />
+          {({ isActive }) => (
+            <span
+              className="flex items-center h-full px-4 py-2"
+              aria-current={isActive ? 'page' : undefined}
+            >
+              <img
+                src="/vulnscout_logo.png"
+                alt="VulnScout Logo"
+                className="w-8 h-8 mr-2 align-middle"
+              />
+              <span className="flex flex-col items-start gap-0.5">
+                <span>VulnScout</span>
+                <span className="self-start">
+                  <VersionDisplay inline showName={false} />
+                </span>
+              </span>
             </span>
-          </span>
-        </button>
+          )}
+        </NavLink>
       </li>
 
       {/* === SBOM === */}
-      <li className={[bgHoverColor, tab == 'packages' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('packages')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'packages' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faBox} className="mr-1" />
-          SBOM
-        </button>
+      <li>
+        <NavLink to={ROUTES.packages} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faBox} className="mr-1" />
+              SBOM
+            </span>
+          )}
+        </NavLink>
       </li>
 
       {/* === Vulnerabilities === */}
-      <li className={[bgHoverColor, tab == 'vulnerabilities' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('vulnerabilities')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'vulnerabilities' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faShieldHalved} className="mr-1" />
-          Vulnerabilities
-        </button>
+      <li>
+        <NavLink to={ROUTES.vulnerabilities} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faShieldHalved} className="mr-1" />
+              Vulnerabilities
+            </span>
+          )}
+        </NavLink>
       </li>
 
       {/* === Scans === */}
-      <li className={[bgHoverColor, tab == 'scans' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('scans')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'scans' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faClockRotateLeft} className="mr-1" />
-          Scans
-        </button>
+      <li>
+        <NavLink to={ROUTES.scans} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faClockRotateLeft} className="mr-1" />
+              Scans
+            </span>
+          )}
+        </NavLink>
       </li>
 
       {/* === Review === */}
-      <li className={[bgHoverColor, tab == 'review' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('review')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'review' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faClipboardCheck} className="mr-1" />
-          Review
-        </button>
+      <li>
+        <NavLink to={ROUTES.review} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faClipboardCheck} className="mr-1" />
+              Review
+            </span>
+          )}
+        </NavLink>
       </li>
 
-      <li className={[bgHoverColor, tab == 'ai' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('ai')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'ai' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faRobot} className="mr-1" />
-          AI
-        </button>
+      {/* === AI Context === */}
+      <li>
+        <NavLink to={ROUTES.ai} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faRobot} className="mr-1" />
+              AI
+            </span>
+          )}
+        </NavLink>
       </li>
 
       {/* === Export === */}
-      <li className={[bgHoverColor, tab == 'exports' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('exports')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'exports' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faFileExport} className="mr-1" />
-          Export
-        </button>
+      <li>
+        <NavLink to={ROUTES.exports} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faFileExport} className="mr-1" />
+              Export
+            </span>
+          )}
+        </NavLink>
       </li>
 
       {/* Spacer */}
@@ -150,16 +163,14 @@ function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, default
       </li>
 
       {/* === Settings === */}
-      <li className={[bgHoverColor, tab == 'settings' && bgActiveColor].join(' ')}>
-        <button
-          type="button"
-          onClick={() => changeTab('settings')}
-          className="flex items-center h-full px-4 py-2"
-          aria-label="Settings"
-          aria-current={tab === 'settings' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faGear} />
-        </button>
+      <li>
+        <NavLink to={ROUTES.settings} className={navLiClass} style={{ display: 'flex', height: '100%' }} aria-label="Settings">
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faGear} />
+            </span>
+          )}
+        </NavLink>
       </li>
 
     </ul>
