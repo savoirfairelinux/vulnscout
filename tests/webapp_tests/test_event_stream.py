@@ -5,10 +5,12 @@
 
 import json
 import os
+import signal
 
 import pytest
 
 from src.bin.webapp import create_app
+from src.bin import webapp as webapp_module
 from src.controllers.event_bus import operation_events
 from src.controllers.operation_registry import (
     LANE_PIPELINE,
@@ -215,6 +217,19 @@ def test_idle_stream_emits_heartbeats(open_stream):
     reader.next_frame_of("snapshot")
 
     assert reader.next_frame_of("heartbeat")["event"] == "heartbeat"
+
+
+@pytest.mark.parametrize("shutdown_signal", [signal.SIGINT, signal.SIGTERM])
+def test_shutdown_handler_sends_bye_to_active_stream(open_stream, shutdown_signal):
+    reader = open_stream()
+    reader.next_frame_of("snapshot")
+
+    assert signal.getsignal(shutdown_signal) is webapp_module.stop_handler
+    with pytest.raises(SystemExit) as stopped:
+        webapp_module.stop_handler(shutdown_signal, None)
+
+    assert stopped.value.code == 0
+    assert reader.next_frame_of("bye")["data"] == {"reason": "server shutdown"}
 
 
 # ---------------------------------------------------------------------------
