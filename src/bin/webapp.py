@@ -9,6 +9,8 @@ from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
 from ..extensions import db, migrate, setup_write_serialization
 from ..controllers.operation_queue import queue as operation_queue
+from ..controllers.job_context import OperationError
+from ..controllers.event_bus import operation_events
 from ..routes import init_app
 from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
 from ..routes.events import STREAM_PATH
@@ -49,7 +51,9 @@ def _launch_enrichment(app):
         # held during commit() itself (milliseconds).
         db.session.autoflush = False
         from ..controllers import ControllersCache
-        post_treatment(ControllersCache(), reporter=ctx)
+        result = post_treatment(ControllersCache(), reporter=ctx)
+        if result.failed:
+            raise OperationError(f"EPSS enrichment incomplete: {result.failed} failed")
 
     registry.create(
         op_id=op_id,
@@ -306,7 +310,9 @@ def create_app():
 
 def stop_handler(signal, frame):
     print("Stopping Flask server")
+    operation_events.close_all()
     sys.exit(0)
 
 
 signal.signal(signal.SIGINT, stop_handler)
+signal.signal(signal.SIGTERM, stop_handler)

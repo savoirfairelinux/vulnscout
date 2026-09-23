@@ -151,12 +151,23 @@ def test_deferred_refresh_is_reserved_with_its_scan_batch(client, ids):
 def test_scan_options_are_carried_onto_the_operation(client, ids):
     response = client.post("/api/operations", json={"jobs": [
         {"kind": "scan", "source": "nvd", "variant_ids": [ids["variant_a"]],
-         "options": {"exclude_kernel": False, "mode": "api"}},
+         "options": {"exclude_kernel": False, "exclude_native": True, "mode": "api"}},
     ]})
 
     options = response.get_json()["operations"][0]["options"]
     assert options["exclude_kernel"] is False
+    assert options["exclude_native"] is True
     assert options["mode"] == "api"
+
+
+@pytest.mark.parametrize("source", ["grype", "nvd", "osv", "scc"])
+def test_native_filter_is_forwarded_to_each_scanner(client, ids, source):
+    response = client.post("/api/operations", json={"jobs": [
+        {"kind": "scan", "source": source, "variant_ids": [ids["variant_a"]],
+         "options": {"exclude_native": True}},
+    ]})
+    assert response.status_code == 202
+    assert response.get_json()["operations"][0]["options"]["exclude_native"] is True
 
 
 def test_operations_start_queued_so_the_ui_can_show_the_whole_batch(client, ids):
@@ -174,6 +185,32 @@ def test_operations_start_queued_so_the_ui_can_show_the_whole_batch(client, ids)
 
 def test_empty_job_list_is_rejected(client):
     assert client.post("/api/operations", json={"jobs": []}).status_code == 400
+
+
+@pytest.mark.parametrize("body", [[], "text", 7])
+def test_non_object_body_is_rejected(client, body):
+    response = client.post("/api/operations", json=body)
+    assert response.status_code == 400
+    assert registry.snapshot() == []
+
+
+@pytest.mark.parametrize("kind", ["scan", "refresh"])
+@pytest.mark.parametrize("source", [[], {}])
+def test_non_string_source_is_rejected(client, kind, source):
+    response = client.post("/api/operations", json={"jobs": [
+        {"kind": kind, "source": source},
+    ]})
+    assert response.status_code == 400
+    assert registry.snapshot() == []
+
+
+def test_non_boolean_native_filter_is_rejected(client, ids):
+    response = client.post("/api/operations", json={"jobs": [
+        {"kind": "scan", "source": "nvd", "variant_ids": [ids["variant_a"]],
+         "options": {"exclude_native": "true"}},
+    ]})
+    assert response.status_code == 400
+    assert registry.snapshot() == []
 
 
 def test_unknown_scan_source_is_rejected(client, ids):

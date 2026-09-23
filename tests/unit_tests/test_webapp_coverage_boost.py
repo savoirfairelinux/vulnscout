@@ -10,6 +10,8 @@ from flask import Flask
 
 from src.bin import webapp as webapp_mod
 from src.controllers import operation_queue as operation_queue_mod
+from src.controllers.job_context import OperationError
+from src.controllers.vulnerabilities import EnrichmentResult
 from src.controllers.operation_registry import (
     KIND_ENRICHMENT, LANE_PIPELINE, registry,
 )
@@ -78,7 +80,9 @@ def test_boot_enrichment_runs_post_treatment_with_a_reporter(
     reporters: list[object] = []
     monkeypatch.setattr(
         webapp_mod, "post_treatment",
-        lambda _controllers, reporter=None: reporters.append(reporter),
+        lambda _controllers, reporter=None: (
+            reporters.append(reporter) or EnrichmentResult(successful=1)
+        ),
     )
 
     webapp_mod._launch_enrichment(Flask(__name__))
@@ -105,6 +109,23 @@ def test_boot_enrichment_failure_reaches_the_queue(
     webapp_mod._launch_enrichment(Flask(__name__))
     submission = captured_submissions[0]
     with pytest.raises(RuntimeError, match="epss failure"):
+        submission["runner"](submission["ctx"])
+
+
+def test_boot_enrichment_partial_failure_reaches_the_queue(
+    captured_submissions, monkeypatch
+):
+    monkeypatch.setattr(
+        webapp_mod, "db", SimpleNamespace(session=SimpleNamespace(autoflush=True))
+    )
+    monkeypatch.setattr(
+        webapp_mod, "post_treatment",
+        lambda _controllers, reporter=None: EnrichmentResult(successful=3, failed=2),
+    )
+
+    webapp_mod._launch_enrichment(Flask(__name__))
+    submission = captured_submissions[0]
+    with pytest.raises(OperationError, match="EPSS enrichment incomplete: 2 failed"):
         submission["runner"](submission["ctx"])
 
 

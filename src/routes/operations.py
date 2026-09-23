@@ -104,7 +104,7 @@ def _bool_option(options: dict, key: str, default: bool) -> bool:
 
 def _plan_scan_job(job: dict) -> List[dict]:
     source = job.get("source")
-    if source not in SCAN_JOBS:
+    if not isinstance(source, str) or source not in SCAN_JOBS:
         raise _PlanError(f"Unknown scan source: {source}")
 
     variant_ids = job.get("variant_ids") or []
@@ -114,6 +114,7 @@ def _plan_scan_job(job: dict) -> List[dict]:
     options = _job_options(job)
     mode = _mode_option(options)
     exclude_kernel = _bool_option(options, "exclude_kernel", True)
+    exclude_native = _bool_option(options, "exclude_native", False)
     planned: List[dict] = []
     for raw_id in variant_ids:
         try:
@@ -138,6 +139,7 @@ def _plan_scan_job(job: dict) -> List[dict]:
             "options": {
                 "variant_id": str(variant_uuid),
                 "exclude_kernel": exclude_kernel,
+                "exclude_native": exclude_native,
                 "mode": mode,
             },
             "runner": SCAN_JOBS[source],
@@ -201,7 +203,7 @@ def _explicit_refresh_options(source: str, job: dict, mode: str) -> dict:
 
 def _plan_refresh_job(job: dict) -> List[dict]:
     source = job.get("source")
-    if source not in REFRESH_JOBS:
+    if not isinstance(source, str) or source not in REFRESH_JOBS:
         raise _PlanError(f"Unknown refresh source: {source}")
 
     options = _job_options(job)
@@ -336,7 +338,9 @@ def init_app(app: Flask) -> None:
         response 404 Error Referenced variant not found.
         response 409 Error One of the requested operations is already active.
         """
-        body = request.get_json(force=True, silent=True) or {}
+        body = request.get_json(force=True, silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be an object"}), 400
         jobs = body.get("jobs")
         if not isinstance(jobs, list) or not jobs:
             return jsonify({"error": "jobs must be a non-empty list"}), 400
