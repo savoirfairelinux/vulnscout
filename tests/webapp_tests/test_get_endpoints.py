@@ -600,6 +600,7 @@ def _wait_for_operation(op_id, timeout=5):
 
 def test_export_documents_async_progress_and_download(client):
     from src.controllers.operation_registry import registry
+    from src.routes import documents
 
     response = client.post("/api/documents/export", json={
         "project_id": "11111111-1111-1111-1111-111111111111",
@@ -621,7 +622,8 @@ def test_export_documents_async_progress_and_download(client):
 
     assert operation["result"]["download_ready"] is True
     assert operation["result"]["filename"].endswith("_consolidated_export.zip")
-    archive_path = str(operation["result"]["archive_path"])
+    assert "archive_path" not in operation["result"]
+    archive_path = documents._export_archives[op_id][0]
     assert os.path.isfile(archive_path)
 
     download = client.get(f"/api/documents/export/{op_id}/download")
@@ -653,6 +655,7 @@ def test_export_download_rejects_operation_that_is_not_ready(client):
 
 def test_export_download_reports_a_vanished_archive(client, tmp_path):
     from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
+    from src.routes import documents
 
     op_id = "export:vanished"
     registry.create(
@@ -660,10 +663,10 @@ def test_export_download_reports_a_vanished_archive(client, tmp_path):
         label="Export demo", lane=LANE_EXPORT,
     )
     registry.update(op_id, status="done", result={
-        "archive_path": str(tmp_path / "gone.zip"),
         "filename": "gone.zip",
         "download_ready": True,
     })
+    documents._export_archives[op_id] = (str(tmp_path / "gone.zip"), documents.datetime.now(documents.timezone.utc))
 
     response = client.get(f"/api/documents/export/{op_id}/download")
     assert response.status_code == 410
@@ -729,14 +732,14 @@ def test_export_retention_evicts_oldest_archive(monkeypatch, tmp_path):
         label="Export demo", lane=LANE_EXPORT,
     )
     registry.update(op_id, status="done", result={
-        "archive_path": str(old_archive),
         "filename": "old.zip",
         "download_ready": True,
     })
+    documents._export_archives[op_id] = (str(old_archive), documents.datetime.now(documents.timezone.utc))
 
     with documents._export_archive_lock:
         monkeypatch.setattr(documents, "EXPORT_MAX_RETAINED_ARCHIVE_BYTES", 5)
-        documents._reserve_retained_archive(3)
+        assert documents._reserve_retained_archive(3)
 
     assert registry.get(op_id) is None
     assert not old_archive.exists()
@@ -754,10 +757,10 @@ def test_export_retention_prunes_archives_past_the_ttl(monkeypatch, tmp_path):
         label="Export demo", lane=LANE_EXPORT,
     )
     registry.update(op_id, status="done", result={
-        "archive_path": str(stale_archive),
         "filename": "stale.zip",
         "download_ready": True,
     })
+    documents._export_archives[op_id] = (str(stale_archive), documents.datetime.now(documents.timezone.utc))
 
     with documents._export_archive_lock:
         monkeypatch.setattr(documents, "EXPORT_JOB_TTL_SECONDS", -1)
@@ -765,6 +768,75 @@ def test_export_retention_prunes_archives_past_the_ttl(monkeypatch, tmp_path):
 
     assert registry.get(op_id) is None
     assert not stale_archive.exists()
+
+
+def test_export_archive_survives_registry_pruning_until_cleanup(monkeypatch, tmp_path):
+    from src.controllers import operation_registry
+    from src.routes import documents
+
+    op_id = "export:registry-pruned"
+    archive = tmp_path / "pruned.zip"
+    archive.write_bytes(b"1234")
+    operation_registry.registry.create(
+        op_id=op_id, kind=operation_registry.KIND_EXPORT, source="documents",
+        label="Export demo", lane=operation_registry.LANE_EXPORT,
+    )
+    operation_registry.registry.update(op_id, status="done")
+    documents._export_archives[op_id] = (str(archive), documents.datetime.now(documents.timezone.utc))
+
+    monkeypatch.setattr(operation_registry, "TERMINAL_TTL_SECONDS", -1)
+    operation_registry.registry.snapshot()
+    assert operation_registry.registry.get(op_id) is None
+    assert archive.exists()
+
+    with documents._export_archive_lock:
+        monkeypatch.setattr(documents, "EXPORT_JOB_TTL_SECONDS", -1)
+        documents._prune_export_archives()
+    assert not archive.exists()
+    assert op_id not in documents._export_archives
+
+
+def test_export_retention_does_not_evict_inflight_archive(monkeypatch, tmp_path):
+    from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
+    from src.routes import documents
+
+    op_id = "export:inflight-retention"
+    archive = tmp_path / "inflight.zip"
+    archive.write_bytes(b"1234")
+    registry.create(op_id=op_id, kind=KIND_EXPORT, source="documents", label="Export demo", lane=LANE_EXPORT)
+    registry.update(op_id, status="running", result={"filename": "inflight.zip", "download_ready": True})
+    documents._export_archives[op_id] = (str(archive), documents.datetime.now(documents.timezone.utc))
+    try:
+        with documents._export_archive_lock:
+            monkeypatch.setattr(documents, "EXPORT_MAX_RETAINED_ARCHIVE_BYTES", 5)
+            assert not documents._reserve_retained_archive(3)
+        assert archive.exists()
+        assert registry.get(op_id)["status"] == "running"
+    finally:
+        with documents._export_archive_lock:
+            registry.update(op_id, status="done")
+            documents._discard_export(op_id)
+
+
+def test_async_export_reports_expected_failure(monkeypatch, client):
+    from src.controllers.operation_registry import registry
+
+    def too_large(*_args, **_kwargs):
+        from src.routes.documents import ExportGenerationError
+        raise ExportGenerationError("Export archive exceeds the maximum allowed size", 413)
+
+    monkeypatch.setattr("src.routes.documents._build_export_archive", too_large)
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "mode": "consolidated", "async": True,
+        "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+    })
+    assert response.status_code == 202
+    operation = _wait_for_operation(response.get_json()["op_id"])
+    assert operation["status"] == "error"
+    assert operation["error"] == "Export archive exceeds the maximum allowed size"
+    assert operation["result"] is None
+    registry.remove(operation["op_id"])
 
 
 def test_export_missing_tool_does_not_disclose_server_path(monkeypatch, client):

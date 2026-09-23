@@ -17,7 +17,7 @@ import zipfile
 from datetime import date, datetime, timedelta, timezone
 from PIL import Image
 from ..controllers import ControllersCache
-from ..controllers.job_context import JobContext
+from ..controllers.job_context import JobContext, OperationError
 from ..controllers.operation_queue import queue as operation_queue
 from ..controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, STATUS_DONE, registry
 from ..models.project import Project
@@ -46,8 +46,9 @@ EXPORT_MAX_RETAINED_ARCHIVE_BYTES = 512 * 1024 * 1024
 EXPORT_MAX_ACTIVE_JOBS = EXPORT_MAX_WORKERS + EXPORT_MAX_QUEUED_JOBS
 # Serialises archive accounting (retention budget, TTL pruning, download pop).
 _export_archive_lock = threading.Lock()
+_export_submission_lock = threading.Lock()
+_export_archives: dict[str, tuple[str, datetime]] = {}
 _sync_export_capacity = threading.BoundedSemaphore(EXPORT_MAX_WORKERS)
-_EPOCH = datetime.fromtimestamp(0, timezone.utc)
 
 
 # Directories searched for user-provided templates, most-preferred first. This
@@ -439,73 +440,53 @@ class _SizeLimitedArchive:
         self.output.flush()
 
 
-def _delete_archive(result: object) -> None:
-    if not isinstance(result, dict):
-        return
-    archive_path = result.get("archive_path")
-    if isinstance(archive_path, str):
-        try:
-            os.remove(archive_path)
-        except FileNotFoundError:
-            pass
-
-
-def _parse_timestamp(value: object) -> Optional[datetime]:
-    if not isinstance(value, str):
-        return None
+def _delete_archive(archive_path: str) -> None:
     try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
+        os.remove(archive_path)
+    except FileNotFoundError:
+        pass
 
 
-def _discard_export(op_id: str, result: object) -> None:
-    _delete_archive(result)
+def _discard_export(op_id: str) -> None:
+    archive = _export_archives.pop(op_id, None)
+    if archive is not None:
+        _delete_archive(archive[0])
     registry.remove(op_id)
 
 
-def _retained_archives() -> List[Tuple[str, Dict[str, object], Optional[datetime]]]:
-    """Export operations still owning an archive on disk, oldest first.
-
-    The operation registry is the archive table: the path lives in the
-    operation ``result``, so retention accounting reads straight from it.
-    """
-    entries: List[Tuple[str, Dict[str, object], Optional[datetime], datetime]] = []
-    for operation in registry.snapshot():
-        if operation.get("kind") != KIND_EXPORT:
-            continue
-        result = operation.get("result")
-        if not isinstance(result, dict) or not isinstance(result.get("archive_path"), str):
-            continue
-        finished_at = _parse_timestamp(operation.get("finished_at"))
-        ordering = finished_at or _parse_timestamp(operation.get("created_at")) or _EPOCH
-        entries.append((str(operation["op_id"]), result, finished_at, ordering))
-    entries.sort(key=lambda entry: entry[3])
-    return [(op_id, result, finished_at) for op_id, result, finished_at, _ in entries]
+def _retained_archives() -> List[Tuple[str, str, datetime]]:
+    """Server-owned archive paths, including results not yet marked done."""
+    return sorted(
+        ((op_id, path, retained_at) for op_id, (path, retained_at) in _export_archives.items()),
+        key=lambda entry: entry[2],
+    )
 
 
 def _prune_export_archives() -> None:
     """Drop archives whose operation finished longer ago than the TTL."""
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=EXPORT_JOB_TTL_SECONDS)
-    for op_id, result, finished_at in _retained_archives():
-        if finished_at is not None and finished_at < cutoff:
-            _discard_export(op_id, result)
+    for op_id, _, retained_at in _retained_archives():
+        if retained_at < cutoff:
+            _discard_export(op_id)
 
 
-def _reserve_retained_archive(archive_bytes: int) -> None:
+def _reserve_retained_archive(archive_bytes: int) -> bool:
     retained = _retained_archives()
     retained_bytes = sum(
-        os.path.getsize(str(result["archive_path"]))
-        for _, result, _ in retained
-        if os.path.isfile(str(result["archive_path"]))
+        os.path.getsize(path)
+        for _, path, _ in retained
+        if os.path.isfile(path)
     )
-    for op_id, result, _ in retained:
+    for op_id, path, _ in retained:
         if retained_bytes + archive_bytes <= EXPORT_MAX_RETAINED_ARCHIVE_BYTES:
             break
-        path = str(result["archive_path"])
+        operation = registry.get(op_id)
+        if operation is not None and operation.get("status") != STATUS_DONE:
+            continue
         if os.path.isfile(path):
             retained_bytes -= os.path.getsize(path)
-        _discard_export(op_id, result)
+        _discard_export(op_id)
+    return retained_bytes + archive_bytes <= EXPORT_MAX_RETAINED_ARCHIVE_BYTES
 
 
 def _unique_archive_path(path: str, used_paths: set[str]) -> str:
@@ -521,8 +502,8 @@ def _unique_archive_path(path: str, used_paths: set[str]) -> str:
 
 def _cleanup_export_archives() -> None:
     with _export_archive_lock:
-        for _, result, _ in _retained_archives():
-            _delete_archive(result)
+        for op_id in list(_export_archives):
+            _discard_export(op_id)
 
 
 atexit.register(_cleanup_export_archives)
@@ -710,14 +691,6 @@ def init_app(app: Flask) -> None:
         filename = f"{project_name}_{suffix}_export.zip"
 
         if body.get("async") is True:
-            active_exports = sum(
-                1 for operation in registry.active() if operation.get("kind") == KIND_EXPORT
-            )
-            if active_exports >= EXPORT_MAX_ACTIVE_JOBS:
-                response = make_response({"error": "Export queue is full; retry later"}, 503)
-                response.headers["Retry-After"] = "5"
-                return response
-
             op_id = f"export:{uuid.uuid4()}"
 
             @copy_current_request_context
@@ -736,34 +709,43 @@ def init_app(app: Flask) -> None:
                         _build_export_archive(app, scopes, selections, cast(BinaryIO, archive), update_progress)
                     with _export_archive_lock:
                         _prune_export_archives()
-                        _reserve_retained_archive(os.path.getsize(archive_path))
+                        if not _reserve_retained_archive(os.path.getsize(archive_path)):
+                            raise OperationError("Export archive retention limit reached")
+                        _export_archives[op_id] = (archive_path, datetime.now(timezone.utc))
                         ctx.message("Export ready")
                         ctx.set_result({
-                            "archive_path": archive_path,
                             "filename": filename,
                             "download_ready": True,
                         })
                     archive_path = None
                 except ExportGenerationError as exc:
-                    raise RuntimeError(str(exc)) from exc
+                    raise OperationError(str(exc)) from exc
                 except FileNotFoundError as exc:
-                    raise RuntimeError("Required conversion tool was not found") from exc
+                    raise OperationError("Required conversion tool was not found") from exc
                 except Exception:
                     app.logger.exception("Export operation %s failed", op_id)
                     raise RuntimeError("Export generation failed")
                 finally:
                     if archive_path is not None:
-                        _delete_archive({"archive_path": archive_path})
+                        _delete_archive(archive_path)
 
-            registry.create(
-                op_id=op_id,
-                kind=KIND_EXPORT,
-                source="documents",
-                label=f"Export {project.name}",
-                lane=LANE_EXPORT,
-                scope={"project_id": str(project_uuid), "project_name": project.name},
-            )
-            operation_queue.submit(op_id, LANE_EXPORT, generate_archive, JobContext(op_id))
+            with _export_submission_lock:
+                active_exports = sum(
+                    1 for operation in registry.active() if operation.get("kind") == KIND_EXPORT
+                )
+                if active_exports >= EXPORT_MAX_ACTIVE_JOBS:
+                    response = make_response({"error": "Export queue is full; retry later"}, 503)
+                    response.headers["Retry-After"] = "5"
+                    return response
+                registry.create(
+                    op_id=op_id,
+                    kind=KIND_EXPORT,
+                    source="documents",
+                    label=f"Export {project.name}",
+                    lane=LANE_EXPORT,
+                    scope={"project_id": str(project_uuid), "project_name": project.name},
+                )
+                operation_queue.submit(op_id, LANE_EXPORT, generate_archive, JobContext(op_id))
             return {"op_id": op_id}, 202
 
         if not _sync_export_capacity.acquire(blocking=False):
@@ -797,20 +779,20 @@ def init_app(app: Flask) -> None:
             if operation is None or operation.get("kind") != KIND_EXPORT:
                 return {"error": "Export job not found"}, 404
             result = operation.get("result")
-            if not isinstance(result, dict):
+            if not isinstance(result, dict) or operation.get("status") != STATUS_DONE:
                 return {"error": "Export is not ready"}, 409
-            archive_path = result.get("archive_path")
-            if operation.get("status") != STATUS_DONE or not isinstance(archive_path, str):
-                return {"error": "Export is not ready"}, 409
+            archive = _export_archives.get(op_id)
+            if archive is None:
+                return {"error": "Export archive is no longer available"}, 410
+            archive_path = archive[0]
             try:
-                archive = open(archive_path, "rb")
+                archive_file = open(archive_path, "rb")
             except FileNotFoundError:
-                _discard_export(op_id, result)
+                _discard_export(op_id)
                 return {"error": "Export archive is no longer available"}, 410
             filename = str(result.get("filename"))
-            registry.remove(op_id)
-            os.remove(archive_path)
-        return send_file(archive, mimetype="application/zip", as_attachment=True, download_name=filename)
+            _discard_export(op_id)
+        return send_file(archive_file, mimetype="application/zip", as_attachment=True, download_name=filename)
 
     @app.route('/api/documents/<doc_name>', methods=['GET'])
     def doc_by_name(doc_name: str) -> ResponseReturnValue:
