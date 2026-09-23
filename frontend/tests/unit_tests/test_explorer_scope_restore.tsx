@@ -2,8 +2,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
+import { MemoryRouter, Link } from 'react-router-dom';
 
 import Explorer from '../../src/pages/Explorer';
+import { ROUTES } from '../../src/routes';
+import type { TabKey } from '../../src/routes';
 import Config from '../../src/handlers/config';
 import Projects from '../../src/handlers/project';
 import Variants from '../../src/handlers/variant';
@@ -79,10 +82,9 @@ jest.mock('../../src/handlers/assessments', () => ({
 
 jest.mock('../../src/components/NavigationBar', () => ({
     __esModule: true,
-    default: ({ defaultProject, defaultScope, changeTab, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
+    default: ({ defaultProject, defaultScope, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
         defaultProject?: { id: string } | null;
         defaultScope?: { project_id: string } | null;
-        changeTab: (tab: string) => void;
         onOpenOperationQueue: () => void;
         trackedScanCount: number;
         finishedScanCount: number;
@@ -92,8 +94,8 @@ jest.mock('../../src/components/NavigationBar', () => ({
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
             <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
-            {['metrics', 'packages', 'vulnerabilities', 'scans', 'review', 'settings'].map(tab => (
-                <button key={tab} onClick={() => changeTab(tab)}>{tab}</button>
+            {(['metrics', 'packages', 'vulnerabilities', 'scans', 'review', 'exports', 'ai', 'settings'] as TabKey[]).map(tab => (
+                <Link key={tab} to={ROUTES[tab]}>{tab}</Link>
             ))}
             <button onClick={onOpenOperationQueue}>progress</button>
         </div>
@@ -125,12 +127,16 @@ jest.mock('../../src/pages/TablePackages', () => ({
 }));
 jest.mock('../../src/pages/TableVulnerabilities', () => ({
     __esModule: true,
-    default: ({ appendAssessment, appendCVSS, patchVuln, onRefreshComplete }: {
+    default: ({ appendAssessment, appendCVSS, patchVuln, onRefreshComplete, filterLabel, filterValue }: {
         appendAssessment: (assessment: { id: string }) => void;
         appendCVSS: (id: string, vector: string) => void;
         patchVuln: (id: string, vulnerability: { id: string }) => void;
         onRefreshComplete: () => void;
+        filterLabel?: string;
+        filterValue?: string;
     }) => <div>
+        <span data-testid="vuln-filter-label">{filterLabel ?? ''}</span>
+        <span data-testid="vuln-filter-value">{filterValue ?? ''}</span>
         <button onClick={() => appendAssessment({ id: 'assessment-1' })}>append assessment</button>
         <button onClick={() => appendCVSS('CVE-1', 'CVSS:3.1/test')}>append cvss</button>
         <button onClick={() => patchVuln('CVE-1', { id: 'CVE-1' })}>patch vulnerability</button>
@@ -166,8 +172,8 @@ jest.mock('../../src/pages/Settings', () => ({
     </div>,
 }));
 jest.mock('../../src/pages/Transfer', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../src/pages/Exports', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../src/pages/AIContext', () => ({ __esModule: true, default: () => null }));
+jest.mock('../../src/pages/Exports', () => ({ __esModule: true, default: () => <div>exports page</div> }));
+jest.mock('../../src/pages/AIContext', () => ({ __esModule: true, default: () => <div>ai context page</div> }));
 
 const mockConfigGet = Config.get as jest.MockedFunction<typeof Config.get>;
 const mockGetFrontendScope = Config.getFrontendScope as jest.MockedFunction<typeof Config.getFrontendScope>;
@@ -235,7 +241,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(savedScope('deleted-project', ['old-variant']));
         mockProjectsList.mockResolvedValue([{ id: 'other-project', name: 'Other Project' }]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         await waitFor(() => {
             expect(mockClearFrontendScope).toHaveBeenCalledTimes(1);
@@ -250,7 +256,7 @@ describe('Explorer saved-scope validation', () => {
         mockProjectsList.mockResolvedValue([{ id: 'existing-project', name: 'Existing Project' }]);
         mockVariantsList.mockResolvedValue([{ id: 'current-variant', name: 'Current Variant', project_id: 'existing-project' }]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         await waitFor(() => {
             expect(mockClearFrontendScope).toHaveBeenCalledTimes(1);
@@ -264,7 +270,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(scope);
         mockProjectsList.mockResolvedValue([]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         await waitFor(() => {
             expect(screen.getByTestId('default-project')).toHaveTextContent('default-project');
@@ -279,7 +285,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(savedScope('saved-project', ['saved-variant']));
         mockProjectsList.mockRejectedValue(new Error('Temporary network failure'));
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         await waitFor(() => {
             expect(screen.getByTestId('default-project')).toHaveTextContent('default-project');
@@ -291,7 +297,7 @@ describe('Explorer saved-scope validation', () => {
 
     test('reloads data after an operation started by another tab finishes', async () => {
         mockGetFrontendScope.mockReturnValue(null);
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
         await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalled());
         const initialCalls = mockVulnerabilitiesList.mock.calls.length;
         TestEventSource.current.send('snapshot', { seq: 1, operations: [
@@ -306,7 +312,7 @@ describe('Explorer saved-scope validation', () => {
     test('shows running operations from SSE even when variant lookup fails', async () => {
         mockGetFrontendScope.mockReturnValue(null);
         mockVariantsListAll.mockRejectedValue(new Error('variants unavailable'));
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
         TestEventSource.current.send('snapshot', { seq: 1, operations: [
             { op_id: 'scan:grype:variant-1', kind: 'scan', status: 'running' },
         ] });
@@ -318,7 +324,7 @@ describe('Explorer saved-scope validation', () => {
         mockProjectsList.mockResolvedValue([]);
         mockVariantsListAll.mockResolvedValue([]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         expect(await screen.findByTestId('setup-required-popup')).toBeInTheDocument();
         expect(screen.getByText('Add your first project')).toBeInTheDocument();
@@ -333,7 +339,7 @@ describe('Explorer saved-scope validation', () => {
         mockProjectsList.mockResolvedValue([{ id: 'project-1', name: 'Project 1' }]);
         mockVariantsListAll.mockResolvedValue([]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         expect(await screen.findByTestId('setup-required-popup')).toBeInTheDocument();
         expect(screen.getByText('Add a project variant')).toBeInTheDocument();
@@ -350,7 +356,7 @@ describe('Explorer saved-scope validation', () => {
             { id: 'variant-1', name: 'Variant 1', project_id: 'project-1' },
         ]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         await waitFor(() => expect(mockProjectsList).toHaveBeenCalled());
         expect(screen.queryByTestId('setup-required-popup')).not.toBeInTheDocument();
@@ -366,7 +372,7 @@ describe('Explorer saved-scope validation', () => {
             { id: 'variant-1', name: 'Variant 1', project_id: 'project-1' },
         ]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         expect(await screen.findByText('Unable to check setup')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -387,9 +393,9 @@ describe('Explorer saved-scope validation', () => {
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([{ id: 'variant-1', name: 'Variant 1', project_id: 'project-1' }]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
         await waitFor(() => expect(mockProjectsList).toHaveBeenCalled());
-        fireEvent.click(screen.getByRole('button', { name: 'settings' }));
+        fireEvent.click(screen.getByRole('link', { name: 'settings' }));
         fireEvent.click(screen.getByRole('button', { name: 'settings changed' }));
         fireEvent.click(screen.getByRole('button', { name: 'settings changed' }));
         await waitFor(() => expect(mockProjectsList).toHaveBeenCalledTimes(3));
@@ -402,7 +408,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(null);
         mockProjectsList.mockResolvedValue([]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
         await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
 
         fireEvent.click(screen.getByRole('button', { name: 'progress' }));
@@ -413,13 +419,13 @@ describe('Explorer saved-scope validation', () => {
         fireEvent.click(screen.getByRole('button', { name: 'patch vulnerability' }));
         fireEvent.click(screen.getByRole('button', { name: 'refresh complete' }));
 
-        fireEvent.click(screen.getByRole('button', { name: 'packages' }));
+        fireEvent.click(screen.getByRole('link', { name: 'packages' }));
         fireEvent.click(screen.getByRole('button', { name: 'show package vulnerabilities' }));
-        fireEvent.click(screen.getByRole('button', { name: 'scans' }));
+        fireEvent.click(screen.getByRole('link', { name: 'scans' }));
         fireEvent.click(screen.getByRole('button', { name: 'scan complete' }));
-        fireEvent.click(screen.getByRole('button', { name: 'review' }));
+        fireEvent.click(screen.getByRole('link', { name: 'review' }));
         fireEvent.click(screen.getByRole('button', { name: 'assessment changed' }));
-        fireEvent.click(screen.getByRole('button', { name: 'settings' }));
+        fireEvent.click(screen.getByRole('link', { name: 'settings' }));
         fireEvent.click(screen.getByRole('button', { name: 'settings changed' }));
         fireEvent.click(screen.getByRole('button', { name: 'settings loading' }));
         fireEvent.click(screen.getByRole('button', { name: 'settings loaded' }));
@@ -436,12 +442,56 @@ describe('Explorer saved-scope validation', () => {
             {id: 'v3', name: 'V3', project_id: 'saved-project'},
         ]);
 
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
         await waitFor(() => expect(mockPackagesList).toHaveBeenCalledWith(
             undefined, 'saved-project', undefined, undefined, ['v1', 'v2'], 'union',
         ));
-        fireEvent.click(screen.getByRole('button', {name: 'scans'}));
+        fireEvent.click(screen.getByRole('link', {name: 'scans'}));
 
         expect(screen.getByTestId('scan-history-variant-ids')).toHaveTextContent('v1,v2');
+    });
+
+    test('routes to the export and AI context pages', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([]);
+
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
+
+        fireEvent.click(screen.getByRole('link', { name: 'exports' }));
+        expect(screen.getByText('exports page')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('link', { name: 'ai' }));
+        expect(screen.getByText('ai context page')).toBeInTheDocument();
+    });
+
+    test('an unknown URL falls back to the metrics page', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([]);
+
+        render(<Explorer />, { wrapper: ({ children }) => (
+            <MemoryRouter initialEntries={['/does-not-exist']}>{children}</MemoryRouter>
+        ) });
+        await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
+
+        expect(screen.getByRole('button', { name: 'filter vulnerabilities' })).toBeInTheDocument();
+    });
+
+    test('a filter applied via goToVulnsTabWithFilter survives the navigation, but a plain nav-bar click to Vulnerabilities resets it', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([]);
+
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
+
+        fireEvent.click(screen.getByRole('button', { name: 'filter vulnerabilities' }));
+        expect(screen.getByTestId('vuln-filter-label')).toHaveTextContent('Severity');
+        expect(screen.getByTestId('vuln-filter-value')).toHaveTextContent('high');
+
+        fireEvent.click(screen.getByRole('link', { name: 'packages' }));
+        fireEvent.click(screen.getByRole('link', { name: 'vulnerabilities' }));
+
+        expect(screen.getByTestId('vuln-filter-label')).toBeEmptyDOMElement();
+        expect(screen.getByTestId('vuln-filter-value')).toBeEmptyDOMElement();
     });
 });
