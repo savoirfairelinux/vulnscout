@@ -1,47 +1,47 @@
 /**
- * OperationQueuePanel — reusable per-variant operation progress / log panel.
+ * One operation in the queue: collapsible card with progress bar and logs.
  *
- * Renders a collapsible card with:
- *  - coloured header showing scan type + variant name
- *  - progress bar
- *  - scrollable log box
- *  - dismiss button (when not running)
+ * Consumes the shared `Operation` shape, so scans, refreshes, uploads and
+ * exports all render through this single component.
  */
 
 import { useEffect, useId, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCheck, faChevronRight, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faBan, faCheck, faChevronRight, faXmark } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
-import type { ScanEntryState } from "../handlers/scanStateManager";
+import type { Operation } from "../types/operation";
+import { isActive, percentOf } from "../types/operation";
 
 type ColorScheme = {
-    border: string;   // e.g. "border-purple-700/60"
-    headerBg: string; // e.g. "bg-purple-900/40"
-    iconText: string; // e.g. "text-purple-400"
-    titleText: string; // e.g. "text-purple-200"
-    subtitleText: string; // e.g. "text-purple-300/80"
-    bar: string;      // e.g. "bg-purple-500"
+    border: string;
+    headerBg: string;
+    iconText: string;
+    titleText: string;
+    subtitleText: string;
+    bar: string;
 };
 
 type Props = {
-    entry: ScanEntryState;
-    label: string;        // e.g. "Grype Scan"
+    operation: Operation;
     icon: IconDefinition;
     colors: ColorScheme;
+    /** e.g. " (variant 2 of 3)" — the caller knows the batch grouping. */
+    positionLabel?: string;
     onDismiss: () => void;
+    onCancel?: () => void;
 };
 
-export default function OperationQueuePanel({ entry, label, icon, colors, onDismiss }: Props) {
-    const { status, variantName, variantPosition, variantCount, progress, logs, total, doneCount } = entry;
-    const pct = status === "done" ? 100 : total > 0 ? Math.max(0, Math.min(100, Math.round((doneCount / total) * 100))) : 0;
-    const hasProgressContent = logs.length > 0 || total > 0 || doneCount > 0;
-    const isActivelyScanning = status === "running" && hasProgressContent;
-    const expandsForStatus = isActivelyScanning || status === "error";
+export default function OperationQueuePanel({
+    operation, icon, colors, positionLabel = "", onDismiss, onCancel,
+}: Readonly<Props>) {
+    const { status, label, scope, progress, logs } = operation;
+    const pct = percentOf(operation);
+    const hasProgressContent = logs.length > 0 || progress.total > 0 || progress.current > 0;
+    const isActivelyRunning = status === "running" && hasProgressContent;
+    const expandsForStatus = isActivelyRunning || status === "error";
     const [isOpen, setIsOpen] = useState(expandsForStatus);
     const contentId = useId();
-    const variantProgress = variantPosition && variantCount && variantCount > 1
-        ? ` (variant ${variantPosition} of ${variantCount})`
-        : "";
+    const title = scope?.variant_name ?? label;
 
     const logBoxRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -53,16 +53,15 @@ export default function OperationQueuePanel({ entry, label, icon, colors, onDism
         if (el) el.scrollTop = el.scrollHeight;
     }, [logs.length]);
 
-    const statusText =
-        status === "queued" || (status === "running" && !isActivelyScanning) ? "queued"
-            : isActivelyScanning ? "in progress"
-                : status === "error" ? "failed"
-                    : status === "cancelled" ? "cancelled"
-                    : "complete";
+    let statusText: string;
+    if (status === "queued" || (status === "running" && !isActivelyRunning)) statusText = "queued";
+    else if (isActivelyRunning) statusText = "in progress";
+    else if (status === "error") statusText = "failed";
+    else if (status === "cancelled") statusText = "cancelled";
+    else statusText = "complete";
 
     return (
         <section className="bg-neutral-900">
-            {/* Header */}
             <div className={`px-4 py-2 flex items-center gap-3 ${colors.headerBg}`}>
                 <button
                     type="button"
@@ -77,17 +76,28 @@ export default function OperationQueuePanel({ entry, label, icon, colors, onDism
                     />
                     <FontAwesomeIcon icon={icon} className={colors.iconText} />
                     <span className={`text-sm font-semibold ${colors.titleText}`}>
-                        {label} – {variantName} {statusText}{variantProgress}
+                        {label} – {title} {statusText}{positionLabel}
                     </span>
                     {status === "done" && (
                         <FontAwesomeIcon icon={faCheck} className="text-green-400" aria-label="Complete" />
                     )}
                     <span className={`text-xs ${colors.subtitleText} ml-auto`}>
-                        {progress ?? ""}
-                        {total > 0 && ` (${pct}%)`}
+                        {progress.message ?? ""}
+                        {progress.total > 0 && ` (${pct}%)`}
                     </span>
                 </button>
-                {status !== "running" && status !== "queued" && (
+                {isActive(operation) && onCancel && (
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        title="Cancel"
+                        aria-label={`Cancel ${label} – ${title}`}
+                        className="text-neutral-400 hover:text-red-400 transition-colors ml-1"
+                    >
+                        <FontAwesomeIcon icon={faBan} className="text-sm" />
+                    </button>
+                )}
+                {!isActive(operation) && (
                     <button
                         type="button"
                         onClick={onDismiss}
@@ -101,9 +111,8 @@ export default function OperationQueuePanel({ entry, label, icon, colors, onDism
 
             {isOpen && (
                 <div id={contentId}>
-                    {/* Progress bar */}
                     <div className="w-full h-2 bg-neutral-800">
-                        {!isActivelyScanning && status !== "done" && status !== "error" && status !== "cancelled" ? (
+                        {!isActivelyRunning && status !== "done" && status !== "error" && status !== "cancelled" ? (
                             <div className="h-full w-full bg-neutral-600 animate-pulse" />
                         ) : (
                             <div
@@ -116,25 +125,16 @@ export default function OperationQueuePanel({ entry, label, icon, colors, onDism
                         )}
                     </div>
 
-                    {/* Log box */}
                     <div
                         ref={logBoxRef}
                         className="max-h-52 overflow-y-auto px-4 py-2 font-mono text-xs text-neutral-300 space-y-0.5 scrollbar-thin scrollbar-thumb-neutral-700"
                     >
-                        {logs.map((line, i) => (
-                            <div
-                                key={i}
-                                className={
-                                    line.startsWith("[") && line.includes("ERROR")
-                                        ? "text-red-400"
-                                        : line.startsWith("✓")
-                                            ? "text-green-400 font-semibold"
-                                            : ""
-                                }
-                            >
-                                {line}
-                            </div>
-                        ))}
+                        {logs.map((line, i) => {
+                            let tone = "";
+                            if (line.includes("ERROR")) tone = "text-red-400";
+                            else if (line.startsWith("✓")) tone = "text-green-400 font-semibold";
+                            return <div key={i} className={tone}>{line}</div>;
+                        })}
                     </div>
                 </div>
             )}
