@@ -84,16 +84,6 @@ class Operations {
         return response.ok;
     }
 
-    static async cancelQueue(queueId: string): Promise<number> {
-        const response = await fetch(api(`/api/operations/queue/${encodeURIComponent(queueId)}/cancel`), {
-            method: "POST",
-            mode: "cors",
-        });
-        if (!response.ok) return 0;
-        const data = await response.json().catch(() => ({}));
-        return data?.cancelled ?? 0;
-    }
-
     /** Drop a finished operation so it disappears for every connected client. */
     static async dismiss(opId: string): Promise<boolean> {
         const response = await fetch(api(`/api/operations/${encodeURIComponent(opId)}`), {
@@ -101,14 +91,6 @@ class Operations {
             mode: "cors",
         });
         return response.ok;
-    }
-
-    /** Fallback snapshot for clients that cannot hold a stream open. */
-    static async list(): Promise<Operation[]> {
-        const response = await fetch(api("/api/operations"), { mode: "cors" });
-        if (!response.ok) return [];
-        const data = await response.json().catch(() => null);
-        return Array.isArray(data?.operations) ? data.operations : [];
     }
 }
 
