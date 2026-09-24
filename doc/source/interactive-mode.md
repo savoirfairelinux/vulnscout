@@ -44,6 +44,19 @@ The interactive mode is where you investigate each CVE and record your triage de
 
 ---
 
+(operation-queue)=
+## Operation Queue
+
+The navigation bar's **Operation queue** shows the status, progress, and logs for scans, vulnerability-data refreshes, SBOM uploads, document exports, and startup enrichment. Each tab sees the same server-side operations. Closing a tab or reloading the page does not stop them; reopening the queue restores their current state. The initial database import still uses its own loading screen, and Scan History JSON imports and direct downloads are not queued document exports.
+
+Scans and refreshes share one serial pipeline. In a batch, scans run in Grype, NVD, OSV, sbom-cve-check order, followed by NVD, EPSS, GHSA, EUVD refreshes. Each source/variant pair is one operation; a batch accepts at most 100 expanded operations. Document exports run in a separate two-worker lane, and SBOM uploads have their own lane, so they can proceed during scans.
+
+An operation can be `queued`, `running`, `done`, `error`, or `cancelled`. Cancel a queued job to prevent it from starting; running jobs stop at a cancellation checkpoint, not necessarily immediately. Check whether an operation is cancellable before requesting cancellation. Failed or cancelled scans prevent dependent post-scan refreshes from doing work. Finished items can be dismissed from every tab without removing scan results.
+
+The queue keeps terminal operations for up to one hour unless dismissed. This state is process-local: restarting the server clears the queue, not just the browser view. A missed export download can be retried from the queue while its ZIP is retained, but the archive expires and is consumed on its first download. A repeat or expired download normally returns `404`; start a new export instead. Settings uploads also remain visible here when leaving Settings, and successful uploads refresh the affected data.
+
+---
+
 ## SBOM Table
 
 The SBOM table lists every package present in the imported SBOMs within your current scope. It provides a package-centric view of your software bill of materials, complementing the vulnerability-centric Vulnerability Table.
@@ -128,7 +141,7 @@ Each row has a checkbox on the left. Selecting one or more rows reveals the **mu
 
 The vulnerabilities table also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
 
-The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. Each refresh is added to the **Operation queue** and runs in the background; a progress banner appears below the toolbar with a live counter, and a per-source **Cancel** button lets you stop a run in progress. Because every source runs independently, several refreshes can be active at once.
+The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. The selected sources are submitted together to the **Operation queue** and run in NVD, EPSS, GHSA, EUVD order on the server's pipeline lane. A progress banner below the toolbar shows the current source and count; each queued or running refresh can be cancelled individually. Closing the page does not stop the work, and another tab can see its progress in the same queue. See [Operation Queue](#operation-queue) for recovery and cancellation behavior.
 
 The available sources are:
 
@@ -220,20 +233,23 @@ By combining these sources, VulnScout reduces the chance of missing a relevant C
 
 ### Running Scans
 
-The **Run Scans** button in the top-right corner of the Scan History page opens a dropdown menu with two sections:
+The **Run Scans** button in the top-right corner of Scan History opens a five-step wizard:
 
-- **Scan types** — checkboxes for Grype, NVD CPE, and OSV. Select which scanners you want to run.
-- **Variants** — checkboxes for the available variants. When a specific variant is selected in the project scope, only that variant appears here. When viewing a project, all variants within the project are listed. "Select all" and "Select none" shortcuts help when managing many variants.
+1. **Scans** — select Grype, NVD CPE, OSV, and/or sbom-cve-check.
+2. **Variants** — select variants in the current scope. A variant scope shows only that variant; a project scope offers its variants, with **Select all** and **Select none** controls.
+3. **Filters** — choose whether to exclude kernel companion packages (the main kernel package remains eligible) and Yocto build-host packages ending in `-native`.
+4. **Refresh** — optionally refresh newly discovered vulnerabilities from all applicable data sources or select a custom subset. With no refresh selected, the scans still run.
+5. **Review** — check the selections and launch the batch.
 
-The bottom of the menu shows a summary button ("Run N scans on M variants") that launches the selected scans. Grype, NVD, OSV, and sbom-cve-check run in order on the server's pipeline lane, followed by the selected vulnerability-data refreshes. Each variant and source has its own operation with live logs and progress in the Operation queue.
+The server queues Grype, NVD, OSV, and sbom-cve-check scans in that order, followed by selected vulnerability-data refreshes. Each source/variant pair has its own operation with live logs and progress in the Operation queue. While any scan is active, **Run Scans** is disabled; opening another tab does not create a second batch.
 
 Every scan and vulnerability-data refresh is also tracked in the **Operation queue** in the navigation bar. A counter shows how many operations have finished out of the total tracked; clicking it opens the Operation queue window, where each running or finished operation has its own progress panel. The window can be closed at any time without interrupting the operations, which keep running in the background.
 
-SBOM imports and document exports appear in the same queue. Exports download automatically when ready; a completed export can also be downloaded from the queue after reloading the page, until the server's retained archive expires.
+SBOM uploads and document exports appear in the same queue. Exports download automatically when ready; if the download was missed, the retained archive can be downloaded from the queue after reloading the page. An archive expires or is consumed on its first download. See [Operation Queue](#operation-queue) for details.
 
 ### Source Visibility Toggles
 
-Three coloured toggle buttons in the toolbar (Grype, NVD, OSV) let you show or hide scan entries by source. This is useful when you only want to see SBOM imports or a specific scanner's results without the others cluttering the timeline.
+Four coloured toggle buttons in the toolbar (Grype, NVD, OSV, sbom-cve-check) let you show or hide scan entries by source. This affects the history view only; it does not cancel or skip queued work.
 
 ### Importing and Exporting Scan Data
 

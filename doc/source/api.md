@@ -893,7 +893,7 @@ Renders selected document formats for every variant in one project. `consolidate
 
 `variant_ids` selects one or more variants belonging to the project. When omitted, all project variants are exported. Reports support either output mode. SBOM selections require `per_variant` mode and cannot be mixed with reports in the same request. Document and extension pairs must match non-asset entries returned by `GET /api/documents`. Custom assets are resources used by report templates and cannot be exported directly.
 
-With `"async": true`, returns `202 Accepted` with `{ "op_id": "export:<uuid>" }`. Watch `GET /api/events/stream` for a `done` operation, then download the retained ZIP from `GET /api/documents/export/<op_id>/download`. The archive is consumed on download and can expire. Without `async`, the response is a ZIP file (`Content-Type: application/zip`).
+With `"async": true`, returns `202 Accepted` with `{ "op_id": "export:<uuid>" }`. Watch `GET /api/events/stream` for a `done` operation, then download the retained ZIP from `GET /api/documents/export/<op_id>/download`. The archive is consumed on the first download and retained for up to one hour, subject to server limits. A repeat request or one after expiry normally returns `404` because the operation has been removed; request a new export rather than relying on `410` to identify those cases. An archive missing while its operation still exists can return `410`, and an unfinished export returns `409`. Without `async`, the response is a ZIP file (`Content-Type: application/zip`).
 
 ---
 
@@ -1108,6 +1108,7 @@ POST /api/operations
 GET /api/operations
 GET /api/events/stream
 POST /api/operations/<op_id>/cancel
+POST /api/operations/queue/<queue_id>/cancel
 DELETE /api/operations/<op_id>
 ```
 
@@ -1123,11 +1124,25 @@ Submit scans and vulnerability-data refreshes as one ordered batch. Scans run in
 }
 ```
 
-For a standalone refresh, supply `ids` (CVE IDs for NVD/EPSS/EUVD, GHSA IDs for GHSA) instead of `variant_ids`. Deferred refresh jobs resolve the variant's newly discovered IDs after preceding scans; `exclude_ids` omits the pre-scan baseline. `options.mode` accepts `"local"` (default) or `"api"` where supported. Duplicate or invalid operations are rejected before any job is queued; active conflicts return `409`.
+For a standalone refresh, supply `ids` (CVE IDs for NVD/EPSS/EUVD, GHSA IDs for GHSA) instead of `variant_ids`. Deferred refresh jobs resolve the variant's newly discovered IDs after preceding scans; `exclude_ids` omits the pre-scan baseline. Scan options `exclude_kernel` and `exclude_native` default to `true` and `false`, respectively. `options.mode` accepts `"local"` (default) or `"api"` where supported. Duplicate or invalid operations are rejected before any job is queued; active conflicts return `409` with the conflicting operation IDs.
 
-**Response:** `202 Accepted` with `{ "queue_id": "q-...", "operations": [ ... ] }`. Each operation contains `op_id`, `kind`, `source`, `status`, `progress`, `logs`, `error`, `result`, and scope. `GET /api/operations` returns the current snapshot.
+**Response:** `202 Accepted` with `{ "queue_id": "q-...", "operations": [ ... ] }`. Each operation contains `op_id`, `kind`, `source`, `queue_id`, `position`, `status`, `progress` (`current`, `total`, `message`), `logs`, `error`, `result`, `scope`, and `cancellable`. `GET /api/operations` returns `{ "operations": [ ... ] }` with the current snapshot. Status values are `queued`, `running`, `done`, `error`, and `cancelled`; do not infer completion from the HTTP 202 response.
 
-`GET /api/events/stream` emits `snapshot`, `operation`, and `operation_removed` frames plus heartbeats. Reconnect with the full epoch-qualified `Last-Event-ID` header (or `last_event_id` query parameter) to replay missed updates. Cancel queued/running work with the operation's ID; dismiss terminal operations with `DELETE`. Export and upload operations also appear in this stream.
+`GET /api/events/stream` returns `text/event-stream`. A fresh connection starts with a `snapshot` containing `seq` and `operations`. Each `operation` event replaces the full state for one `op_id`; `operation_removed` contains only the removed `op_id`. Idle clients receive `heartbeat` events every 15 seconds. Server shutdown sends `bye` and the client reconnects. For example, a fresh empty stream begins with:
+
+```text
+id: <epoch>:0
+event: snapshot
+data: {"seq": 0, "operations": []}
+```
+
+The cursor is instance-specific and changes on server restart. Reconnect with the **complete** `<epoch>:<seq>` `Last-Event-ID` header (or a URL-encoded `last_event_id` query parameter) to replay buffered updates. An invalid or too-old cursor yields a new snapshot. The SSE stream has a default limit of 32 concurrent clients (`VULNSCOUT_SSE_MAX_STREAMS`); requests above the limit return `503`. `GET /api/operations` is a diagnostic snapshot endpoint, not an automatic fallback in the web UI.
+
+To stop one queued/running operation, `POST /api/operations/<op_id>/cancel` returns `200` with `{"status":"cancelling","op_id":"..."}` if accepted, `404` when no active operation has that ID, or `409` for a known non-cancellable operation. Cancellation of running work is cooperative, so wait for a `cancelled` event. `POST /api/operations/queue/<queue_id>/cancel` returns `{"cancelled": <count>}`. For terminal work, `DELETE /api/operations/<op_id>` returns `200` on dismissal or `409` if the operation is unknown or still active; dismissal does not remove its scan results. Upload, export, and boot-enrichment operations also appear in the stream, but not every kind supports cancellation.
+
+Invalid job bodies or batches above 100 expanded operations return `400`; unknown variants return `404`, and active operation conflicts return `409`. The server may return `503` if the SSE stream or document export queue is full.
+
+The registry and replay buffer are process-local, so a restart clears queued and retained operations. Terminal items remain for up to one hour unless dismissed sooner. For queue behavior and user-facing recovery, see {ref}`Operation Queue <operation-queue>`.
 
 ---
 
@@ -1168,6 +1183,4 @@ Upload one or more SBOM files for asynchronous processing.
 ```
 
 Follow the returned `op_id` in `GET /api/events/stream` (or `GET /api/operations`) for progress, completion, and errors. There is no separate upload-status endpoint.
-
----
 
