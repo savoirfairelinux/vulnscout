@@ -6,13 +6,13 @@ describe('operation job builders', () => {
             kind: 'scan',
             source: 'grype',
             variant_ids: ['variant-1'],
-            options: { exclude_kernel: true, mode: 'local' },
+            options: { exclude_kernel: true, exclude_native: false, mode: 'local' },
         });
         expect(Operations.scanJob('nvd', ['variant-2'], { excludeKernel: false, mode: 'api' })).toEqual({
             kind: 'scan',
             source: 'nvd',
             variant_ids: ['variant-2'],
-            options: { exclude_kernel: false, mode: 'api' },
+            options: { exclude_kernel: false, exclude_native: false, mode: 'api' },
         });
     });
 

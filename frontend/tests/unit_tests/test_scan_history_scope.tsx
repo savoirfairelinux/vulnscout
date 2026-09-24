@@ -3,10 +3,28 @@ import '@testing-library/jest-dom';
 
 import ScanHistory from '../../src/pages/ScanHistory';
 import ScansHandler from '../../src/handlers/scans';
+import Vulnerabilities from '../../src/handlers/vulnerabilities';
 import Variants from '../../src/handlers/variant';
 import type { GlobalResult, Scan, ScanDiff } from '../../src/handlers/scans';
 import { setOnDone } from '../../src/handlers/grypeScanState';
 import { downloadJson } from '../../src/helpers/exportJson';
+import Operations from '../../src/handlers/operations';
+import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
+import type { Operation } from '../../src/types/operation';
+
+class TestEventSource {
+    static current: TestEventSource;
+    private handlers = new Map<string, (event: MessageEvent) => void>();
+
+    constructor() { TestEventSource.current = this; }
+    addEventListener(type: string, handler: EventListenerOrEventListenerObject) {
+        this.handlers.set(type, handler as (event: MessageEvent) => void);
+    }
+    close() {}
+    send(type: string, data: unknown) {
+        act(() => this.handlers.get(type)?.({ data: JSON.stringify(data), lastEventId: 'epoch:1' } as MessageEvent));
+    }
+}
 
 const mockEmptySnapshot: readonly never[] = [];
 function mockManager() {
@@ -149,7 +167,10 @@ const globalResult: GlobalResult = {
 };
 
 describe('ScanHistory selected variant scope', () => {
+    let restoreStream: () => void;
+
     beforeEach(() => {
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
         jest.clearAllMocks();
         (global.fetch as jest.Mock | undefined)?.mockRestore?.();
         mockVariantsList.mockResolvedValue([
@@ -176,6 +197,44 @@ describe('ScanHistory selected variant scope', () => {
                 scans: [],
             },
         });
+    });
+
+    afterEach(() => {
+        __reset();
+        restoreStream();
+        jest.restoreAllMocks();
+    });
+
+    test('submits selected scans and deferred refreshes together and waits for the full batch', async () => {
+        mockList.mockResolvedValue([]);
+        const listVulnerabilities = jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
+            ok: true, queueId: 'q-1', operations: [
+                { op_id: 'scan:grype:v1' }, { op_id: 'scan:nvd:v1' }, { op_id: 'refresh:epss' },
+            ] as Operation[],
+        });
+        const onScanComplete = jest.fn();
+        render(<ScanHistory projectId="project" variantIds={['v1']} onScanComplete={onScanComplete} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
+        await screen.findByTestId('wizard-variants');
+        fireEvent.click(screen.getByText('wizard-launch'));
+
+        await waitFor(() => expect(enqueue).toHaveBeenCalled());
+        expect(enqueue.mock.calls[0][0]).toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'scan', source: 'grype', variant_ids: ['v1'], options: expect.objectContaining({ exclude_native: true }) }),
+            expect.objectContaining({ kind: 'refresh', source: 'epss', variant_ids: ['v1'] }),
+        ]));
+        expect(listVulnerabilities).toHaveBeenCalled();
+
+        const completed = (opId: string, kind: 'scan' | 'refresh') => ({
+            op_id: opId, kind, queue_id: 'q-1', status: 'done',
+        });
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [completed('scan:grype:v1', 'scan')] });
+        expect(onScanComplete).not.toHaveBeenCalled();
+        TestEventSource.current.send('operation', completed('scan:nvd:v1', 'scan'));
+        expect(onScanComplete).not.toHaveBeenCalled();
+        TestEventSource.current.send('operation', completed('refresh:epss', 'refresh'));
+        await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
     });
 
     test('switching from three variants to two drops stale history and wizard choices', async () => {
@@ -454,7 +513,7 @@ describe('ScanHistory selected variant scope', () => {
         ]) fireEvent.click(screen.getByText(label));
         fireEvent.click(screen.getByText('wizard-close'));
         fireEvent.click(screen.getByRole('button', {name: 'Run Scans'}));
-        fireEvent.click(screen.getByText('wizard-launch'));
+        fireEvent.click(screen.getByText('wizard-close'));
 
         fireEvent.click(screen.getAllByTitle('Edit description')[0]);
         let descriptionInput = container.querySelector<HTMLInputElement>('input[placeholder="Add a description…"]');

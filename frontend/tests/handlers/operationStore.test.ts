@@ -48,10 +48,10 @@ class FakeEventSource {
     }
 
     /** Deliver one SSE frame to the store. */
-    send(type: string, data: unknown, id?: number) {
+    send(type: string, data: unknown, id?: string) {
         const event = {
             data: JSON.stringify(data),
-            lastEventId: id !== undefined ? String(id) : "",
+            lastEventId: id ?? "",
         } as MessageEvent;
         (this.handlers.get(type) ?? []).forEach(handler => handler(event));
     }
@@ -185,13 +185,17 @@ describe("connection", () => {
     it("resumes with the last seen event id so the server replays missed deltas", () => {
         jest.useFakeTimers();
         const stream = connect();
-        stream.send("snapshot", { seq: 3, operations: [] });
-        stream.send("operation", operation({ op_id: "scan:grype:v1" }), 7);
+        stream.send("snapshot", { seq: 3, operations: [] }, "1a2b:3");
+        stream.send("operation", operation({ op_id: "scan:grype:v1" }), "1a2b:7");
 
         stream.fail();
         jest.advanceTimersByTime(500);
 
-        expect(FakeEventSource.latest().url).toContain("last_event_id=7");
+        expect(FakeEventSource.latest().url).toContain("last_event_id=1a2b%3A7");
+        FakeEventSource.latest().send("snapshot", { seq: 9, operations: [] }, "1a2b:9");
+        FakeEventSource.latest().fail();
+        jest.advanceTimersByTime(500);
+        expect(FakeEventSource.latest().url).toContain("last_event_id=1a2b%3A9");
         jest.useRealTimers();
     });
 });
@@ -355,7 +359,7 @@ describe("waitForQueue", () => {
             ],
         });
 
-        const pending = waitForQueue("q-1");
+        const pending = waitForQueue("q-1", ["scan:grype:v1", "scan:nvd:v1"]);
 
         stream.send("operation", operation({ op_id: "scan:grype:v1", queue_id: "q-1", status: "done" }));
         stream.send("operation", operation({
@@ -372,7 +376,7 @@ describe("waitForQueue", () => {
             operations: [operation({ op_id: "scan:grype:v1", queue_id: "q-1", status: "done" })],
         });
 
-        await expect(waitForQueue("q-1")).resolves.toHaveLength(1);
+        await expect(waitForQueue("q-1", ["scan:grype:v1"])).resolves.toHaveLength(1);
     });
 
     it("still resolves when the batch ends in failure", async () => {
@@ -382,12 +386,49 @@ describe("waitForQueue", () => {
             operations: [operation({ op_id: "scan:grype:v1", queue_id: "q-1", status: "running" })],
         });
 
-        const pending = waitForQueue("q-1");
+        const pending = waitForQueue("q-1", ["scan:grype:v1"]);
         stream.send("operation", operation({
             op_id: "scan:grype:v1", queue_id: "q-1", status: "error", error: "grype binary not found",
         }));
 
         await expect(pending).resolves.toHaveLength(1);
+    });
+
+    it("waits for later batch members even when the first operation finishes early", async () => {
+        const stream = connect();
+        stream.send("snapshot", { seq: 1, operations: [] });
+        const settled = jest.fn();
+        const pending = waitForQueue("q-1", ["scan:grype:v1", "scan:nvd:v1"]).then(settled);
+
+        stream.send("operation", operation({ op_id: "scan:grype:v1", queue_id: "q-1", status: "done" }));
+        await Promise.resolve();
+        expect(settled).not.toHaveBeenCalled();
+
+        stream.send("operation", operation({ op_id: "scan:nvd:v1", queue_id: "q-1", source: "nvd", status: "running" }));
+        await Promise.resolve();
+        expect(settled).not.toHaveBeenCalled();
+
+        stream.send("operation", operation({ op_id: "scan:nvd:v1", queue_id: "q-1", source: "nvd", status: "done" }));
+        await pending;
+        expect(settled).toHaveBeenCalledWith(expect.arrayContaining([
+            expect.objectContaining({ op_id: "scan:grype:v1" }),
+            expect.objectContaining({ op_id: "scan:nvd:v1" }),
+        ]));
+    });
+
+    it("remembers an early completed operation dismissed before the rest finish", async () => {
+        const stream = connect();
+        stream.send("snapshot", { seq: 1, operations: [
+            operation({ op_id: "scan:grype:v1", queue_id: "q-1", status: "running" }),
+            operation({ op_id: "scan:nvd:v1", queue_id: "q-1", source: "nvd", status: "queued" }),
+        ] });
+        const pending = waitForQueue("q-1", ["scan:grype:v1", "scan:nvd:v1"]);
+
+        stream.send("operation", operation({ op_id: "scan:grype:v1", queue_id: "q-1", status: "done" }));
+        stream.send("operation_removed", { op_id: "scan:grype:v1" });
+        stream.send("operation", operation({ op_id: "scan:nvd:v1", queue_id: "q-1", source: "nvd", status: "done" }));
+
+        await expect(pending).resolves.toHaveLength(2);
     });
 });
 
@@ -523,7 +564,7 @@ describe("enqueueing work", () => {
             kind: "scan",
             source: "grype",
             variant_ids: ["v1", "v2"],
-            options: { exclude_kernel: false, mode: "local" },
+            options: { exclude_kernel: false, exclude_native: false, mode: "local" },
         });
         expect(body.jobs[1]).toEqual({
             kind: "refresh",

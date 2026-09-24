@@ -71,6 +71,7 @@ export type OperationJob = {
     exclude_ids?: string[];
     options?: {
         exclude_kernel?: boolean;
+        exclude_native?: boolean;
         mode?: "local" | "api";
     };
 };

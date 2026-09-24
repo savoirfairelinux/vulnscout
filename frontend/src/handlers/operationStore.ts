@@ -28,16 +28,14 @@ const listeners = new Set<() => void>();
 let source: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
-// Highest sequence seen, sent back on reconnect so the server replays the
-// missed deltas instead of resending a full snapshot.
-let lastEventId: number | null = null;
+let lastEventId: string | null = null;
 
 /** Swappable so tests can drive the store without a live server. */
 let createEventSource: (url: string) => EventSource = url => new EventSource(url);
 
 const streamUrl = (): string => {
     const base = import.meta.env.VITE_API_URL + STREAM_PATH;
-    return lastEventId === null ? base : `${base}?last_event_id=${lastEventId}`;
+    return lastEventId === null ? base : `${base}?last_event_id=${encodeURIComponent(lastEventId)}`;
 };
 
 function emit() {
@@ -78,8 +76,7 @@ function parse<T>(event: MessageEvent): T | null {
 }
 
 function trackEventId(event: MessageEvent) {
-    const id = Number.parseInt(event.lastEventId, 10);
-    if (!Number.isNaN(id)) lastEventId = id;
+    if (event.lastEventId) lastEventId = event.lastEventId;
 }
 
 function scheduleReconnect() {
@@ -105,7 +102,7 @@ function openStream() {
         setConnection("open");
         const frame = parse<SnapshotFrame>(event as MessageEvent);
         if (frame) {
-            lastEventId = frame.seq;
+            trackEventId(event as MessageEvent);
             applySnapshot(frame);
         }
     });
@@ -193,13 +190,17 @@ export const hasActive = (kind?: OperationKind): boolean =>
 export const hasActiveSource = (kind: OperationKind, source_: string): boolean =>
     snapshot.some(operation => isActive(operation) && operation.kind === kind && operation.source === source_);
 
-/** Resolves once no operation of *queueId* is queued or running. */
-export const waitForQueue = (queueId: string): Promise<Operation[]> =>
+/** Resolves once every operation returned by enqueue has been observed and settled. */
+export const waitForQueue = (queueId: string, expectedOperationIds: readonly string[]): Promise<Operation[]> =>
     new Promise(resolve => {
+        const completed = new Map<string, Operation>();
         const settled = () => {
-            const batch = selectByQueue(queueId);
-            // An empty batch means the snapshot has not caught up yet.
-            return batch.length > 0 && !batch.some(isActive) ? batch : null;
+            selectByQueue(queueId).forEach(operation => {
+                if (!isActive(operation)) completed.set(operation.op_id, operation);
+            });
+            return expectedOperationIds.length > 0
+                && expectedOperationIds.every(opId => completed.has(opId))
+                ? expectedOperationIds.map(opId => completed.get(opId)!) : null;
         };
 
         const immediate = settled();

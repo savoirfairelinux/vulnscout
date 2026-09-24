@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
@@ -13,6 +13,22 @@ import Assessments from '../../src/handlers/assessments';
 import ScansHandler from '../../src/handlers/scans';
 import { restoreFromStatus as grypeRestore } from '../../src/handlers/grypeScanState';
 import { restoreActiveRefreshes } from '../../src/handlers/activeScanQueue';
+import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
+import type { Operation } from '../../src/types/operation';
+
+class TestEventSource {
+    static current: TestEventSource;
+    private handlers = new Map<string, (event: MessageEvent) => void>();
+
+    constructor() { TestEventSource.current = this; }
+    addEventListener(type: string, handler: EventListenerOrEventListenerObject) {
+        this.handlers.set(type, handler as (event: MessageEvent) => void);
+    }
+    close() {}
+    send(type: string, data: unknown) {
+        act(() => this.handlers.get(type)?.({ data: JSON.stringify(data), lastEventId: 'epoch:1' } as MessageEvent));
+    }
+}
 
 jest.mock('../../src/handlers/config', () => ({
     __esModule: true,
@@ -95,15 +111,19 @@ jest.mock('../../src/handlers/assessments', () => ({
 
 jest.mock('../../src/components/NavigationBar', () => ({
     __esModule: true,
-    default: ({ defaultProject, defaultScope, changeTab, onOpenOperationQueue }: {
+    default: ({ defaultProject, defaultScope, changeTab, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
         defaultProject?: { id: string } | null;
         defaultScope?: { project_id: string } | null;
         changeTab: (tab: string) => void;
         onOpenOperationQueue: () => void;
+        trackedScanCount: number;
+        finishedScanCount: number;
+        activeScanCount: number;
     }) => (
         <div>
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
+            <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
             {['metrics', 'packages', 'vulnerabilities', 'scans', 'review', 'settings'].map(tab => (
                 <button key={tab} onClick={() => changeTab(tab)}>{tab}</button>
             ))}
@@ -214,7 +234,9 @@ const savedScope = (projectId: string, variantIds: string[]) => ({
 });
 
 describe('Explorer saved-scope validation', () => {
+    let restoreStream: () => void;
     beforeEach(() => {
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
         mockConfigGet.mockResolvedValue(SERVER_CONFIG);
         mockPackagesList.mockResolvedValue([]);
         mockVulnerabilitiesList.mockResolvedValue([]);
@@ -224,7 +246,25 @@ describe('Explorer saved-scope validation', () => {
     });
 
     afterEach(() => {
+        __reset();
+        restoreStream();
         jest.clearAllMocks();
+    });
+
+    test('shows and opens server operations from an SSE snapshot in a fresh tab', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
+        mockVariantsListAll.mockResolvedValue([{ id: 'default-variant', project_id: 'default-project', name: 'Default Variant' }]);
+        render(<Explorer />);
+        expect(screen.getByTestId('operation-counts')).toHaveTextContent('0/0/0');
+
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'scan:grype:v1', kind: 'scan', status: 'queued' },
+            { op_id: 'refresh:nvd', kind: 'refresh', status: 'done' },
+        ] as Operation[] });
+
+        expect(screen.getByTestId('operation-counts')).toHaveTextContent('1/2/1');
+        expect(screen.getByRole('button', { name: 'close progress' })).toBeInTheDocument();
     });
 
     test('clears a stale project scope and silently falls back to the default scope', async () => {

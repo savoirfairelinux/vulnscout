@@ -12,6 +12,21 @@ import React from 'react';
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
+import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
+
+class PassiveEventSource {
+    addEventListener() {}
+    close() {}
+}
+
+let restoreStream: () => void;
+beforeEach(() => {
+    restoreStream = __setEventSourceFactory(() => new PassiveEventSource() as unknown as EventSource);
+});
+afterEach(() => {
+    __reset();
+    restoreStream();
+});
 
 // Mock NVDProgressHandler to prevent unwanted fetch calls
 jest.mock('../../src/handlers/nvd_progress', () => ({

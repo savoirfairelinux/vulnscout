@@ -40,7 +40,7 @@ class Operations {
     static scanJob(
         source: ScanSource,
         variantIds: string[],
-        options: { excludeKernel?: boolean; mode?: "local" | "api" } = {},
+        options: { excludeKernel?: boolean; excludeNative?: boolean; mode?: "local" | "api" } = {},
     ): OperationJob {
         return {
             kind: "scan",
@@ -48,6 +48,7 @@ class Operations {
             variant_ids: variantIds,
             options: {
                 exclude_kernel: options.excludeKernel ?? true,
+                exclude_native: options.excludeNative ?? false,
                 mode: options.mode ?? "local",
             },
         };
