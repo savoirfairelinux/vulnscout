@@ -19,6 +19,7 @@ import {
     selectByKind,
     selectByQueue,
     subscribe,
+    waitForOperation,
     waitForQueue,
 } from "../../src/handlers/operationStore";
 import type { RefreshProgressView } from "../../src/handlers/operationStore";
@@ -345,6 +346,26 @@ describe("selectors", () => {
         expect(hasActive("refresh")).toBe(false);
         expect(hasActiveSource("scan", "grype")).toBe(true);
         expect(hasActiveSource("refresh", "epss")).toBe(false);
+    });
+});
+
+describe("waitForOperation", () => {
+    it("observes an upload through progress and completion", async () => {
+        const stream = connect();
+        const onUpdate = jest.fn();
+        const pending = waitForOperation("upload:1", onUpdate);
+        stream.send("snapshot", { seq: 1, operations: [operation({ op_id: "upload:1", kind: "upload", status: "running" })] });
+        stream.send("operation", operation({ op_id: "upload:1", kind: "upload", status: "done" }));
+        await expect(pending).resolves.toMatchObject({ op_id: "upload:1", status: "done" });
+        expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: "running" }));
+    });
+
+    it("unsubscribes a pending upload when its owner unmounts", async () => {
+        const controller = new AbortController();
+        const pending = waitForOperation("upload:1", undefined, controller.signal);
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+        expect(getConnectionState()).toBe("idle");
     });
 });
 

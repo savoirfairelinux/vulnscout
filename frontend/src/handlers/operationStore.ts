@@ -190,6 +190,40 @@ export const hasActive = (kind?: OperationKind): boolean =>
 export const hasActiveSource = (kind: OperationKind, source_: string): boolean =>
     snapshot.some(operation => isActive(operation) && operation.kind === kind && operation.source === source_);
 
+/** Observe one operation until it finishes, including after a snapshot/reconnect. */
+export const waitForOperation = (
+    opId: string,
+    onUpdate?: (operation: Operation) => void,
+    signal?: AbortSignal,
+): Promise<Operation> => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+        reject(new DOMException("Operation wait aborted", "AbortError"));
+        return;
+    }
+    let unsubscribe: (() => void) | undefined;
+    const cleanup = () => {
+        unsubscribe?.();
+        signal?.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+        cleanup();
+        reject(new DOMException("Operation wait aborted", "AbortError"));
+    };
+    const check = () => {
+        const operation = getOperation(opId);
+        if (!operation) return;
+        onUpdate?.(operation);
+        if (!isActive(operation)) {
+            cleanup();
+            resolve(operation);
+        }
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    unsubscribe = subscribe(check);
+    check();
+    if (signal?.aborted) abort();
+});
+
 /** Resolves once every operation returned by enqueue has been observed and settled. */
 export const waitForQueue = (queueId: string, expectedOperationIds: readonly string[]): Promise<Operation[]> =>
     new Promise(resolve => {

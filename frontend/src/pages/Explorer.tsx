@@ -25,13 +25,6 @@ import type { AppConfig } from "../handlers/config";
 import type { FrontendScope } from "../handlers/config";
 import Projects from '../handlers/project';
 import Variants from '../handlers/variant';
-import ScansHandler from '../handlers/scans';
-import type { RunningScanEntry } from '../handlers/scans';
-import { restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
-import { restoreFromStatus as nvdRestore } from "../handlers/nvdScanState";
-import { restoreFromStatus as osvRestore } from "../handlers/osvScanState";
-import { restoreFromStatus as sccRestore } from "../handlers/sccScanState";
-import { restoreActiveRefreshes } from "../handlers/activeScanQueue";
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -83,6 +76,7 @@ function Explorer() {
         { tab: 'projects'; projectId?: string } | null
     >(null);
     const hadActiveScans = useRef(false);
+    const observedOperationStatuses = useRef(new Map<string, string>());
     const setupCheckGeneration = useRef(0);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
     const trackedScanCount = operationEntries.length;
@@ -95,22 +89,6 @@ function Explorer() {
         }
         hadActiveScans.current = activeScanCount > 0;
     }, [activeScanCount]);
-
-    useEffect(() => {
-        let cancelled = false;
-        void restoreActiveRefreshes();
-        Promise.all([Variants.listAll().catch(() => []), ScansHandler.getRunningScans()]).then(([variants, running]) => {
-            if (cancelled) return;
-            const nameById = new Map(variants.map(variant => [variant.id, variant.name]));
-            const toEntries = (entries: RunningScanEntry[]) => entries
-                .map(entry => ({ variantId: entry.variant_id, name: nameById.get(entry.variant_id) ?? entry.variant_id, status: entry }));
-            grypeRestore(toEntries(running.grype));
-            nvdRestore(toEntries(running.nvd));
-            osvRestore(toEntries(running.osv));
-            sccRestore(toEntries(running['sbom-cve-check']));
-        }).catch(() => undefined);
-        return () => { cancelled = true; };
-    }, []);
 
     const loadSetupRequirement = useCallback(() => {
         const generation = ++setupCheckGeneration.current;
@@ -299,6 +277,17 @@ function Explorer() {
     const handleRefreshComplete = useCallback(() => {
         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
     }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+
+    useEffect(() => {
+        const previous = observedOperationStatuses.current;
+        const next = new Map(operationEntries.map(operation => [operation.op_id, operation.status]));
+        const finished = operationEntries.some(operation =>
+            ['scan', 'refresh', 'upload', 'enrichment'].includes(operation.kind)
+            && ['done', 'error', 'cancelled'].includes(operation.status)
+            && previous.get(operation.op_id) !== operation.status);
+        observedOperationStatuses.current = next;
+        if (finished) handleRefreshComplete();
+    }, [operationEntries, handleRefreshComplete]);
 
 
     function appendAssessment(added: Assessment) {
