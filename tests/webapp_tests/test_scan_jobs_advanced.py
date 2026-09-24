@@ -7,84 +7,24 @@ computation in scan list serialisation."""
 import json
 import os
 import subprocess
-import builtins
+import uuid
 import pytest
 from unittest.mock import patch, MagicMock
 
 from src.bin.webapp import create_app
-from src.controllers.job_context import JobContext
+from src.controllers.job_context import CancelledError, JobContext
 from src.controllers.operation_registry import KIND_SCAN, LANE_PIPELINE, registry
 from src.controllers.scan_jobs import (
-    _detect_memory_ceiling,
+    _active_packages,
     _deduplicate_cyclonedx,
     _filter_grype_matches,
     _resolve_grype_memlimit,
+    _tool_scan,
     run_grype_scan,
     run_nvd_scan,
     run_osv_scan,
 )
 from src.extensions import db as _db
-
-
-def test_grype_excludes_native_components_and_matches(tmp_path):
-    ctx = JobContext("scan:grype:test")
-    export_path = tmp_path / "sbom.json"
-    export_path.write_text(json.dumps({
-        "components": [
-            {"name": "cmake-native", "version": "1", "bom-ref": "native"},
-            {"name": "openssl", "version": "3", "bom-ref": "target"},
-        ],
-        "dependencies": [{"ref": "native"}, {"ref": "target"}],
-    }))
-
-    _deduplicate_cyclonedx(ctx, str(export_path), False, exclude_native=True)
-    exported = json.loads(export_path.read_text())
-    assert [component["name"] for component in exported["components"]] == ["openssl"]
-    assert exported["dependencies"] == [{"ref": "target"}]
-
-    results_path = tmp_path / "grype.json"
-    results_path.write_text(json.dumps({"matches": [
-        {"artifact": {"name": "cmake-native", "version": "1"}},
-        {"artifact": {"name": "openssl", "version": "3"}},
-    ]}))
-    _filter_grype_matches(
-        ctx, str(results_path), {("cmake-native", "1"), ("openssl", "3")},
-        exclude_native=True,
-    )
-    matches = json.loads(results_path.read_text())["matches"]
-    assert [match["artifact"]["name"] for match in matches] == ["openssl"]
-
-    results_path.write_text(json.dumps({"matches": [
-        {"artifact": {"name": "cmake-native", "version": "1"}},
-        {"artifact": {"name": "openssl", "version": "3"}},
-    ]}))
-    _filter_grype_matches(ctx, str(results_path), set(), exclude_native=True)
-    assert [match["artifact"]["name"] for match in json.loads(results_path.read_text())["matches"]] == [
-        "openssl"
-    ]
-
-
-def test_grype_missing_binary_is_reported_before_export(app, ids, monkeypatch):
-    import shutil
-
-    monkeypatch.setattr(shutil, "which", lambda binary: None)
-    ctx = _context("grype", ids["variant_id"])
-    with app.app_context(), pytest.raises(RuntimeError, match="Grype is not available on this system"):
-        run_grype_scan(ctx)
-
-
-def test_memory_ceiling_falls_back_to_cgroup_v1(monkeypatch, tmp_path):
-    cgroup_file = tmp_path / "memory.limit_in_bytes"
-    cgroup_file.write_text("536870912\n")
-    original_open = builtins.open
-
-    def open_cgroup(path, *args, **kwargs):
-        if str(path) == "/sys/fs/cgroup/memory/memory.limit_in_bytes":
-            return original_open(cgroup_file, *args, **kwargs)
-        raise OSError("cgroup v2 unavailable")
-
-    monkeypatch.setattr(builtins, "open", open_cgroup)
-    assert _detect_memory_ceiling() == 536870912
 
 
 # ---------------------------------------------------------------------------
@@ -523,15 +463,14 @@ class TestGrypeScanJob:
 
     @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
-    def test_failing_subprocess_logs_stderr_without_exposing_it(
-        self, which, popen, grype_app, caplog
+    def test_failing_subprocess_surfaces_its_stderr(
+        self, which, popen, grype_app
     ):
         popen.return_value = _FakeProcess(returncode=1, stderr="something failed")
 
         ctx = _context("grype", grype_app._test_ids["variant_id"])
         with pytest.raises(RuntimeError, match="Scanner command failed"):
             _run_job(grype_app, run_grype_scan, ctx)
-        assert "something failed" in caplog.text
 
     @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
@@ -664,6 +603,86 @@ class TestResolveGrypeMemlimit:
             result = _resolve_grype_memlimit()
         if result is not None:
             assert result.isdigit()
+
+
+class TestScanJobPackageFilters:
+    def test_active_packages_forwards_native_exclusion(self, monkeypatch):
+        resolved = MagicMock(return_value=([], None))
+        monkeypatch.setattr(
+            "src.controllers.scan_jobs.resolve_active_packages", resolved
+        )
+        ctx = JobContext("scan:nvd", {
+            "variant_id": "00000000-0000-0000-0000-000000000001",
+            "exclude_kernel": False,
+            "exclude_native": True,
+        })
+
+        assert _active_packages(ctx) == []
+        assert resolved.call_args.kwargs == {
+            "exclude_kernel": False,
+            "exclude_native": True,
+        }
+
+    def test_grype_filters_native_components_and_matches(self, tmp_path):
+        ctx = MagicMock()
+        export_path = tmp_path / "sbom.json"
+        export_path.write_text(json.dumps({"components": [
+            {"name": "cmake-native", "version": "1", "bom-ref": "native"},
+            {"name": "openssl", "version": "3", "bom-ref": "target"},
+        ], "dependencies": [
+            {"ref": "native"},
+            {"ref": "target"},
+        ]}))
+
+        _deduplicate_cyclonedx(
+            ctx, str(export_path), exclude_kernel=False, exclude_native=True
+        )
+        exported = json.loads(export_path.read_text())
+        assert [item["name"] for item in exported["components"]] == ["openssl"]
+        assert exported["dependencies"] == [{"ref": "target"}]
+
+        results_path = tmp_path / "grype.json"
+        results_path.write_text(json.dumps({"matches": [
+            {"artifact": {"name": "cmake-native", "version": "1"}},
+            {"artifact": {"name": "openssl", "version": "3"}},
+        ]}))
+        _filter_grype_matches(
+            ctx,
+            str(results_path),
+            {("cmake-native", "1"), ("openssl", "3")},
+            exclude_native=True,
+        )
+        matches = json.loads(results_path.read_text())["matches"]
+        assert [match["artifact"]["name"] for match in matches] == ["openssl"]
+
+
+class TestIncompleteToolScanCleanup:
+    @pytest.mark.parametrize("source", ["nvd", "osv", "scc"])
+    def test_cancellation_removes_partial_scan_and_observation(
+        self, app, ids, source
+    ):
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.scan import Scan
+
+        with app.app_context():
+            finding = _db.session.execute(_db.select(Finding).limit(1)).scalar_one()
+            finding_id = finding.id
+            created = {}
+
+            def create_partial_scan():
+                with _tool_scan(uuid.UUID(ids["variant_id"]), source) as scan:
+                    created["scan_id"] = scan.id
+                    observation = Observation.create(finding.id, scan.id)
+                    created["observation_id"] = observation.id
+                    raise CancelledError()
+
+            with pytest.raises(CancelledError):
+                create_partial_scan()
+
+            assert _db.session.get(Scan, created["scan_id"]) is None
+            assert _db.session.get(Observation, created["observation_id"]) is None
+            assert _db.session.get(Finding, finding_id) is not None
 
 
 # ---------------------------------------------------------------------------

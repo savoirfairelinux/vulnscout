@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
+from collections.abc import Sequence
 from typing import Optional
 
 from ..models.scan import Scan
@@ -61,6 +62,11 @@ class ScanController:
     def get_by_project(project_id: uuid.UUID | str) -> list[Scan]:
         """Return all scans belonging to *project_id* (across all its variants), ordered by timestamp."""
         return Scan.get_by_project(ensure_uuid(project_id))
+
+    @staticmethod
+    def get_by_variants(variant_ids: Sequence[uuid.UUID | str]) -> list[Scan]:
+        """Return scans belonging to any variant in *variant_ids*."""
+        return Scan.get_by_variant_ids([ensure_uuid(variant_id) for variant_id in variant_ids])
 
     # ------------------------------------------------------------------
     # Mutations

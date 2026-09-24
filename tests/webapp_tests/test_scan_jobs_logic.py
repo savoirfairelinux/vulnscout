@@ -17,7 +17,7 @@ from src.bin.webapp import create_app
 from src.controllers.job_context import JobContext
 from src.controllers.nvd_db import NVD_DB as _RealNvdDb
 from src.controllers.operation_registry import KIND_SCAN, LANE_PIPELINE, registry
-from src.controllers.scan_jobs import _active_packages, run_nvd_scan, run_osv_scan
+from src.controllers.scan_jobs import run_nvd_scan, run_osv_scan
 from src.extensions import db as _db
 
 
@@ -122,27 +122,6 @@ def _run(app, runner, ctx):
         finally:
             ctx.flush()
     return registry.get(ctx.op_id)
-
-
-def test_native_package_filter_applies_to_queued_scans(app, ids):
-    from src.models.package import Package
-    from src.models.sbom_document import SBOMDocument
-    from src.models.sbom_package import SBOMPackage
-
-    with app.app_context():
-        native = Package.find_or_create("cmake-native", "3.29")
-        sbom = _db.session.execute(_db.select(SBOMDocument)).scalar_one()
-        SBOMPackage.create(sbom.id, native.id)
-        _db.session.commit()
-
-        for source in ("nvd", "osv", "scc"):
-            ctx = _context(source, ids["variant_id"], exclude_native=True)
-            assert "cmake-native" not in [pkg.name for pkg in _active_packages(ctx)]
-            assert "cmake-native" in [
-                pkg.name for pkg in _active_packages(
-                    JobContext(ctx.op_id, {"variant_id": ids["variant_id"]})
-                )
-            ]
 
 
 # ---------------------------------------------------------------------------

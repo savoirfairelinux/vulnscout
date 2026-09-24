@@ -337,8 +337,9 @@ The `--export-custom-vulnscout-data` flag exports custom assessments, CVSS score
 
 Add `--amend` to reconcile current review data with the existing file in the output directory. The file must already exist at the path produced by the same export scope. Existing records retain stable ordering and extension fields while updated and new records are incorporated.
 
-The `--import-custom-vulnscout-data` command restores entries according to the variant metadata in the file. Imported assessments use the current system time by default. Add `--use-original-timestamps` to preserve assessment timestamps from the file.
-`--use-current-timestamps` is also accepted to select the default explicitly.
+The `--import-custom-vulnscout-data` command restores entries according to the variant metadata in the file. Imported assessments use the current system time by default. Add `--use-original-timestamps` to preserve assessment timestamps from the file. `--use-current-timestamps` is also accepted to select the default explicitly.
+
+Current version 2 exports identify assessment targets by variant name and package, without instance-local variant UUIDs, so they can be shared between VulnScout installations. Legacy version 1 files remain importable; unsupported future versions are rejected explicitly.
 
 [source,shell]
 ----
@@ -420,7 +421,7 @@ The following environment variables can be set via `vulnscout config` or exporte
 
 |`VULNSCOUT_IMAGE`
 |Docker image to use
-|`docker.io/sflinux/vulnscout:v0.21`
+|`docker.io/sflinux/vulnscout:v0.22`
 
 |`VULNSCOUT_BUILD_DIR`
 |Root build directory on the host (parent of `cache/` and `outputs/`)

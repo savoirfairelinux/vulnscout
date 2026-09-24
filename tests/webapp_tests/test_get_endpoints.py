@@ -586,7 +586,22 @@ def test_export_documents_disambiguates_colliding_archive_paths(app, client):
         assert archive.namelist() == ["default/summary.adoc", "default/summary_2.adoc"]
 
 
+def _wait_for_operation(op_id, timeout=5):
+    from src.controllers.operation_registry import ACTIVE_STATUSES, registry
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        operation = registry.get(op_id)
+        if operation is not None and operation["status"] not in ACTIVE_STATUSES:
+            return operation
+        time.sleep(0.01)
+    raise AssertionError(f"operation {op_id} did not finish within {timeout}s")
+
+
 def test_export_documents_async_progress_and_download(client):
+    from src.controllers.operation_registry import registry
+    from src.routes import documents
+
     response = client.post("/api/documents/export", json={
         "project_id": "11111111-1111-1111-1111-111111111111",
         "mode": "consolidated",
@@ -595,38 +610,80 @@ def test_export_documents_async_progress_and_download(client):
     })
 
     assert response.status_code == 202
-    job_id = response.get_json()["job_id"]
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        status = client.get(f"/api/documents/export/{job_id}").get_json()
-        if status["status"] != "running":
-            break
-        time.sleep(0.01)
+    op_id = response.get_json()["op_id"]
+    assert op_id.startswith("export:")
 
-    assert status["status"] == "done"
-    assert status["current"] == status["total"] == 1
-    assert status["logs"] == ["Generating 1 of 1 element: summary.adoc (adoc)"]
+    operation = _wait_for_operation(op_id)
+    assert operation["status"] == "done"
+    assert operation["kind"] == "export"
+    assert operation["lane"] == "export"
+    assert operation["progress"]["current"] == operation["progress"]["total"] == 1
+    assert operation["logs"] == ["Generating 1 of 1 element: summary.adoc (adoc)"]
 
-    from src.routes.documents import _export_jobs, _export_jobs_lock
-    with _export_jobs_lock:
-        archive_path = str(_export_jobs[job_id]["archive_path"])
+    assert operation["result"]["download_ready"] is True
+    assert operation["result"]["filename"].endswith("_consolidated_export.zip")
+    assert "archive_path" not in operation["result"]
+    archive_path = documents._export_archives[op_id][0]
     assert os.path.isfile(archive_path)
 
-    download = client.get(f"/api/documents/export/{job_id}/download")
+    download = client.get(f"/api/documents/export/{op_id}/download")
     assert download.status_code == 200
     assert download.mimetype == "application/zip"
     with zipfile.ZipFile(io.BytesIO(download.data)) as archive:
         assert archive.namelist() == ["summary.adoc"]
     assert not os.path.exists(archive_path)
-    assert client.get(f"/api/documents/export/{job_id}").status_code == 404
+    assert registry.get(op_id) is None
+    assert client.get(f"/api/documents/export/{op_id}/download").status_code == 404
+
+
+def test_export_download_rejects_operation_that_is_not_ready(client):
+    from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
+
+    op_id = "export:not-ready"
+    registry.create(
+        op_id=op_id, kind=KIND_EXPORT, source="documents",
+        label="Export demo", lane=LANE_EXPORT,
+    )
+    try:
+        response = client.get(f"/api/documents/export/{op_id}/download")
+        assert response.status_code == 409
+        assert response.get_json() == {"error": "Export is not ready"}
+    finally:
+        registry.update(op_id, status="cancelled")
+        registry.remove(op_id)
+
+
+def test_export_download_reports_a_vanished_archive(client, tmp_path):
+    from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
+    from src.routes import documents
+
+    op_id = "export:vanished"
+    registry.create(
+        op_id=op_id, kind=KIND_EXPORT, source="documents",
+        label="Export demo", lane=LANE_EXPORT,
+    )
+    registry.update(op_id, status="done", result={
+        "filename": "gone.zip",
+        "download_ready": True,
+    })
+    documents._export_archives[op_id] = (str(tmp_path / "gone.zip"), documents.datetime.now(documents.timezone.utc))
+
+    response = client.get(f"/api/documents/export/{op_id}/download")
+    assert response.status_code == 410
+    assert response.get_json() == {"error": "Export archive is no longer available"}
+    assert registry.get(op_id) is None
 
 
 def test_export_documents_rejects_when_async_queue_is_full(client):
-    from src.routes.documents import EXPORT_MAX_QUEUED_JOBS, EXPORT_MAX_WORKERS, _export_capacity
+    from src.routes.documents import EXPORT_MAX_ACTIVE_JOBS
+    from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
 
-    capacity = EXPORT_MAX_WORKERS + EXPORT_MAX_QUEUED_JOBS
-    for _ in range(capacity):
-        assert _export_capacity.acquire(blocking=False)
+    op_ids = [f"export:saturate-{index}" for index in range(EXPORT_MAX_ACTIVE_JOBS)]
+    for op_id in op_ids:
+        registry.create(
+            op_id=op_id, kind=KIND_EXPORT, source="documents",
+            label="Export demo", lane=LANE_EXPORT,
+        )
     try:
         response = client.post("/api/documents/export", json={
             "project_id": "11111111-1111-1111-1111-111111111111",
@@ -635,8 +692,9 @@ def test_export_documents_rejects_when_async_queue_is_full(client):
             "documents": [{"name": "summary.adoc", "extension": "adoc"}],
         })
     finally:
-        for _ in range(capacity):
-            _export_capacity.release()
+        for op_id in op_ids:
+            registry.update(op_id, status="cancelled")
+            registry.remove(op_id)
 
     assert response.status_code == 503
     assert response.headers["Retry-After"] == "5"
@@ -664,20 +722,121 @@ def test_export_documents_rejects_when_sync_capacity_is_full(client):
 
 def test_export_retention_evicts_oldest_archive(monkeypatch, tmp_path):
     from src.routes import documents
+    from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
 
     old_archive = tmp_path / "old.zip"
     old_archive.write_bytes(b"1234")
-    job_id = "retention-test-job"
-    with documents._export_jobs_lock:
-        documents._export_jobs[job_id] = {
-            "archive_path": str(old_archive),
-            "finished_at": 1.0,
-        }
-        monkeypatch.setattr(documents, "EXPORT_MAX_RETAINED_ARCHIVE_BYTES", 5)
-        documents._reserve_retained_archive(3)
+    op_id = "export:retention-test"
+    registry.create(
+        op_id=op_id, kind=KIND_EXPORT, source="documents",
+        label="Export demo", lane=LANE_EXPORT,
+    )
+    registry.update(op_id, status="done", result={
+        "filename": "old.zip",
+        "download_ready": True,
+    })
+    documents._export_archives[op_id] = (str(old_archive), documents.datetime.now(documents.timezone.utc))
 
-    assert job_id not in documents._export_jobs
+    with documents._export_archive_lock:
+        monkeypatch.setattr(documents, "EXPORT_MAX_RETAINED_ARCHIVE_BYTES", 5)
+        assert documents._reserve_retained_archive(3)
+
+    assert registry.get(op_id) is None
     assert not old_archive.exists()
+
+
+def test_export_retention_prunes_archives_past_the_ttl(monkeypatch, tmp_path):
+    from src.routes import documents
+    from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
+
+    stale_archive = tmp_path / "stale.zip"
+    stale_archive.write_bytes(b"1234")
+    op_id = "export:ttl-test"
+    registry.create(
+        op_id=op_id, kind=KIND_EXPORT, source="documents",
+        label="Export demo", lane=LANE_EXPORT,
+    )
+    registry.update(op_id, status="done", result={
+        "filename": "stale.zip",
+        "download_ready": True,
+    })
+    documents._export_archives[op_id] = (str(stale_archive), documents.datetime.now(documents.timezone.utc))
+
+    with documents._export_archive_lock:
+        monkeypatch.setattr(documents, "EXPORT_JOB_TTL_SECONDS", -1)
+        documents._prune_export_archives()
+
+    assert registry.get(op_id) is None
+    assert not stale_archive.exists()
+
+
+def test_export_archive_survives_registry_pruning_until_cleanup(monkeypatch, tmp_path):
+    from src.controllers import operation_registry
+    from src.routes import documents
+
+    op_id = "export:registry-pruned"
+    archive = tmp_path / "pruned.zip"
+    archive.write_bytes(b"1234")
+    operation_registry.registry.create(
+        op_id=op_id, kind=operation_registry.KIND_EXPORT, source="documents",
+        label="Export demo", lane=operation_registry.LANE_EXPORT,
+    )
+    operation_registry.registry.update(op_id, status="done")
+    documents._export_archives[op_id] = (str(archive), documents.datetime.now(documents.timezone.utc))
+
+    monkeypatch.setattr(operation_registry, "TERMINAL_TTL_SECONDS", -1)
+    operation_registry.registry.snapshot()
+    assert operation_registry.registry.get(op_id) is None
+    assert archive.exists()
+
+    with documents._export_archive_lock:
+        monkeypatch.setattr(documents, "EXPORT_JOB_TTL_SECONDS", -1)
+        documents._prune_export_archives()
+    assert not archive.exists()
+    assert op_id not in documents._export_archives
+
+
+def test_export_retention_does_not_evict_inflight_archive(monkeypatch, tmp_path):
+    from src.controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, registry
+    from src.routes import documents
+
+    op_id = "export:inflight-retention"
+    archive = tmp_path / "inflight.zip"
+    archive.write_bytes(b"1234")
+    registry.create(op_id=op_id, kind=KIND_EXPORT, source="documents", label="Export demo", lane=LANE_EXPORT)
+    registry.update(op_id, status="running", result={"filename": "inflight.zip", "download_ready": True})
+    documents._export_archives[op_id] = (str(archive), documents.datetime.now(documents.timezone.utc))
+    try:
+        with documents._export_archive_lock:
+            monkeypatch.setattr(documents, "EXPORT_MAX_RETAINED_ARCHIVE_BYTES", 5)
+            assert not documents._reserve_retained_archive(3)
+        assert archive.exists()
+        assert registry.get(op_id)["status"] == "running"
+    finally:
+        with documents._export_archive_lock:
+            registry.update(op_id, status="done")
+            documents._discard_export(op_id)
+
+
+def test_async_export_reports_expected_failure(monkeypatch, client):
+    from src.controllers.operation_registry import registry
+
+    def too_large(*_args, **_kwargs):
+        from src.routes.documents import ExportGenerationError
+        raise ExportGenerationError("Export archive exceeds the maximum allowed size", 413)
+
+    monkeypatch.setattr("src.routes.documents._build_export_archive", too_large)
+    response = client.post("/api/documents/export", json={
+        "project_id": "11111111-1111-1111-1111-111111111111",
+        "mode": "consolidated", "async": True,
+        "documents": [{"name": "summary.adoc", "extension": "adoc"}],
+    })
+    assert response.status_code == 202
+    operation = _wait_for_operation(response.get_json()["op_id"])
+    assert operation["status"] == "error"
+    assert operation["error"] == "Export archive exceeds the maximum allowed size"
+    assert operation["result"] is None
+    registry.remove(operation["op_id"])
 
 
 def test_export_missing_tool_does_not_disclose_server_path(monkeypatch, client):

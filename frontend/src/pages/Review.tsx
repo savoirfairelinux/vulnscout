@@ -724,16 +724,26 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             return;
         }
 
-        // VulnScout JSON carries its own variant IDs, while the active project
-        // constrains name-based fallback for exports from other instances.
+        // VulnScout JSON carries portable variant names. The active project
+        // constrains their resolution on this instance.
         const reader = new FileReader();
         reader.onload = async () => {
             try {
                 const text = reader.result as string;
                 const parsed = JSON.parse(text);
 
-                if (!parsed?.version || !parsed?.assessments) {
-                    showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
+                try {
+                    if (detectReviewExportFormat(parsed) !== 'custom') {
+                        throw new Error('Expected a VulnScout custom data export.');
+                    }
+                } catch (error) {
+                    const detail = error instanceof Error ? error.message : '';
+                    showMessage(
+                        detail.startsWith('Unsupported VulnScout JSON version:')
+                            ? detail
+                            : 'Invalid file format. Expected a VulnScout custom data export.',
+                        'error',
+                    );
                     if (fileInputRef.current) fileInputRef.current.value = '';
                     return;
                 }
