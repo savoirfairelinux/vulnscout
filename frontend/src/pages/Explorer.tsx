@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
+import { useLocation, useNavigate, Routes, Route } from "react-router-dom";
+import { ROUTES, tabForPath } from "../routes";
+import type { TabKey } from "../routes";
 import NavigationBar from "../components/NavigationBar";
+import NotFound from "./NotFound";
 import OperationQueueModal from "../components/OperationQueueModal";
 import { subscribe as exportSubscribe, getSnapshot as exportGetSnapshot } from "../handlers/exportQueue";
 import MessageBanner from "../components/MessageBanner";
@@ -375,9 +379,10 @@ function Explorer() {
     }, []);
 
     function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status" | "Package", value: string) {
+        suppressVulnResetRef.current = true;
         setFilterLabel(filterType);
         setFilterValue(value);
-        setTab('vulnerabilities');
+        navigate(ROUTES.vulnerabilities);
     }
 
     const loadOutdatedPackages = useCallback(async () => {
@@ -412,17 +417,46 @@ function Explorer() {
         goToVulnsTabWithFilter("Package", packageId);
     }
 
-    const [tab, setTab] = useState("metrics");
+    const location = useLocation();
+    const navigate = useNavigate();
+    const tab = tabForPath(location.pathname);
 
-    // This function ensures vulns get reset when switching outside filtering context
-    function handleTabChange(newTab: string) {
-        if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
-            setFilterLabel(undefined);
-            setFilterValue(undefined);
-            setFilterVulnerabilityIds(undefined);
+    // Programmatic navigations that carry their own filter/destination state
+    // (goToVulnsTabWithFilter, the setup-required "Go to settings" button) set
+    // these before calling navigate(), so the tab-change effect below can
+    // skip the reset it would otherwise apply for a plain nav-bar click.
+    const suppressVulnResetRef = useRef(false);
+    const suppressSettingsResetRef = useRef(false);
+    const prevTabRef = useRef<TabKey>(tab);
+
+    // Ensures vulns/settings-destination get reset when the tab changes via
+    // a plain navigation (e.g. clicking a NavigationBar link), but not when
+    // the page itself set up filters/destination just before navigating.
+    useEffect(() => {
+        const prevTab = prevTabRef.current;
+        if (tab === 'vulnerabilities' && prevTab !== 'vulnerabilities') {
+            if (suppressVulnResetRef.current) {
+                suppressVulnResetRef.current = false;
+            } else {
+                setFilterLabel(undefined);
+                setFilterValue(undefined);
+                setFilterVulnerabilityIds(undefined);
+            }
         }
-        if (newTab === 'settings') setSettingsDestination(null);
-        setTab(newTab);
+        if (tab === 'settings' && prevTab !== 'settings') {
+            if (suppressSettingsResetRef.current) {
+                suppressSettingsResetRef.current = false;
+            } else {
+                setSettingsDestination(null);
+            }
+        }
+        prevTabRef.current = tab;
+    }, [tab]);
+
+    // Accepts a plain string to match Metrics' existing setTab prop contract;
+    // every caller passes one of our known tab keys.
+    function handleTabChange(newTab: string) {
+        navigate(ROUTES[newTab as TabKey] ?? ROUTES.metrics);
     }
 
     return (
@@ -436,8 +470,6 @@ function Explorer() {
             <header>
                 <NavigationBar
                     key={selectorKey}
-                    tab={tab}
-                    changeTab={handleTabChange}
                     defaultProject={defaultConfig.project}
                     defaultVariant={defaultConfig.variant}
                     defaultScope={frontendScope}
@@ -475,13 +507,14 @@ function Explorer() {
                                 void loadSetupRequirement();
                                 return;
                             }
+                            suppressSettingsResetRef.current = true;
                             setSettingsDestination({
                                 tab: 'projects',
                                 projectId: setupRequirement?.kind === 'variant'
                                     ? setupRequirement.projectId
                                     : undefined,
                             });
-                            setTab('settings');
+                            navigate(ROUTES.settings);
                         }}
                         className="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-400"
                     >
@@ -510,73 +543,88 @@ function Explorer() {
             )}
 
             <div className="p-5 flex-1 overflow-auto">
-                {tab === 'metrics' &&
-                <Metrics
-                    packages={pkgs}
-                    vulnerabilities={vulns}
-                    goToVulnsTabWithFilter={goToVulnsTabWithFilter}
-                    appendAssessment={appendAssessment}
-                    patchVuln={patchVuln}
-                    setTab={setTab}
-                    appendCVSS={appendCVSS}
-                    projectId={currentProjectId}
-                />}
-                {tab === 'packages' && <TablePackages
-                    key={tablePreferenceScopeKey}
-                    packages={pkgs}
-                    vulnerabilities={vulns}
-                    preferenceScopeKey={tablePreferenceScopeKey}
-                    onShowVulns={showVulnsForPackage}
-                    onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
-                    outdatedScopeKey={outdatedPackagesScopeKey}
-                />}
-                {tab === 'vulnerabilities' &&
-                <TableVulnerabilities
-                    key={tablePreferenceScopeKey}
-                    appendAssessment={appendAssessment}
-                    appendCVSS={appendCVSS}
-                    patchVuln={patchVuln}
-                    vulnerabilities={vulns}
-                    preferenceScopeKey={tablePreferenceScopeKey}
-                    filterLabel={filterLabel}
-                    filterValue={filterValue}
-                    filterVulnerabilityIds={filterVulnerabilityIds}
-                    variantId={currentVariantId}
-                    projectId={currentProjectId}
-                    baseVariantId={currentBaseVariantId}
-                    compareOperation={currentOperation}
-                    variantIds={currentVariantIds}
-                    multiOperation={currentMultiOperation}
-                    onRefreshComplete={handleRefreshComplete}
-                    missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
-                    onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
-                    missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
-                    onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
-                />}
-                {tab === 'scans' && <ScanHistory
-                    variantId={currentVariantId}
-                    projectId={currentVariantId ? undefined : currentProjectId}
-                    variantIds={currentVariantIds}
-                    onScanComplete={handleScanComplete}
-                />}
-                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
-                {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
-                {tab === 'settings' && <Settings initialTab={settingsDestination?.tab} onDataChanged={(message) => {
-                    if (message) setLoadingMessage(message);
-                    Config.get().then(config => setDefaultConfig(config)).catch(() => {});
-                    loadSetupRequirement();
-                    setSelectorKey(k => k + 1);
-                    loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                }} projectId={settingsDestination ? settingsDestination.projectId : currentProjectId} onLoadingMessage={(msg) => {
-                    if (msg) {
-                        setLoadingMessage(msg);
-                        setIsLoadingData(true);
-                    } else {
-                        setIsLoadingData(false);
-                        setLoadingMessage("Loading data...");
-                    }
-                }} />}
-                {tab === 'ai' && <AIContext />}
+                <Routes>
+                <Route path={ROUTES.metrics} element={
+                    <Metrics
+                        packages={pkgs}
+                        vulnerabilities={vulns}
+                        goToVulnsTabWithFilter={goToVulnsTabWithFilter}
+                        appendAssessment={appendAssessment}
+                        patchVuln={patchVuln}
+                        setTab={handleTabChange}
+                        appendCVSS={appendCVSS}
+                        projectId={currentProjectId}
+                    />
+                } />
+                <Route path={ROUTES.packages} element={
+                    <TablePackages
+                        key={tablePreferenceScopeKey}
+                        packages={pkgs}
+                        vulnerabilities={vulns}
+                        preferenceScopeKey={tablePreferenceScopeKey}
+                        onShowVulns={showVulnsForPackage}
+                        onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
+                        outdatedScopeKey={outdatedPackagesScopeKey}
+                    />
+                } />
+                <Route path={ROUTES.vulnerabilities} element={
+                    <TableVulnerabilities
+                        key={tablePreferenceScopeKey}
+                        appendAssessment={appendAssessment}
+                        appendCVSS={appendCVSS}
+                        patchVuln={patchVuln}
+                        vulnerabilities={vulns}
+                        preferenceScopeKey={tablePreferenceScopeKey}
+                        filterLabel={filterLabel}
+                        filterValue={filterValue}
+                        filterVulnerabilityIds={filterVulnerabilityIds}
+                        variantId={currentVariantId}
+                        projectId={currentProjectId}
+                        baseVariantId={currentBaseVariantId}
+                        compareOperation={currentOperation}
+                        variantIds={currentVariantIds}
+                        multiOperation={currentMultiOperation}
+                        onRefreshComplete={handleRefreshComplete}
+                        missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
+                        onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
+                        missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
+                        onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
+                    />
+                } />
+                <Route path={ROUTES.scans} element={
+                    <ScanHistory
+                        variantId={currentVariantId}
+                        projectId={currentVariantId ? undefined : currentProjectId}
+                        variantIds={currentVariantIds}
+                        onScanComplete={handleScanComplete}
+                    />
+                } />
+                <Route path={ROUTES.review} element={
+                    <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />
+                } />
+                <Route path={ROUTES.exports} element={
+                    <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />
+                } />
+                <Route path={ROUTES.settings} element={
+                    <Settings initialTab={settingsDestination?.tab} onDataChanged={(message) => {
+                        if (message) setLoadingMessage(message);
+                        Config.get().then(config => setDefaultConfig(config)).catch(() => {});
+                        loadSetupRequirement();
+                        setSelectorKey(k => k + 1);
+                        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
+                    }} projectId={settingsDestination ? settingsDestination.projectId : currentProjectId} onLoadingMessage={(msg) => {
+                        if (msg) {
+                            setLoadingMessage(msg);
+                            setIsLoadingData(true);
+                        } else {
+                            setIsLoadingData(false);
+                            setLoadingMessage("Loading data...");
+                        }
+                    }} />
+                } />
+                <Route path={ROUTES.ai} element={<AIContext />} />
+                <Route path="*" element={<NotFound />} />
+                </Routes>
             </div>
             </main>
         </div>

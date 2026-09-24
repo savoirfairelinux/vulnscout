@@ -145,3 +145,51 @@ class TestFrontpageStaticFolderNone:
             assert "error" in data
         finally:
             app.static_folder = original
+
+
+# ===========================================================================
+# routes/frontpage.py — SPA client-route fallback
+#
+# The frontend router (react-router) owns paths like /sbom and /vulnerabilities
+# client-side. A hard refresh or direct link on one of those paths hits Flask
+# first, so the catch-all route must serve index.html for any path that isn't
+# an actual file on disk, letting the SPA's router take over from there.
+# ===========================================================================
+
+class TestFrontpageSpaFallback:
+    @pytest.fixture()
+    def static_dir(self, app, tmp_path):
+        """Point the app at a throwaway static folder containing just an
+        index.html and one real asset, so fallback vs. direct-serve behavior
+        can be told apart without depending on a built frontend bundle."""
+        folder = tmp_path / "static"
+        folder.mkdir()
+        (folder / "index.html").write_bytes(b"<!doctype html><html><body>index</body></html>")
+        (folder / "vulnscout_logo.png").write_bytes(b"fake-logo-bytes")
+        original = app.static_folder
+        app.static_folder = str(folder)
+        try:
+            yield folder
+        finally:
+            app.static_folder = original
+
+    def test_unknown_client_route_serves_index_html(self, app, client, static_dir):
+        """GET /sbom (a client-side route, not a real file) serves index.html
+        instead of 404ing, so a hard refresh on a deep link still works."""
+        resp = client.get("/sbom")
+        assert resp.status_code == 200
+        assert resp.data == (b"<!doctype html><html><body>index</body></html>")
+
+    def test_nested_unknown_client_route_serves_index_html(self, app, client, static_dir):
+        """A deeper unknown path (e.g. a future nested route) also falls
+        back to index.html rather than 404ing."""
+        resp = client.get("/settings/projects")
+        assert resp.status_code == 200
+        assert resp.data == (b"<!doctype html><html><body>index</body></html>")
+
+    def test_existing_static_file_is_served_directly(self, app, client, static_dir):
+        """A path that matches a real file in the static folder is served
+        as-is, not overridden by the SPA fallback."""
+        resp = client.get("/vulnscout_logo.png")
+        assert resp.status_code == 200
+        assert resp.data == b"fake-logo-bytes"
