@@ -14,6 +14,7 @@ import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import OperationQueuePanel from "./OperationQueuePanel";
 import ModalShell from "./ModalShell";
 import Operations from "../handlers/operations";
+import { downloadExport } from "../handlers/exportQueue";
 import { getConnectionState, getSnapshot, subscribe } from "../handlers/operationStore";
 import type { Operation } from "../types/operation";
 import { isActive } from "../types/operation";
@@ -73,6 +74,7 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
     const connection = useSyncExternalStore(subscribe, getConnectionState);
     // Cancellations awaiting their terminal event, so the button cannot be spammed.
     const [cancelRequested, setCancelRequested] = useState<Set<string>>(new Set());
+    const [downloadError, setDownloadError] = useState<string | null>(null);
 
     useEffect(() => {
         setCancelRequested(previous => {
@@ -114,6 +116,7 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
                     Reconnecting to the operation stream…
                 </p>
             )}
+            {downloadError && <p role="alert" className="px-4 py-2 text-sm text-red-300">{downloadError}</p>}
             {operations.length > 0 ? (
                 <div className="overflow-hidden rounded-lg border border-neutral-700 divide-y divide-neutral-700">
                     {operations.map(operation => {
@@ -126,6 +129,10 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
                                 colors={colors as never}
                                 positionLabel={positionLabelFor(operation, operations)}
                                 onDismiss={() => void Operations.dismiss(operation.op_id)}
+                                onDownload={operation.kind === "export" && operation.status === "done" && operation.result?.download_ready
+                                    ? () => void downloadExport(operation.op_id).catch(error =>
+                                        setDownloadError(error instanceof Error ? error.message : "Failed to download export"))
+                                    : undefined}
                                 onCancel={operation.cancellable && isActive(operation) && !cancelRequested.has(operation.op_id)
                                     ? () => requestCancel(operation.op_id)
                                     : undefined}

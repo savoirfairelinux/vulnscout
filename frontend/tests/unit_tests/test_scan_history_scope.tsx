@@ -6,7 +6,6 @@ import ScansHandler from '../../src/handlers/scans';
 import Vulnerabilities from '../../src/handlers/vulnerabilities';
 import Variants from '../../src/handlers/variant';
 import type { GlobalResult, Scan, ScanDiff } from '../../src/handlers/scans';
-import { setOnDone } from '../../src/handlers/grypeScanState';
 import { downloadJson } from '../../src/helpers/exportJson';
 import Operations from '../../src/handlers/operations';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
@@ -26,29 +25,6 @@ class TestEventSource {
     }
 }
 
-const mockEmptySnapshot: readonly never[] = [];
-function mockManager() {
-    return {
-        subscribe: () => () => {},
-        getSnapshot: () => mockEmptySnapshot,
-        setOnDone: jest.fn(),
-        queueScan: jest.fn(),
-        startQueuedScan: jest.fn(),
-        waitForCompletion: jest.fn(),
-    };
-}
-
-jest.mock('../../src/handlers/grypeScanState', () => mockManager());
-jest.mock('../../src/handlers/nvdScanState', () => mockManager());
-jest.mock('../../src/handlers/osvScanState', () => mockManager());
-jest.mock('../../src/handlers/sccScanState', () => mockManager());
-jest.mock('../../src/handlers/activeScanQueue', () => ({
-    hasActiveRefreshes: jest.fn(() => false),
-    queueVulnerabilityRefresh: jest.fn(() => true),
-    restoreActiveRefreshes: jest.fn(),
-    waitForActiveScans: jest.fn(() => Promise.resolve()),
-    waitForRefreshCompletion: jest.fn(() => Promise.resolve()),
-}));
 jest.mock('../../src/handlers/scans', () => ({
     __esModule: true,
     default: {
@@ -95,7 +71,6 @@ jest.mock('../../src/components/RunScansWizard', () => ({
 
 const mockList = ScansHandler.list as jest.MockedFunction<typeof ScansHandler.list>;
 const mockVariantsList = Variants.list as jest.MockedFunction<typeof Variants.list>;
-const mockSetOnDone = setOnDone as jest.MockedFunction<typeof setOnDone>;
 const mockGetDiff = ScansHandler.getDiff as jest.MockedFunction<typeof ScansHandler.getDiff>;
 const mockGetGlobalResult = ScansHandler.getGlobalResult as jest.MockedFunction<typeof ScansHandler.getGlobalResult>;
 const mockSetDescription = ScansHandler.setDescription as jest.MockedFunction<typeof ScansHandler.setDescription>;
@@ -288,12 +263,10 @@ describe('ScanHistory selected variant scope', () => {
             <ScanHistory projectId="project" variantIds={['v1', 'v2', 'v3']} />
         );
         await screen.findByText('initial-v3 history');
-        const onDone = [...mockSetOnDone.mock.calls]
-            .reverse()
-            .map(call => call[0])
-            .find((callback): callback is () => void => typeof callback === 'function');
-        expect(onDone).toBeDefined();
-        act(() => onDone?.());
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'scan:grype:v1', kind: 'scan', status: 'running' },
+        ] });
+        TestEventSource.current.send('operation', { op_id: 'scan:grype:v1', kind: 'scan', status: 'done' });
         await waitFor(() => expect(threeVariantCalls).toBe(2));
 
         view.rerender(
@@ -321,12 +294,10 @@ describe('ScanHistory selected variant scope', () => {
 
         render(<ScanHistory projectId="project" variantIds={['v1']} />);
         expect(await screen.findByText('Loading scan history…')).toBeInTheDocument();
-        const onDone = [...mockSetOnDone.mock.calls]
-            .reverse()
-            .map(call => call[0])
-            .find((callback): callback is () => void => typeof callback === 'function');
-        expect(onDone).toBeDefined();
-        act(() => onDone?.());
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'scan:grype:v1', kind: 'scan', status: 'running' },
+        ] });
+        TestEventSource.current.send('operation', { op_id: 'scan:grype:v1', kind: 'scan', status: 'done' });
 
         expect(await screen.findByText('refreshed-v1 history')).toBeInTheDocument();
         expect(screen.queryByText('Loading scan history…')).not.toBeInTheDocument();

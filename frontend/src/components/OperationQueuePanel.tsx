@@ -7,7 +7,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBan, faCheck, faChevronRight, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faBan, faCheck, faChevronRight, faDownload, faXmark } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import type { Operation } from "../types/operation";
 import { isActive, percentOf } from "../types/operation";
@@ -29,10 +29,11 @@ type Props = {
     positionLabel?: string;
     onDismiss: () => void;
     onCancel?: () => void;
+    onDownload?: () => void;
 };
 
 export default function OperationQueuePanel({
-    operation, icon, colors, positionLabel = "", onDismiss, onCancel,
+    operation, icon, colors, positionLabel = "", onDismiss, onCancel, onDownload,
 }: Readonly<Props>) {
     const { status, label, scope, progress, logs } = operation;
     const pct = percentOf(operation);
@@ -95,6 +96,12 @@ export default function OperationQueuePanel({
                         className="text-neutral-400 hover:text-red-400 transition-colors ml-1"
                     >
                         <FontAwesomeIcon icon={faBan} className="text-sm" />
+                    </button>
+                )}
+                {status === "done" && onDownload && (
+                    <button type="button" onClick={onDownload} title="Download export" aria-label={`Download ${label}`}
+                        className="text-neutral-400 hover:text-cyan-400 transition-colors ml-1">
+                        <FontAwesomeIcon icon={faDownload} className="text-sm" />
                     </button>
                 )}
                 {!isActive(operation) && (

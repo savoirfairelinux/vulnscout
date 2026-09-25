@@ -23,6 +23,7 @@ import {
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
+import { waitForOperation } from "../handlers/operationStore";
 import type { Variant } from "../handlers/variant";
 import Config from "../handlers/config";
 import NvdApiKey from "../handlers/nvdApiKey";
@@ -32,7 +33,7 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
 import ModalShell from "../components/ModalShell";
 import Transfer from "./Transfer";
-import type { RefreshType } from "../handlers/activeScanQueue";
+import type { RefreshType } from "../helpers/refreshSources";
 import {
   allVulnerabilityRefreshTypes,
   resolveRefreshSources,
@@ -60,9 +61,16 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
 
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
+  const uploadWaitRef = useRef<AbortController | null>(null);
+  const loadingMessageRef = useRef(onLoadingMessage);
+  loadingMessageRef.current = onLoadingMessage;
   useEffect(() => {
     unmountedRef.current = false;
-    return () => { unmountedRef.current = true; };
+    return () => {
+      unmountedRef.current = true;
+      uploadWaitRef.current?.abort();
+      loadingMessageRef.current?.(null);
+    };
   }, []);
 
   // ---- Shared data ----
@@ -680,37 +688,28 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Re
         importFiles,
         Array.from(importRefreshSources),
       );
+      if (unmountedRef.current) return;
       onLoadingMessage?.("Processing SBOM...");
-
-      const uploadId = result.upload_id;
-      const poll = async () => {
-        for (let i = 0; i < 600; i++) {
-          if (unmountedRef.current) { onLoadingMessage?.(null); return; }
-          await new Promise((r) => setTimeout(r, 1000));
-          if (unmountedRef.current) { onLoadingMessage?.(null); return; }
-          const status = await Variants.getUploadStatus(uploadId);
-          if (status.status === "done") {
-            setImportFiles([]);
-            onLoadingMessage?.(null);
-            onDataChanged?.("Importing SBOM...");
-            return;
-          }
-          if (status.status === "error") {
-            setImportMsg(status.message);
-            onLoadingMessage?.(null);
-            return;
-          }
-          onLoadingMessage?.(status.message);
-        }
-        setImportMsg("Upload processing timed out.");
-        onLoadingMessage?.(null);
-      };
-      await poll();
+      const controller = new AbortController();
+      uploadWaitRef.current = controller;
+      const operation = await waitForOperation(result.op_id, current => {
+        if (!unmountedRef.current) onLoadingMessage?.(current.progress.message || "Processing SBOM...");
+      }, controller.signal);
+      if (unmountedRef.current) return;
+      if (operation.status === "done") {
+        setImportFiles([]);
+        onDataChanged?.("Importing SBOM...");
+      } else {
+        setImportMsg(operation.error || operation.progress.message || "SBOM import did not complete.");
+      }
     } catch (e: any) {
-      setImportMsg(e.message);
-      onLoadingMessage?.(null);
+      if (!unmountedRef.current) setImportMsg(e.message);
     } finally {
-      setImportBusy(false);
+      uploadWaitRef.current = null;
+      if (!unmountedRef.current) {
+        onLoadingMessage?.(null);
+        setImportBusy(false);
+      }
     }
   };
 

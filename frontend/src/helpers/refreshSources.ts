@@ -1,4 +1,6 @@
-import type { RefreshType } from "../handlers/activeScanQueue";
+import type { RefreshSource } from "../types/operation";
+
+export type RefreshType = RefreshSource;
 
 export type RefreshMode = "complete" | "custom";
 

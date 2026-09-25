@@ -3,6 +3,7 @@ import '@testing-library/jest-dom';
 
 import OperationQueueModal from '../../src/components/OperationQueueModal';
 import Operations from '../../src/handlers/operations';
+import * as exportsClient from '../../src/handlers/exportQueue';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
 
@@ -248,5 +249,17 @@ describe('OperationQueueModal', () => {
         } finally {
             jest.useRealTimers();
         }
+    });
+
+    it('offers retained export downloads from a restored snapshot and reports expiry', async () => {
+        const download = jest.spyOn(exportsClient, 'downloadExport').mockRejectedValue(new Error('Export archive is no longer available'));
+        const { stream } = renderModal();
+        stream.send('snapshot', { seq: 1, operations: [completed('export:1', 'Project export', {
+            kind: 'export', source: 'documents', lane: 'export', result: { download_ready: true },
+        })] });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Download Project export' }));
+        expect(download).toHaveBeenCalledWith('export:1');
+        expect(await screen.findByRole('alert')).toHaveTextContent('Export archive is no longer available');
     });
 });
