@@ -131,8 +131,9 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | `list_assessments_by_vuln` | List all VEX assessments recorded for a CVE                 |
 | `has_ai_assessment`        | Check whether a pending AI assessment already exists        |
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
-| `get_merged_context`       | Fetch the merged project + variant context for an assessment |
-| `get_variant_context` / `update_variant_context` | Read / update variant context     |
+| `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, environment, threat model, risks, other info) |
+| `get_project_context` / `update_project_context` | Read / replace a project's description |
+| `update_variant_context`   | Replace a variant's context fields (description, environment, threat model, risks, other info) — full replacement, not a partial update |
 
 ---
 
@@ -182,7 +183,10 @@ Pending AI assessments must be reviewed by a human before they become official.
    assessment timeline, labelled **"AI-generated · Pending review"**. It shows
    the same details as a normal assessment (status, justification, impact
    statement, notes, packages, and variant).
-3. Use the panel's action buttons:
+3. Click **Edit** on the vulnerability modal to enter editing mode — the
+   **Approve** / **Reject** buttons only appear on the panel once editing mode
+   is active.
+4. Use the panel's action buttons:
    - **Approve** — promotes the assessment to an official (`custom`)
      assessment. It now affects the vulnerability's status and is included in
      the OpenVEX export.
