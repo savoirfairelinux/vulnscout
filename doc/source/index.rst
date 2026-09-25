@@ -10,6 +10,7 @@ VulnScout Documentation
    vulnscout-script
    container-entrypoint
    interactive-mode
+   operation-queue
    ai-assessments
    templates
    ci_conditions
