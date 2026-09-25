@@ -208,32 +208,93 @@ describe('OperationQueueModal', () => {
         expect(screen.queryByRole('button', { name: /cancel export docs/i })).not.toBeInTheDocument();
     });
 
-    it('numbers the variants of a multi-variant scan batch', () => {
+    const batch = (status: Operation['status'] = 'running') => [
+        operation({
+            op_id: 'scan:grype:variant-1', status: 'done', queue_id: 'q-1', position: 1,
+            scope: { variant_id: 'variant-1', variant_name: 'alpha', project_id: 'project-1' },
+            progress: { current: 4, total: 4, message: 'Scan complete' },
+            logs: ['Scanned'], created_at: '2026-08-19T10:00:00+00:00',
+        }),
+        operation({
+            op_id: 'scan:grype:variant-2', status, queue_id: 'q-1', position: 2,
+            scope: { variant_id: 'variant-2', variant_name: 'hyper-v', project_id: 'project-1' },
+            progress: { current: 1, total: 4, message: '1/4 Exporting CycloneDX' },
+            logs: ['Scanning'], created_at: '2026-08-19T10:00:01+00:00',
+        }),
+        operation({
+            op_id: 'refresh:epss', kind: 'refresh', source: 'epss', label: 'EPSS', queue_id: 'q-1', position: 3,
+            status: status === 'running' ? 'queued' : status, created_at: '2026-08-19T10:00:02+00:00',
+        }),
+    ];
+
+    it('collapses a multi-step batch into one run entry', () => {
+        const { stream } = renderModal();
+        stream.send('snapshot', { seq: 1, operations: batch() });
+
+        const run = screen.getByRole('button', { name: /scan run – 2 variants in progress \(1 of 3 steps\)/i });
+        expect(run).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.getByText(/grype scan – hyper-v: 1\/4 exporting cyclonedx \(42%\)/i)).toBeInTheDocument();
+        expect(screen.queryByText('Scanning')).not.toBeInTheDocument();
+
+        fireEvent.click(run);
+
+        expect(screen.getByText(/grype scan – alpha complete/i)).toBeInTheDocument();
+        expect(screen.getByText(/grype scan – hyper-v in progress/i)).toBeInTheDocument();
+        expect(screen.getByText('Scanning')).toBeInTheDocument();
+        expect(screen.queryByTitle('Close')).not.toBeInTheDocument();
+    });
+
+    it('cancels a whole run once, and a single step on its own', () => {
+        const cancelQueue = jest.spyOn(Operations, 'cancelQueue').mockResolvedValue(true);
+        const cancel = jest.spyOn(Operations, 'cancel').mockResolvedValue(true);
+        const { stream } = renderModal();
+        stream.send('snapshot', { seq: 1, operations: batch() });
+        fireEvent.click(screen.getByRole('button', { name: /scan run – 2 variants in progress/i }));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel Grype Scan – hyper-v' }));
+        expect(cancel).toHaveBeenCalledWith('scan:grype:variant-2');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel Scan run – 2 variants' }));
+        expect(cancelQueue).toHaveBeenCalledWith('q-1');
+        expect(screen.queryByRole('button', { name: 'Cancel Scan run – 2 variants' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /cancel epss/i })).not.toBeInTheDocument();
+    });
+
+    it('offers the run cancellation again when the request is refused', async () => {
+        jest.spyOn(Operations, 'cancelQueue').mockResolvedValue(false);
+        const { stream } = renderModal();
+        stream.send('snapshot', { seq: 1, operations: batch() });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel Scan run – 2 variants' }));
+
+        expect(await screen.findByRole('button', { name: 'Cancel Scan run – 2 variants' })).toBeInTheDocument();
+    });
+
+    it('reports the worst outcome of a finished run and dismisses every step', () => {
+        const dismiss = jest.spyOn(Operations, 'dismiss').mockResolvedValue(true);
+        const { stream } = renderModal();
+        stream.send('snapshot', { seq: 1, operations: batch('error') });
+
+        expect(screen.getByText(/scan run – 2 variants failed \(3 of 3 steps\)/i)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Close Scan run – 2 variants' }));
+
+        expect(dismiss.mock.calls.map(([opId]) => opId)).toEqual([
+            'scan:grype:variant-1', 'scan:grype:variant-2', 'refresh:epss',
+        ]);
+    });
+
+    it('names a refresh-only batch after its data refresh', () => {
         const { stream } = renderModal();
         stream.send('snapshot', {
             seq: 1,
             operations: [
-                operation({
-                    op_id: 'scan:grype:variant-1', status: 'running', queue_id: 'q-1',
-                    scope: { variant_id: 'variant-1', variant_name: 'alpha', project_id: 'project-1' },
-                    logs: ['Scanning'], created_at: '2026-08-19T10:00:00+00:00',
-                }),
-                operation({
-                    op_id: 'scan:grype:variant-2', status: 'running', queue_id: 'q-1',
-                    scope: { variant_id: 'variant-2', variant_name: 'hyper-v', project_id: 'project-1' },
-                    logs: ['Scanning'], created_at: '2026-08-19T10:00:01+00:00',
-                }),
-                operation({
-                    op_id: 'scan:nvd:variant-1', source: 'nvd', label: 'NVD Scan', status: 'running', queue_id: 'q-1',
-                    scope: { variant_id: 'variant-1', variant_name: 'alpha', project_id: 'project-1' },
-                    logs: ['Scanning'], created_at: '2026-08-19T10:00:02+00:00',
-                }),
+                completed('refresh:nvd', 'NVD', { kind: 'refresh', source: 'nvd', queue_id: 'q-2', position: 1 }),
+                completed('refresh:epss', 'EPSS', { kind: 'refresh', source: 'epss', queue_id: 'q-2', position: 2 }),
             ],
         });
 
-        expect(screen.getByText(/grype scan – hyper-v in progress \(variant 2 of 2\)/i)).toBeInTheDocument();
-        expect(screen.getByText(/nvd scan – alpha in progress/i)).toBeInTheDocument();
-        expect(screen.queryByText(/nvd scan – alpha in progress \(variant/i)).not.toBeInTheDocument();
+        expect(screen.getByText(/vulnerability data refresh complete \(2 of 2 steps\)/i)).toBeInTheDocument();
+        expect(screen.getByLabelText('Complete')).toBeInTheDocument();
     });
 
     it('warns that it is reconnecting when the stream drops', () => {

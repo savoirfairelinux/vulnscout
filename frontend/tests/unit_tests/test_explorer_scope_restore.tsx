@@ -231,6 +231,22 @@ describe('Explorer saved-scope validation', () => {
         expect(screen.getByRole('button', { name: 'close progress' })).toBeInTheDocument();
     });
 
+    test('counts every step of one batch as a single queue entry', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
+        mockVariantsListAll.mockResolvedValue([{ id: 'default-variant', project_id: 'default-project', name: 'Default Variant' }]);
+        render(<Explorer />);
+
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'scan:grype:v1', kind: 'scan', status: 'done', queue_id: 'q-1' },
+            { op_id: 'scan:nvd:v1', kind: 'scan', status: 'running', queue_id: 'q-1' },
+            { op_id: 'refresh:epss', kind: 'refresh', status: 'queued', queue_id: 'q-1' },
+            { op_id: 'upload:1', kind: 'upload', status: 'done', queue_id: null },
+        ] as Operation[] });
+
+        expect(screen.getByTestId('operation-counts')).toHaveTextContent('1/2/1');
+    });
+
     test('clears a stale project scope and silently falls back to the default scope', async () => {
         mockGetFrontendScope.mockReturnValue(savedScope('deleted-project', ['old-variant']));
         mockProjectsList.mockResolvedValue([{ id: 'other-project', name: 'Other Project' }]);
