@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "
 import NavigationBar from "../components/NavigationBar";
 import OperationQueueModal from "../components/OperationQueueModal";
 import { subscribe as operationSubscribe, getSnapshot as getOperations } from "../handlers/operationStore";
-import { isActive } from "../types/operation";
+import { groupQueueItems, isQueueItemActive } from "../helpers/operationRuns";
 import MessageBanner from "../components/MessageBanner";
 import ModalShell from "../components/ModalShell";
 import type { Package } from "../handlers/packages";
@@ -79,8 +79,9 @@ function Explorer() {
     const observedOperationStatuses = useRef(new Map<string, string>());
     const setupCheckGeneration = useRef(0);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
-    const trackedScanCount = operationEntries.length;
-    const activeScanCount = operationEntries.filter(isActive).length;
+    const queueItems = groupQueueItems(operationEntries);
+    const trackedScanCount = queueItems.length;
+    const activeScanCount = queueItems.filter(isQueueItemActive).length;
     const finishedScanCount = trackedScanCount - activeScanCount;
 
     useEffect(() => {
