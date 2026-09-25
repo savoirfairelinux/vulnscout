@@ -1,8 +1,23 @@
+/** Combined result of the tool scans one batch ran on a variant. */
+type ScanRunSummary = {
+    id: string;
+    scan_ids: string[];
+    sources: string[];
+    vuln_count: number;
+    finding_count: number;
+    assessment_count: number;
+    newly_detected_vulns: number;
+    newly_detected_findings: number;
+    newly_detected_assessments: number;
+};
+
 type Scan = {
     id: string;
     description: string | null;
     scan_type: string;
     scan_source: string | null;
+    run_id: string | null;
+    run: ScanRunSummary | null;
     timestamp: string;
     variant_id: string;
     variant_name: string | null;
@@ -153,7 +168,7 @@ type GlobalResult = {
     assessment_count: number;
 };
 
-export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, ScanDiff, GlobalResult, GlobalResultFinding, GlobalResultPackage, GlobalResultVuln, GlobalResultAssessment };
+export type { Scan, ScanRunSummary, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, ScanDiff, GlobalResult, GlobalResultFinding, GlobalResultPackage, GlobalResultVuln, GlobalResultAssessment };
 
 type ScanImportEntry = {
     scan_id: string;

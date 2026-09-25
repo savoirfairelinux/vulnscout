@@ -12,12 +12,14 @@ import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
 import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faFileImport, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faFileImport, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck, faLayerGroup } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
 import RunScansWizard from "../components/RunScansWizard";
 import { refreshSourcesForScans } from "../helpers/refreshSources";
+import { groupScanRuns } from "../helpers/scanRuns";
+import type { ScanTimelineEntry } from "../helpers/scanRuns";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
 import Vulnerabilities from "../handlers/vulnerabilities";
@@ -104,6 +106,27 @@ function ChangeLine({ icon, label, children }: { icon: IconDefinition; label: st
             <div className="flex items-center gap-2 flex-wrap">{children}</div>
         </div>
     );
+}
+
+const TOOL_BADGES: Record<string, { label: string; icon: IconDefinition; className: string }> = {
+    grype: { label: 'Grype', icon: faBug, className: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
+    nvd: { label: 'NVD CPE', icon: faShieldHalved, className: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300' },
+    osv: { label: 'OSV', icon: faLeaf, className: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' },
+    scc: { label: 'sbom-cve-check', icon: faBook, className: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300' },
+};
+
+function scanHasChanges(s: Scan): boolean {
+    return s.is_first
+        || (s.findings_added ?? 0) !== 0
+        || (s.findings_removed ?? 0) !== 0
+        || (s.findings_upgraded ?? 0) !== 0
+        || (s.packages_added ?? 0) !== 0
+        || (s.packages_removed ?? 0) !== 0
+        || (s.packages_upgraded ?? 0) !== 0
+        || (s.vulns_added ?? 0) !== 0
+        || (s.vulns_removed ?? 0) !== 0
+        || (s.newly_detected_findings ?? 0) !== 0
+        || (s.newly_detected_vulns ?? 0) !== 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1019,7 +1042,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     const [openGlobalId, setOpenGlobalId] = useState<string | null>(null);
     const [editingDescId, setEditingDescId] = useState<string | null>(null);
     const [editingDescValue, setEditingDescValue] = useState<string>('');
-    const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [deletingIds, setDeletingIds] = useState<string[] | null>(null);
     const [hideEmptyScans, setHideEmptyScans] = useState(false);
     const [showGrype, setShowGrype] = useState(true);
     const [showOsv, setShowOsv] = useState(true);
@@ -1095,10 +1118,14 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
         }
     }
 
-    async function handleDeleteScan(scanId: string) {
-        const result = await ScansHandler.deleteScan(scanId);
-        if (result.ok) {
-            setDeletingId(null);
+    async function handleDeleteScans(scanIds: string[]) {
+        let deleted = 0;
+        for (const scanId of scanIds) {
+            if (!(await ScansHandler.deleteScan(scanId)).ok) break;
+            deleted += 1;
+        }
+        if (deleted === scanIds.length) setDeletingIds(null);
+        if (deleted > 0) {
             refreshScans();
             onScanComplete?.();
         }
@@ -1365,27 +1392,8 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
     const allRunning = operationEntries.some(operation => operation.kind === 'scan' && isActive(operation));
 
-    // Filter out "empty" scans (no changes) when toggle is active
-    const displayedScans = hideEmptyScans
-        ? scans.filter(s => {
-            if (s.is_first) return true; // first scans always shown
-            const hasChanges =
-                (s.findings_added ?? 0) !== 0 ||
-                (s.findings_removed ?? 0) !== 0 ||
-                (s.findings_upgraded ?? 0) !== 0 ||
-                (s.packages_added ?? 0) !== 0 ||
-                (s.packages_removed ?? 0) !== 0 ||
-                (s.packages_upgraded ?? 0) !== 0 ||
-                (s.vulns_added ?? 0) !== 0 ||
-                (s.vulns_removed ?? 0) !== 0 ||
-                (s.newly_detected_findings ?? 0) !== 0 ||
-                (s.newly_detected_vulns ?? 0) !== 0;
-            return hasChanges;
-        })
-        : scans;
-
     // Apply scan-source visibility filters
-    const filteredScans = displayedScans.filter((s) => {
+    const sourceVisible = (s: Scan) => {
         if ((s.scan_type || 'sbom') !== 'tool') return true; // always show SBOM
         const src = s.scan_source || 'grype';
         if (src === 'grype' && !showGrype) return false;
@@ -1393,7 +1401,12 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
         if (src === 'nvd' && !showNvd) return false;
         if (src === 'scc' && !showScc) return false;
         return true;
-    });
+    };
+
+    // "Hide empty scans" drops scans without changes; a run stays whole while one of its steps changed something.
+    const timeline = groupScanRuns(scans).filter(entry => entry.kind === 'scan'
+        ? (!hideEmptyScans || scanHasChanges(entry.scan)) && sourceVisible(entry.scan)
+        : entry.steps.some(sourceVisible) && (!hideEmptyScans || entry.steps.some(scanHasChanges)));
 
     // -- Export All (grouped by project/variant) --
     async function handleExportAll() {
@@ -1423,6 +1436,151 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     // Column sizing — single lane
     const LANE_W = 36;            // px – timeline column
     const mainCX = LANE_W / 2;    // center-x of the lane
+
+    const deletingRun = (deletingIds?.length ?? 0) > 1;
+
+    const renderRun = (entry: Extract<ScanTimelineEntry, { kind: 'run' }>, lane: (dot: ReactNode) => ReactNode) => {
+        const { key, run, steps } = entry;
+        const latest = steps[steps.length - 1];
+        const exporting = steps.some(step => step.id === exportingScanId);
+        const badgeFor = (step: Scan) => TOOL_BADGES[step.scan_source ?? ''] ?? TOOL_BADGES.grype;
+        const menuItemClass = "w-full text-left px-3 py-1.5 text-xs text-neutral-200 hover:bg-sky-900/40 rounded transition-colors";
+
+        return (
+            <div key={key} className="flex items-stretch mb-0">
+                {lane(
+                    <span
+                        className="absolute grid grid-cols-2 gap-px p-px rounded-sm ring-2 ring-gray-200 dark:ring-neutral-800 bg-neutral-300 dark:bg-neutral-900"
+                        style={{ left: mainCX, top: "50%", transform: "translate(-50%, -50%)" }}
+                    >
+                        {steps.map(step => (
+                            <span key={step.id} className={`w-1.5 h-1.5 ${sourceSquareColor[step.scan_source ?? ""] ?? "bg-neutral-400"}`} />
+                        ))}
+                    </span>
+                )}
+
+                <div className="flex-1 min-w-0 py-2 pl-3">
+                <div className="group/card relative p-4 bg-white dark:bg-neutral-700 rounded-lg shadow-sm border border-gray-100 dark:border-neutral-600">
+                    <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover/card:opacity-100 transition-all">
+                        <div className="relative" ref={exportMenuScanId === key ? exportMenuRef : undefined}>
+                            <button
+                                onClick={() => setExportMenuScanId(exportMenuScanId === key ? null : key)}
+                                disabled={exporting}
+                                title="Export scan run"
+                                className={[
+                                    "p-1 transition-colors",
+                                    exporting ? "text-cyan-400 cursor-wait" : "text-neutral-400 hover:text-cyan-400",
+                                ].join(' ')}
+                            >
+                                <FontAwesomeIcon icon={faDownload} className="text-sm" />
+                            </button>
+                            {exportMenuScanId === key && (
+                                <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-1.5">
+                                    <button onClick={() => handleExportScanResult(latest)} className={menuItemClass}>
+                                        Export Scan Result
+                                    </button>
+                                    {steps.map(step => (
+                                        <button key={step.id} onClick={() => handleExportScanDiff(step)} className={menuItemClass}>
+                                            Export {badgeFor(step).label} Diff
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        <button
+                            onClick={() => setDeletingIds(steps.map(step => step.id))}
+                            title="Delete scan run"
+                            className="text-neutral-400 hover:text-red-400 transition-colors p-1"
+                        >
+                            <FontAwesomeIcon icon={faTrash} className="text-sm" />
+                        </button>
+                    </div>
+
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <time className="text-sm font-semibold text-gray-500 dark:text-neutral-400">
+                            {formatDate(steps[0].timestamp)}
+                        </time>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                            <FontAwesomeIcon icon={faCrosshairs} className="mr-1" />
+                            Vulnerability Scan
+                        </span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
+                            <FontAwesomeIcon icon={faLayerGroup} className="mr-1" />
+                            Scan run · {steps.length} scanners
+                        </span>
+                    </div>
+
+                    <p className="text-sm font-medium text-gray-800 dark:text-neutral-100 mb-1">
+                        {latest.project_name
+                            ? <><span className="text-neutral-500 dark:text-neutral-400">{latest.project_name}</span><span className="mx-1 text-neutral-400">/</span><span>{latest.variant_name ?? latest.variant_id}</span></>
+                            : <span>{latest.variant_name ?? latest.variant_id}</span>
+                        }
+                    </p>
+
+                    <div className="mt-3 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <h4 className="text-sm font-bold text-neutral-700 dark:text-neutral-100 mb-1.5">Current result</h4>
+                            <div className="flex items-baseline gap-x-10 gap-y-1.5 flex-wrap">
+                                <BigStat count={latest.global_package_count ?? 0} label="packages" />
+                                <BigStat count={latest.global_vuln_count ?? 0} label="unique vulnerabilities" />
+                                <BigStat count={latest.global_finding_count ?? 0} label="vulnerability matches" />
+                                <BigStat count={latest.global_assessment_count ?? 0} label="assessments" />
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => setOpenGlobalId(latest.id)}
+                            className="shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
+                        >
+                            Details
+                        </button>
+                    </div>
+
+                    <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-600">
+                        <h4 className="text-sm font-bold text-neutral-700 dark:text-neutral-100 mb-2">
+                            Changes since previous scan
+                        </h4>
+                        <div className="space-y-1.5">
+                            <ChangeLine icon={faShieldHalved} label="Unique vulnerabilities">
+                                <ChangeStat count={run.vuln_count} label="detected" tone="total" />
+                                <Dot />
+                                <ChangeStat count={run.newly_detected_vulns} label="new" tone="added" />
+                            </ChangeLine>
+                            <ChangeLine icon={faMagnifyingGlass} label="Vulnerability matches">
+                                <ChangeStat count={run.finding_count} label="detected" tone="total" />
+                                <Dot />
+                                <ChangeStat count={run.newly_detected_findings} label="new" tone="added" />
+                            </ChangeLine>
+                            <ChangeLine icon={faClipboardCheck} label="Assessments">
+                                <ChangeStat count={run.assessment_count} label="detected" tone="total" />
+                                <Dot />
+                                <ChangeStat count={run.newly_detected_assessments} label="new" tone="added" />
+                            </ChangeLine>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-semibold text-neutral-500 dark:text-neutral-300">Per scanner:</span>
+                            {steps.filter(sourceVisible).map(step => {
+                                const badge = badgeFor(step);
+                                return (
+                                    <button
+                                        key={step.id}
+                                        type="button"
+                                        onClick={() => { setOpenDiffId(step.id); setOpenDiffType('tool'); }}
+                                        title={`Show ${badge.label} changes`}
+                                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold hover:opacity-80 transition-opacity ${badge.className}`}
+                                    >
+                                        <FontAwesomeIcon icon={badge.icon} />
+                                        {badge.label}
+                                        <span className="font-normal">+{(step.newly_detected_vulns ?? 0).toLocaleString()} new</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+                </div>
+            </div>
+        );
+    };
 
     const importNoticeBanner = importNotice && (
         <div className="sticky top-0 z-40">
@@ -1541,7 +1699,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                 />
 
                 {/* Export all scan diffs */}
-                {filteredScans.length > 0 && (
+                {timeline.length > 0 && (
                     <button
                         type="button"
                         onClick={handleExportAll}
@@ -1651,14 +1809,16 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                 <GlobalResultModal scanId={openGlobalId} onClose={() => setOpenGlobalId(null)} />
             )}
             <ConfirmationModal
-                isOpen={deletingId !== null}
-                title="Delete Scan"
-                message="Are you sure you want to delete this scan? Associated observations and orphaned findings will be removed. This action cannot be undone."
+                isOpen={deletingIds !== null}
+                title={deletingRun ? "Delete Scan Run" : "Delete Scan"}
+                message={deletingRun
+                    ? `Are you sure you want to delete this scan run? Its ${deletingIds?.length} scans, their observations and orphaned findings will be removed. This action cannot be undone.`
+                    : "Are you sure you want to delete this scan? Associated observations and orphaned findings will be removed. This action cannot be undone."}
                 confirmText="Yes, delete"
                 cancelText="Cancel"
                 showTitleIcon={true}
-                onConfirm={() => { if (deletingId) handleDeleteScan(deletingId); }}
-                onCancel={() => setDeletingId(null)}
+                onConfirm={() => { if (deletingIds) handleDeleteScans(deletingIds); }}
+                onCancel={() => setDeletingIds(null)}
             />
 
             <div className="w-full px-6 py-6">
@@ -1667,23 +1827,28 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
 
                 {/* Timeline rows */}
                 <div className="relative">
-                    {filteredScans.map((scan, index) => {
-                        const isTool = (scan.scan_type || "sbom") === "tool";
+                    {timeline.map((entry, index) => {
                         const isFirst = index === 0;
-                        const isLast = index === filteredScans.length - 1;
-
-                        return (
-                        <div key={scan.id} className="flex items-stretch mb-0">
-                            {/* Lane indicator — single linear column */}
+                        const isLast = index === timeline.length - 1;
+                        // Lane indicator — single linear column
+                        const lane = (dot: ReactNode) => (
                             <div className="flex-shrink-0 relative" style={{ width: LANE_W, minHeight: 80 }}>
                                 {/* Vertical line */}
                                 <div
                                     className="absolute border-l-2 border-cyan-700 dark:border-cyan-600"
                                     style={{ left: mainCX, top: isFirst ? "50%" : 0, bottom: isLast ? "50%" : 0 }}
                                 />
+                                {dot}
+                            </div>
+                        );
+                        if (entry.kind === 'run') return renderRun(entry, lane);
+                        const scan = entry.scan;
+                        const isTool = (scan.scan_type || "sbom") === "tool";
 
-                                {/* Dot: circle for SBOM, colored square for tool scans */}
-                                {!isTool ? (
+                        return (
+                        <div key={scan.id} className="flex items-stretch mb-0">
+                            {/* Dot: circle for SBOM, colored square for tool scans */}
+                            {lane(!isTool ? (
                                     <span
                                         className={[
                                             "absolute flex items-center justify-center",
@@ -1703,8 +1868,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                                         ].join(" ")}
                                         style={{ left: mainCX, top: "50%", transform: "translate(-50%, -50%)" }}
                                     />
-                                )}
-                            </div>
+                                ))}
 
                             {/* Scan card */}
                             <div className="flex-1 min-w-0 py-2 pl-3">
@@ -1744,7 +1908,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                                         )}
                                     </div>
                                     <button
-                                        onClick={() => setDeletingId(scan.id)}
+                                        onClick={() => setDeletingIds([scan.id])}
                                         title="Delete scan"
                                         className="text-neutral-400 hover:text-red-400 transition-colors p-1"
                                     >
