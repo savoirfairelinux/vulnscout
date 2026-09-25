@@ -454,20 +454,27 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         return () => controller.abort();
     }, [modalVuln, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
-    const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
-    const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
+    // A filter jump (e.g. "Show Vulnerabilities" from the packages table) remounts this
+    // component with filterLabel/filterValue set. The effect below resets every other
+    // filter dimension, but that only happens after mount — so the fields it resets must
+    // skip their stale localStorage read here, or the old values render for one frame
+    // (and, since applySearch's guard only covers the async re-run, an old search can
+    // otherwise still apply).
+    const isFilterJump = Boolean(filterLabel && filterValue);
+    const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '', { skipInitialRead: isFilterJump });
+    const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '', { skipInitialRead: isFilterJump });
     const [descriptionMatches, setDescriptionMatches] = useState<Record<string, Set<string>>>({});
     const [descriptionSearchLoading, setDescriptionSearchLoading] = useState(false);
     const [descriptionSearchError, setDescriptionSearchError] = useState(false);
-    const [selectedSeverities, setSelectedSeverities] = useLocalStorageState<string[]>(`${preferenceKey}.severities`, []);
-    const [selectedStatuses, setSelectedStatuses] = useLocalStorageState<string[]>(`${preferenceKey}.statuses`, []);
-    const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
-    const [selectedPackages, setSelectedPackages] = useLocalStorageState<string[]>(`${preferenceKey}.packages`, []);
-    const [publishedDateFilterType, setPublishedDateFilterType] = useLocalStorageState(`${preferenceKey}.publishedDate.type`, '');
-    const [publishedDateValue, setPublishedDateValue] = useLocalStorageState(`${preferenceKey}.publishedDate.value`, '');
-    const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '');
-    const [publishedDateFrom, setPublishedDateFrom] = useLocalStorageState(`${preferenceKey}.publishedDate.from`, '');
-    const [publishedDateTo, setPublishedDateTo] = useLocalStorageState(`${preferenceKey}.publishedDate.to`, '');
+    const [selectedSeverities, setSelectedSeverities] = useLocalStorageState<string[]>(`${preferenceKey}.severities`, [], { skipInitialRead: isFilterJump });
+    const [selectedStatuses, setSelectedStatuses] = useLocalStorageState<string[]>(`${preferenceKey}.statuses`, [], { skipInitialRead: isFilterJump });
+    const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, [], { skipInitialRead: isFilterJump });
+    const [selectedPackages, setSelectedPackages] = useLocalStorageState<string[]>(`${preferenceKey}.packages`, [], { skipInitialRead: isFilterJump });
+    const [publishedDateFilterType, setPublishedDateFilterType] = useLocalStorageState(`${preferenceKey}.publishedDate.type`, '', { skipInitialRead: isFilterJump });
+    const [publishedDateValue, setPublishedDateValue] = useLocalStorageState(`${preferenceKey}.publishedDate.value`, '', { skipInitialRead: isFilterJump });
+    const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '', { skipInitialRead: isFilterJump });
+    const [publishedDateFrom, setPublishedDateFrom] = useLocalStorageState(`${preferenceKey}.publishedDate.from`, '', { skipInitialRead: isFilterJump });
+    const [publishedDateTo, setPublishedDateTo] = useLocalStorageState(`${preferenceKey}.publishedDate.to`, '', { skipInitialRead: isFilterJump });
     const operations = useSyncExternalStore(subscribeToOperations, getOperations);
     const progress = useMemo(() => {
         const forSource = (source: string) => operations.some(operation => operation.op_id === `refresh:${source}`)
@@ -492,16 +499,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
-    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useLocalStorageState(`${preferenceKey}.customSeverity.enabled`, false);
-    const [severityRange, setSeverityRange] = useLocalStorageState(`${preferenceKey}.customSeverity.range`, { min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
-    const [showCustomEpssFilter, setShowCustomEpssFilter] = useLocalStorageState(`${preferenceKey}.customEpss.enabled`, false);
-    const [epssRange, setEpssRange] = useLocalStorageState(`${preferenceKey}.customEpss.range`, { min: 0, max: 100 });
-    const [selectedAttackVectors, setSelectedAttackVectors] = useLocalStorageState<string[]>(`${preferenceKey}.attackVectors`, []);
-    const [selectedFirstScanDates, setSelectedFirstScanDates] = useLocalStorageState<string[]>(`${preferenceKey}.firstScanDates`, []);
+    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useLocalStorageState(`${preferenceKey}.customSeverity.enabled`, false, { skipInitialRead: isFilterJump });
+    const [severityRange, setSeverityRange] = useLocalStorageState(`${preferenceKey}.customSeverity.range`, { min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX }, { skipInitialRead: isFilterJump });
+    const [showCustomEpssFilter, setShowCustomEpssFilter] = useLocalStorageState(`${preferenceKey}.customEpss.enabled`, false, { skipInitialRead: isFilterJump });
+    const [epssRange, setEpssRange] = useLocalStorageState(`${preferenceKey}.customEpss.range`, { min: 0, max: 100 }, { skipInitialRead: isFilterJump });
+    const [selectedAttackVectors, setSelectedAttackVectors] = useLocalStorageState<string[]>(`${preferenceKey}.attackVectors`, [], { skipInitialRead: isFilterJump });
+    const [selectedFirstScanDates, setSelectedFirstScanDates] = useLocalStorageState<string[]>(`${preferenceKey}.firstScanDates`, [], { skipInitialRead: isFilterJump });
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
-    const [aiSuggestionFilter, setAiSuggestionFilter] = useLocalStorageState<'any' | 'has' | 'no'>(`${preferenceKey}.aiSuggestion`, 'any');
+    const [aiSuggestionFilter, setAiSuggestionFilter] = useLocalStorageState<'any' | 'has' | 'no'>(`${preferenceKey}.aiSuggestion`, 'any', { skipInitialRead: isFilterJump });
     const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -604,11 +611,34 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
-        if (filterLabel === "Source") setSelectedSources([filterValue]);
-        if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
-        if (filterLabel === "Status") setSelectedStatuses([filterValue]);
-        if (filterLabel === "Package") setSelectedPackages([filterValue]);
-    }, [filterLabel, filterValue, setSelectedPackages, setSelectedSeverities, setSelectedSources, setSelectedStatuses]);
+        setSelectedSources(filterLabel === "Source" ? [filterValue] : []);
+        setSelectedSeverities(filterLabel === "Severity" ? [filterValue] : []);
+        setSelectedStatuses(filterLabel === "Status" ? [filterValue] : []);
+        setSelectedPackages(filterLabel === "Package" ? [filterValue] : []);
+        // Clear every other persisted filter dimension so the jump shows exactly
+        // the target filter, not last time's leftover search/date/range filters.
+        setSearch('');
+        setDraftSearch('');
+        setPublishedDateFilterType('');
+        setPublishedDateValue('');
+        setPublishedDaysValue('');
+        setPublishedDateFrom('');
+        setPublishedDateTo('');
+        setShowCustomSeverityFilter(false);
+        setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+        setShowCustomEpssFilter(false);
+        setEpssRange({ min: 0, max: 100 });
+        setSelectedAttackVectors([]);
+        setSelectedFirstScanDates([]);
+        setAiSuggestionFilter('any');
+    }, [
+        filterLabel, filterValue,
+        setSelectedPackages, setSelectedSeverities, setSelectedSources, setSelectedStatuses,
+        setSearch, setDraftSearch,
+        setPublishedDateFilterType, setPublishedDateValue, setPublishedDaysValue, setPublishedDateFrom, setPublishedDateTo,
+        setShowCustomSeverityFilter, setSeverityRange, setShowCustomEpssFilter, setEpssRange,
+        setSelectedAttackVectors, setSelectedFirstScanDates, setAiSuggestionFilter,
+    ]);
 
     // Fetch pending AI suggestions (origin == 'ai') for the current scope. These are
     // excluded from the vulnerabilities' assessments array by the backend, so they must
@@ -1470,7 +1500,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     // any in-flight description request before starting a new one. Depending on
     // `vulnerabilities` (not `draftSearch`) avoids firing a description search
     // on every keystroke.
+    // A filter jump (filterLabel/filterValue set at mount, e.g. from "Show
+    // Vulnerabilities") clears search in the effect above. Skip this restore
+    // once on that initial mount so it doesn't immediately reapply the
+    // pre-clear `draftSearch` it captured from localStorage before the clear
+    // took effect.
+    const skipInitialSearchRestore = useRef(isFilterJump);
     useEffect(() => {
+        if (skipInitialSearchRestore.current) {
+            skipInitialSearchRestore.current = false;
+            return;
+        }
         if (draftSearch.trim()) void applySearchRef.current();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [vulnerabilities]);
