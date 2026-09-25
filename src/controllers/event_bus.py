@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import uuid
 from collections import deque
 from typing import Any, Deque, Iterator, List, Optional, Set
 
@@ -98,6 +99,7 @@ class EventBus:
         self._replay: Deque[dict] = deque(maxlen=replay_size)
         self._client_backlog = client_backlog
         self._seq = 0
+        self.epoch = uuid.uuid4().hex
 
     @property
     def seq(self) -> int:
@@ -114,9 +116,8 @@ class EventBus:
             self._seq += 1
             event = {"seq": self._seq, "event": event_type, "data": data}
             self._replay.append(event)
-            targets = list(self._subscribers)
-        for sub in targets:
-            sub._offer(event)
+            for sub in self._subscribers:
+                sub._offer(event)
         return event
 
     def subscribe(self) -> Subscription:

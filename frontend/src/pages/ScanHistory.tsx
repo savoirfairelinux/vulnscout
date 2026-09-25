@@ -2,34 +2,11 @@ import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "
 import type { ReactNode } from "react";
 import ScansHandler from "../handlers/scans";
 import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult } from "../handlers/scans";
-import { subscribe, getSnapshot, setOnDone, queueScan as grypeQueueScan, startQueuedScan as grypeStartQueuedScan, waitForCompletion as grypeWaitForCompletion } from "../handlers/grypeScanState";
-import {
-    subscribe as nvdSubscribe,
-    getSnapshot as nvdGetSnapshot,
-    setOnDone as nvdSetOnDone,
-    queueScan as nvdQueueScan,
-    startQueuedScan as nvdStartQueuedScan,
-    waitForCompletion as nvdWaitForCompletion,
-} from "../handlers/nvdScanState";
-import {
-    subscribe as osvSubscribe,
-    getSnapshot as osvGetSnapshot,
-    setOnDone as osvSetOnDone,
-    queueScan as osvQueueScan,
-    startQueuedScan as osvStartQueuedScan,
-    waitForCompletion as osvWaitForCompletion,
-} from "../handlers/osvScanState";
-import {
-    subscribe as sccSubscribe,
-    getSnapshot as sccGetSnapshot,
-    setOnDone as sccSetOnDone,
-    queueScan as sccQueueScan,
-    startQueuedScan as sccStartQueuedScan,
-    waitForCompletion as sccWaitForCompletion,
-} from "../handlers/sccScanState";
-import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
-import { hasActiveRefreshes, queueVulnerabilityRefresh, restoreActiveRefreshes, waitForActiveScans, waitForRefreshCompletion } from "../handlers/activeScanQueue";
-import type { RefreshType } from "../handlers/activeScanQueue";
+import Operations from "../handlers/operations";
+import { subscribe as operationSubscribe, getSnapshot as getOperations, waitForQueue } from "../handlers/operationStore";
+import type { ScanSource } from "../types/operation";
+import { isActive } from "../types/operation";
+import type { RefreshType } from "../helpers/refreshSources";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
@@ -1074,21 +1051,8 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
         generation: 0,
     });
 
-    // Global Grype scan state — survives tab switches (per-variant)
-    const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);
-    const grypeRunning = grypeEntries.some(e => e.status === "running" || e.status === "queued");
-
-    // Global NVD scan state — survives tab switches (per-variant)
-    const nvdEntries: ScanManagerSnapshot = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
-    const nvdRunning = nvdEntries.some(e => e.status === "running" || e.status === "queued");
-
-    // Global OSV scan state — survives tab switches (per-variant)
-    const osvEntries: ScanManagerSnapshot = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
-    const osvRunning = osvEntries.some(e => e.status === "running" || e.status === "queued");
-
-    // Global SCC scan state — survives tab switches (per-variant)
-    const sccEntries: ScanManagerSnapshot = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
-    const sccRunning = sccEntries.some(e => e.status === "running" || e.status === "queued");
+    const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
+    const observedScanStatuses = useRef(new Map<string, string>());
 
     const requestScans = useCallback((showLoading: boolean) => {
         scanRequestRef.current.controller?.abort();
@@ -1267,35 +1231,14 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
     );
     const variantsReady = loadedVariantScopeKey === variantScopeKey;
 
-    // Register the refresh callback so the global store can trigger it on completion
     useEffect(() => {
-        setOnDone(() => { refreshScans(); onScanComplete?.(); });
-        return () => setOnDone(null);
-    }, [refreshScans, onScanComplete]);
-
-    useEffect(() => {
-        nvdSetOnDone(() => { refreshScans(); onScanComplete?.(); });
-        return () => nvdSetOnDone(null);
-    }, [refreshScans, onScanComplete]);
-
-    useEffect(() => {
-        osvSetOnDone(() => { refreshScans(); onScanComplete?.(); });
-        return () => osvSetOnDone(null);
-    }, [refreshScans, onScanComplete]);
-
-    useEffect(() => {
-        sccSetOnDone(() => { refreshScans(); onScanComplete?.(); });
-        return () => sccSetOnDone(null);
-    }, [refreshScans, onScanComplete]);
-
-    // If a scan finished while we were away, refresh the list on mount
-    useEffect(() => {
-        if (grypeEntries.some(e => e.status === 'done')) refreshScans();
-        if (nvdEntries.some(e => e.status === 'done')) refreshScans();
-        if (osvEntries.some(e => e.status === 'done')) refreshScans();
-        if (sccEntries.some(e => e.status === 'done')) refreshScans();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        const previous = observedScanStatuses.current;
+        const scans = operationEntries.filter(operation => operation.kind === 'scan');
+        observedScanStatuses.current = new Map(scans.map(operation => [operation.op_id, operation.status]));
+        if (scans.some(operation =>
+            ['done', 'error', 'cancelled'].includes(operation.status)
+            && previous.get(operation.op_id) !== operation.status)) refreshScans();
+    }, [operationEntries, refreshScans]);
 
     // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {
@@ -1381,29 +1324,6 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanWizardOpen(false);
-        const opts = { excludeKernel, excludeNative };
-        const scanQueue = [
-            ['grype', grypeQueueScan, grypeStartQueuedScan, grypeWaitForCompletion],
-            ['nvd', nvdQueueScan, nvdStartQueuedScan, nvdWaitForCompletion],
-            ['osv', osvQueueScan, osvStartQueuedScan, osvWaitForCompletion],
-            ['scc', sccQueueScan, sccStartQueuedScan, sccWaitForCompletion],
-        ] as const;
-
-        await restoreActiveRefreshes();
-        const refreshAheadOfScans = hasActiveRefreshes();
-        // Capture any scan managers that are already active (e.g. a scan
-        // restored by Explorer or triggered by a previous action) BEFORE we
-        // queue the newly selected batches. Their completion must be part of
-        // the global barrier so a pre-existing scan in an unselected manager
-        // never overlaps with the batch we are about to start.
-        const preExistingScans = waitForActiveScans();
-        await Promise.all(scanQueue.map(async ([scanType, queueScan]) => {
-            if (selectedScanTypes.has(scanType)) await queueScan(variants, opts);
-        }));
-
-        if (refreshAheadOfScans) await waitForRefreshCompletion();
-        await preExistingScans;
-
         const applicableRefreshTypes = refreshSourcesForScans(selectedScanTypes);
         const refreshTypes = (refreshMode === 'complete' ? [...applicableRefreshTypes] : [...selectedRefreshTypes])
             .filter(type => applicableRefreshTypes.has(type));
@@ -1411,27 +1331,22 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
         const loadSelectedVulnerabilities = () => targetVariantIds.length > 1
             ? Vulnerabilities.list(undefined, projectId, undefined, undefined, targetVariantIds, 'union')
             : Vulnerabilities.list(targetVariantIds[0], projectId);
-        // An unavailable baseline must never block the scans: fall back to refreshing the whole selected scope.
         const existingVulnerabilityIds = new Set(refreshTypes.length === 0 ? [] : (
             await loadSelectedVulnerabilities().catch(() => [])
         ).map(vulnerability => vulnerability.id));
-
-        for (const [scanType, , startQueuedScan, waitForCompletion] of scanQueue) {
-            if (!selectedScanTypes.has(scanType)) continue;
-            await startQueuedScan();
-            await waitForCompletion();
-        }
-        if (refreshTypes.length === 0) return;
-
-        // A refresh may have started while the scans were running; queueing is rejected while one is active.
-        await waitForRefreshCompletion();
-        const queued = queueVulnerabilityRefresh({
-            refreshTypes,
-            nvdMode: 'local',
-            loadVulnerabilities: async () => (await loadSelectedVulnerabilities())
-                .filter(vulnerability => !existingVulnerabilityIds.has(vulnerability.id)),
-        });
-        if (!queued) throw new Error('Scans finished, but the vulnerability data refresh could not be queued because another refresh is running.');
+        const scanSources: ScanSource[] = ['grype', 'nvd', 'osv', 'scc'];
+        const jobs = [
+            ...scanSources.filter(source => selectedScanTypes.has(source))
+                .map(source => Operations.scanJob(source, targetVariantIds, { excludeKernel, excludeNative })),
+            ...refreshTypes.map(source => Operations.deferredRefreshJob(
+                source, targetVariantIds, [...existingVulnerabilityIds],
+            )),
+        ];
+        const result = await Operations.enqueue(jobs);
+        if (!result.ok) throw new Error(result.error);
+        await waitForQueue(result.queueId, result.operations.map(operation => operation.op_id));
+        refreshScans();
+        onScanComplete?.();
     }
 
     function handleRunSelectedScans() {
@@ -1448,7 +1363,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
 
     // Build the scan-trigger button (always visible when there are variant(s) to scan)
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
-    const allRunning = grypeRunning || nvdRunning || osvRunning || sccRunning;
+    const allRunning = operationEntries.some(operation => operation.kind === 'scan' && isActive(operation));
 
     // Filter out "empty" scans (no changes) when toggle is active
     const displayedScans = hideEmptyScans

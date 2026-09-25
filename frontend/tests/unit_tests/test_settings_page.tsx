@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import Settings from "../../src/pages/Settings";
@@ -7,6 +7,20 @@ import Variants from "../../src/handlers/variant";
 import Config from "../../src/handlers/config";
 import NvdApiKey from "../../src/handlers/nvdApiKey";
 import ScansHandler from "../../src/handlers/scans";
+import { __reset, __setEventSourceFactory } from "../../src/handlers/operationStore";
+
+class TestEventSource {
+  static current: TestEventSource;
+  private handlers = new Map<string, (event: MessageEvent) => void>();
+  constructor() { TestEventSource.current = this; }
+  addEventListener(type: string, handler: EventListenerOrEventListenerObject) {
+    this.handlers.set(type, handler as (event: MessageEvent) => void);
+  }
+  close() {}
+  send(type: string, data: unknown) {
+    act(() => this.handlers.get(type)?.({ data: JSON.stringify(data), lastEventId: "epoch:1" } as MessageEvent));
+  }
+}
 
 jest.mock("../../src/handlers/project", () => ({
   __esModule: true,
@@ -65,7 +79,9 @@ const project = { id: "project-1", name: "Apollo" };
 const variant = { id: "variant-1", name: "Release", project_id: project.id };
 
 describe("Settings scoped project and variant views", () => {
+  let restoreStream: () => void;
   beforeEach(() => {
+    restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
     projectsList.mockResolvedValue([project]);
     variantsList.mockResolvedValue([variant]);
     configGet.mockResolvedValue({
@@ -102,6 +118,52 @@ describe("Settings scoped project and variant views", () => {
     deleteOutdatedData.mockResolvedValue({ ok: true });
     getOrphanedVulnerabilitiesPreview.mockResolvedValue({ ok: true, vulnerabilities: [{ id: "CVE-2026-0001", assessments: 2 }] });
     deleteOrphanedVulnerabilities.mockResolvedValue({ ok: true, count: 1 });
+  });
+
+  afterEach(() => {
+    __reset();
+    restoreStream();
+  });
+
+  test.each(["done", "error"])("tracks an SBOM upload until %s through SSE", async status => {
+    variantsUploadSBOM.mockResolvedValue({ op_id: "upload:1", scan_id: "scan-1", message: "Accepted" });
+    const onDataChanged = jest.fn();
+    const onLoadingMessage = jest.fn();
+    render(<Settings onDataChanged={onDataChanged} onLoadingMessage={onLoadingMessage} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Release" }));
+    fireEvent.change(await screen.findByLabelText("SBOM Files"), {
+      target: { files: [new File(["{}"], "sbom.json", { type: "application/json" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(onLoadingMessage).toHaveBeenCalledWith("Processing SBOM..."));
+    TestEventSource.current.send("operation", {
+      op_id: "upload:1", status, error: status === "error" ? "Import failed" : null,
+      progress: { current: 1, total: 1, message: "Processing complete" },
+    });
+    if (status === "done") {
+      await waitFor(() => expect(onDataChanged).toHaveBeenCalledWith("Importing SBOM..."));
+    } else {
+      expect(await screen.findByText("Import failed")).toBeInTheDocument();
+      expect(onDataChanged).not.toHaveBeenCalled();
+    }
+    expect(onLoadingMessage).toHaveBeenLastCalledWith(null);
+  });
+
+  test("clears the loading overlay when leaving Settings during an upload", async () => {
+    variantsUploadSBOM.mockResolvedValue({ op_id: "upload:1", scan_id: "scan-1", message: "Accepted" });
+    const onLoadingMessage = jest.fn();
+    const view = render(<Settings onLoadingMessage={onLoadingMessage} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Release" }));
+    fireEvent.change(await screen.findByLabelText("SBOM Files"), {
+      target: { files: [new File(["{}"], "sbom.json", { type: "application/json" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(onLoadingMessage).toHaveBeenCalledWith("Processing SBOM..."));
+    view.unmount();
+    expect(onLoadingMessage).toHaveBeenLastCalledWith(null);
   });
 
   test("selecting a project shows its management view instead of the add-project form", async () => {

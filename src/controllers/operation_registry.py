@@ -78,7 +78,6 @@ class OperationRegistry:
         cancellable: bool = False,
     ) -> dict:
         """Register a new operation in ``queued`` state and publish it."""
-        self.prune()
         operation: Dict[str, Any] = {
             "op_id": op_id,
             "kind": kind,
@@ -100,10 +99,11 @@ class OperationRegistry:
             "result": None,
         }
         with self._lock:
+            self.prune()
             self._operations[op_id] = operation
             self._finished_at.pop(op_id, None)
             snapshot = dict(operation)
-        operation_events.publish("operation", snapshot)
+            operation_events.publish("operation", snapshot)
         return snapshot
 
     def update(self, op_id: str, **patch: Any) -> Optional[dict]:
@@ -129,10 +129,10 @@ class OperationRegistry:
             if status in TERMINAL_STATUSES:
                 if operation["finished_at"] is None:
                     operation["finished_at"] = _now()
-                self._finished_at[op_id] = time.monotonic()
+                    self._finished_at[op_id] = time.monotonic()
             snapshot = dict(operation)
             snapshot["logs"] = list(operation["logs"])
-        operation_events.publish("operation", snapshot)
+            operation_events.publish("operation", snapshot)
         return snapshot
 
     def remove(self, op_id: str) -> bool:
@@ -143,7 +143,7 @@ class OperationRegistry:
                 return False
             del self._operations[op_id]
             self._finished_at.pop(op_id, None)
-        operation_events.publish("operation_removed", {"op_id": op_id})
+            operation_events.publish("operation_removed", {"op_id": op_id})
         return True
 
     def prune(self) -> None:
@@ -154,8 +154,7 @@ class OperationRegistry:
             for op_id in expired:
                 self._operations.pop(op_id, None)
                 self._finished_at.pop(op_id, None)
-        for op_id in expired:
-            operation_events.publish("operation_removed", {"op_id": op_id})
+                operation_events.publish("operation_removed", {"op_id": op_id})
 
     def clear(self) -> None:
         """Drop every operation. Used by tests to isolate cases."""
@@ -178,6 +177,7 @@ class OperationRegistry:
 
     def snapshot(self) -> List[dict]:
         with self._lock:
+            self.prune()
             result = []
             for operation in self._operations.values():
                 entry = dict(operation)

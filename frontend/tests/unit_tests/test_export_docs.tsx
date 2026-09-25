@@ -1,11 +1,25 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
 import Exports from '../../src/pages/Exports';
+import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
+
+class TestEventSource {
+    static current: TestEventSource;
+    private handlers = new Map<string, (event: MessageEvent) => void>();
+    constructor() { TestEventSource.current = this; }
+    addEventListener(type: string, handler: EventListenerOrEventListenerObject) {
+        this.handlers.set(type, handler as (event: MessageEvent) => void);
+    }
+    close() {}
+    send(type: string, data: unknown) {
+        act(() => this.handlers.get(type)?.({ data: JSON.stringify(data), lastEventId: 'epoch:1' } as MessageEvent));
+    }
+}
 
 const documents = [
     { id: 'summary.adoc', category: ['built-in'], extension: 'adoc | pdf' },
@@ -26,7 +40,15 @@ function loadProject() {
 }
 
 describe('Exports Page', () => {
-    beforeEach(() => fetchMock.resetMocks());
+    let restoreStream: () => void;
+    beforeEach(() => {
+        fetchMock.resetMocks();
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
+    });
+    afterEach(() => {
+        __reset();
+        restoreStream();
+    });
 
     test('shows the in-page wizard and Settings management reminder', async () => {
         fetchMock
@@ -76,10 +98,7 @@ describe('Exports Page', () => {
         expect(screen.queryByRole('checkbox', { name: /cyclonedx/i })).not.toBeInTheDocument();
 
         fetchMock
-            .mockResponseOnce(JSON.stringify({ job_id: 'export-job-1' }), { status: 202 })
-            .mockResponseOnce(JSON.stringify({
-                status: 'done', current: 1, total: 1, progress: 'Export ready', logs: ['Generating 1 of 1 element: summary.adoc (adoc)'], error: null,
-            }))
+            .mockResponseOnce(JSON.stringify({ op_id: 'export:job-1' }), { status: 202 })
             .mockResponseOnce('zip-content', {
             headers: {
                 'Content-Type': 'application/zip',
@@ -108,7 +127,9 @@ describe('Exports Page', () => {
                 { name: 'summary.adoc', extension: 'adoc' },
             ],
         });
+        TestEventSource.current.send('operation', { op_id: 'export:job-1', kind: 'export', status: 'done' });
         await waitFor(() => expect(click).toHaveBeenCalled());
+        expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/documents/export/export%3Ajob-1'))).toBe(false);
 
         expect(createObjectURL).toHaveBeenCalled();
         expect(revokeObjectURL).toHaveBeenCalledWith('blob:export');
@@ -188,10 +209,7 @@ describe('Exports Page', () => {
         expect(cycloneDxJson).toBeDisabled();
 
         fetchMock
-            .mockResponseOnce(JSON.stringify({ job_id: 'export-job-2' }), { status: 202 })
-            .mockResponseOnce(JSON.stringify({
-                status: 'done', current: 4, total: 4, progress: 'Export ready', logs: ['Generating 4 of 4 element: beta: CycloneDX 1.6 (json)'], error: null,
-            }))
+            .mockResponseOnce(JSON.stringify({ op_id: 'export:job-2' }), { status: 202 })
             .mockResponseOnce('zip-content', {
                 headers: { 'Content-Type': 'application/zip' },
             });
@@ -201,6 +219,8 @@ describe('Exports Page', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /download export/i }));
 
+        await waitFor(() => expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(true));
+        TestEventSource.current.send('operation', { op_id: 'export:job-2', kind: 'export', status: 'done' });
         await waitFor(() => expect(click).toHaveBeenCalled());
         const exportRequest = fetchMock.mock.calls.find(([, request]) => request?.method === 'POST');
         expect(JSON.parse(String(exportRequest?.[1]?.body))).toEqual({

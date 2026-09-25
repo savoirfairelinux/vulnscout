@@ -213,7 +213,7 @@ The Scan History page provides a chronological record of every SBOM import and v
 An SBOM lists the packages that make up your system, but a single vulnerability source rarely provides complete coverage. Different databases track different ecosystems, use different matching strategies, and update at different speeds. VulnScout cross-references your SBOM against several scanners to offer a wider set of information:
 
 - **NVD** correlates packages with NIST's National Vulnerability Database using CPE identifiers. It queries every CPE attached to each package, ensuring broad coverage across many ecosystems.
-- **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages. Grype scans run serially (one at a time) because the underlying export process is global.
+- **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages.
 - **OSV** queries the open-source OSV database, which aggregates advisories from language-specific ecosystems (PyPI, npm, Go, Rust, etc.) and Linux distributions. It queries every PURL attached to each package, providing precise ecosystem-level matching.
 
 By combining these sources, VulnScout reduces the chance of missing a relevant CVE while giving you the **Sources** column and filter to trace exactly where each finding originated. If a vulnerability is reported by multiple scanners, you can have higher confidence that it genuinely applies; if only one scanner flags it, that context helps you prioritise your triage effort.
@@ -225,9 +225,11 @@ The **Run Scans** button in the top-right corner of the Scan History page opens 
 - **Scan types** — checkboxes for Grype, NVD CPE, and OSV. Select which scanners you want to run.
 - **Variants** — checkboxes for the available variants. When a specific variant is selected in the project scope, only that variant appears here. When viewing a project, all variants within the project are listed. "Select all" and "Select none" shortcuts help when managing many variants.
 
-The bottom of the menu shows a summary button ("Run N scans on M variants") that launches the selected scans. Each scan runs independently and displays a per-variant progress panel below the toolbar, showing real-time logs, a progress bar, and the current step. Grype scans are queued and run one at a time; NVD and OSV scans can run in parallel.
+The bottom of the menu shows a summary button ("Run N scans on M variants") that launches the selected scans. Grype, NVD, OSV, and sbom-cve-check run in order on the server's pipeline lane, followed by the selected vulnerability-data refreshes. Each variant and source has its own operation with live logs and progress in the Operation queue.
 
 Every scan and vulnerability-data refresh is also tracked in the **Operation queue** in the navigation bar. A counter shows how many operations have finished out of the total tracked; clicking it opens the Operation queue window, where each running or finished operation has its own progress panel. The window can be closed at any time without interrupting the operations, which keep running in the background.
+
+SBOM imports and document exports appear in the same queue. Exports download automatically when ready; a completed export can also be downloaded from the queue after reloading the page, until the server's retained archive expires.
 
 ### Source Visibility Toggles
 
