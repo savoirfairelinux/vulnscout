@@ -910,6 +910,8 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # assessment JOIN queries keyed on the contributing scan-id set.
     _grs_cache: Dict = {}
     _assess_cache: Dict = {}
+    # scan_id -> (before findings, vulns, assessments, after findings, vulns, assessments)
+    tool_states: Dict[uuid.UUID, Tuple[set, set, set, set, set, set]] = {}
     result = []
     for entry in scan_data:
         scan = entry["scan"]
@@ -982,6 +984,10 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
                 sbom_after, tools_after, _cache=_assess_cache,
                 _obs_prefetch=_assess_prefetch, _pkg_prefetch=packages_map)
             base["newly_detected_assessments"] = len(after_assess - before_assess)
+            tool_states[scan.id] = (
+                before_fids, before_vids, before_assess,
+                after_fids, after_vids, after_assess,
+            )
 
             # Branch result = SBOM ∪ THIS tool scan only (one source)
             branch_fids, branch_vids, branch_pkg_ids = _global_result_id_sets(
@@ -1121,4 +1127,48 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
                     doc_formats.add(doc.format)
             base["formats"] = sorted(doc_formats)
         result.append(base)
+    _attach_run_summaries(result, scans, tool_states, findings_map, vulns_map, _assess_prefetch)
     return result
+
+
+def _attach_run_summaries(
+    result: List[dict],
+    scans: list[Scan],
+    tool_states: Dict[uuid.UUID, Tuple[set, set, set, set, set, set]],
+    findings_map: Dict[uuid.UUID, set[uuid.UUID]],
+    vulns_map: Dict[uuid.UUID, set[str]],
+    assessment_rows: Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID]]],
+) -> None:
+    """Set ``run`` on every tool scan sharing its run with another scan of its variant.
+
+    "Newly detected" spans the whole run: the global state after its last
+    step compared with the state before its first one, so a vulnerability
+    reported by several scanners is only counted once.
+    """
+    groups: Dict[Tuple[str, uuid.UUID], List[Scan]] = {}
+    for scan in scans:
+        if scan.run_id and scan.id in tool_states:
+            groups.setdefault((scan.run_id, scan.variant_id), []).append(scan)
+
+    summaries: Dict[str, dict] = {}
+    for (run_id, _variant_id), members in groups.items():
+        if len(members) < 2:
+            continue
+        before_f, before_v, before_a = tool_states[members[0].id][:3]
+        after_f, after_v, after_a = tool_states[members[-1].id][3:]
+        summary = {
+            "id": run_id,
+            "scan_ids": [str(member.id) for member in members],
+            "sources": [member.scan_source for member in members],
+            "vuln_count": len({vid for m in members for vid in vulns_map.get(m.id, set())}),
+            "finding_count": len({fid for m in members for fid in findings_map.get(m.id, set())}),
+            "assessment_count": len({aid for m in members for aid, _ in assessment_rows.get(m.id, ())}),
+            "newly_detected_vulns": len(after_v - before_v),
+            "newly_detected_findings": len(after_f - before_f),
+            "newly_detected_assessments": len(after_a - before_a),
+        }
+        for member in members:
+            summaries[str(member.id)] = summary
+
+    for entry in result:
+        entry["run"] = summaries.get(entry["id"])
