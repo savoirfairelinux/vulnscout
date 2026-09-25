@@ -1159,6 +1159,132 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('package filter jump clears a stale severity filter', async () => {
+        // ARRANGE - seed a leftover severity filter from a previous visit
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.stale-severity-filter.severities',
+            JSON.stringify(['low'])
+        );
+
+        render(
+            <TableVulnerabilities
+                preferenceScopeKey="stale-severity-filter"
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="xxxyyyzzz@2.0.0"
+            />
+        );
+
+        // ASSERT - the package filter alone applies; the stale severity filter is cleared
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2018-5678/ })).toBeInTheDocument();
+            expect(screen.queryByRole('cell', { name: /CVE-2010-1234/ })).not.toBeInTheDocument();
+        });
+    })
+
+    test('package filter jump clears a stale search term', async () => {
+        // ARRANGE - seed a leftover search term from a previous visit
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.stale-search-filter.search',
+            JSON.stringify('authentification')
+        );
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.stale-search-filter.draftSearch',
+            JSON.stringify('authentification')
+        );
+
+        render(
+            <TableVulnerabilities
+                preferenceScopeKey="stale-search-filter"
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="xxxyyyzzz@2.0.0"
+            />
+        );
+
+        // ASSERT - the stale search never renders, not even for one frame: the
+        // filter-jump mount skips the localStorage read entirely instead of reading
+        // the stale value and clearing it in a later effect.
+        expect(screen.getByRole('searchbox')).toHaveValue('');
+
+        // ASSERT - the package filter alone applies; the stale search term is cleared
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2018-5678/ })).toBeInTheDocument();
+        });
+    })
+
+    test('package filter jump shows all of a package vulns after a prior CVE-id search on a fresh mount', async () => {
+        const pkgId = '@adobe/css-tools@1.0.0';
+        const makeVuln = (id: string): Vulnerability => ({
+            ...vulnerabilities[1],
+            id,
+            aliases: [],
+            datasource: `https://nvd.nist.gov/vuln/detail/${id}`,
+            packages: [pkgId],
+            packages_current: [pkgId],
+            texts: [{ title: 'description', content: `description for ${id}` }],
+            effort: {
+                optimistic: new Iso8601Duration('PT4H'),
+                likely: new Iso8601Duration('P1DT2H'),
+                pessimistic: new Iso8601Duration('P2.5D')
+            },
+        });
+
+        const twoVulns = [
+            makeVuln('CVE-2005-4890'),
+            makeVuln('CVE-2023-0001'),
+        ];
+
+        // ACT - fresh mount on the Vulnerabilities page, search one specific CVE
+        const firstMount = render(
+            <TableVulnerabilities
+                preferenceScopeKey="adobe-css-tools-repro"
+                vulnerabilities={twoVulns}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        const user = userEvent.setup();
+        const searchBox = screen.getByRole('searchbox');
+        await user.type(searchBox, 'CVE-2005-4890');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
+
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2005-4890/ })).toBeInTheDocument();
+            expect(screen.queryByRole('cell', { name: /CVE-2023-0001/ })).not.toBeInTheDocument();
+        });
+
+        firstMount.unmount();
+
+        // ACT - navigate back to SBOM page, then click "Show Vulnerabilities" for the package
+        render(
+            <TableVulnerabilities
+                preferenceScopeKey="adobe-css-tools-repro"
+                vulnerabilities={twoVulns}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue={pkgId}
+                filterVulnerabilityIds={['CVE-2005-4890', 'CVE-2023-0001']}
+            />
+        );
+
+        // ASSERT - both of the package's vulnerabilities show, not just the previously searched one
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2005-4890/ })).toBeInTheDocument();
+            expect(screen.getByRole('cell', { name: /CVE-2023-0001/ })).toBeInTheDocument();
+        });
+    })
+
     test('filter by packages dropdown', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
