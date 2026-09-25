@@ -27,7 +27,8 @@ type Props = {
     colors: ColorScheme;
     /** e.g. " (variant 2 of 3)" — the caller knows the batch grouping. */
     positionLabel?: string;
-    onDismiss: () => void;
+    /** Omitted for the steps of a run, which is dismissed as a whole. */
+    onDismiss?: () => void;
     onCancel?: () => void;
     onDownload?: () => void;
 };
@@ -104,7 +105,7 @@ export default function OperationQueuePanel({
                         <FontAwesomeIcon icon={faDownload} className="text-sm" />
                     </button>
                 )}
-                {!isActive(operation) && (
+                {!isActive(operation) && onDismiss && (
                     <button
                         type="button"
                         onClick={onDismiss}

@@ -32,3 +32,30 @@ describe('operation job builders', () => {
         });
     });
 });
+
+describe('operation queue requests', () => {
+    const fetchSpy = jest.fn();
+    let restoreFetch: typeof fetch;
+
+    beforeEach(() => {
+        restoreFetch = global.fetch;
+        global.fetch = fetchSpy as typeof fetch;
+        fetchSpy.mockReset();
+    });
+
+    afterEach(() => {
+        global.fetch = restoreFetch;
+    });
+
+    it('cancels every step of a batch through the queue endpoint', async () => {
+        fetchSpy.mockResolvedValueOnce({ ok: true } as Response);
+        fetchSpy.mockResolvedValueOnce({ ok: false } as Response);
+
+        expect(await Operations.cancelQueue('q-1/2')).toBe(true);
+        expect(await Operations.cancelQueue('q-1/2')).toBe(false);
+        expect(fetchSpy.mock.calls[0]).toEqual([
+            expect.stringMatching(/\/api\/operations\/queue\/q-1%2F2\/cancel$/),
+            { method: 'POST', mode: 'cors' },
+        ]);
+    });
+});

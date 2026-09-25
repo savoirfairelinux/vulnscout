@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
 import ScanHistory from '../../src/pages/ScanHistory';
@@ -547,5 +547,129 @@ describe('ScanHistory selected variant scope', () => {
             expect.objectContaining({mode: 'cors'}),
         ));
         fetchSpy.mockRestore();
+    });
+
+    describe('scan runs', () => {
+        const run = {
+            id: 'q-run', scan_ids: ['grype-step', 'nvd-step'], sources: ['grype', 'nvd'],
+            vuln_count: 21, finding_count: 22, assessment_count: 23,
+            newly_detected_vulns: 17, newly_detected_findings: 18, newly_detected_assessments: 19,
+        };
+        const step = (id: string, source: string, overrides: Partial<Scan> = {}): Scan => ({
+            ...scan(id, 'v1'), scan_type: 'tool', scan_source: source, is_first: false,
+            run_id: 'q-run', run, newly_detected_vulns: 0, ...overrides,
+        } as Scan);
+        const history = (): Scan[] => [
+            {...scan('sbom-scan', 'v1'), is_first: true},
+            step('grype-step', 'grype', {timestamp: '2026-09-17T01:00:00Z', newly_detected_vulns: 3}),
+            step('nvd-step', 'nvd', {timestamp: '2026-09-17T01:05:00Z', global_vuln_count: 99}),
+            {
+                ...scan('osv-solo', 'v1'), scan_type: 'tool', scan_source: 'osv', is_first: false,
+                run_id: 'q-solo', run: null, newly_detected_vulns: 1,
+            } as Scan,
+        ];
+
+        test('shows every step of a run as one card with per-scanner details', async () => {
+            mockList.mockResolvedValue(history());
+            render(<ScanHistory projectId="project" variantIds={['v1']} />);
+
+            expect(await screen.findByText(/Scan run · 2 scanners/)).toBeInTheDocument();
+            expect(screen.getAllByText(/Scan run · /)).toHaveLength(1);
+            expect(screen.getByText('OSV Scan')).toBeInTheDocument();
+            expect(screen.queryByText('Grype Scan')).not.toBeInTheDocument();
+            ['99', '21', '17', '22', '18', '23', '19'].forEach(count =>
+                expect(screen.getByText(count)).toBeInTheDocument());
+            expect(screen.getByTitle('Show Grype changes')).toHaveTextContent('+3 new');
+
+            fireEvent.click(screen.getByTitle('Show NVD CPE changes'));
+            await waitFor(() => expect(mockGetDiff).toHaveBeenCalledWith('nvd-step'));
+            fireEvent.click(await screen.findByRole('button', {name: 'Close'}));
+
+            const runCard = screen.getByText(/Scan run · 2 scanners/).closest('.group\\/card') as HTMLElement;
+            fireEvent.click(within(runCard).getByRole('button', {name: 'Details'}));
+            await waitFor(() => expect(mockGetGlobalResult).toHaveBeenCalledWith('nvd-step'));
+        });
+
+        test('keeps a run while one of its scanners is visible', async () => {
+            mockList.mockResolvedValue(history());
+            render(<ScanHistory projectId="project" variantIds={['v1']} />);
+            await screen.findByText(/Scan run · 2 scanners/);
+
+            fireEvent.click(screen.getByTitle('Grype scans visible'));
+            expect(screen.queryByTitle('Show Grype changes')).not.toBeInTheDocument();
+            expect(screen.getByTitle('Show NVD CPE changes')).toBeInTheDocument();
+
+            fireEvent.click(screen.getByTitle('NVD scans visible'));
+            expect(screen.queryByText(/Scan run · /)).not.toBeInTheDocument();
+        });
+
+        test('hides a run without changes only when every step is empty', async () => {
+            const quiet = history().map(entry => entry.run ? {...entry, newly_detected_vulns: 0} : entry);
+            mockList.mockResolvedValue(quiet);
+            render(<ScanHistory projectId="project" variantIds={['v1']} />);
+            await screen.findByText(/Scan run · 2 scanners/);
+
+            fireEvent.click(screen.getByTitle('Showing all scans'));
+
+            expect(screen.queryByText(/Scan run · /)).not.toBeInTheDocument();
+            expect(screen.getByText('OSV Scan')).toBeInTheDocument();
+        });
+
+        test('deletes every scan of a run after confirmation', async () => {
+            mockList.mockResolvedValue(history());
+            const onScanComplete = jest.fn();
+            render(<ScanHistory projectId="project" variantIds={['v1']} onScanComplete={onScanComplete} />);
+            await screen.findByText(/Scan run · 2 scanners/);
+
+            fireEvent.click(screen.getByTitle('Delete scan run'));
+            expect(await screen.findByText('Delete Scan Run')).toBeInTheDocument();
+            expect(screen.getByText(/Its 2 scans/)).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', {name: 'Yes, delete'}));
+
+            await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
+            expect(mockDeleteScan.mock.calls.map(([scanId]) => scanId)).toEqual(['grype-step', 'nvd-step']);
+            await waitFor(() => expect(screen.queryByText('Delete Scan Run')).not.toBeInTheDocument());
+        });
+
+        test('keeps the confirmation open when part of a run cannot be deleted', async () => {
+            mockList.mockResolvedValue(history());
+            mockDeleteScan.mockResolvedValueOnce({ok: true}).mockResolvedValueOnce({ok: false, error: 'locked'});
+            const onScanComplete = jest.fn();
+            render(<ScanHistory projectId="project" variantIds={['v1']} onScanComplete={onScanComplete} />);
+            await screen.findByText(/Scan run · 2 scanners/);
+
+            fireEvent.click(screen.getByTitle('Delete scan run'));
+            fireEvent.click(await screen.findByRole('button', {name: 'Yes, delete'}));
+
+            await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
+            expect(screen.getByText('Delete Scan Run')).toBeInTheDocument();
+        });
+
+        test('exports the run result and each scanner diff', async () => {
+            mockList.mockResolvedValue(history());
+            const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+                ok: true,
+                headers: new Headers(),
+                json: async () => ({exported: true}),
+            } as Response);
+            render(<ScanHistory projectId="project" variantIds={['v1']} />);
+            await screen.findByText(/Scan run · 2 scanners/);
+
+            fireEvent.click(screen.getByTitle('Export scan run'));
+            fireEvent.click(screen.getByText('Export Grype Diff'));
+            await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+                expect.stringContaining('/api/scans/grype-step/export-diff'),
+                expect.objectContaining({mode: 'cors'}),
+            ));
+            await waitFor(() => expect(screen.queryByText('Exporting…')).not.toBeInTheDocument());
+
+            fireEvent.click(screen.getByTitle('Export scan run'));
+            fireEvent.click(screen.getByText('Export Scan Result'));
+            await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+                expect.stringContaining('/api/scans/nvd-step/export-result'),
+                expect.objectContaining({mode: 'cors'}),
+            ));
+            fetchSpy.mockRestore();
+        });
     });
 });

@@ -342,7 +342,7 @@ def _enqueue(planned: List[dict]) -> Tuple[str, List[dict]]:
             op_id=item["op_id"],
             lane=item["lane"],
             runner=item["runner"],
-            ctx=JobContext(item["op_id"], item["options"]),
+            ctx=JobContext(item["op_id"], item["options"], queue_id=queue_id),
         )
     return queue_id, created
 
