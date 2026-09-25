@@ -276,6 +276,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
               help="Yocto VEX JSON file (may be repeated).")
 @click.option("--grype", "grype_inputs", multiple=True, type=click.Path(exists=True),
               help="Grype vulnerability JSON file (may be repeated).")
+@click.option("--run-id", default=None,
+              help="Operation queue id grouping this tool scan with the rest of its scan run.")
 @with_appcontext
 def create_project_context(
     project: str,
@@ -286,6 +288,7 @@ def create_project_context(
     yocto_cve_inputs: tuple,
     yocto_vex_inputs: tuple,
     grype_inputs: tuple,
+    run_id: str | None,
 ) -> None:
     """Register SBOM inputs into the database under a named project/variant scan.
 
@@ -306,7 +309,8 @@ def create_project_context(
     scan_source = "grype" if (not has_sbom_inputs and grype_inputs) else None
 
     scan = ScanController.create(scan_description, variant_obj.id, scan_type=scan_type,
-                                 scan_source=scan_source)
+                                 scan_source=scan_source,
+                                 run_id=run_id if scan_type == "tool" else None)
     click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}")
 
     format_groups: list[tuple[tuple, str]] = [

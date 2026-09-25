@@ -89,12 +89,15 @@ def _active_packages(ctx: JobContext) -> Sequence[Package]:
 
 
 @contextmanager
-def _tool_scan(variant_uuid: uuid_module.UUID, source: str) -> Iterator[Scan]:
+def _tool_scan(
+    variant_uuid: uuid_module.UUID, source: str, run_id: str | None = None
+) -> Iterator[Scan]:
     scan = Scan.create(
         description=EMPTY_DESCRIPTION,
         variant_id=variant_uuid,
         scan_type="tool",
         scan_source=source,
+        run_id=run_id,
     )
     try:
         yield scan
@@ -359,11 +362,13 @@ def run_grype_scan(ctx: JobContext) -> None:
         ctx.check_cancelled()
         ctx.report(2, 4, "3/4 Merging results")
         ctx.log("[3/4] Merging Grype results into database…")
-        _run(
-            ["flask", "--app", FLASK_APP, "merge", "--project", project_name,
-             "--variant", variant.name, "--grype", grype_out],
-            GRYPE_MERGE_TIMEOUT,
-        )
+        merge_command = [
+            "flask", "--app", FLASK_APP, "merge", "--project", project_name,
+            "--variant", variant.name, "--grype", grype_out,
+        ]
+        if ctx.queue_id:
+            merge_command += ["--run-id", ctx.queue_id]
+        _run(merge_command, GRYPE_MERGE_TIMEOUT)
         ctx.report(3, 4, "3/4 Merging results")
         ctx.log("[3/4] Merge complete")
 
@@ -395,7 +400,7 @@ def _run_nvd_scan_local(ctx: JobContext, packages: List[Package]) -> None:
     except Exception as error:
         raise OperationError("Failed to load local NVD database") from error
 
-    with _tool_scan(variant_uuid, "nvd") as scan:
+    with _tool_scan(variant_uuid, "nvd", ctx.queue_id) as scan:
         total = len(packages)
         writer = _SccBulkWriter(scan.id, variant_uuid, packages)
         seen_keys: set = set()
@@ -482,7 +487,7 @@ def _run_nvd_scan_api(ctx: JobContext, packages: List[Package]) -> None:
     total = len(cpe_to_packages)
     ctx.log(f"Found {len(packages)} packages with {total} unique CPEs to query")
 
-    with _tool_scan(variant_uuid, "nvd") as scan:
+    with _tool_scan(variant_uuid, "nvd", ctx.queue_id) as scan:
         cves_found: Set[str] = set()
         observation_pairs: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
         assessed_findings: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
@@ -629,7 +634,7 @@ def run_osv_scan(ctx: JobContext) -> None:
             f"PURL identifiers ({total} unique PURLs to query)"
         )
 
-        with _tool_scan(variant_uuid, "osv") as scan:
+        with _tool_scan(variant_uuid, "osv", ctx.queue_id) as scan:
             vulns_found: Set[str] = set()
             observation_pairs: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
             assessed_findings: Set[Tuple[uuid_module.UUID, uuid_module.UUID]] = set()
@@ -759,7 +764,7 @@ def run_scc_scan(ctx: JobContext) -> None:
             engine = _load_scc_engine(ctx)
             ctx.log("Index ready — scanning packages")
 
-            with _tool_scan(variant_uuid, "scc") as scan:
+            with _tool_scan(variant_uuid, "scc", ctx.queue_id) as scan:
                 writer = _SccBulkWriter(scan.id, variant_uuid, packages)
 
                 for index, package in enumerate(packages, 1):

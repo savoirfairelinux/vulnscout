@@ -442,6 +442,18 @@ class TestGrypeScanJob:
 
     @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")
+    def test_merge_step_tags_the_scan_with_its_run(self, which, popen, grype_app):
+        popen.side_effect = _grype_pipeline(export_payload={})
+
+        ctx = _context("grype", grype_app._test_ids["variant_id"])
+        ctx.queue_id = "q-7"
+        _run_job(grype_app, run_grype_scan, ctx)
+
+        merge = next(call.args[0] for call in popen.call_args_list if "merge" in call.args[0])
+        assert merge[-2:] == ["--run-id", "q-7"]
+
+    @patch("subprocess.Popen")
+    @patch("shutil.which", return_value="/usr/bin/grype")
     def test_missing_cyclonedx_export_fails_the_scan(
         self, which, popen, grype_app
     ):

@@ -32,9 +32,15 @@ class OperationError(RuntimeError):
 class JobContext:
     """Progress channel and cancellation signal for one operation."""
 
-    def __init__(self, op_id: str, options: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        op_id: str,
+        options: Optional[Dict[str, Any]] = None,
+        queue_id: Optional[str] = None,
+    ) -> None:
         self.op_id = op_id
         self.options: Dict[str, Any] = options or {}
+        self.queue_id = queue_id
         self._lock = threading.Lock()
         self._cancel = threading.Event()
         self._pending_logs: List[str] = []

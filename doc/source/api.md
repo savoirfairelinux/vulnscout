@@ -900,6 +900,10 @@ Returns all scans with diff statistics compared to the previous scan of the same
 - `packages_added`, `packages_removed`, `packages_upgraded`
 - `vulns_added`, `vulns_removed`
 - `variant_name`, `project_name`, `is_first`
+- `run_id`: operation queue id shared by the tool scans launched together, or `null`
+- `run`: for a tool scan that shares its `run_id` with other tool scans of the same variant, the combined
+  summary of that scan run (`id`, `scan_ids`, `sources`, `vuln_count`, `finding_count`, `assessment_count`,
+  `newly_detected_vulns`, `newly_detected_findings`, `newly_detected_assessments`); `null` otherwise
 
 ### List Scans for a Project
 
