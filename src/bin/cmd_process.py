@@ -67,9 +67,10 @@ def _ts_key(ts) -> str:
         return str(ts)
 
 
-def post_treatment(controllers: ControllersCache, documents=None):
+def post_treatment(controllers: ControllersCache, documents=None, reporter=None):
     """Enrich vulnerabilities with EPSS scores."""
-    return controllers.vulnerabilities.fetch_epss_scores()
+    from ..controllers.progress_reporter import NULL_REPORTER
+    return controllers.vulnerabilities.fetch_epss_scores(reporter or NULL_REPORTER)
 
 
 REFRESH_SOURCES = ("epss", "nvd", "euvd", "ghsa")

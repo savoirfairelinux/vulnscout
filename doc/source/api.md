@@ -886,13 +886,14 @@ Renders selected document formats for every variant in one project. `consolidate
   "documents": [
     { "name": "summary.adoc", "extension": "pdf" },
     { "name": "CycloneDX 1.6", "extension": "json" }
-  ]
+  ],
+  "async": true
 }
 ```
 
 `variant_ids` selects one or more variants belonging to the project. When omitted, all project variants are exported. Reports support either output mode. SBOM selections require `per_variant` mode and cannot be mixed with reports in the same request. Document and extension pairs must match non-asset entries returned by `GET /api/documents`. Custom assets are resources used by report templates and cannot be exported directly.
 
-**Response:** ZIP file download (`Content-Type: application/zip`).
+With `"async": true`, returns `202 Accepted` with `{ "op_id": "export:<uuid>" }`. Watch `GET /api/events/stream` for a `done` operation, then download the retained ZIP from `GET /api/documents/export/<op_id>/download`. The archive is consumed on download and can expire. Without `async`, the response is a ZIP file (`Content-Type: application/zip`).
 
 ---
 
@@ -1100,183 +1101,41 @@ Fetches NVD data for the given CVE and updates the stored description, CVSS scor
 | `429` | `rate_limited` | API mode only: NVD rate limit exceeded. |
 | `401`/`403` | `unauthorized` | API mode only: API key rejected by NVD. |
 
-### Bulk NVD Refresh
+### Operation Queue and Event Stream
 
 ```
-POST /api/vulnerabilities/bulk-nvd-refresh
+POST /api/operations
+GET /api/operations
+GET /api/events/stream
+POST /api/operations/<op_id>/cancel
+DELETE /api/operations/<op_id>
 ```
 
-Triggers an asynchronous bulk refresh of NVD data for a list of CVE IDs. Returns `202 Accepted` immediately and runs in a background thread.
+Submit scans and vulnerability-data refreshes as one ordered batch. Scans run in Grype, NVD, OSV, sbom-cve-check order on the pipeline lane, followed by NVD, EPSS, GHSA, and EUVD refreshes. A batch may expand to at most 100 operations.
 
 **Request body:**
 ```json
 {
-  "cve_ids": ["CVE-2024-1234", "CVE-2024-5678"],
-  "mode": "local"
+  "jobs": [
+    { "kind": "scan", "source": "grype", "variant_ids": ["<variant-uuid>"], "options": { "exclude_kernel": true, "exclude_native": false } },
+    { "kind": "refresh", "source": "nvd", "variant_ids": ["<variant-uuid>"], "exclude_ids": ["CVE-2024-1234"] }
+  ]
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `cve_ids` | array of strings | CVE identifiers to refresh. Must match the pattern `CVE-YYYY-NNNNN`. |
-| `mode` | string | `"local"` (default) — no rate limit cap. `"api"` — capped at 1000 CVEs per request. |
+For a standalone refresh, supply `ids` (CVE IDs for NVD/EPSS/EUVD, GHSA IDs for GHSA) instead of `variant_ids`. Deferred refresh jobs resolve the variant's newly discovered IDs after preceding scans; `exclude_ids` omits the pre-scan baseline. `options.mode` accepts `"local"` (default) or `"api"` where supported. Duplicate or invalid operations are rejected before any job is queued; active conflicts return `409`.
 
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "total": 42 }
-```
+**Response:** `202 Accepted` with `{ "queue_id": "q-...", "operations": [ ... ] }`. Each operation contains `op_id`, `kind`, `source`, `status`, `progress`, `logs`, `error`, `result`, and scope. `GET /api/operations` returns the current snapshot.
 
-Returns `409 Conflict` if a bulk refresh is already in progress. Returns `400` if `cve_ids` is empty or contains no valid identifiers, or if `mode` is `"api"` and more than 1000 IDs are supplied.
-
-Progress can be polled via `GET /api/nvd/progress`.
-
-### Cancel Bulk NVD Refresh
-
-```
-POST /api/vulnerabilities/cancel-nvd-refresh
-```
-
-Requests cancellation of an in-progress bulk NVD refresh. The running refresh stops after completing its current CVE.
-
-**Response:**
-```json
-{ "status": "cancelled" }
-```
-
-Returns `404` if no refresh is currently running.
+`GET /api/events/stream` emits `snapshot`, `operation`, and `operation_removed` frames plus heartbeats. Reconnect with the full epoch-qualified `Last-Event-ID` header (or `last_event_id` query parameter) to replay missed updates. Cancel queued/running work with the operation's ID; dismiss terminal operations with `DELETE`. Export and upload operations also appear in this stream.
 
 ---
 
-## Scan Triggers
+## Scan Sources
 
-These endpoints trigger asynchronous vulnerability scans for a specific variant. Each returns `202 Accepted` immediately; use the corresponding `/status` endpoint to poll progress.
+`POST /api/operations` accepts `scan` jobs for `grype`, `nvd`, `osv`, and `scc` (sbom-cve-check). Each scan takes one or more `variant_ids`. The Grype job exports CycloneDX, runs Grype, merges the results and processes findings. NVD scans use the local advisory database by default; set `options.mode` to `"api"` to query NVD by CPE. OSV scans query every package PURL. SCC scans match packages against the local NVD-FKIE and CVEList databases. Progress and errors arrive as operation events, not separate per-scanner status responses.
 
-All trigger endpoints return `409 Conflict` if a scan of the same type is already running for the variant, `404` if the variant is not found, and `503` if the required tool is unavailable (Grype only).
-
-### Trigger Grype Scan
-
-```
-POST /api/variants/<variant_id>/grype-scan
-```
-
-Runs Grype on the export, filters the results to only the variant's SBOM packages, and merges findings back as a tool scan.
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-Progress steps: `1/4 Exporting CycloneDX` → `2/4 Running Grype` → `3/4 Merging results` → `4/4 Processing`.
-
-### Check Grype Scan Status
-
-```
-GET /api/variants/<variant_id>/grype-scan/status
-```
-
-**Response:**
-```json
-{
-  "status": "running",
-  "error": null,
-  "progress": "2/4 Running Grype",
-  "logs": ["[1/4] CycloneDX export complete", "..."],
-  "total": 4,
-  "done_count": 1
-}
-```
-
-Status values: `"idle"` (no scan started), `"running"`, `"done"`, `"error"`.
-
-### Trigger NVD Scan
-
-```
-POST /api/variants/<variant_id>/nvd-scan
-```
-
-Triggers a CVE scan for the given variant. Supports two modes controlled by the `?mode` query parameter:
-
-- **`local`** (default) — uses the local NVD-FKIE advisory database via the sbom-cve-check engine; no network calls, no rate limits.
-- **`api`** — queries the NVD REST API v2 using CPE identifiers from packages; honours the `NVD_API_KEY` environment variable and rate limits.
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `mode` | string | `"local"` (default) or `"api"` — selects the NVD data source. |
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-### Check NVD Scan Status
-
-```
-GET /api/variants/<variant_id>/nvd-scan/status
-```
-
-Same response shape as Grype status. In local mode `total` is the number of active packages; in API mode it is the number of unique CPEs to query. `done_count` advances per package or CPE respectively.
-
-### Trigger OSV Scan
-
-```
-POST /api/variants/<variant_id>/osv-scan
-```
-
-For every active package with PURL identifiers, queries the OSV API. All PURLs per package are queried (e.g. generic + ecosystem-specific) so no vulnerabilities are missed.
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-### Check OSV Scan Status
-
-```
-GET /api/variants/<variant_id>/osv-scan/status
-```
-
-Same response shape as Grype status. `total` is the number of unique PURLs to query.
-
-### Trigger sbom-cve-check Scan
-
-```
-POST /api/variants/<variant_id>/sbom-cve-check-scan
-```
-
-Runs a CVE scan powered by the sbom-cve-check engine. For every active package, the engine looks up candidate advisories from locally-cloned NVD-FKIE and CVEList V5 databases, applies product-name aliasing, evaluates version ranges locally, and records findings as a tool scan. No network calls are made during matching.
-
-The databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/local_databases`, inside the cache volume next to `vulnscout.db`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to use a shared clone mounted at `/local_databases` instead. Set `SBOM_CVE_CHECK_AUTO_UPDATE=1` to let the engine clone the databases on first use and fetch fresh advisories before every scan.
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-`total` is the number of active packages to scan. Progress is reported per package.
-
-### Check sbom-cve-check Scan Status
-
-```
-GET /api/variants/<variant_id>/sbom-cve-check-scan/status
-```
-
-Same response shape as Grype status. `total` is the number of active packages being scanned, `done_count` advances per package.
-
-**Response:**
-```json
-{
-  "status": "running",
-  "error": null,
-  "progress": "42/120 packages",
-  "logs": ["Resolved 120 active packages", "Index ready — scanning packages", "[1/120] busybox@1.35.0 → 3 vuln(s): CVE-2022-28391, ..."],
-  "total": 120,
-  "done_count": 42
-}
-```
-
-Status values: `"idle"` (no scan started), `"running"`, `"done"`, `"error"`.
+The SCC databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/local_databases`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to mount a shared clone, or `SBOM_CVE_CHECK_AUTO_UPDATE=1` to update before scans.
 
 ---
 
@@ -1297,78 +1156,18 @@ Upload one or more SBOM files for asynchronous processing.
 | `files` | file(s) | One or more SBOM files |
 | `project_id` | UUID | Target project |
 | `variant_id` | UUID | Target variant |
-| `format` | string | Optional: `spdx`, `cdx`, `openvex`, `yocto_cve_check`, `grype` — auto-detected if omitted |
+| `refresh_sources` | repeated string | NVD, EPSS, GHSA, EUVD; use `none` to disable post-import refreshes |
 
 **Response:** `202 Accepted`
 ```json
 {
-  "upload_id": "...",
+  "op_id": "upload:<uuid>",
   "scan_id": "...",
-  "message": "Upload accepted, processing started"
+  "message": "Upload accepted. Processing started."
 }
 ```
 
-### Check Upload Status
-
-```
-GET /api/sbom/upload/<upload_id>/status
-```
-
-**Response:**
-```json
-{
-  "status": "processing",
-  "message": "Merging inputs..."
-}
-```
-
-Status values: `"processing"`, `"done"`, `"error"`.
-
----
-
-## Progress
-
-### NVD Progress
-
-```
-GET /api/nvd/progress
-```
-
-Get the current progress of NVD database updates.
-
-**Response:**
-```json
-{
-  "in_progress": true,
-  "phase": "Fetching CVE data",
-  "current": 42,
-  "total": 100,
-  "message": "Processing page 42/100",
-  "last_update": "2026-04-07T10:30:00Z",
-  "started_at": "2026-04-07T10:25:00Z"
-}
-```
-
-### EPSS Progress
-
-```
-GET /api/epss/progress
-```
-
-Get the current progress of EPSS score enrichment.
-
-**Response:**
-```json
-{
-  "in_progress": false,
-  "phase": "Complete",
-  "current": 100,
-  "total": 100,
-  "message": "EPSS enrichment complete",
-  "last_update": "2026-04-07T10:35:00Z",
-  "started_at": "2026-04-07T10:30:00Z"
-}
-```
+Follow the returned `op_id` in `GET /api/events/stream` (or `GET /api/operations`) for progress, completion, and errors. There is no separate upload-status endpoint.
 
 ---
 

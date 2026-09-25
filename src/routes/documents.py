@@ -4,7 +4,6 @@
 from flask import Flask, Response, copy_current_request_context, request, make_response, send_file
 from flask.typing import ResponseReturnValue
 import atexit
-from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import os
@@ -12,13 +11,15 @@ import mimetypes
 import re
 import tempfile
 import threading
-import time
 import traceback
 import uuid
 import zipfile
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from PIL import Image
 from ..controllers import ControllersCache
+from ..controllers.job_context import JobContext, OperationError
+from ..controllers.operation_queue import queue as operation_queue
+from ..controllers.operation_registry import KIND_EXPORT, LANE_EXPORT, STATUS_DONE, registry
 from ..models.project import Project
 from ..models.variant import Variant
 from ..views.templates import Templates, find_asset
@@ -28,22 +29,25 @@ from ..views.spdx3 import SPDX3
 from ..views.openvex import OpenVex
 from ..helpers.export_scope import ExportScope, compute_export_scope
 from ._scan_helpers import parse_uuid_or_400
-from typing import BinaryIO, Callable, cast, Dict, List, Optional
+from typing import BinaryIO, Callable, cast, Dict, List, Optional, Tuple
 
 
 # You can associate specific files to specific categories
 # "example.adoc": ["misc", "category_name"]
 CategoriesDictionary: Dict[str, List[str]] = {}
 ASCIIDOC_MIME = "text/asciidoc"
-_export_jobs: Dict[str, Dict[str, object]] = {}
-_export_jobs_lock = threading.Lock()
 EXPORT_JOB_TTL_SECONDS = 3600
 EXPORT_MAX_WORKERS = 2
 EXPORT_MAX_QUEUED_JOBS = 4
 EXPORT_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 EXPORT_MAX_RETAINED_ARCHIVE_BYTES = 512 * 1024 * 1024
-_export_executor = ThreadPoolExecutor(max_workers=EXPORT_MAX_WORKERS, thread_name_prefix="document-export")
-_export_capacity = threading.BoundedSemaphore(EXPORT_MAX_WORKERS + EXPORT_MAX_QUEUED_JOBS)
+# Async exports run on the shared "export" lane, which has EXPORT_MAX_WORKERS
+# workers; this bounds how many may additionally wait behind them.
+EXPORT_MAX_ACTIVE_JOBS = EXPORT_MAX_WORKERS + EXPORT_MAX_QUEUED_JOBS
+# Serialises archive accounting (retention budget, TTL pruning, download pop).
+_export_archive_lock = threading.Lock()
+_export_submission_lock = threading.Lock()
+_export_archives: dict[str, tuple[str, datetime]] = {}
 _sync_export_capacity = threading.BoundedSemaphore(EXPORT_MAX_WORKERS)
 
 
@@ -436,49 +440,53 @@ class _SizeLimitedArchive:
         self.output.flush()
 
 
-def _delete_archive(job: Dict[str, object]) -> None:
-    archive_path = job.get("archive_path")
-    if isinstance(archive_path, str):
-        try:
-            os.remove(archive_path)
-        except FileNotFoundError:
-            pass
+def _delete_archive(archive_path: str) -> None:
+    try:
+        os.remove(archive_path)
+    except FileNotFoundError:
+        pass
 
 
-def _prune_export_jobs() -> None:
-    cutoff = time.monotonic() - EXPORT_JOB_TTL_SECONDS
-    expired = []
-    for job_id, job in _export_jobs.items():
-        finished_at = job.get("finished_at")
-        if isinstance(finished_at, float) and finished_at < cutoff:
-            expired.append(job_id)
-    for job_id in expired:
-        _delete_archive(_export_jobs.pop(job_id))
+def _discard_export(op_id: str) -> None:
+    archive = _export_archives.pop(op_id, None)
+    if archive is not None:
+        _delete_archive(archive[0])
+    registry.remove(op_id)
 
 
-def _reserve_retained_archive(archive_bytes: int) -> None:
-    retained = [
-        (job_id, job) for job_id, job in _export_jobs.items()
-        if isinstance(job.get("archive_path"), str)
-    ]
-
-    def finished_at(item: tuple[str, Dict[str, object]]) -> float:
-        value = item[1].get("finished_at")
-        return value if isinstance(value, float) else 0.0
-
-    retained.sort(key=finished_at)
-    retained_bytes = sum(
-        os.path.getsize(str(job["archive_path"]))
-        for _, job in retained
-        if os.path.isfile(str(job["archive_path"]))
+def _retained_archives() -> List[Tuple[str, str, datetime]]:
+    """Server-owned archive paths, including results not yet marked done."""
+    return sorted(
+        ((op_id, path, retained_at) for op_id, (path, retained_at) in _export_archives.items()),
+        key=lambda entry: entry[2],
     )
-    for job_id, job in retained:
+
+
+def _prune_export_archives() -> None:
+    """Drop archives whose operation finished longer ago than the TTL."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=EXPORT_JOB_TTL_SECONDS)
+    for op_id, _, retained_at in _retained_archives():
+        if retained_at < cutoff:
+            _discard_export(op_id)
+
+
+def _reserve_retained_archive(archive_bytes: int) -> bool:
+    retained = _retained_archives()
+    retained_bytes = sum(
+        os.path.getsize(path)
+        for _, path, _ in retained
+        if os.path.isfile(path)
+    )
+    for op_id, path, _ in retained:
         if retained_bytes + archive_bytes <= EXPORT_MAX_RETAINED_ARCHIVE_BYTES:
             break
-        path = str(job["archive_path"])
+        operation = registry.get(op_id)
+        if operation is not None and operation.get("status") != STATUS_DONE:
+            continue
         if os.path.isfile(path):
             retained_bytes -= os.path.getsize(path)
-        _delete_archive(_export_jobs.pop(job_id))
+        _discard_export(op_id)
+    return retained_bytes + archive_bytes <= EXPORT_MAX_RETAINED_ARCHIVE_BYTES
 
 
 def _unique_archive_path(path: str, used_paths: set[str]) -> str:
@@ -493,9 +501,9 @@ def _unique_archive_path(path: str, used_paths: set[str]) -> str:
 
 
 def _cleanup_export_archives() -> None:
-    with _export_jobs_lock:
-        for job in _export_jobs.values():
-            _delete_archive(job)
+    with _export_archive_lock:
+        for op_id in list(_export_archives):
+            _discard_export(op_id)
 
 
 atexit.register(_cleanup_export_archives)
@@ -683,34 +691,14 @@ def init_app(app: Flask) -> None:
         filename = f"{project_name}_{suffix}_export.zip"
 
         if body.get("async") is True:
-            if not _export_capacity.acquire(blocking=False):
-                response = make_response({"error": "Export queue is full; retry later"}, 503)
-                response.headers["Retry-After"] = "5"
-                return response
-
-            job_id = str(uuid.uuid4())
-            with _export_jobs_lock:
-                _prune_export_jobs()
-                _export_jobs[job_id] = {
-                    "status": "running",
-                    "current": 0,
-                    "total": len(scopes) * len(selections),
-                    "progress": "Queued",
-                    "logs": [],
-                    "error": None,
-                    "filename": filename,
-                }
+            op_id = f"export:{uuid.uuid4()}"
 
             @copy_current_request_context
-            def generate_archive() -> None:
+            def generate_archive(ctx: JobContext) -> None:
                 def update_progress(current: int, total: int, element_name: str) -> None:
                     message = f"Generating {current} of {total} element: {element_name}"
-                    with _export_jobs_lock:
-                        job = _export_jobs[job_id]
-                        job.update({"current": current, "total": total, "progress": message})
-                        logs = job["logs"]
-                        assert isinstance(logs, list)
-                        logs.append(message)
+                    ctx.report(current, total, message)
+                    ctx.log(message)
 
                 archive_path: str | None = None
                 try:
@@ -719,49 +707,46 @@ def init_app(app: Flask) -> None:
                     ) as archive:
                         archive_path = archive.name
                         _build_export_archive(app, scopes, selections, cast(BinaryIO, archive), update_progress)
-                    with _export_jobs_lock:
-                        _prune_export_jobs()
-                        _reserve_retained_archive(os.path.getsize(archive_path))
-                        _export_jobs[job_id].update({
-                            "status": "done",
-                            "progress": "Export ready",
-                            "archive_path": archive_path,
-                            "finished_at": time.monotonic(),
+                    with _export_archive_lock:
+                        _prune_export_archives()
+                        if not _reserve_retained_archive(os.path.getsize(archive_path)):
+                            raise OperationError("Export archive retention limit reached")
+                        _export_archives[op_id] = (archive_path, datetime.now(timezone.utc))
+                        ctx.message("Export ready")
+                        ctx.set_result({
+                            "filename": filename,
+                            "download_ready": True,
                         })
                     archive_path = None
-                except (ExportGenerationError, FileNotFoundError) as exc:
-                    message = str(exc)
-                    if isinstance(exc, FileNotFoundError):
-                        message = "Required conversion tool was not found"
-                    with _export_jobs_lock:
-                        _export_jobs[job_id].update({
-                            "status": "error",
-                            "error": message,
-                            "progress": "Export failed",
-                            "finished_at": time.monotonic(),
-                        })
+                except ExportGenerationError as exc:
+                    raise OperationError(str(exc)) from exc
+                except FileNotFoundError as exc:
+                    raise OperationError("Required conversion tool was not found") from exc
                 except Exception:
-                    app.logger.exception("Export job %s failed", job_id)
-                    with _export_jobs_lock:
-                        _export_jobs[job_id].update({
-                            "status": "error",
-                            "error": "Export generation failed",
-                            "progress": "Export failed",
-                            "finished_at": time.monotonic(),
-                        })
+                    app.logger.exception("Export operation %s failed", op_id)
+                    raise RuntimeError("Export generation failed")
                 finally:
                     if archive_path is not None:
-                        _delete_archive({"archive_path": archive_path})
+                        _delete_archive(archive_path)
 
-            try:
-                future = _export_executor.submit(generate_archive)
-            except RuntimeError:
-                with _export_jobs_lock:
-                    del _export_jobs[job_id]
-                _export_capacity.release()
-                return {"error": "Export service is unavailable"}, 503
-            future.add_done_callback(lambda _future: _export_capacity.release())
-            return {"job_id": job_id}, 202
+            with _export_submission_lock:
+                active_exports = sum(
+                    1 for operation in registry.active() if operation.get("kind") == KIND_EXPORT
+                )
+                if active_exports >= EXPORT_MAX_ACTIVE_JOBS:
+                    response = make_response({"error": "Export queue is full; retry later"}, 503)
+                    response.headers["Retry-After"] = "5"
+                    return response
+                registry.create(
+                    op_id=op_id,
+                    kind=KIND_EXPORT,
+                    source="documents",
+                    label=f"Export {project.name}",
+                    lane=LANE_EXPORT,
+                    scope={"project_id": str(project_uuid), "project_name": project.name},
+                )
+                operation_queue.submit(op_id, LANE_EXPORT, generate_archive, JobContext(op_id))
+            return {"op_id": op_id}, 202
 
         if not _sync_export_capacity.acquire(blocking=False):
             response = make_response({"error": "Export service is busy; retry later"}, 503)
@@ -786,35 +771,28 @@ def init_app(app: Flask) -> None:
             download_name=filename,
         )
 
-    @app.route('/api/documents/export/<job_id>', methods=['GET'])
-    def export_status(job_id: str) -> ResponseReturnValue:
-        with _export_jobs_lock:
-            _prune_export_jobs()
-            job = _export_jobs.get(job_id)
-            if job is None:
+    @app.route('/api/documents/export/<op_id>/download', methods=['GET'])
+    def download_export(op_id: str) -> ResponseReturnValue:
+        with _export_archive_lock:
+            _prune_export_archives()
+            operation = registry.get(op_id)
+            if operation is None or operation.get("kind") != KIND_EXPORT:
                 return {"error": "Export job not found"}, 404
-            return {key: value for key, value in job.items() if key not in {"archive", "filename", "finished_at"}}
-
-    @app.route('/api/documents/export/<job_id>/download', methods=['GET'])
-    def download_export(job_id: str) -> ResponseReturnValue:
-        with _export_jobs_lock:
-            _prune_export_jobs()
-            job = _export_jobs.get(job_id)
-            if job is None:
-                return {"error": "Export job not found"}, 404
-            if job["status"] != "done" or "archive_path" not in job:
+            result = operation.get("result")
+            if not isinstance(result, dict) or operation.get("status") != STATUS_DONE:
                 return {"error": "Export is not ready"}, 409
-            archive_path = job["archive_path"]
-            if not isinstance(archive_path, str):
-                return {"error": "Export archive is invalid"}, 500
-            try:
-                archive = open(archive_path, "rb")
-            except FileNotFoundError:
-                _delete_archive(_export_jobs.pop(job_id))
+            archive = _export_archives.get(op_id)
+            if archive is None:
                 return {"error": "Export archive is no longer available"}, 410
-            filename = str(_export_jobs.pop(job_id)["filename"])
-            os.remove(archive_path)
-        return send_file(archive, mimetype="application/zip", as_attachment=True, download_name=filename)
+            archive_path = archive[0]
+            try:
+                archive_file = open(archive_path, "rb")
+            except FileNotFoundError:
+                _discard_export(op_id)
+                return {"error": "Export archive is no longer available"}, 410
+            filename = str(result.get("filename"))
+            _discard_export(op_id)
+        return send_file(archive_file, mimetype="application/zip", as_attachment=True, download_name=filename)
 
     @app.route('/api/documents/<doc_name>', methods=['GET'])
     def doc_by_name(doc_name: str) -> ResponseReturnValue:

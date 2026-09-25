@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
@@ -10,9 +10,22 @@ import Variants from '../../src/handlers/variant';
 import Packages from '../../src/handlers/packages';
 import Vulnerabilities from '../../src/handlers/vulnerabilities';
 import Assessments from '../../src/handlers/assessments';
-import ScansHandler from '../../src/handlers/scans';
-import { restoreFromStatus as grypeRestore } from '../../src/handlers/grypeScanState';
-import { restoreActiveRefreshes } from '../../src/handlers/activeScanQueue';
+import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
+import type { Operation } from '../../src/types/operation';
+
+class TestEventSource {
+    static current: TestEventSource;
+    private handlers = new Map<string, (event: MessageEvent) => void>();
+
+    constructor() { TestEventSource.current = this; }
+    addEventListener(type: string, handler: EventListenerOrEventListenerObject) {
+        this.handlers.set(type, handler as (event: MessageEvent) => void);
+    }
+    close() {}
+    send(type: string, data: unknown) {
+        act(() => this.handlers.get(type)?.({ data: JSON.stringify(data), lastEventId: 'epoch:1' } as MessageEvent));
+    }
+}
 
 jest.mock('../../src/handlers/config', () => ({
     __esModule: true,
@@ -37,35 +50,6 @@ jest.mock('../../src/handlers/variant', () => ({
     default: { list: jest.fn(), listAll: jest.fn() },
 }));
 
-jest.mock('../../src/handlers/scans', () => ({
-    __esModule: true,
-    default: { getRunningScans: jest.fn() },
-}));
-
-jest.mock('../../src/handlers/grypeScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/nvdScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/osvScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/sccScanState', () => {
-    const snapshot: never[] = [];
-    return { subscribe: () => () => undefined, getSnapshot: () => snapshot, restoreFromStatus: jest.fn() };
-});
-jest.mock('../../src/handlers/activeScanQueue', () => {
-    const snapshot: never[] = [];
-    return {
-        subscribeToRefreshQueue: () => () => undefined,
-        getRefreshQueueSnapshot: () => snapshot,
-        restoreActiveRefreshes: jest.fn(() => Promise.resolve()),
-    };
-});
 
 jest.mock('../../src/handlers/packages', () => ({
     __esModule: true,
@@ -95,15 +79,19 @@ jest.mock('../../src/handlers/assessments', () => ({
 
 jest.mock('../../src/components/NavigationBar', () => ({
     __esModule: true,
-    default: ({ defaultProject, defaultScope, changeTab, onOpenOperationQueue }: {
+    default: ({ defaultProject, defaultScope, changeTab, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
         defaultProject?: { id: string } | null;
         defaultScope?: { project_id: string } | null;
         changeTab: (tab: string) => void;
         onOpenOperationQueue: () => void;
+        trackedScanCount: number;
+        finishedScanCount: number;
+        activeScanCount: number;
     }) => (
         <div>
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
+            <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
             {['metrics', 'packages', 'vulnerabilities', 'scans', 'review', 'settings'].map(tab => (
                 <button key={tab} onClick={() => changeTab(tab)}>{tab}</button>
             ))}
@@ -190,9 +178,6 @@ const mockVariantsListAll = Variants.listAll as jest.MockedFunction<typeof Varia
 const mockPackagesList = Packages.list as jest.MockedFunction<typeof Packages.list>;
 const mockVulnerabilitiesList = Vulnerabilities.list as jest.MockedFunction<typeof Vulnerabilities.list>;
 const mockAssessmentsList = Assessments.list as jest.MockedFunction<typeof Assessments.list>;
-const mockGetRunningScans = ScansHandler.getRunningScans as jest.MockedFunction<typeof ScansHandler.getRunningScans>;
-const mockGrypeRestore = grypeRestore as jest.MockedFunction<typeof grypeRestore>;
-const mockRestoreActiveRefreshes = restoreActiveRefreshes as jest.MockedFunction<typeof restoreActiveRefreshes>;
 
 const SERVER_CONFIG = {
     project: { id: 'default-project', name: 'Default Project' },
@@ -214,17 +199,36 @@ const savedScope = (projectId: string, variantIds: string[]) => ({
 });
 
 describe('Explorer saved-scope validation', () => {
+    let restoreStream: () => void;
     beforeEach(() => {
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
         mockConfigGet.mockResolvedValue(SERVER_CONFIG);
         mockPackagesList.mockResolvedValue([]);
         mockVulnerabilitiesList.mockResolvedValue([]);
         mockAssessmentsList.mockResolvedValue([]);
         mockVariantsListAll.mockResolvedValue([]);
-        mockGetRunningScans.mockResolvedValue({ grype: [], nvd: [], osv: [], 'sbom-cve-check': [] });
     });
 
     afterEach(() => {
+        __reset();
+        restoreStream();
         jest.clearAllMocks();
+    });
+
+    test('shows and opens server operations from an SSE snapshot in a fresh tab', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
+        mockVariantsListAll.mockResolvedValue([{ id: 'default-variant', project_id: 'default-project', name: 'Default Variant' }]);
+        render(<Explorer />);
+        expect(screen.getByTestId('operation-counts')).toHaveTextContent('0/0/0');
+
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'scan:grype:v1', kind: 'scan', status: 'queued' },
+            { op_id: 'refresh:nvd', kind: 'refresh', status: 'done' },
+        ] as Operation[] });
+
+        expect(screen.getByTestId('operation-counts')).toHaveTextContent('1/2/1');
+        expect(screen.getByRole('button', { name: 'close progress' })).toBeInTheDocument();
     });
 
     test('clears a stale project scope and silently falls back to the default scope', async () => {
@@ -285,49 +289,28 @@ describe('Explorer saved-scope validation', () => {
         expect(mockClearFrontendScope).not.toHaveBeenCalled();
     });
 
-    test('restores backend-running scans on application mount', async () => {
+    test('reloads data after an operation started by another tab finishes', async () => {
         mockGetFrontendScope.mockReturnValue(null);
-        mockVariantsListAll.mockResolvedValue([
-            { id: 'variant-1', name: 'Variant 1', project_id: 'project-1' },
-        ]);
-        mockGetRunningScans.mockResolvedValue({
-            grype: [{ variant_id: 'variant-1', status: 'running', progress: 'Scanning' }],
-            nvd: [],
-            osv: [],
-            'sbom-cve-check': [],
-        });
-
         render(<Explorer />);
-
-        expect(mockRestoreActiveRefreshes).toHaveBeenCalledTimes(1);
-        await waitFor(() => expect(mockGrypeRestore).toHaveBeenCalledWith([
-            {
-                variantId: 'variant-1',
-                name: 'Variant 1',
-                status: { variant_id: 'variant-1', status: 'running', progress: 'Scanning' },
-            },
-        ]));
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalled());
+        const initialCalls = mockVulnerabilitiesList.mock.calls.length;
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'scan:grype:variant-1', kind: 'scan', status: 'running' },
+        ] });
+        TestEventSource.current.send('operation', {
+            op_id: 'scan:grype:variant-1', kind: 'scan', status: 'done',
+        });
+        await waitFor(() => expect(mockVulnerabilitiesList.mock.calls.length).toBeGreaterThan(initialCalls));
     });
 
-    test('restores running scans with their IDs when variant lookup fails', async () => {
+    test('shows running operations from SSE even when variant lookup fails', async () => {
         mockGetFrontendScope.mockReturnValue(null);
         mockVariantsListAll.mockRejectedValue(new Error('variants unavailable'));
-        mockGetRunningScans.mockResolvedValue({
-            grype: [{ variant_id: 'variant-1', status: 'running' }],
-            nvd: [],
-            osv: [],
-            'sbom-cve-check': [],
-        });
-
         render(<Explorer />);
-
-        await waitFor(() => expect(mockGrypeRestore).toHaveBeenCalledWith([
-            {
-                variantId: 'variant-1',
-                name: 'variant-1',
-                status: { variant_id: 'variant-1', status: 'running' },
-            },
-        ]));
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'scan:grype:variant-1', kind: 'scan', status: 'running' },
+        ] });
+        expect(screen.getByTestId('operation-counts')).toHaveTextContent('0/1/1');
     });
 
     test('opens the add project settings view when no projects exist', async () => {
