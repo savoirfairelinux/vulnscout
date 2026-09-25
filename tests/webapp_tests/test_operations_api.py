@@ -131,6 +131,18 @@ def test_every_operation_in_a_batch_shares_one_queue_id(client, ids):
     assert queue_ids == {payload["queue_id"]}
 
 
+def test_every_job_of_a_batch_receives_its_queue_id(client, ids):
+    with patch("src.controllers.operation_queue.OperationQueue.submit") as submit:
+        payload = client.post("/api/operations", json={"jobs": [
+            {"kind": "scan", "source": "grype",
+             "variant_ids": [ids["variant_a"], ids["variant_b"]]},
+        ]}).get_json()
+
+    assert [call.kwargs["ctx"].queue_id for call in submit.call_args_list] == [
+        payload["queue_id"], payload["queue_id"],
+    ]
+
+
 def test_deferred_refresh_is_reserved_with_its_scan_batch(client, ids):
     payload = client.post("/api/operations", json={"jobs": [
         {"kind": "scan", "source": "grype", "variant_ids": [ids["variant_a"]]},
