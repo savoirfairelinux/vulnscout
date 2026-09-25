@@ -12,10 +12,12 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import OperationQueuePanel from "./OperationQueuePanel";
+import OperationRunPanel from "./OperationRunPanel";
 import ModalShell from "./ModalShell";
 import Operations from "../handlers/operations";
 import { downloadExport } from "../handlers/exportQueue";
 import { getConnectionState, getSnapshot, subscribe } from "../handlers/operationStore";
+import { groupQueueItems } from "../helpers/operationRuns";
 import type { Operation } from "../types/operation";
 import { isActive } from "../types/operation";
 
@@ -51,23 +53,8 @@ function appearanceFor(operation: Operation): Appearance {
     return { icon: faSeedling, colors: green };
 }
 
-/**
- * " (variant 2 of 3)" for multi-variant scan batches.
- *
- * The backend numbers positions across the whole batch, so the index is
- * recomputed within each scan source.
- */
-function positionLabelFor(operation: Operation, all: readonly Operation[]): string {
-    if (operation.kind !== "scan" || operation.queue_id === null) return "";
-    const siblings = all.filter(
-        candidate => candidate.kind === "scan"
-            && candidate.source === operation.source
-            && candidate.queue_id === operation.queue_id,
-    );
-    if (siblings.length < 2) return "";
-    const index = siblings.findIndex(candidate => candidate.op_id === operation.op_id);
-    return ` (variant ${index + 1} of ${siblings.length})`;
-}
+// Keys of cancelled runs in the pending-cancellation set, next to plain op ids.
+const RUN_KEY = "run:";
 
 function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
     const operations = useSyncExternalStore(subscribe, getSnapshot);
@@ -78,24 +65,46 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
 
     useEffect(() => {
         setCancelRequested(previous => {
-            const stillActive = [...previous].filter(opId => {
-                const operation = operations.find(candidate => candidate.op_id === opId);
-                return operation !== undefined && isActive(operation);
-            });
+            const stillActive = [...previous].filter(key => operations.some(operation => isActive(operation)
+                && (key.startsWith(RUN_KEY)
+                    ? operation.queue_id === key.slice(RUN_KEY.length)
+                    : operation.op_id === key)));
             return stillActive.length === previous.size ? previous : new Set(stillActive);
         });
     }, [operations]);
 
-    const requestCancel = (opId: string) => {
-        setCancelRequested(previous => new Set(previous).add(opId));
+    const requestCancel = (key: string, send: () => Promise<boolean>) => {
+        setCancelRequested(previous => new Set(previous).add(key));
         const restore = () => setCancelRequested(previous => {
             const next = new Set(previous);
-            next.delete(opId);
+            next.delete(key);
             return next;
         });
-        Operations.cancel(opId).then(cancelled => {
+        send().then(cancelled => {
             if (!cancelled) restore();
         }).catch(restore);
+    };
+
+    const renderOperation = (operation: Operation, inRun: boolean) => {
+        const { icon, colors } = appearanceFor(operation);
+        const cancelBlocked = cancelRequested.has(operation.op_id)
+            || (inRun && cancelRequested.has(RUN_KEY + operation.queue_id));
+        return (
+            <OperationQueuePanel
+                key={operation.op_id}
+                operation={operation}
+                icon={icon}
+                colors={colors as never}
+                onDismiss={inRun ? undefined : () => void Operations.dismiss(operation.op_id)}
+                onDownload={operation.kind === "export" && operation.status === "done" && operation.result?.download_ready
+                    ? () => void downloadExport(operation.op_id).catch(error =>
+                        setDownloadError(error instanceof Error ? error.message : "Failed to download export"))
+                    : undefined}
+                onCancel={operation.cancellable && isActive(operation) && !cancelBlocked
+                    ? () => requestCancel(operation.op_id, () => Operations.cancel(operation.op_id))
+                    : undefined}
+            />
+        );
     };
 
     if (!isOpen) return null;
@@ -119,26 +128,20 @@ function OperationQueueModal({ isOpen, onClose }: Readonly<Props>) {
             {downloadError && <p role="alert" className="px-4 py-2 text-sm text-red-300">{downloadError}</p>}
             {operations.length > 0 ? (
                 <div className="overflow-hidden rounded-lg border border-neutral-700 divide-y divide-neutral-700">
-                    {operations.map(operation => {
-                        const { icon, colors } = appearanceFor(operation);
-                        return (
-                            <OperationQueuePanel
-                                key={operation.op_id}
-                                operation={operation}
-                                icon={icon}
-                                colors={colors as never}
-                                positionLabel={positionLabelFor(operation, operations)}
-                                onDismiss={() => void Operations.dismiss(operation.op_id)}
-                                onDownload={operation.kind === "export" && operation.status === "done" && operation.result?.download_ready
-                                    ? () => void downloadExport(operation.op_id).catch(error =>
-                                        setDownloadError(error instanceof Error ? error.message : "Failed to download export"))
-                                    : undefined}
-                                onCancel={operation.cancellable && isActive(operation) && !cancelRequested.has(operation.op_id)
-                                    ? () => requestCancel(operation.op_id)
+                    {groupQueueItems(operations).map(item => item.type === "operation"
+                        ? renderOperation(item.operation, false)
+                        : (
+                            <OperationRunPanel
+                                key={item.queueId}
+                                steps={item.steps}
+                                renderStep={step => renderOperation(step, true)}
+                                onDismiss={() => item.steps.forEach(step => void Operations.dismiss(step.op_id))}
+                                onCancel={item.steps.some(step => step.cancellable && isActive(step))
+                                    && !cancelRequested.has(RUN_KEY + item.queueId)
+                                    ? () => requestCancel(RUN_KEY + item.queueId, () => Operations.cancelQueue(item.queueId))
                                     : undefined}
                             />
-                        );
-                    })}
+                        ))}
                 </div>
             ) : (
                 <p className="py-8 text-center text-sm text-neutral-400">No operations to display.</p>
