@@ -6,8 +6,10 @@ import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import Variants from "../handlers/variant";
 import Context from "../handlers/context";
+import Assessments from "../handlers/assessments";
 import type { VariantContextData, ContextExport, ImportResult } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
+import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import HelpPopover from "../components/HelpPopover";
 import useDismissablePopover from "../hooks/useDismissablePopover";
@@ -61,6 +63,11 @@ function AIContext() {
 
     // UI state
     const [busy, setBusy] = useState(false);
+    const [variantContextLoading, setVariantContextLoading] = useState(false);
+    const [confirmOutdate, setConfirmOutdate] = useState(false);
+    // Variant fields as last loaded or saved, to detect whether a save changes anything.
+    const savedVariantFieldsRef = useRef<VariantContextData | null>(null);
+    const variantLoadIdRef = useRef(0);
     const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
     const [bannerMsg, setBannerMsg] = useState<ReactNode>('');
     const [bannerType, setBannerType] = useState<'success' | 'error'>('success');
@@ -149,14 +156,25 @@ function AIContext() {
     // Variant-bound fields only. The merged endpoint also returns the project
     // description; it is deliberately ignored here.
     const loadVariantContext = useCallback(() => {
+        const loadId = ++variantLoadIdRef.current;
+        savedVariantFieldsRef.current = null;
+        clearVariantFields();
         if (!selectedProjectId || !selectedVariantId) {
-            // Variant cleared or not yet selected — clear variant-bound fields
-            clearVariantFields();
+            setVariantContextLoading(false);
             return;
         }
+        setVariantContextLoading(true);
         Context.get(selectedProjectId, selectedVariantId)
             .then(ctx => {
-                if (unmountedRef.current) return;
+                if (unmountedRef.current || loadId !== variantLoadIdRef.current) return;
+                savedVariantFieldsRef.current = {
+                    variant_description: ctx.variant_description ?? null,
+                    codebase_path: ctx.codebase_path ?? null,
+                    environment: ctx.environment ?? null,
+                    threat_model: ctx.threat_model ?? null,
+                    risks: ctx.risks ?? null,
+                    other_info: ctx.other_info ?? null,
+                };
                 setVariantDescription(ctx.variant_description ?? '');
                 setCodebasePath(ctx.codebase_path ?? '');
                 setEnvironment(ctx.environment ?? '');
@@ -164,8 +182,11 @@ function AIContext() {
                 setRisks(ctx.risks ?? '');
                 setOtherInfo(ctx.other_info ?? '');
             }).catch((e: any) => {
-                if (!unmountedRef.current)
+                if (!unmountedRef.current && loadId === variantLoadIdRef.current)
                     showBanner(e?.message || "Failed to load context.", "error");
+            }).finally(() => {
+                if (!unmountedRef.current && loadId === variantLoadIdRef.current)
+                    setVariantContextLoading(false);
             });
     }, [selectedProjectId, selectedVariantId]);
 
@@ -185,9 +206,41 @@ function AIContext() {
         return Object.keys(errors).length === 0;
     };
 
+    const currentVariantFields = (): VariantContextData => ({
+        variant_description: variantDescription.trim() || null,
+        codebase_path: codebasePath.trim() || null,
+        environment: environment.trim() || null,
+        threat_model: threatModel.trim() || null,
+        risks: risks.trim() || null,
+        other_info: otherInfo.trim() || null,
+    });
+
+    // Editing the variant context marks every pending AI assessment of that variant
+    // as outdated, so ask first when the save would actually change it.
     const handleSave = async () => {
-        if (!selectedProjectId || busy) return;
+        if (!selectedProjectId || busy || variantContextLoading) return;
         if (!validate()) return;
+        const saved = savedVariantFieldsRef.current;
+        const fields = currentVariantFields();
+        const variantChanged = !!selectedVariantId && saved !== null
+            && (Object.keys(fields) as (keyof VariantContextData)[]).some(k => fields[k] !== saved[k]);
+        if (variantChanged) {
+            let hasPendingAi = true;
+            try {
+                hasPendingAi = (await Assessments.listForReview(selectedVariantId, undefined, 'ai')).length > 0;
+            } catch {
+                // Could not check: warn anyway rather than silently outdating assessments.
+            }
+            if (unmountedRef.current) return;
+            if (hasPendingAi) {
+                setConfirmOutdate(true);
+                return;
+            }
+        }
+        await performSave();
+    };
+
+    const performSave = async () => {
         setBusy(true);
         try {
             await Context.saveProject(selectedProjectId, description.trim() || null);
@@ -197,16 +250,10 @@ function AIContext() {
             return;
         }
         if (selectedVariantId) {
-            const fields: VariantContextData = {
-                variant_description: variantDescription.trim() || null,
-                codebase_path: codebasePath.trim() || null,
-                environment: environment.trim() || null,
-                threat_model: threatModel.trim() || null,
-                risks: risks.trim() || null,
-                other_info: otherInfo.trim() || null,
-            };
+            const fields = currentVariantFields();
             try {
                 await Context.saveVariant(selectedVariantId, fields);
+                savedVariantFieldsRef.current = fields;
             } catch (e: any) {
                 if (!unmountedRef.current)
                     showBanner(
@@ -310,7 +357,7 @@ function AIContext() {
     // Close the export menu on outside click
     useDismissablePopover(exportMenuOpen, exportMenuRef, useCallback(() => setExportMenuOpen(false), []), { closeOnEscape: false });
 
-    const variantSelected = Boolean(selectedVariantId);
+    const variantSelected = Boolean(selectedVariantId) && !variantContextLoading;
     const projectSelected = Boolean(selectedProjectId);
     const labelClass = "block text-sm text-zinc-300 mb-1";
     const inputClass =
@@ -622,12 +669,23 @@ function AIContext() {
                 />
             </div>
 
+                <ConfirmationModal
+                    isOpen={confirmOutdate}
+                    title="Mark AI assessments as outdated?"
+                    message="Saving this context will mark all pending AI assessments for this variant as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
+                    confirmText="Save and mark outdated"
+                    cancelText="Cancel"
+                    showTitleIcon={true}
+                    onConfirm={() => { setConfirmOutdate(false); void performSave(); }}
+                    onCancel={() => setConfirmOutdate(false)}
+                />
+
                 {/* Save */}
                 <div>
                     <button
                         type="button"
                         onClick={handleSave}
-                        disabled={!projectSelected || busy}
+                        disabled={!projectSelected || busy || variantContextLoading}
                         className={btnPrimary + " flex items-center gap-2"}
                     >
                         {busy && <FontAwesomeIcon icon={faSpinner} spin />}

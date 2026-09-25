@@ -562,6 +562,7 @@ class _SccBulkWriter:
         if finding_id not in self._last_simplified:
             self._last_simplified[finding_id] = "Pending Assessment"
             assess_id = uuid.uuid4()
+            assessment_timestamp = datetime.now(timezone.utc)
             self._assess_rows.append({
                 "id": assess_id,
                 "status": "under_investigation",
@@ -570,7 +571,8 @@ class _SccBulkWriter:
                 "variant_id": self._variant_uuid,
                 "origin": "scc",
                 "status_notes": None,
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": assessment_timestamp,
+                "created_at": assessment_timestamp,
                 "responses": [],
             })
             # Target storage is universal: every assessment — including this

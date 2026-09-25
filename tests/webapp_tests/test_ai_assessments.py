@@ -89,6 +89,115 @@ def test_ai_post_creates_ai_origin(client):
     assert all(a["origin"] == "ai" for a in body["assessments"])
 
 
+def _review_ai(client):
+    resp = client.get(f"/api/assessments/review/ai?variant_id={VARIANT_UUID}")
+    assert resp.status_code == 200
+    return json.loads(resp.data)
+
+
+def _set_context(app, **fields):
+    from src.models.variant_context import VariantContext
+    with app.app_context():
+        VariantContext.upsert(VARIANT_UUID, **fields)
+
+
+def test_ai_context_outdated_false_without_context(client):
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_true_when_first_context_is_added(client, app):
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_false_when_context_older(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_true_after_context_edit(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_stays_true_when_context_is_restored(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+    _set_context(app, threat_model="old")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_uses_creation_time_after_assessment_edit(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    _set_context(app, threat_model="new")
+
+    with app.app_context():
+        assessment = DBAssessment.get_by_origin(
+            [VARIANT_UUID], origin="ai"
+        )[0]
+        created_at = assessment.created_at
+        assessment.update(status_notes="revised after context edit")
+        assert assessment.timestamp > created_at
+        assert assessment.created_at == created_at
+
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_ignores_noop_save(client, app):
+    _set_context(app, threat_model="same")
+    _post_ai(client)
+    _set_context(app, threat_model="same")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_only_for_edited_variant(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    _post_ai(client)
+    _post_ai(client, variant_id=other_variant)
+    _set_context(app, threat_model="new")
+    resp = client.get("/api/assessments/review/ai")
+    by_variant = {a["targets"][0]["variant_id"]: a["context_outdated"] for a in json.loads(resp.data)}
+    assert by_variant == {str(VARIANT_UUID): True, other_variant: False}
+
+
+def test_ai_context_outdated_when_any_target_context_is_newer(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    response = _post_ai(
+        client,
+        targets=[
+            {"package": PKG, "variant_id": str(VARIANT_UUID)},
+            {"package": PKG2, "variant_id": other_variant},
+        ],
+    )
+    assert response.status_code == 200
+
+    _set_context(app, threat_model="changed")
+
+    rows = json.loads(client.get("/api/assessments/review/ai").data)
+    assert len(rows) == 1
+    assert rows[0]["context_outdated"] is True
+
+
+def test_reviews_endpoint_flags_ai_context_outdated(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    url = f"/api/reviews/assessments?variant_id={VARIANT_UUID}&origin=ai"
+    assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [False]
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [True]
+
+
 def test_ai_post_duplicate_rejected(client):
     first = _post_ai(client)
     assert first.status_code == 200

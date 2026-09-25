@@ -4,7 +4,7 @@
 import gzip
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, overload
 from uuid import UUID
 
@@ -370,6 +370,44 @@ def init_app(app: Flask) -> None:
             return {a["id"]: a for a in assessments}
         return assessments
 
+    def _current_context_updates(
+        assessments: list[DBAssessment],
+    ) -> dict[UUID, datetime | None]:
+        """Last real context-change time for every targeted variant."""
+        from ..models.variant_context import VariantContext
+
+        variant_ids = {
+            target.variant_id
+            for assessment in assessments
+            for target in assessment.target_rows
+        }
+        updates: dict[UUID, datetime | None] = {
+            variant_id: None for variant_id in variant_ids
+        }
+        if variant_ids:
+            for variant_id, updated_at in db.session.execute(
+                db.select(VariantContext.variant_id, VariantContext.updated_at).where(
+                    VariantContext.variant_id.in_(variant_ids)
+                )
+            ):
+                updates[variant_id] = _as_utc(updated_at) if updated_at else None
+        return updates
+
+    def _as_utc(dt: datetime) -> datetime:
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    def _is_context_outdated(
+        assessment: DBAssessment,
+        context_updates: dict[UUID, datetime | None],
+    ) -> bool:
+        """True when any targeted variant changed after assessment creation."""
+        created_at = _as_utc(assessment.created_at)
+        return any(
+            (updated_at := context_updates.get(target.variant_id)) is not None
+            and updated_at > created_at
+            for target in assessment.target_rows
+        )
+
     def _review_assessments_by_origin(origin: str) -> ResponseReturnValue:
         """Return assessments matching ``origin``, enriched with a ``vuln_texts``
         key mapping to the vulnerability's ``texts`` dict so the front-end can
@@ -403,10 +441,14 @@ def init_app(app: Flask) -> None:
         vuln_ids = {a.vuln_id for a in assessments if a.vuln_id}
         vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
 
+        context_updates = _current_context_updates(assessments) if origin == "ai" else {}
+
         assessments_serialized = []
         for a in assessments:
             a_ser = a.to_dict()
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
+            if origin == "ai":
+                a_ser["context_outdated"] = _is_context_outdated(a, context_updates)
             assessments_serialized.append(a_ser)
 
         annotate_assessments_outdated(assessments_serialized)
@@ -1000,6 +1042,18 @@ def init_app(app: Flask) -> None:
 
         rows = _assessments_for_vulnerability(vuln_id, project_variant_ids)
         assessments = annotate_targets(rows)
+
+        ai_rows = [row for row in rows if row.origin == "ai"]
+        if ai_rows:
+            context_updates = _current_context_updates(ai_rows)
+            outdated_by_id = {
+                str(row.id): _is_context_outdated(row, context_updates)
+                for row in ai_rows
+            }
+            for a in assessments:
+                if a.get("origin") == "ai":
+                    a["context_outdated"] = outdated_by_id.get(str(a["id"]), False)
+
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments, 200
@@ -1117,6 +1171,15 @@ def init_app(app: Flask) -> None:
         vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
         for a in assessments:
             a["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts.get(a["vuln_id"], [])))
+
+        if origin == "ai":
+            context_updates = _current_context_updates(rows)
+            outdated_by_id = {
+                str(row.id): _is_context_outdated(row, context_updates)
+                for row in rows
+            }
+            for a in assessments:
+                a["context_outdated"] = outdated_by_id.get(str(a["id"]), False)
 
         return assessments, 200
 

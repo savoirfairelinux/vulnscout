@@ -10,7 +10,7 @@ import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
@@ -66,6 +66,8 @@ type ReviewRow = {
     responses: string[];
     origin: string;
     timestamp: string;
+    /** AI assessment written before the variant context was last modified. */
+    context_outdated: boolean;
     targets: NonNullable<Assessment["targets"]>;
     /** Unique packages across every target (for columns and search). */
     packages: string[];
@@ -99,6 +101,7 @@ function toReviewRow(
         responses: assessment.responses,
         origin: assessment.origin,
         timestamp: assessment.timestamp,
+        context_outdated: assessment.context_outdated === true,
         targets,
         packages,
         variant_ids,
@@ -1145,8 +1148,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             size: 110,
             cell: info => {
                 return (
-                    <div className="flex items-center justify-center h-full">
+                    <div className="flex items-center justify-center h-full gap-1.5">
                         <code>{info.getValue()}</code>
+                        {info.row.original.context_outdated && (
+                            <span title="Context outdated: the variant's AI context was modified after this assessment was generated">
+                                <FontAwesomeIcon icon={faTriangleExclamation} className="w-3.5 h-3.5 text-amber-400" />
+                            </span>
+                        )}
                     </div>
                 );
             },
@@ -1307,22 +1315,20 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         header: () => <div className="flex items-center justify-center">Actions</div>,
         size: 140,
         cell: info => (
-            <div className="flex flex-wrap items-center justify-center gap-2 h-full">
+            <div className="flex flex-nowrap items-center justify-center gap-3 h-full">
                 <button
                     onClick={() => handleApproveAiRow(info.row.original)}
-                    className="px-2 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-xs flex items-center gap-1"
+                    className="text-green-400 hover:text-green-300 transition-colors"
                     title="Approve AI suggestion"
                 >
-                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
-                    Approve
+                    <FontAwesomeIcon icon={faCheck} className="w-4 h-4" />
                 </button>
                 <button
                     onClick={() => handleRejectAiRow(info.row.original)}
-                    className="px-2 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-xs flex items-center gap-1"
+                    className="text-red-400 hover:text-red-300 transition-colors"
                     title="Reject AI suggestion"
                 >
-                    <FontAwesomeIcon icon={faXmark} className="w-3 h-3" />
-                    Reject
+                    <FontAwesomeIcon icon={faXmark} className="w-4 h-4" />
                 </button>
                 <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
