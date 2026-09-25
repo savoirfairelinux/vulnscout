@@ -27,6 +27,8 @@ class Scan(Base):
     description: Mapped[str | None] = mapped_column(Text)
     scan_type: Mapped[str | None] = mapped_column(default="sbom")  # 'sbom' or 'tool'
     scan_source: Mapped[str | None] = mapped_column()  # 'grype', 'nvd', 'osv', or None
+    # Operation queue id shared by every tool scan launched in the same batch.
+    run_id: Mapped[str | None] = mapped_column()
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -70,10 +72,10 @@ class Scan(Base):
 
     @staticmethod
     def create(description: str, variant_id: uuid.UUID, scan_type: str = "sbom",
-               scan_source: str | None = None) -> "Scan":
+               scan_source: str | None = None, run_id: str | None = None) -> "Scan":
         """Create a new scan with the given *description* under *variant_id*, persist it and return it."""
         scan = Scan(description=description, variant_id=variant_id,
-                    scan_type=scan_type, scan_source=scan_source)
+                    scan_type=scan_type, scan_source=scan_source, run_id=run_id)
         db.session.add(scan)
         db.session.commit()
         return scan

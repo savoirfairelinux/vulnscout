@@ -30,6 +30,7 @@ class ScanController:
             "description": scan.description,
             "scan_type": scan.scan_type or "sbom",
             "scan_source": scan.scan_source,
+            "run_id": scan.run_id,
             "timestamp": ensure_utc_iso(scan.timestamp),
             "variant_id": str(scan.variant_id),
         }
@@ -74,14 +75,16 @@ class ScanController:
 
     @staticmethod
     def create(description: str, variant_id: uuid.UUID | str,
-               scan_type: str = "sbom", scan_source: str | None = None) -> Scan:
+               scan_type: str = "sbom", scan_source: str | None = None,
+               run_id: str | None = None) -> Scan:
         """
         Create a new scan under *variant_id*.
 
         :raises ValueError: if *variant_id* is not a valid UUID string.
         """
         return Scan.create(description, ensure_uuid(variant_id),
-                           scan_type=scan_type, scan_source=scan_source)
+                           scan_type=scan_type, scan_source=scan_source,
+                           run_id=run_id)
 
     @staticmethod
     def update(scan: Scan | uuid.UUID | str, description: str) -> Scan:
