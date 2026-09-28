@@ -64,6 +64,10 @@ function AIContext() {
     // UI state
     const [busy, setBusy] = useState(false);
     const [variantContextLoading, setVariantContextLoading] = useState(false);
+    // Without a successful load there is no baseline to diff against, and the
+    // fields were cleared, so saving would both skip the outdating check and
+    // overwrite the stored context with blanks.
+    const [variantContextLoadFailed, setVariantContextLoadFailed] = useState(false);
     const [confirmOutdate, setConfirmOutdate] = useState(false);
     // Variant fields as last loaded or saved, to detect whether a save changes anything.
     const savedVariantFieldsRef = useRef<VariantContextData | null>(null);
@@ -159,6 +163,7 @@ function AIContext() {
         const loadId = ++variantLoadIdRef.current;
         savedVariantFieldsRef.current = null;
         clearVariantFields();
+        setVariantContextLoadFailed(false);
         if (!selectedProjectId || !selectedVariantId) {
             setVariantContextLoading(false);
             return;
@@ -182,8 +187,10 @@ function AIContext() {
                 setRisks(ctx.risks ?? '');
                 setOtherInfo(ctx.other_info ?? '');
             }).catch((e: any) => {
-                if (!unmountedRef.current && loadId === variantLoadIdRef.current)
+                if (!unmountedRef.current && loadId === variantLoadIdRef.current) {
+                    setVariantContextLoadFailed(true);
                     showBanner(e?.message || "Failed to load context.", "error");
+                }
             }).finally(() => {
                 if (!unmountedRef.current && loadId === variantLoadIdRef.current)
                     setVariantContextLoading(false);
@@ -219,6 +226,7 @@ function AIContext() {
     // as outdated, so ask first when the save would actually change it.
     const handleSave = async () => {
         if (!selectedProjectId || busy || variantContextLoading) return;
+        if (selectedVariantId && variantContextLoadFailed) return;
         if (!validate()) return;
         const saved = savedVariantFieldsRef.current;
         const fields = currentVariantFields();
@@ -575,6 +583,18 @@ function AIContext() {
                         <option key={v.id} value={v.id}>{v.name}</option>
                     ))}
                 </select>
+                {variantSelected && variantContextLoadFailed && (
+                    <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
+                        Could not load this variant&apos;s context. Saving is disabled until it loads.
+                        <button
+                            type="button"
+                            onClick={loadVariantContext}
+                            className="underline hover:text-red-400"
+                        >
+                            Retry
+                        </button>
+                    </p>
+                )}
             </div>
 
             {/* Variant Description */}
@@ -685,7 +705,8 @@ function AIContext() {
                     <button
                         type="button"
                         onClick={handleSave}
-                        disabled={!projectSelected || busy || variantContextLoading}
+                        disabled={!projectSelected || busy || variantContextLoading
+                            || (variantSelected && variantContextLoadFailed)}
                         className={btnPrimary + " flex items-center gap-2"}
                     >
                         {busy && <FontAwesomeIcon icon={faSpinner} spin />}
