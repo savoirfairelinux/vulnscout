@@ -46,10 +46,11 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--add-openvex <path>` | Add an OpenVEX JSON file |
 | `--add-cdx <path>` | Add a CycloneDX file |
 | `--add-grype <path>` | Add a Grype results file (`.grype.json`) |
-| `--perform-grype-scan` | Export current DB as CycloneDX, run Grype on it, and merge results back. Memory capped by `GRYPE_MEMLIMIT` (default: auto ~80 % of cgroup limit) |
-| `--perform-nvd-scan` | Run an NVD CPE-based vulnerability scan |
-| `--perform-osv-scan` | Run an OSV PURL-based vulnerability scan |
-| `--perform-sbom-cve-check-scan` | Run a CVE scan using local sbom-cve-check databases |
+| `--perform-scans <types|all>` | Run one or more scanners: `grype`, `nvd`, `osv`, `sbom-cve-check`, or `all`. Separate types with commas or repeat the option. Grype exports the current DB as CycloneDX, runs Grype and merges results; memory is capped by `GRYPE_MEMLIMIT` (default: auto ~80 % of cgroup limit). |
+
+`all` runs every available scanner in the order Grype, NVD, OSV, sbom-cve-check. `--refresh-vulnerability-data` is separate: it enriches existing vulnerability records rather than discovering new findings.
+
+The previous `--perform-grype-scan`, `--perform-nvd-scan`, `--perform-osv-scan`, and `--perform-sbom-cve-check-scan` flags remain supported as aliases.
 
 ### Scan & Output Commands
 
@@ -110,14 +111,14 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 When multiple flags are provided in a single invocation, the entrypoint processes them in this order:
 
 1. **Input staging** — Files specified with `--add-*` are copied into `/scan/inputs/<type>/`
-2. **Scan** — If new inputs, a match condition, or a Grype scan was requested, the scan pipeline runs:
+2. **Scan** — If new inputs, a match condition, or any scanner was requested, the scan pipeline runs:
    - Database migration (`flask db upgrade`)
    - Web server started in background (if `--serve`)
    - Input files merged into the database
-   - Grype scan (if `--perform-grype-scan`)
-   - NVD CPE scan (if `--perform-nvd-scan`)
-   - OSV PURL scan (if `--perform-osv-scan`)
-   - sbom-cve-check scan (if `--perform-sbom-cve-check-scan`)
+    - Grype scan (if `grype` or `all` was selected)
+    - NVD CPE scan (if `nvd` or `all` was selected)
+    - OSV PURL scan (if `osv` or `all` was selected)
+    - sbom-cve-check scan (if `sbom-cve-check` or `all` was selected)
    - Vulnerability processing (NVD enrichment, EPSS scoring)
    - Input files cleaned up after processing
 3. **Reports** — Templates specified with `--report` are generated for every variant in the selected project, or only the selected `--variant`
@@ -142,6 +143,8 @@ The following paths inside the container are relevant:
 | `/etc/vulnscout/config.env` | Persistent configuration file |
 | `/cache/vulnscout/local_databases/` | Local sbom-cve-check advisory database clones (NVD-FKIE + CVEList), stored inside the cache volume next to `vulnscout.db`. Override the host path with `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` (then mounted at `/local_databases`) |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
+
+For local execution outside the container, `VULNSCOUT_BASE_DIR` and `VULNSCOUT_INPUTS_DIR` can override `/scan` and `/scan/inputs`; container defaults are unchanged.
 
 ---
 
@@ -183,7 +186,7 @@ Omit `--variant x86` to include every variant in `demo`.
 docker exec vulnscout /scan/src/entrypoint.sh \
   --project demo --variant x86 \
   --add-spdx /scan/inputs/sbom.spdx.json \
-  --perform-sbom-cve-check-scan
+  --perform-scans sbom-cve-check
 ```
 
 > By default the sbom-cve-check databases live in `/cache/vulnscout/local_databases` (inside the cache volume, next to `vulnscout.db`); set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` to use a shared host clone mounted at `/local_databases` instead. With `SBOM_CVE_CHECK_AUTO_UPDATE=1` the databases are cloned automatically on first use and refreshed before every scan.
