@@ -88,6 +88,165 @@ def test_bulk_find_or_create_with_suppliers(app):
     assert result[acme_key].id != result[bar_key].id
 
 
+@pytest.mark.parametrize("versions", [
+    ("1_1.0.0", "1.0.0"),
+    ("1.0.0", "1_1.0.0"),
+])
+def test_same_sbom_epoch_and_bare_version_share_package(app, versions):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("epoch-project")
+    variant = Variant.create("epoch-variant", project.id)
+    scan = Scan.create("epoch-scan", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("epoch.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = document
+    for version in versions:
+        ctrl.add(Package("mesa", version))
+
+    linked = _db.session.query(SBOMPackage).filter_by(sbom_document_id=document.id).all()
+    assert len(linked) == 1
+    assert linked[0].package.version == "1_1.0.0"
+    assert ctrl.get("mesa@1.0.0").id == linked[0].package_id
+    assert ctrl.get_or_resolve_db_id("mesa@1.0.0") == linked[0].package_id
+
+
+def test_epoch_versions_and_suppliers_remain_distinct(app):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("epochs-project")
+    variant = Variant.create("epochs-variant", project.id)
+    scan = Scan.create("epochs-scan", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("epochs.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = document
+    for name, version, supplier in [
+        ("pixman", "1_1.0.0", ""),
+        ("pixman", "2_1.0.0", ""),
+        ("pixman", "1.0.0", ""),
+        ("pixman", "3_1.0.0", ""),
+        ("pixman", "1_1.0.0", "Organization: Other"),
+        ("pixman", "1_1.1.0", ""),
+        ("pixman", "1_1.0.0-rc1", ""),
+    ]:
+        ctrl.add(Package(name, version, supplier=supplier))
+
+    linked = SBOMPackage.get_by_document(document.id)
+    assert {link.package.string_id for link in linked} == {
+        "pixman@1_1.0.0", "pixman@2_1.0.0", "pixman@3_1.0.0", "pixman@1.0.0",
+        "pixman@1_1.0.0::Organization: Other", "pixman@1_1.1.0",
+        "pixman@1_1.0.0-rc1",
+    }
+
+
+def test_bare_version_stops_aliasing_when_multiple_epochs_match(app):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("ambiguous-project")
+    variant = Variant.create("ambiguous-variant", project.id)
+    scan = Scan.create("ambiguous-scan", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("ambiguous.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = document
+    ctrl.add(Package("mesa", "1.0.0"))
+    ctrl.add(Package("mesa", "1_1.0.0"))
+    ctrl.add(Package("mesa", "2_1.0.0"))
+    assert ctrl.get_or_resolve_db_id("mesa@1.0.0") is None
+    bare = ctrl.add(Package("mesa", "1.0.0"))
+
+    linked = {link.package.string_id: link.package_id for link in SBOMPackage.get_by_document(document.id)}
+    assert set(linked) == {"mesa@1_1.0.0", "mesa@2_1.0.0", "mesa@1.0.0"}
+    assert bare.id == linked["mesa@1.0.0"]
+    assert ctrl.get("mesa@1.0.0").id == bare.id
+    assert ctrl.get_or_resolve_db_id("mesa@1.0.0") == bare.id
+
+
+def test_epoch_upgrade_does_not_change_package_in_another_document(app):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("shared-project")
+    variant = Variant.create("shared-variant", project.id)
+    scan = Scan.create("shared-scan", variant.id, scan_type="sbom")
+    first = SBOMDocument.create("first.spdx.json", "spdx", scan.id)
+    second = SBOMDocument.create("second.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = first
+    bare = ctrl.add(Package("mesa", "1.0.0"))
+    ctrl.current_sbom_document = second
+    ctrl.add(Package("mesa", "1.0.0"))
+    epoch = ctrl.add(Package("mesa", "1_1.0.0"))
+
+    assert bare.version == "1.0.0"
+    assert epoch.version == "1_1.0.0"
+    assert {link.package_id for link in SBOMPackage.get_by_document(first.id)} == {bare.id}
+    assert {link.package_id for link in SBOMPackage.get_by_document(second.id)} == {epoch.id}
+
+
+def test_epoch_upgrade_reuses_existing_epoch_row(app):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("reuse-project")
+    variant = Variant.create("reuse-variant", project.id)
+    scan = Scan.create("reuse-scan", variant.id, scan_type="sbom")
+    first = SBOMDocument.create("epoch.spdx.json", "spdx", scan.id)
+    second = SBOMDocument.create("mixed.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = first
+    epoch = ctrl.add(Package("mesa", "1_1.0.0"))
+    ctrl.current_sbom_document = second
+    ctrl.add(Package("mesa", "1.0.0"))
+    assert ctrl.add(Package("mesa", "1_1.0.0")).id == epoch.id
+    assert {link.package_id for link in SBOMPackage.get_by_document(second.id)} == {epoch.id}
+    assert Package.get_by_string_id("mesa@1_1.0.0").id == epoch.id
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_fast_spdx_epoch_ingestion_keeps_identifiers_and_other_versions(app, reverse):
+    from src.controllers.cache import ControllersCache
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.views.fast_spdx import FastSPDX
+
+    project = Project.create("spdx-epoch-project")
+    variant = Variant.create("spdx-epoch-variant", project.id)
+    scan = Scan.create("spdx-epoch-scan", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("versions.spdx.json", "spdx", scan.id)
+    controllers = ControllersCache()
+    controllers.packages.current_sbom_document = document
+    mesa = [
+        {"name": "mesa", "versionInfo": version, "externalRefs": [{
+            "referenceType": "purl", "referenceLocator": f"pkg:generic/mesa@{version}",
+        }]}
+        for version in ("1_1.0.0", "1.0.0")
+    ]
+    if reverse:
+        mesa.reverse()
+    FastSPDX(controllers).parse_from_dict({
+        "spdxVersion": "SPDX-2.3",
+        "packages": mesa + [
+            {"name": "mesa", "versionInfo": "1_1.1.0"},
+            {"name": "pixman", "versionInfo": "1_6.4"},
+        ],
+    })
+
+    linked = {link.package.string_id: link.package for link in SBOMPackage.get_by_document(document.id)}
+    assert set(linked) == {"mesa@1_1.0.0", "mesa@1_1.1.0", "pixman@1_6.4"}
+    assert {"pkg:generic/mesa@1_1.0.0", "pkg:generic/mesa@1.0.0"} <= set(
+        linked["mesa@1_1.0.0"].purl
+    )
+    assert controllers.packages.get("mesa@1.0.0").id == linked["mesa@1_1.0.0"].id
+
+
 def test_controller_from_dict_roundtrip_preserves_supplier(app):
     from src.controllers.packages import PackagesController
     ctrl = PackagesController()
