@@ -6,6 +6,7 @@
 import json
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -263,6 +264,21 @@ def test_project_description_edit_flagged_on_vuln_scoped_endpoint(client, app):
     assert ai_flags() == [False]
     _set_project_context(app, "new")
     assert ai_flags() == [True]
+
+
+def test_future_payload_timestamp_does_not_suppress_outdating(client, app):
+    """created_at must come from the server clock, not the payload."""
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    assert _post_ai(client, timestamp=future).status_code == 200
+    _set_context(app, threat_model="changed after the assessment was written")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_past_payload_timestamp_does_not_outdate_a_fresh_assessment(client, app):
+    _set_context(app, threat_model="current")
+    past = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    assert _post_ai(client, timestamp=past).status_code == 200
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
 
 
 def test_ai_post_replaces_pending_on_same_variant(client, app):

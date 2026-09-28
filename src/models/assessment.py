@@ -637,6 +637,11 @@ class Assessment(Base):
             targets: The ``(variant_id, finding_id)`` pairs this assessment
                 applies to. ``targets`` is the only way to say what an
                 assessment applies to; at least one pair is required.
+            timestamp: The assessment's displayed date. May be caller-supplied,
+                so imports can keep historical dates. ``created_at`` is
+                deliberately left to the column default instead: it dates the
+                write itself, and AI staleness compares it against context edit
+                times, which a supplied timestamp could skew either way.
             commit: If True (default), commit immediately. Set False for bulk operations.
 
         Raises:
@@ -659,7 +664,6 @@ class Assessment(Base):
             workaround=workaround,
             responses=responses or [],
             timestamp=effective_timestamp,
-            created_at=effective_timestamp,
         )
         if assessment_id is not None:
             assessment.id = assessment_id

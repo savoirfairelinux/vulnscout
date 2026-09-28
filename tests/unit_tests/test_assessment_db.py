@@ -157,22 +157,41 @@ class TestAssessmentAddPackage:
 
 
 class TestAssessmentCreationTime:
-    def test_create_sets_created_at_from_explicit_timestamp(
+    def test_create_sets_created_at_from_the_server_clock(
         self, app, db_variant, db_finding
     ):
-        from datetime import datetime, timezone
+        """A supplied timestamp dates the assessment, never the write itself."""
+        from datetime import datetime, timedelta, timezone
         from src.models.assessment import Assessment
 
         written = datetime(2026, 9, 1, 12, 30, tzinfo=timezone.utc)
+        before = datetime.now(timezone.utc) - timedelta(seconds=1)
         assessment = Assessment.create(
             status="affected",
             origin="ai",
             targets=[(db_variant.id, db_finding.id)],
             timestamp=written,
         )
+        after = datetime.now(timezone.utc) + timedelta(seconds=1)
 
         assert assessment.timestamp.replace(tzinfo=timezone.utc) == written
-        assert assessment.created_at.replace(tzinfo=timezone.utc) == written
+        assert before <= assessment.created_at.replace(tzinfo=timezone.utc) <= after
+
+    def test_create_ignores_a_future_timestamp_for_created_at(
+        self, app, db_variant, db_finding
+    ):
+        from datetime import datetime, timedelta, timezone
+        from src.models.assessment import Assessment
+
+        future = datetime.now(timezone.utc) + timedelta(days=365)
+        assessment = Assessment.create(
+            status="affected",
+            origin="ai",
+            targets=[(db_variant.id, db_finding.id)],
+            timestamp=future,
+        )
+
+        assert assessment.created_at.replace(tzinfo=timezone.utc) < future
 
     def test_update_does_not_change_created_at(
         self, app, db_variant, db_finding
@@ -188,11 +207,12 @@ class TestAssessmentCreationTime:
             targets=[(db_variant.id, db_finding.id)],
             timestamp=created,
         )
+        written_at = assessment.created_at
 
         assessment.update(status_notes="revised", timestamp=edited)
 
         assert assessment.timestamp.replace(tzinfo=timezone.utc) == edited
-        assert assessment.created_at.replace(tzinfo=timezone.utc) == created
+        assert assessment.created_at == written_at
 
 
 # ---------------------------------------------------------------------------
