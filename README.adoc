@@ -231,17 +231,19 @@ VulnScout can run Grype on the current database contents. This exports the curre
 
 [source,shell]
 ----
-./vulnscout --project demo --variant x86 --perform-grype-scan
+./vulnscout --project demo --variant x86 --perform-scans grype
 ----
 
 This can be chained with other inputs to scan newly added files immediately:
 
 [source,shell]
 ----
-./vulnscout --project demo --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-grype-scan
+./vulnscout --project demo --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-scans grype
 ----
 
-`--perform-grype-scan` can consume significant RAM when the SBOM contains many packages.
+`--perform-scans` also accepts `nvd`, `osv`, and `sbom-cve-check`. Use comma-separated types such as `--perform-scans nvd,osv`, repeat the option, or pass `all` to run every scanner in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh remains a separate option.
+
+`--perform-scans grype` can consume significant RAM when the SBOM contains many packages.
 By default VulnScout caps Grype's memory at ~80 % of the container/cgroup limit.
 Override with the `GRYPE_MEMLIMIT` environment variable (see the Environment Variables table above).
 
@@ -252,7 +254,7 @@ Override with the `GRYPE_MEMLIMIT` environment variable (see the Environment Var
 
 # One-off: override via the host environment before starting the container
 export GRYPE_MEMLIMIT=24GiB
-./vulnscout --project demo --variant x86 --perform-grype-scan
+./vulnscout --project demo --variant x86 --perform-scans grype
 ----
 
 ===  Generating Reports

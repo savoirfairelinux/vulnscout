@@ -100,10 +100,8 @@ Commands with optional --project and --variant (uses "default" project and varia
     --add-grype <path>              Add a Grype results file
 
     Trigger scanning to detect new vulnerabilities in the selected project/variant:
-    --perform-grype-scan            Run Grype after merging any inputs
-    --perform-nvd-scan              Run an NVD CPE-based scan
-    --perform-osv-scan              Run an OSV PURL-based scan
-    --perform-sbom-cve-check-scan   Run an sbom-cve-check scan
+    --perform-scans <types|all>     Run grype, nvd, osv, sbom-cve-check, or all
+                                    (comma-separated types or repeated flag)
 
     Export the selected project/variant's vulnerability data to a SBOM file:
     --export-spdx                   Export as SPDX 3.0 SBOM
@@ -149,6 +147,8 @@ Environment variables:
 
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
+    vulnscout --project test --variant x86 --perform-scans nvd,osv
+    vulnscout --project test --perform-scans all
   vulnscout --project test --match-condition "cvss >= 9.0"
   vulnscout --project test --variant x86 --report summary.adoc
   vulnscout --serve
@@ -196,6 +196,22 @@ add_input() {
 
     call_container_engine cp "$file" "$CONTAINER_NAME:$staged"
     PENDING_ARGS+=("--${cmd}" "$staged")
+}
+
+validate_scan_types() {
+    local selection="$1" scan_type
+    local -a scan_types
+    IFS=',' read -r -a scan_types <<< "$selection"
+    if [[ -z "$selection" || "$selection" == ,* || "$selection" == *, || "$selection" == *,,* ]]; then
+        echo "Error: --perform-scans requires scan types: grype, nvd, osv, sbom-cve-check, or all." >&2
+        return 1
+    fi
+    for scan_type in "${scan_types[@]}"; do
+        case "$scan_type" in
+            grype|nvd|osv|sbom-cve-check|all) ;;
+            *) echo "Error: unknown scan type '$scan_type'. Expected grype, nvd, osv, sbom-cve-check, or all." >&2; return 1 ;;
+        esac
+    done
 }
 
 config_set() {
@@ -389,14 +405,20 @@ parse_and_run() {
                 ensure_running; REFRESH_VULNERABILITY_DATA=true; shift ;;
             add-asset|--add-asset)
                 ensure_running; add_input add-asset "$2"; shift 2 ;;
+            --perform-scans)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --perform-scans requires a scan type." >&2; exit 1
+                fi
+                validate_scan_types "$2"
+                ensure_running; PENDING_ARGS+=(--perform-scans "$2"); shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
-                ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-scans grype); shift ;;
             perform-nvd-scan|--perform-nvd-scan)
-                ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-scans nvd); shift ;;
             perform-osv-scan|--perform-osv-scan)
-                ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-scans osv); shift ;;
             perform-sbom-cve-check-scan|--perform-sbom-cve-check-scan|sbom-cve-check-scan|--sbom-cve-check-scan)
-                ensure_running; PENDING_ARGS+=(--perform-sbom-cve-check-scan); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-scans sbom-cve-check); shift ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
             export-cdx|--export-cdx)

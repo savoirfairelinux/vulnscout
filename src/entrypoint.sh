@@ -6,13 +6,13 @@ set -euo pipefail # Enable error checking
 set -m # enable job control to allow `fg` command
 
 CONFIG_FILE="${VULNSCOUT_CONFIG:-/etc/vulnscout/config.env}"
-INPUTS_DIR="/scan/inputs"
+readonly BASE_DIR="${VULNSCOUT_BASE_DIR:-/scan}"
+INPUTS_DIR="${VULNSCOUT_INPUTS_DIR:-$BASE_DIR/inputs}"
 PROJECT_NAME="default"
 PROJECT_SPECIFIED=false
 VARIANT_NAME=""
 VARIANT_SPECIFIED=false
 
-readonly BASE_DIR="/scan"
 INTERACTIVE_MODE="${INTERACTIVE_MODE:-false}"
 DEV_MODE="${DEV_MODE:-false}"
 
@@ -152,10 +152,8 @@ Commands with optional --project and --variant (uses "default" project and varia
         --add-grype <path>              Add a Grype results file
 
         Trigger scanning to detect new vulnerabilities in the selected project/variant:
-        --perform-grype-scan            Run Grype after merging any inputs
-        --perform-nvd-scan              Run an NVD CPE-based scan
-        --perform-osv-scan              Run an OSV PURL-based scan
-        --perform-sbom-cve-check-scan   Run an sbom-cve-check scan
+        --perform-scans <types|all>     Run grype, nvd, osv, sbom-cve-check, or all
+                        (comma-separated types or repeated flag)
 
         Export the selected project/variant's vulnerability data to a SBOM file:
         --export-spdx                   Export as SPDX 3.0 SBOM
@@ -189,6 +187,7 @@ Custom review export options:
 
 Examples:
   /scan/src/entrypoint.sh --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
+    /scan/src/entrypoint.sh --project test --variant x86 --perform-scans grype,nvd
   /scan/src/entrypoint.sh --project test --match-condition "cvss >= 9.0"
   /scan/src/entrypoint.sh --project test --variant x86 --match-condition "cvss >= 9.0"
   /scan/src/entrypoint.sh --serve
@@ -366,7 +365,7 @@ cmd_scan() {
         export INTERACTIVE_MODE="false"
     fi
 
-    cd $BASE_DIR
+    cd "$BASE_DIR"
 
     # 0. Run server to start page
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
@@ -462,7 +461,9 @@ cmd_scan() {
             local grype_tmp
             grype_tmp=$(mktemp -d)
             echo "Exporting current project as CycloneDX for Grype scan..."
-            (cd "$BASE_DIR" && flask --app src.bin.webapp export --format cdx16 --output-dir "$grype_tmp")
+            (cd "$BASE_DIR" && flask --app src.bin.webapp export --format cdx16 --output-dir "$grype_tmp") || {
+                rm -rf "$grype_tmp"; return 1
+            }
             local exported_cdx="$grype_tmp/sbom_cyclonedx_v1_6.cdx.json"
             if [[ -f "$exported_cdx" ]]; then
                 mkdir -p "$INPUTS_DIR/grype"
@@ -472,13 +473,19 @@ cmd_scan() {
                 _grype_gomemlimit=$(resolve_grype_memlimit)
                 if [[ -n "$_grype_gomemlimit" ]]; then
                     echo "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
-                    GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                    GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                        rm -rf "$grype_tmp"; return 1
+                    }
                 else
-                    grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                    grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                        rm -rf "$grype_tmp"; return 1
+                    }
                 fi
                 echo "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
-                    --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --grype "$grype_out")
+                    --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --grype "$grype_out") || {
+                    rm -rf "$grype_tmp"; return 1
+                }
                 has_inputs=true
             else
                 echo "Warning: CycloneDX export produced no file, skipping Grype scan."
@@ -490,21 +497,21 @@ cmd_scan() {
         if [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running NVD scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp nvd-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || return $?
         fi
 
         # If an OSV scan was requested, run it synchronously via the flask CLI.
         if [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp osv-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || return $?
         fi
 
         # If an sbom-cve-check scan was requested, run it synchronously via the flask CLI.
         if [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running sbom-cve-check scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp sbom-cve-check-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || return $?
         fi
 
         # merger_ci.py emits lines of the form  ::STATUS::<step>::<message>
@@ -804,6 +811,31 @@ cmd_daemon() {
     tail -f /dev/null
 }
 
+request_scans() {
+    local selection="$1" scan_type
+    local -a scan_types
+    IFS=',' read -r -a scan_types <<< "$selection"
+    if [[ -z "$selection" || "$selection" == ,* || "$selection" == *, || "$selection" == *,,* ]]; then
+        echo "Error: --perform-scans requires scan types: grype, nvd, osv, sbom-cve-check, or all." >&2
+        return 1
+    fi
+    for scan_type in "${scan_types[@]}"; do
+        case "$scan_type" in
+            grype) GRYPE_SCAN_REQUESTED=true ;;
+            nvd) NVD_SCAN_REQUESTED=true ;;
+            osv) OSV_SCAN_REQUESTED=true ;;
+            sbom-cve-check) SBOM_CVE_CHECK_SCAN_REQUESTED=true ;;
+            all)
+                GRYPE_SCAN_REQUESTED=true
+                NVD_SCAN_REQUESTED=true
+                OSV_SCAN_REQUESTED=true
+                SBOM_CVE_CHECK_SCAN_REQUESTED=true ;;
+            *) echo "Error: unknown scan type '$scan_type'. Expected grype, nvd, osv, sbom-cve-check, or all." >&2; return 1 ;;
+        esac
+    done
+    SCAN_REQUIRED=true
+}
+
 #######################################
 # Print status update to file + console
 # Globals:
@@ -872,14 +904,19 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-asset)
             cmd_add_asset "$2"; shift 2 ;;
+        --perform-scans)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --perform-scans requires a scan type." >&2; exit 1
+            fi
+            request_scans "$2"; shift 2 ;;
         --perform-grype-scan)
-            GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+            request_scans grype; shift ;;
         --perform-nvd-scan)
-            NVD_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+            request_scans nvd; shift ;;
         --perform-osv-scan)
-            OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+            request_scans osv; shift ;;
         --perform-sbom-cve-check-scan)
-            SBOM_CVE_CHECK_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+            request_scans sbom-cve-check; shift ;;
         --refresh-vulnerability-data)
             REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
         --delete-scan)
