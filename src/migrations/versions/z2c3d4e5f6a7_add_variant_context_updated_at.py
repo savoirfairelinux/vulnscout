@@ -18,6 +18,8 @@ depends_on = None
 def upgrade():
     with op.batch_alter_table('variant_context') as batch_op:
         batch_op.add_column(sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True))
+    with op.batch_alter_table('project_context') as batch_op:
+        batch_op.add_column(sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True))
     with op.batch_alter_table('assessments') as batch_op:
         batch_op.add_column(sa.Column('created_at', sa.DateTime(timezone=True), nullable=True))
     op.execute("UPDATE assessments SET created_at = timestamp")
@@ -32,5 +34,7 @@ def upgrade():
 def downgrade():
     with op.batch_alter_table('assessments') as batch_op:
         batch_op.drop_column('created_at')
+    with op.batch_alter_table('project_context') as batch_op:
+        batch_op.drop_column('updated_at')
     with op.batch_alter_table('variant_context') as batch_op:
         batch_op.drop_column('updated_at')
