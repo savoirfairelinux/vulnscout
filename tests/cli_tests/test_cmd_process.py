@@ -432,8 +432,21 @@ class TestCmdProcessCoverage:
 
         assert "Warning: could not populate observations table" in capsys.readouterr().out
 
+    def test_run_main_no_refresh_does_not_enrich(self, app, monkeypatch):
+        monkeypatch.delenv("INTERACTIVE_MODE", raising=False)
+        monkeypatch.delenv("MATCH_CONDITION", raising=False)
+        with patch("src.bin.cmd_process.post_treatment") as post_treatment_call, \
+             patch("src.bin.cmd_process.refresh_vulnerability_sources") as refresh_call, \
+             patch("src.bin.cmd_process.read_inputs"), \
+             patch("src.bin.cmd_process.populate_observations"):
+            with app.app_context():
+                from src.bin.cmd_process import _run_main
+                _run_main()
+
+        post_treatment_call.assert_not_called()
+        refresh_call.assert_not_called()
+
     def test_run_main_interactive_mode_skips_post_treatment(self, app, monkeypatch):
-        """_run_main skips post_treatment when INTERACTIVE_MODE=true (line 348)."""
         monkeypatch.setenv("INTERACTIVE_MODE", "true")
         with patch("src.bin.cmd_process.post_treatment") as mock_pt, \
              patch("src.bin.cmd_process.read_inputs") as mock_ri, \
