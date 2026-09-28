@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faDiagramProject } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import VersionDisplay from './VersionDisplay';
@@ -24,7 +24,7 @@ type Props = {
 
 function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue }: Readonly<Props>) {
   return (
-  <nav aria-label="Main navigation">
+  <nav aria-label="Main navigation" className="overflow-x-auto">
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
       {/* === VulnScout (Logo + text) === */}
       <li className={[bgHoverColor, tab == 'metrics' && bgActiveColor].join(' ')}>
@@ -56,6 +56,14 @@ function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, default
         >
           <FontAwesomeIcon icon={faBox} className="mr-1" />
           SBOM
+        </button>
+      </li>
+
+      {/* === Vulnerabilities === */}
+      <li className={[bgHoverColor, tab == 'dependencies' && bgActiveColor].join(' ')}>
+        <button type="button" onClick={() => changeTab('dependencies')} className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'dependencies' ? 'page' : undefined}>
+          <FontAwesomeIcon icon={faDiagramProject} className="mr-1" /> Dependencies
         </button>
       </li>
 

@@ -127,6 +127,15 @@ class SPDX:
     def parse_and_merge(self):
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
+        edges = set()
+        for relation in self.sbom.relationships:
+            if not isinstance(relation.spdx_element_id, str) or not isinstance(relation.related_spdx_element_id, str):
+                continue
+            if relation.relationship_type == RelationshipType.DEPENDS_ON:
+                edges.add((relation.spdx_element_id, relation.related_spdx_element_id))
+            elif relation.relationship_type == RelationshipType.DEPENDENCY_OF:
+                edges.add((relation.related_spdx_element_id, relation.spdx_element_id))
+        self.packagesCtrl.add_dependencies(self.ref_dict, edges)
 
     def register_components(self, with_cpe=False):
         """

@@ -118,6 +118,13 @@ class CycloneDx:
         try:
             cyclonedx = self.clean_sbom(cyclonedx)
             self.sbom = Bom.from_json(data=cyclonedx)  # type: ignore
+            self._dependency_edges = {
+                (entry['ref'], target)
+                for entry in cyclonedx.get('dependencies', [])
+                if isinstance(entry, dict) and isinstance(entry.get('ref'), str)
+                and isinstance(entry.get('dependsOn'), list)
+                for target in entry['dependsOn'] if isinstance(target, str)
+            }
         except Exception as e:
             print(f"Error parsing CycloneDx format: {e}")
 
@@ -272,6 +279,7 @@ class CycloneDx:
     def parse_and_merge(self):
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
+        self.packagesCtrl.add_dependencies(self.ref_dict, getattr(self, '_dependency_edges', set()))
         self.merge_vulnerabilities_into_controller()
 
     def register_components(self):

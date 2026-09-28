@@ -564,11 +564,37 @@ class FastSPDX3:
         """
         self.merge_components_into_controller(spdx)
 
+    def merge_dependencies_into_controller(self, spdx: Dict[str, Any]) -> None:
+        graph = spdx.get('@graph', [])
+        if not isinstance(graph, list):
+            return
+        edges: set[tuple[str, str]] = set()
+        for relationship in graph:
+            if not isinstance(relationship, dict) or relationship.get('type') != 'Relationship':
+                continue
+            relation = relationship.get('relationshipType')
+            source = relationship.get('from')
+            targets = relationship.get('to')
+            if not isinstance(source, str):
+                continue
+            if isinstance(targets, str):
+                targets = [targets]
+            if not isinstance(targets, list):
+                continue
+            for target in targets:
+                if isinstance(target, str):
+                    if relation == 'dependsOn':
+                        edges.add((source, target))
+                    elif relation == 'dependencyOf':
+                        edges.add((target, source))
+        self.packagesCtrl.add_dependencies(self.uri_to_package, edges)
+
     def parse_from_dict(self, spdx: Dict[str, Any]):
         """
         Read data from SPDX 3 format and populate controllers.
         """
         self.merge_components_into_controller(spdx)
+        self.merge_dependencies_into_controller(spdx)
         self.merge_vulnerabilities_into_controller(spdx)
         self.process_vex_relationships(spdx)
         self._remove_vulnerabilities_without_assessments()
