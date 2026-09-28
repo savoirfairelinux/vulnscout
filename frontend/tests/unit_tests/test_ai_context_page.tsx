@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import "@testing-library/jest-dom";
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
@@ -521,6 +521,47 @@ describe('AIContext page', () => {
             fireEvent.click(retry);
             await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM'));
             expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+        });
+
+        test('switching variants mid-check does not confirm or save the wrong variant', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([
+                { id: 'v1', name: 'Variant 1', project_id: 'p1' },
+                { id: 'v2', name: 'Variant 2', project_id: 'p1' },
+            ]));
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fetchMock.mockResponseOnce(JSON.stringify({
+                project_id: 'p1', description: 'Desc', variant_id: 'v1', variant_description: null,
+                environment: null, threat_model: 'TM1', risks: null, other_info: null, files: [],
+            }));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+            await screen.findByRole('option', { name: 'Variant 1' });
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM1'));
+
+            // The pending-AI check for v1 is still in flight when v2 is selected.
+            let resolvePendingCheck: (value: any) => void = () => {};
+            fetchMock.mockImplementationOnce(() => new Promise(resolve => {
+                resolvePendingCheck = resolve;
+            }));
+            fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'TM2' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+            fetchMock.mockResponseOnce(JSON.stringify({
+                project_id: 'p1', description: 'Desc', variant_id: 'v2', variant_description: null,
+                environment: null, threat_model: 'TM-V2', risks: null, other_info: null, files: [],
+            }));
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v2' } });
+            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM-V2'));
+
+            await act(async () => {
+                resolvePendingCheck({ status: 200, body: JSON.stringify([aiRow]) });
+            });
+
+            expect(screen.queryByText(/mark all pending AI assessments/i)).not.toBeInTheDocument();
+            expect(putCalls()).toHaveLength(0);
         });
 
         test('disables saving while a newly selected variant context is loading', async () => {
