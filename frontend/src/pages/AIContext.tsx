@@ -36,6 +36,14 @@ async function fetchVariantList(projectId: string): Promise<Variant[]> {
     ) as Variant[];
 }
 
+type SaveSnapshot = {
+    loadId: number;
+    projectId: string;
+    variantId: string;
+    description: string | null;
+    fields: VariantContextData;
+};
+
 function AIContext() {
     const unmountedRef = useRef(false);
     useEffect(() => {
@@ -72,6 +80,9 @@ function AIContext() {
     // Variant fields as last loaded or saved, to detect whether a save changes anything.
     const savedVariantFieldsRef = useRef<VariantContextData | null>(null);
     const variantLoadIdRef = useRef(0);
+    // The selection a pending confirmation belongs to, so confirming cannot save
+    // whatever happens to be selected by then.
+    const pendingSaveRef = useRef<SaveSnapshot | null>(null);
     const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
     const [bannerMsg, setBannerMsg] = useState<ReactNode>('');
     const [bannerType, setBannerType] = useState<'success' | 'error'>('success');
@@ -230,6 +241,13 @@ function AIContext() {
         if (!validate()) return;
         const saved = savedVariantFieldsRef.current;
         const fields = currentVariantFields();
+        const snapshot: SaveSnapshot = {
+            loadId: variantLoadIdRef.current,
+            projectId: selectedProjectId,
+            variantId: selectedVariantId,
+            description: description.trim() || null,
+            fields,
+        };
         const variantChanged = !!selectedVariantId && saved !== null
             && (Object.keys(fields) as (keyof VariantContextData)[]).some(k => fields[k] !== saved[k]);
         if (variantChanged) {
@@ -239,29 +257,32 @@ function AIContext() {
             } catch {
                 // Could not check: warn anyway rather than silently outdating assessments.
             }
-            if (unmountedRef.current) return;
+            // The selection may have moved on while the check was in flight; its
+            // answer says nothing about whatever is selected now.
+            if (unmountedRef.current || snapshot.loadId !== variantLoadIdRef.current) return;
             if (hasPendingAi) {
+                pendingSaveRef.current = snapshot;
                 setConfirmOutdate(true);
                 return;
             }
         }
-        await performSave();
+        await performSave(snapshot);
     };
 
-    const performSave = async () => {
+    const performSave = async (snapshot: SaveSnapshot) => {
         setBusy(true);
         try {
-            await Context.saveProject(selectedProjectId, description.trim() || null);
+            await Context.saveProject(snapshot.projectId, snapshot.description);
         } catch (e: any) {
             if (!unmountedRef.current) showBanner(e?.message || "Failed to save project context.", "error");
             setBusy(false);
             return;
         }
-        if (selectedVariantId) {
-            const fields = currentVariantFields();
+        if (snapshot.variantId) {
+            const fields = snapshot.fields;
             try {
-                await Context.saveVariant(selectedVariantId, fields);
-                savedVariantFieldsRef.current = fields;
+                await Context.saveVariant(snapshot.variantId, fields);
+                if (snapshot.loadId === variantLoadIdRef.current) savedVariantFieldsRef.current = fields;
             } catch (e: any) {
                 if (!unmountedRef.current)
                     showBanner(
@@ -696,8 +717,13 @@ function AIContext() {
                     confirmText="Save and mark outdated"
                     cancelText="Cancel"
                     showTitleIcon={true}
-                    onConfirm={() => { setConfirmOutdate(false); void performSave(); }}
-                    onCancel={() => setConfirmOutdate(false)}
+                    onConfirm={() => {
+                        setConfirmOutdate(false);
+                        const snapshot = pendingSaveRef.current;
+                        pendingSaveRef.current = null;
+                        if (snapshot) void performSave(snapshot);
+                    }}
+                    onCancel={() => { pendingSaveRef.current = null; setConfirmOutdate(false); }}
                 />
 
                 {/* Save */}
