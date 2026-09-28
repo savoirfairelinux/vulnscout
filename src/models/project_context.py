@@ -3,9 +3,10 @@
 
 import uuid
 import typing
+from datetime import datetime, timezone
 
 from ..extensions import db, Base
-from sqlalchemy import ForeignKey, UniqueConstraint, Text
+from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
@@ -23,6 +24,9 @@ class ProjectContext(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bumped only when the description actually changes; AI assessments older
+    # than this were written against a previous context.  NULL = never modified.
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="context")
 
@@ -48,11 +52,17 @@ class ProjectContext(Base):
     ) -> "ProjectContext":
         existing = ProjectContext.get_by_project(project_id)
         if existing is not None:
-            existing.description = description
+            if existing.description != description:
+                existing.description = description
+                existing.updated_at = datetime.now(timezone.utc)
             if commit:
                 db.session.commit()
             return existing
-        pc = ProjectContext(project_id=project_id, description=description)
+        pc = ProjectContext(
+            project_id=project_id,
+            description=description,
+            updated_at=datetime.now(timezone.utc) if description is not None else None,
+        )
         db.session.add(pc)
         if commit:
             db.session.commit()

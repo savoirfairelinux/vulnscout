@@ -397,7 +397,12 @@ def init_app(app: Flask) -> None:
     def _current_context_updates(
         assessments: list[DBAssessment],
     ) -> dict[UUID, datetime | None]:
-        """Last real context-change time for every targeted variant."""
+        """Last real context-change time for every targeted variant.
+
+        AI agents consume the merged context, so a variant counts as changed when
+        either its own context or its project's description was edited.
+        """
+        from ..models.project_context import ProjectContext
         from ..models.variant_context import VariantContext
 
         variant_ids = {
@@ -408,13 +413,38 @@ def init_app(app: Flask) -> None:
         updates: dict[UUID, datetime | None] = {
             variant_id: None for variant_id in variant_ids
         }
-        if variant_ids:
-            for variant_id, updated_at in db.session.execute(
-                db.select(VariantContext.variant_id, VariantContext.updated_at).where(
-                    VariantContext.variant_id.in_(variant_ids)
+        if not variant_ids:
+            return updates
+
+        for variant_id, updated_at in db.session.execute(
+            db.select(VariantContext.variant_id, VariantContext.updated_at).where(
+                VariantContext.variant_id.in_(variant_ids)
+            )
+        ):
+            updates[variant_id] = _as_utc(updated_at) if updated_at else None
+
+        variant_project_ids = {
+            variant_id: project_id
+            for variant_id, project_id in db.session.execute(
+                db.select(DBVariant.id, DBVariant.project_id).where(
+                    DBVariant.id.in_(variant_ids)
                 )
-            ):
-                updates[variant_id] = _as_utc(updated_at) if updated_at else None
+            )
+        }
+        project_updates = {
+            project_id: _as_utc(updated_at)
+            for project_id, updated_at in db.session.execute(
+                db.select(ProjectContext.project_id, ProjectContext.updated_at).where(
+                    ProjectContext.project_id.in_(set(variant_project_ids.values()))
+                )
+            )
+            if updated_at
+        }
+        for variant_id, project_id in variant_project_ids.items():
+            project_updated_at = project_updates.get(project_id)
+            current = updates.get(variant_id)
+            if project_updated_at is not None and (current is None or project_updated_at > current):
+                updates[variant_id] = project_updated_at
         return updates
 
     def _as_utc(dt: datetime) -> datetime:

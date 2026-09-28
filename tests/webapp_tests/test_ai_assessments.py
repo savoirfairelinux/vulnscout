@@ -110,6 +110,12 @@ def _set_context(app, **fields):
         VariantContext.upsert(VARIANT_UUID, **fields)
 
 
+def _set_project_context(app, description):
+    from src.models.project_context import ProjectContext
+    with app.app_context():
+        ProjectContext.upsert(PROJECT_UUID, description=description)
+
+
 def test_ai_context_outdated_false_without_context(client):
     _post_ai(client)
     assert [a["context_outdated"] for a in _review_ai(client)] == [False]
@@ -205,6 +211,58 @@ def test_reviews_endpoint_flags_ai_context_outdated(client, app):
     assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [False]
     _set_context(app, threat_model="new")
     assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [True]
+
+
+def test_ai_context_outdated_true_after_project_description_edit(client, app):
+    """The project description is part of the context AI agents consume."""
+    _set_project_context(app, "old")
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+    _set_project_context(app, "new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_true_when_first_project_description_is_added(client, app):
+    _post_ai(client)
+    _set_project_context(app, "added later")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_ignores_noop_project_save(client, app):
+    _set_project_context(app, "same")
+    _post_ai(client)
+    _set_project_context(app, "same")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_ignores_project_context_read(client, app):
+    """Reading the context creates an empty row; that is not an edit."""
+    _post_ai(client)
+    assert client.get(f"/api/projects/{PROJECT_UUID}/context").status_code == 200
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_project_description_edit_outdates_every_variant_of_the_project(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    _post_ai(client)
+    _post_ai(client, variant_id=other_variant)
+    _set_project_context(app, "changed")
+    resp = client.get("/api/assessments/review/ai")
+    by_variant = {a["targets"][0]["variant_id"]: a["context_outdated"] for a in json.loads(resp.data)}
+    assert by_variant == {str(VARIANT_UUID): True, other_variant: True}
+
+
+def test_project_description_edit_flagged_on_vuln_scoped_endpoint(client, app):
+    _set_project_context(app, "old")
+    _post_ai(client)
+    url = f"/api/vulnerabilities/{VULN_ID}/assessments"
+    ai_flags = lambda: [  # noqa: E731
+        a["context_outdated"] for a in json.loads(client.get(url).data) if a["origin"] == "ai"
+    ]
+    assert ai_flags() == [False]
+    _set_project_context(app, "new")
+    assert ai_flags() == [True]
 
 
 def test_ai_post_replaces_pending_on_same_variant(client, app):

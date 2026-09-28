@@ -67,6 +67,32 @@ class TestProjectContextModel:
         from src.models.project_context import ProjectContext
         assert ProjectContext.get_by_project(project.id) is None
 
+    def test_updated_at_none_for_empty_context(self, app, project):
+        """A bare read creates the row; that must not count as an edit."""
+        from src.models.project_context import ProjectContext
+        pc = ProjectContext.upsert(project.id, description=None)
+        assert pc.updated_at is None
+
+    def test_updated_at_set_on_creation_with_content(self, app, project):
+        from src.models.project_context import ProjectContext
+        pc = ProjectContext.upsert(project.id, description="A description")
+        assert pc.updated_at is not None
+
+    def test_updated_at_bumped_only_on_real_change(self, app, project):
+        from src.models.project_context import ProjectContext
+        pc = ProjectContext.upsert(project.id, description="First")
+        first = pc.updated_at
+        pc = ProjectContext.upsert(project.id, description="First")
+        assert pc.updated_at == first
+        pc = ProjectContext.upsert(project.id, description="Second")
+        assert pc.updated_at > first
+
+    def test_updated_at_set_when_first_filled(self, app, project):
+        from src.models.project_context import ProjectContext
+        ProjectContext.upsert(project.id, description=None)
+        pc = ProjectContext.upsert(project.id, description="Now described")
+        assert pc.updated_at is not None
+
     def test_cascade_delete_with_project(self, app, project):
         from src.models.project_context import ProjectContext
         ProjectContext.upsert(project.id, description="will be deleted")
