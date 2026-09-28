@@ -495,6 +495,34 @@ describe('AIContext page', () => {
             expect(putCalls()).toHaveLength(0);
         });
 
+        test('a failed context load blocks saving until a retry succeeds', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fetchMock.mockRejectOnce(new Error('Context fetch error'));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+            await screen.findByRole('option', { name: 'Variant 1' });
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+
+            // Without a known baseline the page cannot tell whether a save would
+            // change the context, so it must not save at all.
+            const retry = await screen.findByRole('button', { name: /retry/i });
+            expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+            fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'TM2' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            expect(putCalls()).toHaveLength(0);
+
+            fetchMock.mockResponseOnce(JSON.stringify({
+                project_id: 'p1', description: 'Desc', variant_id: 'v1', variant_description: null,
+                environment: null, threat_model: 'TM', risks: null, other_info: null, files: [],
+            }));
+            fireEvent.click(retry);
+            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM'));
+            expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+        });
+
         test('disables saving while a newly selected variant context is loading', async () => {
             fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
             fetchMock.mockResponseOnce(JSON.stringify([
