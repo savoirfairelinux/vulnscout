@@ -56,6 +56,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | Flag | Description |
 |------|-------------|
 | `--serve` | Run scan then start the interactive web UI (port 7275). Incompatible with `--match-condition` |
+| `--refresh-vulnerability-data` | Refresh stored EPSS, NVD, EUVD, and GHSA data on demand. Without new inputs, `--project` and `--variant` can limit the refresh scope |
 | `--report <template>` | Generate a report from a template (name or path). `--project` includes every project variant; adding `--variant` restricts the report to that variant. The `default` project is used when `--project` is omitted. Unknown scopes fail rather than broadening the report. If a path is given, the template is staged automatically |
 | `--export-spdx` | Export project as SPDX 3.0 SBOM to `/scan/outputs/` |
 | `--export-cdx` | Export project as CycloneDX 1.6 SBOM to `/scan/outputs/` |
@@ -118,7 +119,7 @@ When multiple flags are provided in a single invocation, the entrypoint processe
    - NVD CPE scan (if `--perform-nvd-scan`)
    - OSV PURL scan (if `--perform-osv-scan`)
    - sbom-cve-check scan (if `--perform-sbom-cve-check-scan`)
-   - Vulnerability processing (NVD enrichment, EPSS scoring)
+   - Vulnerability processing (stored NVD, EPSS, EUVD, and GHSA data is refreshed only with `--refresh-vulnerability-data`)
    - Input files cleaned up after processing
 3. **Reports** — Templates specified with `--report` are generated for every variant in the selected project, or only the selected `--variant`
 4. **Exports** — SBOM formats specified with `--export-*` are written

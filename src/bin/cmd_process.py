@@ -492,7 +492,7 @@ def _run_main(
             " assessments to -- parsed assessments will not be stored"
         )
 
-    # Wrap all ingestion + post-treatment inside batch_session so that the
+    # Wrap ingestion inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a
     # single SQLite transaction at the end of the block.
     with batch_session():
@@ -509,13 +509,6 @@ def _run_main(
 
     match_condition = os.getenv("MATCH_CONDITION", "")
 
-    # In interactive (serve) mode the webapp background thread handles all
-    # enrichment after the loading screen clears.  Running it here too would
-    # block the shell from writing the __END_OF_SCAN_SCRIPT__ marker, keeping
-    # the frontend stuck at Step 1.
-    # Match-condition evaluates stored data; refreshing it requires the
-    # explicit --refresh-vulnerability-data option.
-    interactive_mode = get_bool_env("INTERACTIVE_MODE", False)
     observations_populated = False
     if refresh_vulnerability_data:
         populate_observations(latest_scan, vulnCtrl)
@@ -533,14 +526,6 @@ def _run_main(
                 f"{', '.join(unique_failed)} vulnerability-data refresh failed."
             )
         click.echo("Vulnerability data refresh complete.")
-    elif match_condition:
-        verbose("merger_ci: Skipping automatic EPSS enrichment for match-condition")
-    elif not interactive_mode:
-        verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
-        post_treatment(controllers)
-        verbose("merger_ci: Post-treatment done")
-    else:
-        verbose("merger_ci: Skipping CLI enrichment in interactive mode (webapp background thread will handle it)")
 
     failed_vulns = []
     if match_condition:

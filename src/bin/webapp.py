@@ -9,13 +9,12 @@ from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
 from ..extensions import db, migrate, setup_write_serialization
 from ..controllers.operation_queue import queue as operation_queue
-from ..controllers.job_context import OperationError
 from ..controllers.event_bus import operation_events
 from ..routes import init_app
 from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
 from ..routes.events import STREAM_PATH
 from .. import models  # noqa: F401
-from .merger_ci import init_app as init_merger_cli, post_treatment
+from .merger_ci import init_app as init_merger_cli
 import sys
 import os
 import threading
@@ -30,39 +29,6 @@ DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
 MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
 MAX_SCAN_IMPORT_REQUEST_BYTES = 100 * 1024 * 1024
 DEFAULT_BACKGROUND_TASK_DELAY = 120.0
-
-
-def _launch_enrichment(app):
-    """Queue boot EPSS enrichment so its progress reaches the event stream."""
-    from ..controllers.job_context import JobContext
-    from ..controllers.operation_queue import queue
-    from ..controllers.operation_registry import (
-        KIND_ENRICHMENT, LANE_PIPELINE, registry,
-    )
-
-    op_id = "enrichment:boot"
-    if registry.has_active(op_id):
-        return
-
-    def _enrich_epss(ctx):
-        # Disable autoflush: without this, every SELECT triggers a flush which
-        # acquires the write-lock and holds it across the slow HTTP calls until
-        # the next explicit commit(). With autoflush=False the lock is only
-        # held during commit() itself (milliseconds).
-        db.session.autoflush = False
-        from ..controllers import ControllersCache
-        result = post_treatment(ControllersCache(), reporter=ctx)
-        if result.failed:
-            raise OperationError(f"EPSS enrichment incomplete: {result.failed} failed")
-
-    registry.create(
-        op_id=op_id,
-        kind=KIND_ENRICHMENT,
-        source="epss",
-        label="EPSS enrichment",
-        lane=LANE_PIPELINE,
-    )
-    queue.submit(op_id, LANE_PIPELINE, _enrich_epss, JobContext(op_id))
 
 
 def _warm_scan_list_cache(app):
@@ -122,15 +88,10 @@ def _refresh_sqlite_stats(app):
 
 
 def _schedule_background_tasks(app):
-    """Start post-scan work after the initial Explorer data request burst.
+    """Warm scan history after the initial Explorer data request burst.
 
-    Starting both jobs from the status-poll response makes them compete with
-    the immediately following packages, vulnerabilities, and assessments
-    requests.  The delay keeps that work asynchronous in practice, not merely
-    in implementation.  It must also cover large Explorer responses, which
-    can take well over 30 seconds on production-sized databases, while
-    retaining automatic enrichment and cache warming when no browser is
-    connected.
+    The delay keeps cache warming from competing with the immediately
+    following packages, vulnerabilities, and assessments requests.
     """
     try:
         delay = float(app.config.get("BACKGROUND_TASK_DELAY", DEFAULT_BACKGROUND_TASK_DELAY))
@@ -138,7 +99,6 @@ def _schedule_background_tasks(app):
         delay = DEFAULT_BACKGROUND_TASK_DELAY
 
     def _start():
-        _launch_enrichment(app)
         _warm_scan_list_cache(app)
 
     timer = threading.Timer(max(0.0, delay), _start)
@@ -293,7 +253,7 @@ def create_app():
     @app.middleware("/api")
     def fail_scan_not_finished(*args, **kw):
         # The event stream is exempt like /api/scan/status: the UI opens it
-        # during boot import so it can render enrichment progress live.
+        # during boot import to render operation progress live.
         if request.path in {
             "/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui",
             STREAM_PATH,

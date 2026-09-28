@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -10,133 +11,32 @@ from flask import Flask
 
 from src.bin import webapp as webapp_mod
 from src.controllers import operation_queue as operation_queue_mod
-from src.controllers.job_context import OperationError
-from src.controllers.vulnerabilities import EnrichmentResult
-from src.controllers.operation_registry import (
-    KIND_ENRICHMENT, LANE_PIPELINE, registry,
-)
-
-
-class _InlineThread:
-    """Replace threading.Thread so targets run immediately in tests."""
-
-    def __init__(self, target, name=None, daemon=None):
-        self._target = target
-        self.name = name
-        self.daemon = daemon
-
-    def start(self):
-        self._target()
+from src.controllers.operation_registry import registry
 
 
 @pytest.fixture()
 def captured_submissions(monkeypatch):
-    """Record what ``_launch_enrichment`` hands to the operation queue."""
+    """Record submissions without running jobs in the background."""
     registry.clear()
     submissions: list[dict] = []
 
-    def _submit(op_id, lane, runner, ctx):
+    def _submit(self, op_id, lane, runner, ctx):
         submissions.append(
             {"op_id": op_id, "lane": lane, "runner": runner, "ctx": ctx}
         )
 
-    monkeypatch.setattr(operation_queue_mod.queue, "submit", _submit)
+    monkeypatch.setattr(operation_queue_mod.OperationQueue, "submit", _submit)
     yield submissions
     registry.clear()
 
 
-def test_boot_enrichment_is_registered_as_a_pipeline_operation(
-    captured_submissions,
+def test_scan_completion_warms_cache_without_queuing_epss(
+    monkeypatch, tmp_path, captured_submissions,
 ):
-    webapp_mod._launch_enrichment(Flask(__name__))
-
-    operation = registry.get("enrichment:boot")
-    assert operation is not None
-    assert operation["kind"] == KIND_ENRICHMENT
-    assert operation["source"] == "epss"
-    assert operation["lane"] == LANE_PIPELINE
-
-    assert len(captured_submissions) == 1
-    submission = captured_submissions[0]
-    assert submission["op_id"] == "enrichment:boot"
-    assert submission["lane"] == LANE_PIPELINE
-    assert submission["ctx"].op_id == "enrichment:boot"
-
-
-def test_boot_enrichment_is_not_queued_twice(captured_submissions):
-    app = Flask(__name__)
-    webapp_mod._launch_enrichment(app)
-    webapp_mod._launch_enrichment(app)
-
-    assert len(captured_submissions) == 1
-
-
-def test_boot_enrichment_runs_post_treatment_with_a_reporter(
-    captured_submissions, monkeypatch
-):
-    fake_session = SimpleNamespace(autoflush=True)
-    monkeypatch.setattr(webapp_mod, "db", SimpleNamespace(session=fake_session))
-
-    reporters: list[object] = []
-    monkeypatch.setattr(
-        webapp_mod, "post_treatment",
-        lambda _controllers, reporter=None: (
-            reporters.append(reporter) or EnrichmentResult(successful=1)
-        ),
-    )
-
-    webapp_mod._launch_enrichment(Flask(__name__))
-    submission = captured_submissions[0]
-    submission["runner"](submission["ctx"])
-
-    assert fake_session.autoflush is False
-    assert reporters == [submission["ctx"]]
-
-
-def test_boot_enrichment_failure_reaches_the_queue(
-    captured_submissions, monkeypatch
-):
-    """The runner raises so the queue can mark the operation as failed."""
-    monkeypatch.setattr(
-        webapp_mod, "db", SimpleNamespace(session=SimpleNamespace(autoflush=True))
-    )
-
-    def _raise(_controllers, reporter=None):
-        raise RuntimeError("epss failure")
-
-    monkeypatch.setattr(webapp_mod, "post_treatment", _raise)
-
-    webapp_mod._launch_enrichment(Flask(__name__))
-    submission = captured_submissions[0]
-    with pytest.raises(RuntimeError, match="epss failure"):
-        submission["runner"](submission["ctx"])
-
-
-def test_boot_enrichment_partial_failure_reaches_the_queue(
-    captured_submissions, monkeypatch
-):
-    monkeypatch.setattr(
-        webapp_mod, "db", SimpleNamespace(session=SimpleNamespace(autoflush=True))
-    )
-    monkeypatch.setattr(
-        webapp_mod, "post_treatment",
-        lambda _controllers, reporter=None: EnrichmentResult(successful=3, failed=2),
-    )
-
-    webapp_mod._launch_enrichment(Flask(__name__))
-    submission = captured_submissions[0]
-    with pytest.raises(OperationError, match="EPSS enrichment incomplete: 2 failed"):
-        submission["runner"](submission["ctx"])
-
-
-def test_create_app_schedules_background_tasks_when_scan_finished(monkeypatch, tmp_path):
     status_file = tmp_path / "status.txt"
     status_file.write_text("__END_OF_SCAN_SCRIPT__")
 
-    calls: list[str] = []
-
-    def _record_launch(_app):
-        calls.append("launched")
+    cache_started = Event()
 
     def _register_api_ping(app):
         @app.route("/api/ping")
@@ -144,22 +44,27 @@ def test_create_app_schedules_background_tasks_when_scan_finished(monkeypatch, t
             return {"ok": True}
 
     monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
-    monkeypatch.setattr(webapp_mod, "_schedule_background_tasks", _record_launch)
+    monkeypatch.setattr(webapp_mod, "_warm_scan_list_cache", lambda _app: cache_started.set())
     monkeypatch.setattr(webapp_mod, "init_app", _register_api_ping)
     monkeypatch.setattr(webapp_mod, "init_merger_cli", lambda _app: None)
 
     app = webapp_mod.create_app()
     app.config["SCAN_FILE"] = str(status_file)
     app.config["TESTING"] = False
+    app.config["BACKGROUND_TASK_DELAY"] = 0
 
     client = app.test_client()
     response = client.get("/api/ping")
 
     assert response.status_code == 200
-    assert calls == ["launched"]
+    assert cache_started.wait(timeout=5)
+    assert captured_submissions == []
+    assert registry.get("enrichment:boot") is None
 
 
-def test_schedule_background_tasks_starts_both_jobs(monkeypatch):
+def test_schedule_background_tasks_warms_cache_without_epss_enrichment(
+    monkeypatch, captured_submissions,
+):
     calls: list[str] = []
 
     class _InlineTimer:
@@ -173,14 +78,15 @@ def test_schedule_background_tasks_starts_both_jobs(monkeypatch):
             self._target()
 
     monkeypatch.setattr(webapp_mod.threading, "Timer", _InlineTimer)
-    monkeypatch.setattr(webapp_mod, "_launch_enrichment", lambda _app: calls.append("epss"))
     monkeypatch.setattr(webapp_mod, "_warm_scan_list_cache", lambda _app: calls.append("cache"))
 
     app = Flask(__name__)
     app.config["BACKGROUND_TASK_DELAY"] = 0
     webapp_mod._schedule_background_tasks(app)
 
-    assert calls == ["epss", "cache"]
+    assert calls == ["cache"]
+    assert captured_submissions == []
+    assert registry.get("enrichment:boot") is None
 
 
 def test_create_app_swallows_pragma_setup_error(monkeypatch):
