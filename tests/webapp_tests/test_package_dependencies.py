@@ -88,6 +88,64 @@ def test_spdx3_ingestion_and_scoped_api(app, tmp_path):
     assert client.get('/api/package-dependencies?variant_ids=,').status_code == 400
 
 
+@pytest.mark.parametrize('format_name', ['spdx3', 'spdx2', 'cdx'])
+def test_document_references_do_not_resolve_through_previous_document(app, tmp_path, format_name):
+    with app.app_context():
+        project = Project.create(f'{format_name}-project')
+        variant = Variant.create('default', project.id)
+        scan = Scan.create('SBOM', variant.id)
+
+        def document(source_ref, lib_ref, target_refs):
+            if format_name == 'spdx3':
+                return {'@graph': [
+                    {'type': 'CreationInfo', 'specVersion': '3.0.1'},
+                    *({'type': 'software_Package', 'spdxId': ref, 'name': name,
+                        'software_packageVersion': '1.0'}
+                      for ref, name in ((source_ref, 'app'), (lib_ref, 'lib'))),
+                    {'type': 'Relationship', 'relationshipType': 'dependsOn',
+                     'from': source_ref, 'to': target_refs},
+                ]}
+            if format_name == 'spdx2':
+                return {
+                    'spdxVersion': 'SPDX-2.3', 'SPDXID': 'SPDXRef-DOCUMENT',
+                    'creationInfo': {'creators': ['Tool: test'], 'created': '2024-01-01T00:00:00Z'},
+                    'name': 'test', 'dataLicense': 'CC0-1.0',
+                    'documentNamespace': f'https://example.org/{source_ref}',
+                    'packages': [
+                        {'SPDXID': ref, 'name': name, 'versionInfo': '1.0',
+                         'downloadLocation': 'NOASSERTION'}
+                        for ref, name in ((source_ref, 'app'), (lib_ref, 'lib'))
+                    ],
+                    'relationships': [
+                        {'spdxElementId': source_ref, 'relationshipType': 'DEPENDS_ON',
+                         'relatedSpdxElement': target} for target in target_refs
+                    ],
+                }
+            return {
+                'bomFormat': 'CycloneDX', 'specVersion': '1.5', 'version': 1,
+                'components': [
+                    {'type': 'library', 'bom-ref': ref, 'name': name, 'version': '1.0'}
+                    for ref, name in ((source_ref, 'app'), (lib_ref, 'lib'))
+                ],
+                'dependencies': [{'ref': source_ref, 'dependsOn': target_refs}],
+            }
+
+        for name, source, lib, targets in (
+            ('a', 'app-a', 'lib-a', ['lib-a']),
+            ('b', 'app-b', 'lib-b', ['lib-a']),
+        ):
+            path = tmp_path / f'{name}.json'
+            path.write_text(json.dumps(document(source, lib, targets)))
+            SBOMDocument.create(str(path), path.name, scan.id,
+                                format='cdx' if format_name == 'cdx' else 'spdx')
+
+        read_inputs(ControllersCache(), scan.id)
+        documents = SBOMDocument.get_by_scan(scan.id)
+        assert [document.source_name for document in documents] == ['a.json', 'b.json']
+        assert [db.session.query(PackageDependency).filter_by(sbom_document_id=doc.id).count()
+            for doc in documents] == [1, 0]
+
+
 def test_reingesting_document_replaces_removed_relationships(app, tmp_path):
     variant, scan_id = _scan(app, tmp_path, 'updated', _spdx3())
     replacement = _spdx3()
