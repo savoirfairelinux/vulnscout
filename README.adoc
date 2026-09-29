@@ -81,6 +81,14 @@ It is also possible to add sources files on a specific project and variant with 
 
 Full documentation is available at https://vulnscout.readthedocs.io/
 
+===  MCP Server Source
+
+The VulnScout MCP server source is now vendored in this repository under
+`mcp/`.
+
+It is launched as a stdio process by MCP clients (for example VS Code /
+Copilot) via `mcp/run_server.py`.
+
 ===  Container Lifecycle
 
 The `vulnscout` script manages the container lifecycle. The container runs in the background and accepts commands via `docker exec`.

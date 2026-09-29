@@ -1,0 +1,7 @@
+# Runtime
+mcp[cli]>=2.0.0
+httpx>=0.27
+
+# Test only
+respx>=0.21
+pytest>=8.0
