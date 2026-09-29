@@ -196,6 +196,11 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
+        cdx.ref_dict.clear()
+        spdx.ref_dict.clear()
+        spdx.pkg_to_ref.clear()
+        fastspdx3.uri_to_package.clear()
+        fastspdx.ref_dict.clear()
         pkgCtrl.current_sbom_document = doc
         try:
             verbose(f"merger_ci: Reading {doc.path} (format={doc.format!r})")

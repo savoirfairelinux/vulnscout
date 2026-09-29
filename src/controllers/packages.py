@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..models import Package, Finding, SBOMDocument, SBOMPackage
+from ..models import Package, Finding, SBOMDocument, SBOMPackage, PackageDependency
 from ..helpers.verbose import verbose
 from ..extensions import db
 from ._base import to_dict_with_fallback
@@ -91,6 +91,37 @@ class PackagesController:
             self._db_id_cache[string_id] = pkg.id
             return pkg.id
         return None
+
+    def add_dependencies(self, references: dict[str, str], edges: set[tuple[str, str]]) -> None:
+        """Persist source -> dependency references belonging to the active document."""
+        document = self._current_sbom_document
+        if document is None:
+            return
+        package_ids = {row.package_id for row in SBOMPackage.get_by_document(document.id)}
+        resolved = {
+            ref: self.get_or_resolve_db_id(string_id)
+            for ref, string_id in references.items()
+        }
+        pairs = {
+            (resolved[source], resolved[target]) for source, target in edges
+            if source in resolved and target in resolved
+            and resolved[source] is not None and resolved[target] is not None
+            and resolved[source] != resolved[target]
+            and resolved[source] in package_ids and resolved[target] in package_ids
+        }
+        existing_rows = db.session.execute(
+            db.select(PackageDependency)
+            .where(PackageDependency.sbom_document_id == document.id)
+        ).scalars().all()
+        existing = {(row.package_id, row.dependency_id) for row in existing_rows}
+        for row in existing_rows:
+            if (row.package_id, row.dependency_id) not in pairs:
+                db.session.delete(row)
+        db.session.add_all(
+            PackageDependency(sbom_document_id=document.id, package_id=source, dependency_id=target)
+            for source, target in pairs - existing
+        )
+        db.session.commit()
 
     # ------------------------------------------------------------------
     # Core mutators

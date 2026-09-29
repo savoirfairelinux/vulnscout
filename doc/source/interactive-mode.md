@@ -66,6 +66,7 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
 - **Remaining Pending Vulnerabilities** — the count of vulnerabilities still awaiting triage for this package.
+- **Dependencies** — opens the Dependency tab focused on this package. This column is hidden by default.
 
 ### Filters
 
@@ -83,6 +84,14 @@ See the [Match Conditions](ci_conditions.md) page for the full syntax and token 
 ### Actions
 
 Each row has a **Show Vulnerabilities** button that navigates to the Vulnerability Table pre-filtered to show only the vulnerabilities associated with that specific package.
+
+---
+
+## Dependency Graph
+
+The **Dependency** tab shows package relationships recorded in the active SBOM documents. Select an SBOM source to inspect one document, or keep **All SBOM sources** to see the current scope. The package selector lists packages by number of direct dependencies, highest first. All packages are selected by default; use the checkboxes or **All** and **None** to change which packages and their dependencies appear in the graph. The package list below the graph is paginated for large SBOMs.
+
+Enable the hidden **Dependencies** column in the SBOM table and select **View graph** to focus on one package. Choose **Show whole graph** to return to the complete view. An SBOM without recorded dependency relationships still displays its packages.
 
 ---
 

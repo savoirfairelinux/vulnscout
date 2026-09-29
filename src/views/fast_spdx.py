@@ -15,6 +15,7 @@ class FastSPDX ():
         self.packagesCtrl: PackagesController = controllers.packages
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
+        self.ref_dict: dict[str, str] = {}
 
     def _check_spdx_version(self, sbom: dict):
         """Check if the SPDX version is supported."""
@@ -28,6 +29,9 @@ class FastSPDX ():
             parsed_package = self._parse_package(pkg)
             if parsed_package:
                 self.packagesCtrl.add(parsed_package)
+                spdx_id = _get_field(pkg, ["SPDXID", "spdxId"])
+                if isinstance(spdx_id, str):
+                    self.ref_dict[spdx_id] = parsed_package.string_id
 
     def _parse_package(self, pkg: dict) -> Package | None:
         name = _get_field(pkg, ["name", "Name", "packageName", "PackageName"])
@@ -58,6 +62,17 @@ class FastSPDX ():
         """Read data from SPDX json parsed format."""
         self._check_spdx_version(spdx)
         self._merge_packages(spdx)
+        edges = set()
+        for relation in _get_field(spdx, ["relationships", "Relationships"]) or []:
+            source = relation.get("spdxElementId")
+            target = relation.get("relatedSpdxElement")
+            kind = relation.get("relationshipType")
+            if isinstance(source, str) and isinstance(target, str):
+                if kind == "DEPENDS_ON":
+                    edges.add((source, target))
+                elif kind == "DEPENDENCY_OF":
+                    edges.add((target, source))
+        self.packagesCtrl.add_dependencies(self.ref_dict, edges)
 
 
 def _get_field(obj: dict, field: list[str]):

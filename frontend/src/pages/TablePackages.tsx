@@ -5,7 +5,7 @@ import TableGeneric from "../components/TableGeneric";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faC, faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faC, faCircleQuestion, faCircleInfo, faBook, faDiagramProject } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { extractSupplierName } from '../helpers/pkgId';
 import { formatSourceName, getOriginalSourceName } from '../helpers/sourceNames';
@@ -21,6 +21,7 @@ type Props = {
     packages: Package[];
     vulnerabilities?: Vulnerability[];
     onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
+    onShowDependencies?: (packageId: string) => void;
     onLoadOutdatedPackages?: () => Promise<Package[]>;
     outdatedScopeKey?: string;
     preferenceScopeKey?: string;
@@ -44,7 +45,7 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 const emptyVulnerabilities: Vulnerability[] = [];
 
-function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey, preferenceScopeKey = 'unscoped' }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onShowDependencies, onLoadOutdatedPackages, outdatedScopeKey, preferenceScopeKey = 'unscoped' }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const preferenceKey = `vulnscout.tables.packages.${encodeURIComponent(preferenceScopeKey)}`;
     const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
@@ -237,6 +238,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         'vulnerabilities': 'Vulnerabilities',
         'variants': 'Variants',
         'source': 'Sources',
+        'dependencies': 'Dependencies',
         'actions': 'Actions',
     }), []);
 
@@ -424,6 +426,19 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 enableSorting: false,
                 size: 220,
             }),
+            columnHelper.accessor(row => row.id, {
+                id: 'dependencies',
+                header: () => <div className="flex items-center justify-center">Dependencies</div>,
+                cell: info => <div className="flex items-center justify-center h-full">
+                    <button type="button" className="text-cyan-700 dark:text-cyan-300 hover:underline inline-flex items-center gap-2"
+                        onClick={() => onShowDependencies?.(info.getValue())}
+                        aria-label={`View dependencies for ${info.row.original.name}`}>
+                        <FontAwesomeIcon icon={faDiagramProject} /> View graph
+                    </button>
+                </div>,
+                enableSorting: false,
+                size: 150,
+            }),
             columnHelper.accessor(row => row, {
                 id: 'actions',
                 header: 'Actions',
@@ -460,7 +475,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 size: 10
             })
         ]
-    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts]);
+    }, [onShowVulns, onShowDependencies, matchingVulnerabilityIds, matchingVulnerabilityCounts]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -616,6 +631,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     'PURL',
                     'Supplier',
                     'Vulnerabilities',
+                    'Dependencies',
                     'Variants',
                     'Sources',
                 ]}

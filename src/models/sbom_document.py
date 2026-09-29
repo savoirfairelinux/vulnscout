@@ -11,7 +11,7 @@ from ..extensions import db, Base
 from . import Variant, Scan
 
 if typing.TYPE_CHECKING:
-    from . import SBOMPackage, SBOMObservation
+    from . import SBOMPackage, SBOMObservation, PackageDependency
 
 
 class SBOMDocument(Base):
@@ -32,6 +32,11 @@ class SBOMDocument(Base):
     )
     sbom_observations: Mapped[list["SBOMObservation"]] = relationship(
         back_populates="sbom_document",
+        cascade="all, delete-orphan",
+    )
+    package_dependencies: Mapped[list["PackageDependency"]] = relationship(
+        "PackageDependency",
+        primaryjoin="SBOMDocument.id == foreign(PackageDependency.sbom_document_id)",
         cascade="all, delete-orphan",
     )
 

@@ -11,6 +11,7 @@ import type { Assessment } from "../handlers/assessments";
 import Packages from "../handlers/packages";
 import Vulnerabilities from "../handlers/vulnerabilities";
 import TablePackages from "./TablePackages";
+import DependencyGraph from './DependencyGraph';
 import TableVulnerabilities from "./TableVulnerabilities";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
@@ -29,6 +30,7 @@ import Variants from '../handlers/variant';
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
         packages: 'SBOM',
+        dependencies: 'Dependency',
         vulnerabilities: 'Vulnerabilities',
         scans: 'Scans',
         review: 'Review',
@@ -40,6 +42,7 @@ const tabLabels: Record<string, string> = {
 function Explorer() {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
+    const [dataRevision, setDataRevision] = useState(0);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const vulnsRef = useRef<Vulnerability[]>([]);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
@@ -68,6 +71,9 @@ function Explorer() {
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
+    const [focusedDependencyPackageId, setFocusedDependencyPackageId] = useState<string | undefined>(
+        () => new URLSearchParams(window.location.search).get('package') ?? undefined
+    );
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const [setupRequirement, setSetupRequirement] = useState<
         { kind: 'project' } | { kind: 'variant'; projectId: string } | { kind: 'error' } | null
@@ -157,6 +163,7 @@ function Explorer() {
             setVulns(enriched_vulns);
             const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
             setPkgs(enrichedPkgs);
+            setDataRevision(value => value + 1);
         }).catch(error => {
             console.error(error);
             setIsLoadingData(false);
@@ -234,6 +241,10 @@ function Explorer() {
     }, [loadData]);
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
+        setFocusedDependencyPackageId(undefined);
+        const params = new URLSearchParams(window.location.search);
+        params.delete('package');
+        window.history.replaceState(null, '', `${window.location.pathname}?${params}${window.location.hash}`);
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
         setFilterLabel(undefined);
@@ -271,12 +282,14 @@ function Explorer() {
     }, [loadData]);
 
     const handleScanComplete = useCallback(() => {
-        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-    }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+        loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+            currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
+    }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
     const handleRefreshComplete = useCallback(() => {
-        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-    }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+        loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+            currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
+    }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
     useEffect(() => {
         const previous = observedOperationStatuses.current;
@@ -394,10 +407,28 @@ function Explorer() {
         goToVulnsTabWithFilter("Package", packageId);
     }
 
-    const [tab, setTab] = useState("metrics");
+    const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'dependencies' ? 'dependencies' : 'metrics');
+
+    function updateDependencyUrl(active: boolean, packageId?: string) {
+        const params = new URLSearchParams(window.location.search);
+        if (active) params.set('tab', 'dependencies');
+        else params.delete('tab');
+        if (packageId) params.set('package', packageId);
+        else params.delete('package');
+        const query = params.toString();
+        window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+    }
+
+    function showDependenciesForPackage(packageId: string) {
+        setFocusedDependencyPackageId(packageId);
+        setTab('dependencies');
+        updateDependencyUrl(true, packageId);
+    }
 
     // This function ensures vulns get reset when switching outside filtering context
     function handleTabChange(newTab: string) {
+        setFocusedDependencyPackageId(undefined);
+        updateDependencyUrl(newTab === 'dependencies');
         if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
             setFilterLabel(undefined);
             setFilterValue(undefined);
@@ -509,8 +540,21 @@ function Explorer() {
                     vulnerabilities={vulns}
                     preferenceScopeKey={tablePreferenceScopeKey}
                     onShowVulns={showVulnsForPackage}
+                    onShowDependencies={showDependenciesForPackage}
                     onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
                     outdatedScopeKey={outdatedPackagesScopeKey}
+                />}
+                {tab === 'dependencies' && <DependencyGraph
+                    key={tablePreferenceScopeKey}
+                    variantId={currentBaseVariantId ?? currentVariantId}
+                    projectId={currentProjectId}
+                    variantIds={currentVariantIds}
+                    compareVariantId={currentBaseVariantId ? currentVariantId : undefined}
+                    operation={currentBaseVariantId ? currentOperation : currentMultiOperation}
+                    dataRevision={dataRevision}
+                    focusedPackageId={focusedDependencyPackageId}
+                    onFocusPackage={showDependenciesForPackage}
+                    onClearFocus={() => { setFocusedDependencyPackageId(undefined); updateDependencyUrl(true); }}
                 />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities

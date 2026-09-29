@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import "@testing-library/jest-dom";
 import { describe, test, expect, jest } from '@jest/globals';
 import matchers from '@testing-library/jest-dom/matchers';
@@ -518,6 +519,26 @@ describe('Packages Table', () => {
         // ASSERT
         expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
     })
+
+    test('hidden dependencies column opens the selected package graph', async () => {
+        function TableWithDestination() {
+            const [focusedId, setFocusedId] = useState('');
+            return <>
+                <TablePackages packages={packages} onShowDependencies={setFocusedId} />
+                <span data-testid="focused-dependency">{focusedId}</span>
+            </>;
+        }
+
+        render(<TableWithDestination />);
+        expect(screen.queryByRole('columnheader', { name: 'Dependencies' })).toBeNull();
+
+        const user = userEvent.setup();
+        await user.click(screen.getByText('Columns'));
+        await user.click(screen.getByRole('checkbox', { name: 'Dependencies' }));
+        await user.click(screen.getByRole('button', { name: 'View dependencies for aaabbbccc' }));
+
+        expect(screen.getByTestId('focused-dependency').textContent).toBe('aaabbbccc@1.0.0');
+    });
 
     test('package without CPE shows dash placeholder', async () => {
         // ARRANGE
