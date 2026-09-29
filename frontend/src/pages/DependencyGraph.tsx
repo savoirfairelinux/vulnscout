@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowRight, faDiagramProject, faRotateRight } from '@fortawesome/free-solid-svg-icons';
+import { faArrowRight, faDiagramProject, faMagnifyingGlass, faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { ReactFlow, Background, Controls, MarkerType } from '@xyflow/react';
 import type { Edge, Node } from '@xyflow/react';
 import dagre from 'dagre';
@@ -12,6 +12,9 @@ type Props = {
     variantId?: string;
     projectId?: string;
     variantIds?: string[];
+    compareVariantId?: string;
+    operation?: string;
+    dataRevision?: number;
     focusedPackageId?: string;
     onFocusPackage?: (packageId: string) => void;
     onClearFocus?: () => void;
@@ -24,10 +27,14 @@ type ViewProps = Pick<Props, 'focusedPackageId' | 'onFocusPackage' | 'onClearFoc
 };
 
 const PAGE_SIZE = 50;
+const MAX_GRAPH_PACKAGES = 200;
+const MAX_GRAPH_NODES = 200;
+const MAX_GRAPH_EDGES = 400;
 const NODE_WIDTH = 190;
 const NODE_HEIGHT = 60;
 
-function DependencyGraph({ variantId, projectId, variantIds, focusedPackageId, onFocusPackage, onClearFocus }: Readonly<Props>) {
+function DependencyGraph({ variantId, projectId, variantIds, compareVariantId, operation, dataRevision,
+    focusedPackageId, onFocusPackage, onClearFocus }: Readonly<Props>) {
     const [documents, setDocuments] = useState<DependencyDocument[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -38,12 +45,13 @@ function DependencyGraph({ variantId, projectId, variantIds, focusedPackageId, o
         let cancelled = false;
         setLoading(true);
         setError('');
-        listDependencies(variantId, projectId, variantIdsKey ? variantIdsKey.split(',') : undefined)
+        listDependencies(variantId, projectId, variantIdsKey ? variantIdsKey.split(',') : undefined,
+            compareVariantId, operation)
             .then(result => { if (!cancelled) setDocuments(result); })
             .catch(() => { if (!cancelled) setError('Unable to load dependencies'); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [variantId, projectId, variantIdsKey, retry]);
+    }, [variantId, projectId, variantIdsKey, compareVariantId, operation, dataRevision, retry]);
 
     return <DependencyGraphView documents={documents} loading={loading} error={error}
         onRetry={() => setRetry(value => value + 1)} focusedPackageId={focusedPackageId}
@@ -55,6 +63,15 @@ export function DependencyGraphView({ documents, loading = false, error = '', on
     const [documentId, setDocumentId] = useState('all');
     const [excluded, setExcluded] = useState<Set<string>>(new Set());
     const [page, setPage] = useState(0);
+
+    useEffect(() => {
+        if (documentId !== 'all' && !documents.some(doc => doc.id === documentId)) {
+            setDocumentId('all');
+            setExcluded(new Set());
+            setPage(0);
+            onClearFocus?.();
+        }
+    }, [documents, documentId, onClearFocus]);
 
     const scope = useMemo(() => documents.filter(doc => documentId === 'all' || doc.id === documentId), [documents, documentId]);
     const packages = useMemo(() => {
@@ -73,7 +90,11 @@ export function DependencyGraphView({ documents, loading = false, error = '', on
     }, [scope, packages]);
     const dependencies = useMemo(() => {
         const bySource = new Map<string, string[]>();
-        edges.forEach(edge => bySource.set(edge.package_id, [...(bySource.get(edge.package_id) ?? []), edge.dependency_id]));
+        edges.forEach(edge => {
+            const targets = bySource.get(edge.package_id);
+            if (targets) targets.push(edge.dependency_id);
+            else bySource.set(edge.package_id, [edge.dependency_id]);
+        });
         return bySource;
     }, [edges]);
     const ordered = useMemo(() => [...packages.values()].sort((left, right) =>
@@ -81,18 +102,27 @@ export function DependencyGraphView({ documents, loading = false, error = '', on
         || left.name.localeCompare(right.name) || left.version.localeCompare(right.version) || left.id.localeCompare(right.id)
     ), [packages, dependencies]);
     const focused = focusedPackageId && packages.has(focusedPackageId) ? focusedPackageId : undefined;
-    const visible = ordered.filter(pkg => focused ? pkg.id === focused : !excluded.has(pkg.id));
+    const visible = useMemo(() => ordered.filter(pkg => focused ? pkg.id === focused : !excluded.has(pkg.id)),
+        [ordered, focused, excluded]);
     const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
     const currentPage = Math.min(page, pageCount - 1);
-    const displayed = visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-    const visibleEdges = visible.reduce((count, pkg) => count + (dependencies.get(pkg.id)?.length ?? 0), 0);
+    const displayed = useMemo(() => visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE),
+        [visible, currentPage]);
+    const needsFocus = visible.length > MAX_GRAPH_PACKAGES && !focused;
     const graph = useMemo(() => {
+        const graphSources = needsFocus ? [] : displayed;
+        if (graphSources.length === 0) return { nodes: [], edges: [], limited: false };
         const layout = new dagre.graphlib.Graph();
         layout.setGraph({ rankdir: 'LR', nodesep: 30, ranksep: 90 });
         layout.setDefaultEdgeLabel(() => ({}));
-        const nodeIds = new Set(visible.map(pkg => pkg.id));
+        const nodeIds = new Set(graphSources.map(pkg => pkg.id));
         const graphEdges: Edge[] = [];
-        visible.forEach(pkg => (dependencies.get(pkg.id) ?? []).forEach(id => {
+        let limited = false;
+        graphSources.forEach(pkg => (dependencies.get(pkg.id) ?? []).forEach(id => {
+            if (graphEdges.length >= MAX_GRAPH_EDGES || (!nodeIds.has(id) && nodeIds.size >= MAX_GRAPH_NODES)) {
+                limited = true;
+                return;
+            }
             nodeIds.add(id);
             graphEdges.push({ id: `${pkg.id}:${id}`, source: pkg.id, target: id,
                 markerEnd: { type: MarkerType.ArrowClosed }, animated: false });
@@ -108,8 +138,9 @@ export function DependencyGraphView({ documents, loading = false, error = '', on
                 style: { width: NODE_WIDTH, minHeight: NODE_HEIGHT, overflowWrap: 'anywhere',
                     borderColor: id === focused ? '#0e7490' : '#9ca3af' } };
         });
-        return { nodes, edges: graphEdges };
-    }, [visible, dependencies, packages, focused]);
+        return { nodes, edges: graphEdges, limited };
+    }, [needsFocus, displayed, dependencies, packages, focused]);
+    const visibleEdges = graph.edges.length;
 
     const toggle = (id: string) => {
         if (focused) onClearFocus?.();
@@ -153,18 +184,24 @@ export function DependencyGraphView({ documents, loading = false, error = '', on
                             <input type="checkbox" className="mt-1" aria-label={`Show ${pkg.name}@${pkg.version}`} checked={focused ? focused === pkg.id : !excluded.has(pkg.id)} onChange={() => toggle(pkg.id)} />
                             <span className="min-w-0 break-all">{pkg.name}<span className="text-gray-500 dark:text-gray-400">@{pkg.version}</span></span>
                             <span className="ml-auto tabular-nums text-gray-500 dark:text-gray-400">{dependencies.get(pkg.id)?.length ?? 0}</span>
+                            {onFocusPackage && <button type="button" title={`Focus ${pkg.name}@${pkg.version}`}
+                                aria-label={`Focus ${pkg.name}@${pkg.version}`} onClick={() => onFocusPackage(pkg.id)}>
+                                <FontAwesomeIcon icon={faMagnifyingGlass} />
+                            </button>}
                         </label>)}
                     </div>
                 </aside>
                 <div className="flex-1 min-w-0 overflow-auto" aria-label="Directed dependencies">
                     <div className="flex flex-wrap items-center gap-3 text-sm mb-3 text-gray-600 dark:text-gray-300">
-                        <span>{visibleEdges} dependencies from {visible.length} selected packages</span>
+                        {!needsFocus && <span>{visibleEdges} dependencies from {visible.length} selected packages</span>}
                         {focused && <button type="button" className="underline text-cyan-800 dark:text-cyan-300" onClick={onClearFocus}>Show whole graph</button>}
                         {visible.length > PAGE_SIZE && <span>Displaying {currentPage * PAGE_SIZE + 1}-{Math.min((currentPage + 1) * PAGE_SIZE, visible.length)} of {visible.length} packages</span>}
                     </div>
                     {visible.length === 0 && <p>Select packages to display their dependencies.</p>}
-                    {visibleEdges === 0 && visible.length > 0 && <p>No dependency relationships recorded for the selected packages.</p>}
-                    {visible.length > 0 && <div className="h-[min(68vh,740px)] min-h-[360px] w-full border border-gray-300 dark:border-neutral-600" aria-label="Dependency diagram">
+                    {needsFocus && <p>Focus a package from the list to display its dependency graph.</p>}
+                    {!needsFocus && visibleEdges === 0 && visible.length > 0 && <p>No dependency relationships recorded for the selected packages.</p>}
+                    {graph.limited && <p role="status">Graph limited to {MAX_GRAPH_NODES} packages and {MAX_GRAPH_EDGES} relationships.</p>}
+                    {!needsFocus && visible.length > 0 && <div className="h-[min(68vh,740px)] min-h-[360px] w-full border border-gray-300 dark:border-neutral-600" aria-label="Dependency diagram">
                         <ReactFlow key={`${documentId}:${focused ?? ''}:${currentPage}:${graph.nodes.map(node => node.id).join(',')}`}
                             nodes={graph.nodes} edges={graph.edges} fitView nodesDraggable={false} onlyRenderVisibleElements
                             minZoom={0.1} maxZoom={1.5} onNodeClick={(_, node) => onFocusPackage?.(node.id)}>

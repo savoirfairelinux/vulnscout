@@ -84,5 +84,16 @@ class SBOMPackage(Base):
 
     def delete(self) -> None:
         """Remove this association from the database."""
+        from .package_dependency import PackageDependency
+
+        db.session.execute(
+            db.delete(PackageDependency).where(
+                PackageDependency.sbom_document_id == self.sbom_document_id,
+                db.or_(
+                    PackageDependency.package_id == self.package_id,
+                    PackageDependency.dependency_id == self.package_id,
+                ),
+            )
+        )
         db.session.delete(self)
         db.session.commit()

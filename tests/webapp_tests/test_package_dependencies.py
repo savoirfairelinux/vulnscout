@@ -10,7 +10,7 @@ from src.bin.webapp import create_app
 from src.bin.cmd_process import read_inputs
 from src.controllers import ControllersCache
 from src.extensions import db
-from src.models import PackageDependency, Project, SBOMDocument, Scan, Variant
+from src.models import PackageDependency, Project, SBOMDocument, SBOMPackage, Scan, Variant
 
 
 @pytest.fixture()
@@ -105,6 +105,88 @@ def test_reingesting_document_replaces_removed_relationships(app, tmp_path):
     assert {(names[edge['package_id']], names[edge['dependency_id']]) for edge in document['edges']} == {
         ('lib', 'util'),
     }
+
+
+def test_deleting_scan_removes_dependency_edges(app, tmp_path):
+    _, scan_id = _scan(app, tmp_path, 'removed', _spdx3())
+    with app.app_context():
+        assert db.session.query(PackageDependency).count() == 3
+        Scan.get_by_id(scan_id).delete()
+        assert db.session.query(PackageDependency).count() == 0
+
+
+def test_deleting_package_link_removes_incoming_and_outgoing_edges(app, tmp_path):
+    _, scan_id = _scan(app, tmp_path, 'link', _spdx3())
+    with app.app_context():
+        document_id = SBOMDocument.get_by_scan(scan_id)[0].id
+        linked = SBOMPackage.get_by_document(document_id)
+        app_link = next(link for link in linked if link.package.name == 'app')
+        app_link.delete()
+        assert db.session.query(PackageDependency).count() == 1
+        util_link = next(link for link in linked if link.package.name == 'util')
+        util_link.delete()
+        assert db.session.query(PackageDependency).count() == 0
+
+
+def test_outdated_cleanup_keeps_reactivated_graph_consistent(app, tmp_path):
+    variant_id, older_scan_id = _scan(app, tmp_path, 'older', _spdx3())
+    with app.app_context():
+        newer_scan = Scan.create('SBOM', variant_id)
+        document = {'@graph': [
+            {'type': 'CreationInfo', 'specVersion': '3.0.1'},
+            {'type': 'software_Package', 'spdxId': 'pkg:app',
+             'name': 'app', 'software_packageVersion': '1.0'},
+        ]}
+        path = tmp_path / 'newer.json'
+        path.write_text(json.dumps(document))
+        SBOMDocument.create(str(path), path.name, newer_scan.id, format='spdx')
+        read_inputs(ControllersCache(), newer_scan.id)
+
+        from src.helpers.outdated_cleanup import delete_outdated_data
+        assert delete_outdated_data()['sbom_packages_deleted'] == 2
+        assert db.session.query(PackageDependency).count() == 0
+        newer_scan.delete()
+
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}')
+    assert graph.status_code == 200
+    assert graph.json['documents'][0]['edges'] == []
+    with app.app_context():
+        assert Scan.get_by_id(older_scan_id) is not None
+
+
+def test_comparison_graph_matches_package_selection(app, tmp_path):
+    base_id, _ = _scan(app, tmp_path, 'base', _spdx3())
+    compare_id, _ = _scan(app, tmp_path, 'compare', {'@graph': [
+        {'type': 'CreationInfo', 'specVersion': '3.0.1'},
+        *({'type': 'software_Package', 'spdxId': f'pkg:{name}',
+            'name': name, 'software_packageVersion': '1.0'}
+          for name in ('app', 'core', 'other')),
+        {'type': 'Relationship', 'relationshipType': 'dependsOn',
+         'from': 'pkg:app', 'to': ['pkg:core']},
+        {'type': 'Relationship', 'relationshipType': 'dependsOn',
+         'from': 'pkg:core', 'to': ['pkg:other']},
+    ]})
+    client = app.test_client()
+    for operation, expected_names, expected_edges in (
+        ('difference', {'core', 'other'}, 1),
+        ('intersection', {'app'}, 0),
+    ):
+        query = f'variant_id={base_id}&compare_variant_id={compare_id}&operation={operation}'
+        packages = client.get(f'/api/packages?{query}').json
+        graph = client.get(f'/api/package-dependencies?{query}')
+        assert graph.status_code == 200
+        documents = graph.json['documents']
+        assert len(documents) == (1 if operation == 'difference' else 2)
+        assert {package['name'] for doc in documents for package in doc['packages']} == expected_names
+        assert {package['name'] for package in packages} == expected_names
+        assert sum(len(doc['edges']) for doc in documents) == expected_edges
+
+    intersection = client.get(
+        f'/api/package-dependencies?variant_ids={base_id},{compare_id}&operation=intersection'
+    )
+    assert intersection.status_code == 200
+    assert {package['name'] for doc in intersection.json['documents']
+            for package in doc['packages']} == {'app'}
 
 
 @pytest.mark.parametrize('format_name,document', [

@@ -42,6 +42,7 @@ const tabLabels: Record<string, string> = {
 function Explorer() {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
+    const [dataRevision, setDataRevision] = useState(0);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const vulnsRef = useRef<Vulnerability[]>([]);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
@@ -162,6 +163,7 @@ function Explorer() {
             setVulns(enriched_vulns);
             const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
             setPkgs(enrichedPkgs);
+            setDataRevision(value => value + 1);
         }).catch(error => {
             console.error(error);
             setIsLoadingData(false);
@@ -280,12 +282,14 @@ function Explorer() {
     }, [loadData]);
 
     const handleScanComplete = useCallback(() => {
-        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-    }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+        loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+            currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
+    }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
     const handleRefreshComplete = useCallback(() => {
-        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-    }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+        loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+            currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
+    }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
     useEffect(() => {
         const previous = observedOperationStatuses.current;
@@ -542,11 +546,12 @@ function Explorer() {
                 />}
                 {tab === 'dependencies' && <DependencyGraph
                     key={tablePreferenceScopeKey}
-                    variantId={currentVariantId}
+                    variantId={currentBaseVariantId ?? currentVariantId}
                     projectId={currentProjectId}
-                    variantIds={currentBaseVariantId && currentVariantId
-                        ? [currentBaseVariantId, currentVariantId]
-                        : currentVariantIds}
+                    variantIds={currentVariantIds}
+                    compareVariantId={currentBaseVariantId ? currentVariantId : undefined}
+                    operation={currentBaseVariantId ? currentOperation : currentMultiOperation}
+                    dataRevision={dataRevision}
                     focusedPackageId={focusedDependencyPackageId}
                     onFocusPackage={showDependenciesForPackage}
                     onClearFocus={() => { setFocusedDependencyPackageId(undefined); updateDependencyUrl(true); }}
