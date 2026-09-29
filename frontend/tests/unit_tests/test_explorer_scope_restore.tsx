@@ -245,7 +245,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(null);
         mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
         mockVariantsListAll.mockResolvedValue([{ id: 'default-variant', project_id: 'default-project', name: 'Default Variant' }]);
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
         expect(screen.getByTestId('operation-counts')).toHaveTextContent('0/0/0');
 
         TestEventSource.current.send('snapshot', { seq: 1, operations: [
