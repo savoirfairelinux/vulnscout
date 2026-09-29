@@ -1480,6 +1480,22 @@ describe('Review — filters, search and keyboard', () => {
         expect(screen.getByText('CVE-2020-MIXED')).toBeInTheDocument();
     });
 
+    test('the outdated toggle on the AI Assessments tab includes rows whose context is outdated', async () => {
+        mockNetwork([], {
+            aiReviewList: [
+                { ...makeAssessment('ai1', 'v1'), vuln_id: 'CVE-CTX-OUTDATED', context_outdated: true },
+            ],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText('AI Assessments'));
+        await screen.findByText('CVE-CTX-OUTDATED');
+        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+
+        expect(screen.getByText('CVE-CTX-OUTDATED')).toBeInTheDocument();
+    });
+
     test('filtering by status hides non-matching rows', async () => {
         mockNetwork([RICH_ASSESSMENT, makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
