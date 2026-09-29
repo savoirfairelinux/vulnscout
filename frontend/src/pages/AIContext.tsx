@@ -76,9 +76,13 @@ function AIContext() {
     // fields were cleared, so saving would both skip the outdating check and
     // overwrite the stored context with blanks.
     const [variantContextLoadFailed, setVariantContextLoadFailed] = useState(false);
+    // Same reasoning as variantContextLoadFailed, for the project description.
+    const [projectContextLoadFailed, setProjectContextLoadFailed] = useState(false);
     const [confirmOutdate, setConfirmOutdate] = useState(false);
     // Variant fields as last loaded or saved, to detect whether a save changes anything.
     const savedVariantFieldsRef = useRef<VariantContextData | null>(null);
+    // Project description as last loaded or saved, to detect whether a save changes anything.
+    const savedDescriptionRef = useRef<string | null>(null);
     const variantLoadIdRef = useRef(0);
     // The selection a pending confirmation belongs to, so confirming cannot save
     // whatever happens to be selected by then.
@@ -153,14 +157,18 @@ function AIContext() {
     // The project description is project-bound, so it is loaded only when the project
     // changes. Reloading it on every variant change would discard unsaved edits.
     const loadProjectContext = useCallback(() => {
+        setProjectContextLoadFailed(false);
         if (!selectedProjectId) return;
         Context.getProject(selectedProjectId)
             .then(ctx => {
                 if (unmountedRef.current) return;
+                savedDescriptionRef.current = ctx.description ?? null;
                 setDescription(ctx.description ?? '');
             }).catch((e: any) => {
-                if (!unmountedRef.current)
+                if (!unmountedRef.current) {
+                    setProjectContextLoadFailed(true);
                     showBanner(e?.message || "Failed to load project context.", "error");
+                }
             });
     }, [selectedProjectId]);
 
@@ -234,10 +242,13 @@ function AIContext() {
     });
 
     // Editing the variant context marks every pending AI assessment of that variant
-    // as outdated, so ask first when the save would actually change it.
+    // as outdated, and editing the project description does the same for every
+    // variant in the project, so ask first when the save would actually change
+    // either one.
     const handleSave = async () => {
         if (!selectedProjectId || busy || variantContextLoading) return;
         if (selectedVariantId && variantContextLoadFailed) return;
+        if (projectContextLoadFailed) return;
         if (!validate()) return;
         const saved = savedVariantFieldsRef.current;
         const fields = currentVariantFields();
@@ -250,10 +261,16 @@ function AIContext() {
         };
         const variantChanged = !!selectedVariantId && saved !== null
             && (Object.keys(fields) as (keyof VariantContextData)[]).some(k => fields[k] !== saved[k]);
-        if (variantChanged) {
+        const descriptionChanged = savedDescriptionRef.current !== null
+            && snapshot.description !== savedDescriptionRef.current;
+        if (descriptionChanged || variantChanged) {
             let hasPendingAi = true;
             try {
-                hasPendingAi = (await Assessments.listForReview(selectedVariantId, undefined, 'ai')).length > 0;
+                // A project-description change outdates every variant in the
+                // project, not just the one selected, so check project-wide.
+                hasPendingAi = descriptionChanged
+                    ? (await Assessments.listForReview(undefined, snapshot.projectId, 'ai')).length > 0
+                    : (await Assessments.listForReview(selectedVariantId, undefined, 'ai')).length > 0;
             } catch {
                 // Could not check: warn anyway rather than silently outdating assessments.
             }
@@ -273,6 +290,7 @@ function AIContext() {
         setBusy(true);
         try {
             await Context.saveProject(snapshot.projectId, snapshot.description);
+            if (snapshot.loadId === variantLoadIdRef.current) savedDescriptionRef.current = snapshot.description;
         } catch (e: any) {
             if (!unmountedRef.current) showBanner(e?.message || "Failed to save project context.", "error");
             setBusy(false);
@@ -586,6 +604,18 @@ function AIContext() {
                 {validationErrors.description && (
                     <p className="text-red-500 text-xs mt-1">{validationErrors.description}</p>
                 )}
+                {projectSelected && projectContextLoadFailed && (
+                    <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
+                        Could not load this project&apos;s context. Saving is disabled until it loads.
+                        <button
+                            type="button"
+                            onClick={loadProjectContext}
+                            className="underline hover:text-red-400"
+                        >
+                            Retry
+                        </button>
+                    </p>
+                )}
             </div>
 
             {/* Variant selector */}
@@ -713,7 +743,7 @@ function AIContext() {
                 <ConfirmationModal
                     isOpen={confirmOutdate}
                     title="Mark AI assessments as outdated?"
-                    message="Saving this context will mark all pending AI assessments for this variant as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
+                    message="Saving this context will mark all pending AI assessments as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
                     confirmText="Save and mark outdated"
                     cancelText="Cancel"
                     showTitleIcon={true}
@@ -732,7 +762,7 @@ function AIContext() {
                         type="button"
                         onClick={handleSave}
                         disabled={!projectSelected || busy || variantContextLoading
-                            || (variantSelected && variantContextLoadFailed)}
+                            || (variantSelected && variantContextLoadFailed) || projectContextLoadFailed}
                         className={btnPrimary + " flex items-center gap-2"}
                     >
                         {busy && <FontAwesomeIcon icon={faSpinner} spin />}

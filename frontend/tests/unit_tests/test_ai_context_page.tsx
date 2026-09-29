@@ -588,6 +588,75 @@ describe('AIContext page', () => {
 
             expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
         });
+
+        async function loadVariantAndEditDescriptionOnly(aiList: unknown[], saveResponses: unknown[] = []) {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fetchMock.mockResponseOnce(JSON.stringify({
+                project_id: 'p1', description: 'Desc', variant_id: 'v1', variant_description: null,
+                environment: null, threat_model: 'TM', risks: null, other_info: null, files: [],
+            }));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+            await screen.findByRole('option', { name: 'Variant 1' });
+            fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM'));
+            await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Desc'));
+            fetchMock.mockResponseOnce(JSON.stringify(aiList));
+            saveResponses.forEach(r => fetchMock.mockResponseOnce(JSON.stringify(r)));
+            fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'Desc2' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+        }
+
+        async function loadWithNoVariantAndEditDescription(aiList: unknown[], saveResponses: unknown[] = []) {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+            await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Desc'));
+            fetchMock.mockResponseOnce(JSON.stringify(aiList));
+            saveResponses.forEach(r => fetchMock.mockResponseOnce(JSON.stringify(r)));
+            fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'Desc2' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+        }
+
+        test('editing only the project description triggers the pending-AI check across the whole project', async () => {
+            await loadVariantAndEditDescriptionOnly([aiRow]);
+            expect(await screen.findByText(/mark all pending AI assessments/i)).toBeInTheDocument();
+            expect(putCalls()).toHaveLength(0);
+
+            const checkCall = fetchMock.mock.calls.find(c => String(c[0]).includes('/api/reviews/assessments'));
+            expect(checkCall).toBeDefined();
+            expect(String(checkCall![0])).not.toMatch(/variant_id=/);
+            expect(String(checkCall![0])).toMatch(/project_id=p1/);
+        });
+
+        test('editing the project description with no variant selected also triggers the pending-AI check', async () => {
+            await loadWithNoVariantAndEditDescription([aiRow]);
+            expect(await screen.findByText(/mark all pending AI assessments/i)).toBeInTheDocument();
+            expect(putCalls()).toHaveLength(0);
+        });
+
+        test('a failed project context load blocks saving until a retry succeeds', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+            fetchMock.mockRejectOnce(new Error('Project context fetch error'));
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+
+            const retry = await screen.findByRole('button', { name: /retry/i });
+            expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+
+            fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Desc' }));
+            fireEvent.click(retry);
+            await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Desc'));
+            expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+        });
     });
 
     test('shows error banner when variant load fails', async () => {
