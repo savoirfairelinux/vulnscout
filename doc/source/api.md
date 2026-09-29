@@ -1146,6 +1146,52 @@ The registry and replay buffer are process-local, so a restart clears queued and
 
 ---
 
+## Vulnerability History
+
+Every change to a vulnerability's data is recorded, whichever path wrote it: SBOM import, scans, bulk refreshes or single-CVE refreshes. Tracked fields are the description, severity (`status`), published date, attack vector, EPSS score, links, weaknesses, affected CPEs, patch links, the ENISA EUVD fields, and scanner-level CVSS scores, keyed `cvss:<version>:<author>`. User-entered, variant-scoped CVSS scores are not tracked.
+
+Each change stores the value it replaced, when it happened, and its source: `sbom`, `grype`, `osv`, `scc`, `nvd`, `epss`, `ghsa`, or `euvd`. The live value is not duplicated; the API derives the value each change produced. Values already stored when the history table was created get no row until their first change.
+
+### List the Changes of a Vulnerability
+
+```
+GET /api/vulnerabilities/<vuln_id>/history
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `field` | string | Optional. Restrict to one field, e.g. `epss_score` or `cvss:3.1:nvd@nist.gov`. |
+
+**Response:** Changes ordered oldest first. An `old_value` of `null` means the field got its value then, e.g. when the vulnerability was first imported.
+```json
+{
+  "vuln_id": "CVE-2025-21758",
+  "history": [
+    { "field": "epss_score", "old_value": null, "value": 0.13707, "source": "sbom", "changed_at": "2026-09-16T15:05:10+00:00" },
+    { "field": "epss_score", "old_value": 0.13707, "value": 0.14108, "source": "epss", "changed_at": "2026-09-29T20:11:36+00:00" }
+  ]
+}
+```
+
+Returns `404` if the vulnerability does not exist.
+
+### Summarise Recent Changes
+
+```
+GET /api/vulnerabilities/history?since=<iso-8601>&source=nvd,epss
+```
+
+Counts the changes recorded at or after `since`, optionally restricted to comma-separated sources. The frontend calls it when a bulk refresh finishes to report what the refresh changed.
+
+**Response:**
+```json
+{ "since": "2026-09-29T20:11:45+00:00", "total": 171, "vulnerabilities": 171, "fields": { "epss_score": 171 } }
+```
+
+Returns `400` if `since` is missing or is not an ISO 8601 timestamp.
+
+---
+
 ## Scan Sources
 
 `POST /api/operations` accepts `scan` jobs for `grype`, `nvd`, `osv`, and `scc` (sbom-cve-check). Each scan takes one or more `variant_ids`. The Grype job exports CycloneDX, runs Grype, merges the results and processes findings. NVD scans use the local advisory database by default; set `options.mode` to `"api"` to query NVD by CPE. OSV scans query every package PURL. SCC scans match packages against the local NVD-FKIE and CVEList databases. Progress and errors arrive as operation events, not separate per-scanner status responses.

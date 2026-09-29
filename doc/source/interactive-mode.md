@@ -199,6 +199,12 @@ Each CVSS vector associated with the vulnerability is rendered as a gauge card s
 
 The vulnerability's textual descriptions (from NVD, the SBOM source, or other feeds) are displayed in full, followed by a list of reference links. Each link opens in a new tab.
 
+### Data History
+
+The collapsible **Data history** section lists, per field, every change VulnScout recorded for this vulnerability's data: EPSS score, severity, description, published date, CWEs, CPEs, links, ENISA EUVD data, and each scanner's CVSS score. Each entry shows when the change happened, which source made it (SBOM import, a scan, or an NVD, EPSS, GHSA, or EUVD refresh), the new value and, for scores and lists, the delta from the previous value. The first entry of a field marked **first added** is when that value first reached the database. Values stored before history tracking was introduced appear as **Before history tracking** above their first change.
+
+The section reloads after the modal's refresh button completes. When a bulk **Refresh Vulnerability Data** run finishes, the vulnerabilities table banner summarises how many values the refresh changed, per field.
+
 ### Time Estimation
 
 The time-estimate editor lets you record optimistic, likely, and pessimistic durations for remediation effort. These three-point estimates feed into the Estimated Effort column in the table and can be used for planning and prioritisation.

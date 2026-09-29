@@ -37,6 +37,7 @@ from ..models.time_estimate import TimeEstimate
 from ..models.variant import Variant
 from ..models.vuln_refresh import VulnRefresh
 from ..models.vulnerability import Vulnerability
+from ..models.vulnerability_history import VulnerabilityHistory
 from .assessment_staleness import annotate_assessments_outdated
 
 PackageIdentity = tuple[str | None, str | None]
@@ -421,9 +422,10 @@ def remove_target(assessment_id: uuid.UUID, variant_id: uuid.UUID, finding_id: u
 def _delete_orphaned_vulnerabilities(vulnerability_ids: set[str]) -> int:
     """Delete vulnerability aggregates with no remaining package evidence.
 
-    Dependent ``Metrics`` and ``VulnRefresh`` rows are removed first: bulk
-    ``DELETE`` bypasses the ORM's ``delete-orphan`` cascade, so the child rows
-    must be cleared explicitly to avoid leaving orphans behind.
+    Dependent ``Metrics``, ``VulnRefresh`` and ``VulnerabilityHistory`` rows
+    are removed first: bulk ``DELETE`` bypasses the ORM's ``delete-orphan``
+    cascade, so the child rows must be cleared explicitly to avoid leaving
+    orphans behind.
     """
     if not vulnerability_ids:
         return 0
@@ -437,6 +439,7 @@ def _delete_orphaned_vulnerabilities(vulnerability_ids: set[str]) -> int:
         ).scalars())
     _delete_in_chunks(Metrics, Metrics.vulnerability_id, ids)
     _delete_in_chunks(VulnRefresh, VulnRefresh.vuln_id, ids)
+    _delete_in_chunks(VulnerabilityHistory, VulnerabilityHistory.vuln_id, ids)
     _delete_in_chunks(Vulnerability, Vulnerability.id, ids)
     return len(ids)
 
@@ -747,6 +750,7 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
         _delete_in_chunks(Finding, Finding.id, finding_ids)
         _delete_in_chunks(Metrics, Metrics.vulnerability_id, vulnerability_ids)
         _delete_in_chunks(VulnRefresh, VulnRefresh.vuln_id, vulnerability_ids)
+        _delete_in_chunks(VulnerabilityHistory, VulnerabilityHistory.vuln_id, vulnerability_ids)
         _delete_in_chunks(Vulnerability, Vulnerability.id, vulnerability_ids)
         db.session.commit()
 
