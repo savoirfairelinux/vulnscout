@@ -223,7 +223,7 @@ function formatDate(iso: string): string {
 }
 
 function hasOutdatedAssessment(row: ReviewRow): boolean {
-    return row.targets.some(t => t.outdated);
+    return row.targets.some(t => t.outdated) || row.context_outdated;
 }
 
 function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
