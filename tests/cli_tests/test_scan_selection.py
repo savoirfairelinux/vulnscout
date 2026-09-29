@@ -97,6 +97,55 @@ def test_entrypoint_dispatches_scan_with_real_flask_cli(tmp_path, args, scanner)
     assert "No scans found for variant" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--perform-scans", "osv"],
+        ["--perform-scans", "osv,nvd"],
+        ["--perform-scans", "osv", "--perform-scans", "nvd"],
+        ["--perform-scans", "all"],
+    ],
+)
+def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args):
+    if any("nvd" in arg or arg == "all" for arg in args):
+        databases_dir = Path(os.environ.get("SBOM_CVE_CHECK_DATABASES_DIR", ""))
+        if not (databases_dir / "nvd-fkie").is_dir():
+            pytest.skip("requires a configured local NVD advisory database")
+        if "all" in args and not shutil.which("grype"):
+            pytest.skip("requires the Grype scanner")
+
+    env = os.environ.copy()
+    env["VULNSCOUT_CONFIG"] = str(tmp_path / "absent-config.env")
+    env["VULNSCOUT_BASE_DIR"] = str(ROOT)
+    env["VULNSCOUT_INPUTS_DIR"] = str(tmp_path / "inputs")
+    if "SBOM_CVE_CHECK_DATABASES_DIR" not in env:
+        env["SBOM_CVE_CHECK_DATABASES_DIR"] = str(tmp_path / "local_databases")
+    env["SBOM_CVE_CHECK_AUTO_UPDATE"] = "false"
+    env["FLASK_SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{tmp_path / 'scan.db'}"
+    seed = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scan-selection", "--add-cdx",
+         str(ROOT / "tests" / "end_to_end_tests" / "input_cdx.json")],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert seed.returncode == 0, seed.stderr
+
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scan-selection", *args],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr
+    if any("nvd" in arg or arg == "all" for arg in args):
+        assert result.stdout.index("Running NVD scan") < result.stdout.index("Running OSV scan")
+        assert result.stdout.count("Scan complete") >= 2
+    else:
+        assert "Running OSV scan" in result.stdout
+        assert "Scan complete" in result.stdout
+    if "all" in args:
+        assert result.stdout.index("Merging Grype results") < result.stdout.index("Running NVD scan")
+        assert result.stdout.index("Running OSV scan") < result.stdout.index("Running sbom-cve-check scan")
+
+
 @pytest.mark.parametrize("args", [["--perform-scans", "grype"], ["--perform-scans", "all"], ["--perform-grype-scan"]])
 def test_entrypoint_dispatches_grype_with_real_flask_cli(tmp_path, args):
     env = os.environ.copy()
@@ -110,3 +159,27 @@ def test_entrypoint_dispatches_grype_with_real_flask_cli(tmp_path, args):
     )
 
     assert "Exporting current project as CycloneDX for Grype scan" in result.stdout
+
+
+def test_grype_failure_does_not_stage_partial_results(tmp_path):
+    env = os.environ.copy()
+    env["VULNSCOUT_CONFIG"] = str(tmp_path / "absent-config.env")
+    env["VULNSCOUT_BASE_DIR"] = str(ROOT)
+    env["VULNSCOUT_INPUTS_DIR"] = str(tmp_path / "inputs")
+    env["FLASK_SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{tmp_path / 'scan.db'}"
+    seed = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scan-selection", "--add-cdx",
+         str(ROOT / "tests" / "end_to_end_tests" / "input_cdx.json")],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert seed.returncode == 0, seed.stderr
+
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scan-selection", "--perform-scans", "grype"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+
+    assert "Grype scan:" in result.stdout, result.stderr
+    if not shutil.which("grype"):
+        assert result.returncode != 0
+    assert not (tmp_path / "inputs" / "grype" / "grype_from_db.grype.json").exists()
