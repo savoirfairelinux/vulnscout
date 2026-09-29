@@ -309,6 +309,7 @@ def init_app(app):
             vc.id, original_name=original_name, file_path=file_path,
             description=description, id=file_id
         )
+        VariantContext.touch(variant_uuid)
         return jsonify(cf.to_dict()), 201
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>', methods=['DELETE'])
@@ -345,6 +346,7 @@ def init_app(app):
         from ..extensions import db
         db.session.delete(cf)
         db.session.commit()
+        VariantContext.touch(variant_uuid)
 
         try:
             if os.path.isfile(file_path):

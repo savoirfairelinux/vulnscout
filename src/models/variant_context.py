@@ -201,6 +201,22 @@ class VariantContext(Base):
             db.session.commit()
         return vc
 
+    @staticmethod
+    def touch(variant_id: uuid.UUID, commit: bool = True) -> "VariantContext | None":
+        """Mark an existing variant context as changed without altering its fields.
+
+        Used by callers that mutate context outside the text-field set covered by
+        `upsert` (e.g. supplemental context files), so `context_outdated` still
+        reflects the change.
+        """
+        existing = VariantContext.get_by_variant(variant_id)
+        if existing is None:
+            return None
+        existing.updated_at = datetime.now(timezone.utc)
+        if commit:
+            db.session.commit()
+        return existing
+
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy events — post-commit filesystem cleanup

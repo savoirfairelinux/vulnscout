@@ -534,6 +534,35 @@ class TestPostContextFile:
         )
         assert resp.status_code == 404
 
+    def test_upload_file_bumps_variant_context_updated_at(self, client, variant, tmp_path):
+        from src.models.variant_context import VariantContext
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            from io import BytesIO
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files",
+                data={"file": (BytesIO(b"content"), "report.pdf")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 201
+        vc = VariantContext.get_by_variant(variant.id)
+        assert vc is not None
+        assert vc.updated_at is not None
+
+    def test_upload_file_to_existing_variant_context_bumps_updated_at(self, client, variant, tmp_path):
+        from src.models.variant_context import VariantContext
+        VariantContext.upsert(variant.id, threat_model="CVSS >= 7")
+        old_updated_at = VariantContext.get_by_variant(variant.id).updated_at
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            from io import BytesIO
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files",
+                data={"file": (BytesIO(b"content"), "report.pdf")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 201
+        new_updated_at = VariantContext.get_by_variant(variant.id).updated_at
+        assert new_updated_at > old_updated_at
+
 
 class TestDeleteContextFile:
 
@@ -557,3 +586,12 @@ class TestDeleteContextFile:
             f"/api/variants/{variant.id}/context/files/{uuid.uuid4()}"
         )
         assert resp.status_code == 404
+
+    def test_delete_bumps_variant_context_updated_at(self, client, variant, tmp_path):
+        from src.models.variant_context import VariantContext
+        file_id = self._upload(client, variant, tmp_path)
+        post_upload_updated_at = VariantContext.get_by_variant(variant.id).updated_at
+        resp = client.delete(f"/api/variants/{variant.id}/context/files/{file_id}")
+        assert resp.status_code == 204
+        post_delete_updated_at = VariantContext.get_by_variant(variant.id).updated_at
+        assert post_delete_updated_at > post_upload_updated_at
