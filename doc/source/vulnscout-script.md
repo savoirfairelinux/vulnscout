@@ -249,18 +249,22 @@ To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
 VulnScout can run Grype on the current database contents:
 
 ```bash
-./vulnscout --project demo --variant x86 --perform-grype-scan
+./vulnscout --project demo --variant x86 --perform-scans grype
 ```
+
+`--perform-scans` accepts `grype`, `nvd` (CPE-based), `osv` (PURL-based), and `sbom-cve-check` (local advisory databases). Select several with commas (`--perform-scans nvd,osv`) or by repeating the option, or select every available scanner with `--perform-scans all`. Scans always run in the order Grype, NVD, OSV, sbom-cve-check after inputs are merged. Vulnerability-data refresh is a separate option.
+
+The previous `--perform-grype-scan`, `--perform-nvd-scan`, `--perform-osv-scan`, and `--perform-sbom-cve-check-scan` flags remain supported as aliases.
 
 This can be chained with other inputs to scan newly added files immediately:
 
 ```bash
 ./vulnscout --project demo \
   --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --perform-grype-scan
+  --perform-scans grype
 ```
 
-`--perform-grype-scan` can consume significant RAM on large SBOMs.
+`--perform-scans grype` can consume significant RAM on large SBOMs.
 VulnScout automatically caps Grype's memory at ~80 % of the container/cgroup limit.
 Use `GRYPE_MEMLIMIT` to override:
 
@@ -270,7 +274,7 @@ Use `GRYPE_MEMLIMIT` to override:
 
 # Or export it on the host before running (forwarded into the container)
 export GRYPE_MEMLIMIT=24GiB
-./vulnscout --project demo --perform-grype-scan
+./vulnscout --project demo --perform-scans grype
 
 # Disable the limit entirely
 ./vulnscout --config GRYPE_MEMLIMIT off
@@ -283,10 +287,10 @@ Set to `off`, `0`, or `disabled` to remove the cap.
 
 ## Performing an sbom-cve-check Scan
 
-The `--perform-sbom-cve-check-scan` flag runs a CVE scan powered by [sbom-cve-check](https://github.com/savoirfairelinux/sbom-cve-check). Unlike the NVD and OSV scanners, and once the databases are synced, this scan never makes network calls during analysis,it queries locally-cloned advisory databases (NVD-FKIE JSON feeds and CVEList V5).
+`--perform-scans sbom-cve-check` runs a CVE scan powered by [sbom-cve-check](https://github.com/savoirfairelinux/sbom-cve-check). Unlike the NVD and OSV scanners, and once the databases are synced, this scan never makes network calls during analysis; it queries locally-cloned advisory databases (NVD-FKIE JSON feeds and CVEList V5).
 
 ```bash
-./vulnscout --project demo --variant x86 --perform-sbom-cve-check-scan
+./vulnscout --project demo --variant x86 --perform-scans sbom-cve-check
 ```
 
 The scan can be chained with other inputs:
@@ -294,7 +298,7 @@ The scan can be chained with other inputs:
 ```bash
 ./vulnscout --project demo \
   --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --perform-sbom-cve-check-scan
+  --perform-scans sbom-cve-check
 ```
 
 ---
