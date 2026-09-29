@@ -590,6 +590,38 @@ describe('ScanHistory selected variant scope', () => {
             await waitFor(() => expect(mockGetGlobalResult).toHaveBeenCalledWith('nvd-step'));
         });
 
+        test('keeps removal-only runs visible and lets users read and edit each scanner note', async () => {
+            mockList.mockResolvedValue(history().map(entry => {
+                const unchangedRun = entry.run ? {...entry, run: {
+                    ...entry.run, newly_detected_vulns: 0,
+                    newly_detected_findings: 0, newly_detected_assessments: 0,
+                }} : entry;
+                if (entry.id === 'grype-step') return {
+                    ...unchangedRun, description: 'Grype note', newly_detected_vulns: 0,
+                    vulns_removed: 2, findings_removed: 4,
+                };
+                if (entry.id === 'nvd-step') return {...unchangedRun, description: 'NVD note'};
+                return unchangedRun;
+            }));
+            render(<ScanHistory projectId="project" variantIds={['v1']} />);
+
+            const runCard = (await screen.findByText(/Scan run · 2 scanners/)).closest('.group\\/card') as HTMLElement;
+            fireEvent.click(screen.getByTitle('Showing all scans'));
+            expect(runCard).toBeInTheDocument();
+            expect(within(runCard).getByTitle('Show Grype changes')).toHaveTextContent('−2 vulnerabilities removed');
+            expect(within(runCard).getByTitle('Show Grype changes')).toHaveTextContent('−4 matches removed');
+            expect(within(runCard).getByTitle('Show NVD CPE changes')).not.toHaveTextContent('removed');
+            expect(within(runCard).getByText('Grype note')).toBeInTheDocument();
+            const nvdNote = within(runCard).getByText('NVD note');
+            fireEvent.click(within(nvdNote.parentElement!).getByTitle('Edit description'));
+            fireEvent.change(within(runCard).getByPlaceholderText('Add a description…'), {
+                target: {value: 'NVD updated'},
+            });
+            fireEvent.click(within(runCard).getByTitle('Save'));
+            await waitFor(() => expect(within(runCard).getByText('NVD updated')).toBeInTheDocument());
+            expect(mockSetDescription).toHaveBeenCalledWith('nvd-step', 'NVD updated');
+        });
+
         test('keeps a run while one of its scanners is visible', async () => {
             mockList.mockResolvedValue(history());
             render(<ScanHistory projectId="project" variantIds={['v1']} />);
