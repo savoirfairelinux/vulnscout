@@ -193,3 +193,36 @@ class TestFrontpageSpaFallback:
         resp = client.get("/vulnscout_logo.png")
         assert resp.status_code == 200
         assert resp.data == b"fake-logo-bytes"
+
+    def test_unknown_api_endpoint_still_404s(self, app, client, static_dir):
+        """An unknown /api/... path must keep returning 404 instead of the SPA
+        shell, so API clients never mistake HTML for a successful response."""
+        resp = client.get("/api/does-not-exist")
+        assert resp.status_code == 404
+        assert b"<body>index</body>" not in resp.data
+
+    def test_unknown_nested_api_endpoint_still_404s(self, app, client, static_dir):
+        """Deeper unknown API paths are server-owned too, not client routes."""
+        resp = client.get("/api/packages/nope/deeper")
+        assert resp.status_code == 404
+        assert b"<body>index</body>" not in resp.data
+
+    def test_bare_api_path_serves_openapi_spec(self, app, client, static_dir):
+        """/api is a real endpoint (the OpenAPI spec), so it must keep
+        answering with the spec rather than the SPA shell."""
+        resp = client.get("/api")
+        assert resp.status_code == 200
+        assert b"<body>index</body>" not in resp.data
+        assert resp.is_json
+
+    def test_missing_asset_still_404s(self, app, client, static_dir):
+        """A path that looks like a file (has an extension) but is absent from
+        the static folder is a missing asset, not a client route."""
+        resp = client.get("/assets/missing-bundle.js")
+        assert resp.status_code == 404
+        assert b"<body>index</body>" not in resp.data
+
+    def test_known_api_endpoint_still_answers(self, app, client, static_dir):
+        """The 404 branch must not shadow real API endpoints."""
+        resp = client.get("/api/scan/status")
+        assert resp.status_code == 200

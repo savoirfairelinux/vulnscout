@@ -125,24 +125,43 @@ jest.mock('../../src/pages/TablePackages', () => ({
         <button onClick={() => onShowVulns('pkg-1', ['CVE-1'])}>show package vulnerabilities</button>
     ),
 }));
-jest.mock('../../src/pages/TableVulnerabilities', () => ({
-    __esModule: true,
-    default: ({ appendAssessment, appendCVSS, patchVuln, onRefreshComplete, filterLabel, filterValue }: {
-        appendAssessment: (assessment: { id: string }) => void;
-        appendCVSS: (id: string, vector: string) => void;
-        patchVuln: (id: string, vulnerability: { id: string }) => void;
-        onRefreshComplete: () => void;
-        filterLabel?: string;
-        filterValue?: string;
-    }) => <div>
-        <span data-testid="vuln-filter-label">{filterLabel ?? ''}</span>
-        <span data-testid="vuln-filter-value">{filterValue ?? ''}</span>
-        <button onClick={() => appendAssessment({ id: 'assessment-1' })}>append assessment</button>
-        <button onClick={() => appendCVSS('CVE-1', 'CVSS:3.1/test')}>append cvss</button>
-        <button onClick={() => patchVuln('CVE-1', { id: 'CVE-1' })}>patch vulnerability</button>
-        <button onClick={onRefreshComplete}>refresh complete</button>
-    </div>,
-}));
+// The real table writes the filter props it sees on mount into persisted
+// (localStorage-backed) selections, so what matters is the filter present on
+// the *first* render of each mount, not only the latest props. `mountFilters`
+// records that, letting tests assert a stale filter is never applied.
+jest.mock('../../src/pages/TableVulnerabilities', () => {
+    const { useEffect } = jest.requireActual<typeof import('react')>('react');
+    const mountFilters: Array<{ label?: string; value?: string }> = [];
+    return {
+        __esModule: true,
+        mountFilters,
+        default: ({ appendAssessment, appendCVSS, patchVuln, onRefreshComplete, filterLabel, filterValue }: {
+            appendAssessment: (assessment: { id: string }) => void;
+            appendCVSS: (id: string, vector: string) => void;
+            patchVuln: (id: string, vulnerability: { id: string }) => void;
+            onRefreshComplete: () => void;
+            filterLabel?: string;
+            filterValue?: string;
+        }) => {
+            useEffect(() => {
+                mountFilters.push({ label: filterLabel, value: filterValue });
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, []);
+            return <div>
+                <span data-testid="vuln-filter-label">{filterLabel ?? ''}</span>
+                <span data-testid="vuln-filter-value">{filterValue ?? ''}</span>
+                <button onClick={() => appendAssessment({ id: 'assessment-1' })}>append assessment</button>
+                <button onClick={() => appendCVSS('CVE-1', 'CVSS:3.1/test')}>append cvss</button>
+                <button onClick={() => patchVuln('CVE-1', { id: 'CVE-1' })}>patch vulnerability</button>
+                <button onClick={onRefreshComplete}>refresh complete</button>
+            </div>;
+        },
+    };
+});
+
+const { mountFilters } = jest.requireMock<{ mountFilters: Array<{ label?: string; value?: string }> }>(
+    '../../src/pages/TableVulnerabilities',
+);
 jest.mock('../../src/pages/ScanHistory', () => ({
     __esModule: true,
     default: ({ onScanComplete, variantIds }: { onScanComplete: () => void; variantIds?: string[] }) => <div>
@@ -219,6 +238,7 @@ describe('Explorer saved-scope validation', () => {
         __reset();
         restoreStream();
         jest.clearAllMocks();
+        mountFilters.length = 0;
     });
 
     test('shows and opens server operations from an SSE snapshot in a fresh tab', async () => {
@@ -494,5 +514,46 @@ describe('Explorer saved-scope validation', () => {
 
         expect(screen.getByTestId('vuln-filter-label')).toBeEmptyDOMElement();
         expect(screen.getByTestId('vuln-filter-value')).toBeEmptyDOMElement();
+    });
+
+    test('the vulnerabilities table never mounts with a filter left over from an earlier visit', async () => {
+        // Arrange: arrive on the vulnerabilities page carrying a filter
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([]);
+
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
+
+        fireEvent.click(screen.getByRole('button', { name: 'filter vulnerabilities' }));
+        expect(mountFilters).toEqual([{ label: 'Severity', value: 'high' }]);
+
+        // Act: leave the page, then come back through a plain nav-bar link
+        fireEvent.click(screen.getByRole('link', { name: 'metrics' }));
+        fireEvent.click(screen.getByRole('link', { name: 'vulnerabilities' }));
+
+        // Assert: the fresh mount saw no filter at all, so the table cannot
+        // persist the old selection before the props are cleared
+        expect(mountFilters).toEqual([
+            { label: 'Severity', value: 'high' },
+            { label: undefined, value: undefined },
+        ]);
+    });
+
+    test('the 404 page is not treated as the dashboard', async () => {
+        // Arrange: no project exists, which would open the setup-required modal
+        // on the dashboard route
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([]);
+
+        // Act
+        render(<Explorer />, { wrapper: ({ children }) => (
+            <MemoryRouter initialEntries={['/does-not-exist']}>{children}</MemoryRouter>
+        ) });
+        await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
+
+        // Assert
+        expect(screen.getByRole('heading', { name: '404' })).toBeInTheDocument();
+        expect(screen.queryByTestId('setup-required-popup')).not.toBeInTheDocument();
+        expect(screen.getByRole('main')).toHaveAttribute('aria-label', 'Page not found');
     });
 });

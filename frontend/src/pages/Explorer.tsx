@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { useLocation, useNavigate, Routes, Route } from "react-router-dom";
 import { ROUTES, tabForPath } from "../routes";
-import type { TabKey } from "../routes";
+import type { RouteKey, TabKey } from "../routes";
 import NavigationBar from "../components/NavigationBar";
 import NotFound from "./NotFound";
 import OperationQueueModal from "../components/OperationQueueModal";
@@ -39,6 +39,21 @@ const tabLabels: Record<string, string> = {
         exports: 'Export',
         settings: 'Settings',
         ai: 'AI Context',
+        unknown: 'Page not found',
+};
+
+/**
+ * Intent carried by a programmatic navigation. Plain navigations (a nav-bar
+ * link) carry none, so the destination always renders with a clean slate
+ * instead of inheriting state from an earlier visit.
+ */
+type ExplorerNavState = {
+    vulnFilter?: {
+        label: "Source" | "Severity" | "Status" | "Package";
+        value: string;
+        vulnerabilityIds?: string[];
+    };
+    settingsDestination?: { tab: 'projects'; projectId?: string };
 };
 
 function Explorer() {
@@ -46,9 +61,8 @@ function Explorer() {
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const vulnsRef = useRef<Vulnerability[]>([]);
-    const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
-    const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
-    const [filterVulnerabilityIds, setFilterVulnerabilityIds] = useState<string[] | undefined>(undefined);
+    const location = useLocation();
+    const navigate = useNavigate();
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -75,9 +89,6 @@ function Explorer() {
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const [setupRequirement, setSetupRequirement] = useState<
         { kind: 'project' } | { kind: 'variant'; projectId: string } | { kind: 'error' } | null
-    >(null);
-    const [settingsDestination, setSettingsDestination] = useState<
-        { tab: 'projects'; projectId?: string } | null
     >(null);
     const hadActiveScans = useRef(false);
     const observedOperationStatuses = useRef(new Map<string, string>());
@@ -240,9 +251,8 @@ function Explorer() {
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
-        setFilterLabel(undefined);
-        setFilterValue(undefined);
-        setFilterVulnerabilityIds(undefined);
+        // A new scope invalidates any filter the previous page navigated with.
+        navigate(location.pathname, { replace: true, state: null });
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
         // Track origin variant and operation separately for MultiEditBar intersection logic
@@ -272,7 +282,7 @@ function Explorer() {
             multiActive ? variantIds : undefined,
             multiActive ? (multiOperation || undefined) : undefined,
         );
-    }, [loadData]);
+    }, [loadData, navigate, location.pathname]);
 
     const handleScanComplete = useCallback(() => {
         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
@@ -360,11 +370,15 @@ function Explorer() {
         }));
     }, []);
 
-    function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status" | "Package", value: string) {
-        suppressVulnResetRef.current = true;
-        setFilterLabel(filterType);
-        setFilterValue(value);
-        navigate(ROUTES.vulnerabilities);
+    function goToVulnsTabWithFilter(
+        filterType: "Source" | "Severity" | "Status" | "Package",
+        value: string,
+        matchingVulnerabilityIds?: string[],
+    ) {
+        const state: ExplorerNavState = {
+            vulnFilter: { label: filterType, value, vulnerabilityIds: matchingVulnerabilityIds },
+        };
+        navigate(ROUTES.vulnerabilities, { state });
     }
 
     const loadOutdatedPackages = useCallback(async () => {
@@ -395,45 +409,19 @@ function Explorer() {
     );
 
     function showVulnsForPackage(packageId: string, matchingVulnerabilityIds?: string[]) {
-        setFilterVulnerabilityIds(matchingVulnerabilityIds);
-        goToVulnsTabWithFilter("Package", packageId);
+        goToVulnsTabWithFilter("Package", packageId, matchingVulnerabilityIds);
     }
 
-    const location = useLocation();
-    const navigate = useNavigate();
-    const tab = tabForPath(location.pathname);
+    const tab: RouteKey = tabForPath(location.pathname);
 
-    // Programmatic navigations that carry their own filter/destination state
-    // (goToVulnsTabWithFilter, the setup-required "Go to settings" button) set
-    // these before calling navigate(), so the tab-change effect below can
-    // skip the reset it would otherwise apply for a plain nav-bar click.
-    const suppressVulnResetRef = useRef(false);
-    const suppressSettingsResetRef = useRef(false);
-    const prevTabRef = useRef<TabKey>(tab);
-
-    // Ensures vulns/settings-destination get reset when the tab changes via
-    // a plain navigation (e.g. clicking a NavigationBar link), but not when
-    // the page itself set up filters/destination just before navigating.
-    useEffect(() => {
-        const prevTab = prevTabRef.current;
-        if (tab === 'vulnerabilities' && prevTab !== 'vulnerabilities') {
-            if (suppressVulnResetRef.current) {
-                suppressVulnResetRef.current = false;
-            } else {
-                setFilterLabel(undefined);
-                setFilterValue(undefined);
-                setFilterVulnerabilityIds(undefined);
-            }
-        }
-        if (tab === 'settings' && prevTab !== 'settings') {
-            if (suppressSettingsResetRef.current) {
-                suppressSettingsResetRef.current = false;
-            } else {
-                setSettingsDestination(null);
-            }
-        }
-        prevTabRef.current = tab;
-    }, [tab]);
+    // Navigation intent for the current location, set by the page that
+    // navigated here. Reading it during render (instead of resetting state in
+    // an effect) guarantees the destination's first render already has the
+    // right filter/destination, so a plain nav-bar click can never make it
+    // mount with leftovers from an earlier visit.
+    const navState = (location.state ?? null) as ExplorerNavState | null;
+    const vulnFilter = navState?.vulnFilter;
+    const settingsDestination = navState?.settingsDestination ?? null;
 
     // Accepts a plain string to match Metrics' existing setTab prop contract;
     // every caller passes one of our known tab keys.
@@ -489,14 +477,15 @@ function Explorer() {
                                 void loadSetupRequirement();
                                 return;
                             }
-                            suppressSettingsResetRef.current = true;
-                            setSettingsDestination({
-                                tab: 'projects',
-                                projectId: setupRequirement?.kind === 'variant'
-                                    ? setupRequirement.projectId
-                                    : undefined,
-                            });
-                            navigate(ROUTES.settings);
+                            const state: ExplorerNavState = {
+                                settingsDestination: {
+                                    tab: 'projects',
+                                    projectId: setupRequirement?.kind === 'variant'
+                                        ? setupRequirement.projectId
+                                        : undefined,
+                                },
+                            };
+                            navigate(ROUTES.settings, { state });
                         }}
                         className="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-400"
                     >
@@ -557,9 +546,9 @@ function Explorer() {
                         patchVuln={patchVuln}
                         vulnerabilities={vulns}
                         preferenceScopeKey={tablePreferenceScopeKey}
-                        filterLabel={filterLabel}
-                        filterValue={filterValue}
-                        filterVulnerabilityIds={filterVulnerabilityIds}
+                        filterLabel={vulnFilter?.label}
+                        filterValue={vulnFilter?.value}
+                        filterVulnerabilityIds={vulnFilter?.vulnerabilityIds}
                         variantId={currentVariantId}
                         projectId={currentProjectId}
                         baseVariantId={currentBaseVariantId}

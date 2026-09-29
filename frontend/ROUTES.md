@@ -12,4 +12,4 @@ Source of truth: `src/routes.ts`.
 | `/ai-context`     | AI Context            |
 | `/export`         | Export                |
 | `/settings`       | Settings              |
-| `*` (unknown)     | Redirects to `/`      |
+| `*` (unknown)     | Not Found (404) page  |
