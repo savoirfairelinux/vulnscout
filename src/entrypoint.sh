@@ -466,8 +466,7 @@ cmd_scan() {
             }
             local exported_cdx="$grype_tmp/sbom_cyclonedx_v1_6.cdx.json"
             if [[ -f "$exported_cdx" ]]; then
-                mkdir -p "$INPUTS_DIR/grype"
-                local grype_out="$INPUTS_DIR/grype/grype_from_db.grype.json"
+                local grype_out="$grype_tmp/grype_from_db.grype.json"
                 echo "Grype scan: $exported_cdx -> $grype_out"
                 local _grype_gomemlimit
                 _grype_gomemlimit=$(resolve_grype_memlimit)

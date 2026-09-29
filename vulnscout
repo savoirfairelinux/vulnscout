@@ -410,15 +410,20 @@ parse_and_run() {
                     echo "Error: --perform-scans requires a scan type." >&2; exit 1
                 fi
                 validate_scan_types "$2"
-                ensure_running; PENDING_ARGS+=(--perform-scans "$2"); shift 2 ;;
+                ensure_running
+                if ! exec_container --help | grep -q -- '--perform-scans <types|all>'; then
+                    echo "Error: the running container does not support --perform-scans. Set VULNSCOUT_IMAGE to a compatible image or use --dev." >&2
+                    exit 1
+                fi
+                PENDING_ARGS+=(--perform-scans "$2"); shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
-                ensure_running; PENDING_ARGS+=(--perform-scans grype); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
             perform-nvd-scan|--perform-nvd-scan)
-                ensure_running; PENDING_ARGS+=(--perform-scans nvd); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
             perform-osv-scan|--perform-osv-scan)
-                ensure_running; PENDING_ARGS+=(--perform-scans osv); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
             perform-sbom-cve-check-scan|--perform-sbom-cve-check-scan|sbom-cve-check-scan|--sbom-cve-check-scan)
-                ensure_running; PENDING_ARGS+=(--perform-scans sbom-cve-check); shift ;;
+                ensure_running; PENDING_ARGS+=(--perform-sbom-cve-check-scan); shift ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
             export-cdx|--export-cdx)
