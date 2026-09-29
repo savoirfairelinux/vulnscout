@@ -93,6 +93,7 @@ class FastSPDX3:
             self.logger.warning("No @graph found in SPDX document")
             return
 
+        package_refs = []
         for component in graph:
             if not isinstance(component, dict):
                 continue
@@ -110,8 +111,12 @@ class FastSPDX3:
             spdx_id = component.get('spdxId')
             if spdx_id:
                 self.uri_to_package[spdx_id] = package.string_id
+                package_refs.append(spdx_id)
 
             self.packagesCtrl.add(package)
+
+        for spdx_id in package_refs:
+            self.uri_to_package[spdx_id] = self.packagesCtrl.canonical_id(self.uri_to_package[spdx_id])
 
     def _convert_to_package(self, pkg_element: Dict[str, Any]) -> Optional[Package]:
         """

@@ -157,14 +157,116 @@ def test_bare_version_stops_aliasing_when_multiple_epochs_match(app):
     ctrl.add(Package("mesa", "1.0.0"))
     ctrl.add(Package("mesa", "1_1.0.0"))
     ctrl.add(Package("mesa", "2_1.0.0"))
-    assert ctrl.get_or_resolve_db_id("mesa@1.0.0") is None
+    restored_id = ctrl.get_or_resolve_db_id("mesa@1.0.0")
+    assert restored_id is not None
     bare = ctrl.add(Package("mesa", "1.0.0"))
 
     linked = {link.package.string_id: link.package_id for link in SBOMPackage.get_by_document(document.id)}
     assert set(linked) == {"mesa@1_1.0.0", "mesa@2_1.0.0", "mesa@1.0.0"}
+    assert bare.id == restored_id
     assert bare.id == linked["mesa@1.0.0"]
     assert ctrl.get("mesa@1.0.0").id == bare.id
     assert ctrl.get_or_resolve_db_id("mesa@1.0.0") == bare.id
+
+
+@pytest.mark.parametrize("versions", [
+    ("1.0.0", "1_1.0.0", "2_1.0.0"),
+    ("1_1.0.0", "1.0.0", "2_1.0.0"),
+    ("2_1.0.0", "1_1.0.0", "1.0.0"),
+])
+def test_ambiguous_bare_version_survives_without_readding(app, versions):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("ambiguous-order-project")
+    variant = Variant.create("ambiguous-order-variant", project.id)
+    scan = Scan.create("ambiguous-order-scan", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("ambiguous-order.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = document
+    for version in versions:
+        ctrl.add(Package(
+            "mesa", version, [f"cpe:2.3:a:mesa:mesa:{version}:*:*:*:*:*:*:*"],
+            [f"pkg:generic/mesa@{version}"], "MIT" if version == "1.0.0" else "Apache-2.0",
+        ))
+        if version == "1_1.0.0":
+            ctrl.add(Package(
+                "mesa", version, ["cpe:2.3:a:mesa:mesa:1_1.0.0:extra:*:*:*:*:*:*"],
+                ["pkg:generic/mesa-extra@1_1.0.0"],
+            ))
+
+    linked = {link.package.string_id: link.package for link in SBOMPackage.get_by_document(document.id)}
+    assert set(linked) == {"mesa@1.0.0", "mesa@1_1.0.0", "mesa@2_1.0.0"}
+    for version in versions:
+        package = linked[f"mesa@{version}"]
+        expected_cpe = [f"cpe:2.3:a:mesa:mesa:{version}:*:*:*:*:*:*:*"]
+        expected_purl = [f"pkg:generic/mesa@{version}"]
+        if version == "1_1.0.0":
+            expected_cpe.append("cpe:2.3:a:mesa:mesa:1_1.0.0:extra:*:*:*:*:*:*")
+            expected_purl.append("pkg:generic/mesa-extra@1_1.0.0")
+        assert package.cpe == expected_cpe
+        assert package.purl == expected_purl
+        assert package.licences == ("MIT" if version == "1.0.0" else "Apache-2.0")
+    assert ctrl.get_or_resolve_db_id("mesa@1.0.0") is not None
+
+
+def test_ambiguous_document_preserves_existing_epoch_metadata(app):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("shared-epoch-project")
+    variant = Variant.create("shared-epoch-variant", project.id)
+    scan = Scan.create("shared-epoch-scan", variant.id, scan_type="sbom")
+    older = SBOMDocument.create("older.spdx.json", "spdx", scan.id)
+    newer = SBOMDocument.create("newer.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = older
+    epoch = ctrl.add(Package(
+        "mesa", "1_1.0.0", ["cpe:2.3:a:mesa:mesa:1_1.0.0:*:*:*:*:*:*:*"],
+        ["pkg:generic/mesa@1_1.0.0"], "Apache-2.0",
+    ))
+    ctrl.current_sbom_document = newer
+    ctrl.add(Package("mesa", "1_1.0.0"))
+    ctrl.add(Package(
+        "mesa", "1.0.0", ["cpe:2.3:a:mesa:mesa:1.0.0:*:*:*:*:*:*:*"],
+        ["pkg:generic/mesa@1.0.0"], "MIT",
+    ))
+    ctrl.add(Package("mesa", "2_1.0.0"))
+
+    assert {link.package_id for link in SBOMPackage.get_by_document(older.id)} == {epoch.id}
+    assert {link.package.version for link in SBOMPackage.get_by_document(newer.id)} == {
+        "1.0.0", "1_1.0.0", "2_1.0.0",
+    }
+    assert epoch.cpe == ["cpe:2.3:a:mesa:mesa:1_1.0.0:*:*:*:*:*:*:*"]
+    assert epoch.purl == ["pkg:generic/mesa@1_1.0.0"]
+    assert epoch.licences == "Apache-2.0"
+
+
+def test_ambiguous_document_restores_metadata_to_shared_bare_row(app):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("shared-ambiguity-project")
+    variant = Variant.create("shared-ambiguity-variant", project.id)
+    scan = Scan.create("shared-ambiguity-scan", variant.id, scan_type="sbom")
+    older = SBOMDocument.create("older.spdx.json", "spdx", scan.id)
+    newer = SBOMDocument.create("newer.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = older
+    bare = ctrl.add(Package("mesa", "1.0.0"))
+    ctrl.current_sbom_document = newer
+    ctrl.add(Package("mesa", "1_1.0.0"))
+    ctrl.add(Package("mesa", "1.0.0", purl=["pkg:generic/mesa@1.0.0"], licences="MIT"))
+    ctrl.add(Package("mesa", "2_1.0.0"))
+
+    linked = {link.package.string_id for link in SBOMPackage.get_by_document(newer.id)}
+    assert linked == {"mesa@1.0.0", "mesa@1_1.0.0", "mesa@2_1.0.0"}
+    assert {link.package_id for link in SBOMPackage.get_by_document(older.id)} == {bare.id}
+    assert bare.licences == "MIT"
+    assert "pkg:generic/mesa@1.0.0" in bare.purl
 
 
 def test_epoch_upgrade_does_not_change_package_in_another_document(app):
@@ -210,12 +312,180 @@ def test_epoch_upgrade_reuses_existing_epoch_row(app):
     assert Package.get_by_string_id("mesa@1_1.0.0").id == epoch.id
 
 
+@pytest.mark.parametrize("shared_bare", [False, True])
+def test_existing_epoch_row_retains_bare_metadata_across_documents(app, shared_bare):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("reuse-metadata-project")
+    variant = Variant.create("reuse-metadata-variant", project.id)
+    scan = Scan.create("reuse-metadata-scan", variant.id, scan_type="sbom")
+    older = SBOMDocument.create("older.spdx.json", "spdx", scan.id)
+    shared = SBOMDocument.create("shared.spdx.json", "spdx", scan.id) if shared_bare else None
+    newer = SBOMDocument.create("newer.spdx.json", "spdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = older
+    epoch = ctrl.add(Package("mesa", "1_1.0.0"))
+    if shared is not None:
+        ctrl.current_sbom_document = shared
+        bare = ctrl.add(Package("mesa", "1.0.0"))
+    ctrl.current_sbom_document = newer
+    ctrl.add(Package(
+        "mesa", "1.0.0", ["cpe:2.3:a:mesa:mesa:1.0.0:*:*:*:*:*:*:*"],
+        ["pkg:generic/mesa@1.0.0"], "MIT",
+    ))
+    ctrl.add(Package("mesa", "1_1.0.0"))
+
+    assert {link.package_id for link in SBOMPackage.get_by_document(newer.id)} == {epoch.id}
+    if shared is not None:
+        assert {link.package_id for link in SBOMPackage.get_by_document(shared.id)} == {bare.id}
+        assert bare.version == "1.0.0"
+    assert "pkg:generic/mesa@1.0.0" in epoch.purl
+    assert "cpe:2.3:a:mesa:mesa:1.0.0:*:*:*:*:*:*:*" in epoch.cpe
+    assert epoch.licences == "MIT"
+
+
+@pytest.mark.parametrize("format_name", ["spdx3", "cdx"])
+@pytest.mark.parametrize("versions", [
+    ("1.0.0", "1_1.0.0"),
+    ("1.0.0", "1_1.0.0", "2_1.0.0"),
+    ("1_1.0.0", "1.0.0", "2_1.0.0"),
+])
+def test_bare_first_sbom_keeps_cve_and_vex_targets(app, format_name, versions):
+    from src.controllers.cache import ControllersCache
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.views.cyclonedx import CycloneDx
+    from src.views.fast_spdx3 import FastSPDX3
+
+    project = Project.create(f"{format_name}-cve-project")
+    variant = Variant.create("cve-variant", project.id)
+    scan = Scan.create("cve-scan", variant.id, scan_type="sbom")
+    document = SBOMDocument.create(f"{format_name}.json", format_name, scan.id)
+    controllers = ControllersCache()
+    controllers.packages.current_sbom_document = document
+    controllers.assessments.current_variant_id = variant.id
+    controllers.vulnerabilities.current_variant_id = variant.id
+    if format_name == "spdx3":
+        FastSPDX3(controllers).parse_from_dict({"@graph": [
+            {"type": "CreationInfo", "specVersion": "3.0.1"},
+            *({"type": "software_Package", "spdxId": f"pkg:{version}",
+                "name": "mesa", "software_packageVersion": version}
+                            for version in versions),
+            {"type": "security_Vulnerability", "spdxId": "vuln:CVE-2024-12345",
+             "externalIdentifier": [{"externalIdentifierType": "cve",
+                                     "identifier": "CVE-2024-12345"}]},
+            {"type": "Relationship", "relationshipType": "hasAssociatedVulnerability",
+             "from": "pkg:1.0.0", "to": ["vuln:CVE-2024-12345"]},
+            {"type": "security_VexNotAffectedVulnAssessmentRelationship",
+             "relationshipType": "doesNotAffect", "from": "vuln:CVE-2024-12345",
+             "to": ["pkg:1.0.0"]},
+        ]})
+    else:
+        parser = CycloneDx(controllers)
+        parser.load_from_dict({
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "components": [
+                {"type": "library", "bom-ref": f"mesa-{version}",
+                 "name": "mesa", "version": version}
+                for version in versions
+            ],
+            "vulnerabilities": [{
+                "id": "CVE-2024-12345", "bom-ref": "CVE-2024-12345",
+                "analysis": {"state": "exploitable"},
+                "affects": [{"ref": "mesa-1.0.0"}],
+            }],
+        })
+        parser.parse_and_merge()
+
+    linked = SBOMPackage.get_by_document(document.id)
+    expected_version = "1_1.0.0" if len(versions) == 2 else "1.0.0"
+    assert len(linked) == (1 if len(versions) == 2 else 3)
+    target = next(link for link in linked if link.package.version == expected_version)
+    findings = _db.session.execute(_db.select(Finding).where(
+        Finding.package_id == target.package_id,
+        Finding.vulnerability_id == "CVE-2024-12345",
+    )).scalars().all()
+    assert len(findings) == 1
+    assert _db.session.execute(_db.select(AssessmentTarget).where(
+        AssessmentTarget.finding_id == findings[0].id,
+        AssessmentTarget.variant_id == variant.id,
+    )).scalar_one_or_none() is not None
+
+
+@pytest.mark.parametrize("parser_class", ["YoctoVulns", "YoctoVex"])
+@pytest.mark.parametrize("historical", [False, True])
+def test_yocto_issue_before_epoch_keeps_scan_target(app, parser_class, historical):
+    from src.bin.cmd_process import populate_observations
+    from src.controllers.cache import ControllersCache
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_observation import SBOMObservation
+    from src.models.sbom_package import SBOMPackage
+    from src.views.yocto_vex import YoctoVex
+    from src.views.yocto_vulns import YoctoVulns
+
+    project = Project.create("yocto-epoch-project")
+    variant = Variant.create("yocto-epoch-variant", project.id)
+    scan = Scan.create("yocto-epoch-scan", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("yocto-epoch.json", "yocto", scan.id)
+    controllers = ControllersCache()
+    controllers.packages.current_sbom_document = document
+    controllers.assessments.current_variant_id = variant.id
+    controllers.vulnerabilities.current_variant_id = variant.id
+    parser = {"YoctoVulns": YoctoVulns, "YoctoVex": YoctoVex}[parser_class](controllers)
+    issue = {"id": "CVE-2024-12345", "status": "Unpatched", "description": "Affected"}
+    bare = {"name": "mesa", "version": "1.0.0", "issue": [issue]}
+    epoch = {"name": "mesa", "version": "1_1.0.0", "issue": []}
+
+    if historical:
+        older_scan = Scan.create("yocto-older-scan", variant.id, scan_type="sbom")
+        older_document = SBOMDocument.create("yocto-older.json", "yocto", older_scan.id)
+        controllers.packages.current_sbom_document = older_document
+        parser.load_from_dict({"package": [bare]})
+        populate_observations(older_scan, controllers.vulnerabilities)
+        older_link = SBOMPackage.get_by_document(older_document.id)[0]
+        older_finding = Finding.get_by_package_and_vulnerability(older_link.package_id, issue["id"])
+        controllers.packages.current_sbom_document = document
+
+    parser.load_from_dict({"package": [bare, epoch]})
+    populate_observations(scan, controllers.vulnerabilities)
+
+    links = SBOMPackage.get_by_document(document.id)
+    assert len(links) == 1
+    assert links[0].package.version == "1_1.0.0"
+    finding = Finding.get_by_package_and_vulnerability(links[0].package_id, issue["id"])
+    assert finding is not None
+    assert any(row.finding_id == finding.id for row in Observation.get_by_scan(scan.id))
+    assert _db.session.execute(_db.select(AssessmentTarget).where(
+        AssessmentTarget.finding_id == finding.id,
+        AssessmentTarget.variant_id == variant.id,
+    )).scalar_one_or_none() is not None
+    assert any(row.sbom_document_id == document.id and row.package_id == links[0].package_id
+               for row in SBOMObservation.get_by_vuln(issue["id"]))
+    if historical:
+        assert older_link.package_id != links[0].package_id
+        assert Finding.get_by_id(older_finding.id) is not None
+        assert any(row.finding_id == older_finding.id for row in Observation.get_by_scan(older_scan.id))
+        assert _db.session.execute(_db.select(AssessmentTarget).where(
+            AssessmentTarget.finding_id == older_finding.id,
+            AssessmentTarget.variant_id == variant.id,
+        )).scalar_one_or_none() is not None
+
+
 @pytest.mark.parametrize("reverse", [False, True])
 def test_fast_spdx_epoch_ingestion_keeps_identifiers_and_other_versions(app, reverse):
     from src.controllers.cache import ControllersCache
     from src.models.sbom_document import SBOMDocument
     from src.models.sbom_package import SBOMPackage
+    from src.views.cyclonedx import CycloneDx
     from src.views.fast_spdx import FastSPDX
+    from cyclonedx.model.bom import Bom
 
     project = Project.create("spdx-epoch-project")
     variant = Variant.create("spdx-epoch-variant", project.id)
@@ -224,9 +494,10 @@ def test_fast_spdx_epoch_ingestion_keeps_identifiers_and_other_versions(app, rev
     controllers = ControllersCache()
     controllers.packages.current_sbom_document = document
     mesa = [
-        {"name": "mesa", "versionInfo": version, "externalRefs": [{
-            "referenceType": "purl", "referenceLocator": f"pkg:generic/mesa@{version}",
-        }]}
+        {"name": "mesa", "versionInfo": version, "externalRefs": [
+            {"referenceType": "purl", "referenceLocator": f"pkg:generic/mesa@{version}"},
+            {"referenceType": "cpe23Type", "referenceLocator": f"cpe:2.3:a:mesa:mesa:{version}:*:*:*:*:*:*:*"},
+        ]}
         for version in ("1_1.0.0", "1.0.0")
     ]
     if reverse:
@@ -244,7 +515,19 @@ def test_fast_spdx_epoch_ingestion_keeps_identifiers_and_other_versions(app, rev
     assert {"pkg:generic/mesa@1_1.0.0", "pkg:generic/mesa@1.0.0"} <= set(
         linked["mesa@1_1.0.0"].purl
     )
+    assert {
+        "cpe:2.3:a:mesa:mesa:1_1.0.0:*:*:*:*:*:*:*",
+        "cpe:2.3:a:mesa:mesa:1.0.0:*:*:*:*:*:*:*",
+    } <= set(linked["mesa@1_1.0.0"].cpe)
     assert controllers.packages.get("mesa@1.0.0").id == linked["mesa@1_1.0.0"].id
+    export = CycloneDx(controllers)
+    export.sbom = Bom()
+    export.register_components()
+    component = next(component for component in export.sbom.components if component.name == "mesa"
+                     and component.version == "1_1.0.0")
+    assert str(component.bom_ref) == "pkg:generic/mesa@1_1.0.0"
+    assert str(component.purl) == "pkg:generic/mesa@1_1.0.0"
+    assert component.cpe == "cpe:2.3:a:mesa:mesa:1_1.0.0:*:*:*:*:*:*:*"
 
 
 def test_controller_from_dict_roundtrip_preserves_supplier(app):
