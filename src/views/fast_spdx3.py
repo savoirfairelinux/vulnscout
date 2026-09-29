@@ -102,6 +102,7 @@ class FastSPDX3:
             and item.get('name') == 'West SPDX Generator'
             for item in graph
         )
+        package_refs = []
         for component in graph:
             if not isinstance(component, dict):
                 continue
@@ -122,8 +123,13 @@ class FastSPDX3:
             if spdx_id:
                 self.uri_to_package[spdx_id] = package.string_id
                 self._document_refs[spdx_id] = package.string_id
+                package_refs.append(spdx_id)
 
             self.packagesCtrl.add(package)
+        for spdx_id in package_refs:
+            canonical_id = self.packagesCtrl.canonical_id(self.uri_to_package[spdx_id])
+            self.uri_to_package[spdx_id] = canonical_id
+            self._document_refs[spdx_id] = canonical_id
         self.merge_sources_into_controller(components_dict)
 
     def merge_sources_into_controller(self, document: Dict[str, Any]) -> None:
