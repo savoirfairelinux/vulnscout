@@ -102,13 +102,18 @@ class YoctoBase:
         skip_patched = get_bool_env('CVE_CHECK_EXCLUDE_PATCHED')
 
         with batch_session():
+            entries = []
             for pkg in data.get("package", []):
                 if "name" not in pkg or "version" not in pkg:
                     continue
 
                 package = self._build_package(pkg)
-                package = self.packagesCtrl.add(package)
+                string_id = package.string_id
+                saved = self.packagesCtrl.add(package)
+                entries.append((pkg, string_id, saved))
 
+            for pkg, string_id, saved in entries:
+                package = self.packagesCtrl.get(string_id) or saved
                 # Pre-warm the in-memory index with DB assessments for this
                 # package so that gets_by_vuln_pkg hits only the in-memory
                 # index — no DB query per issue.

@@ -172,6 +172,7 @@ class CycloneDx:
         if "sbom" not in self.__dict__ or not self.sbom:
             return
 
+        component_refs = []
         for component in self._inventory_components():
             package = Package(component.name, component.version or "", [], [])
             if component.purl:
@@ -187,8 +188,16 @@ class CycloneDx:
                 bom_link = f"urn:cdx:{self.sbom.serial_number}/{self.sbom.version}#{component.bom_ref.value}"
                 self.bom_link_refs[bom_link] = package.string_id
                 self._document_refs[component.bom_ref.value] = package.string_id
+                component_refs.append(component.bom_ref.value)
 
             self.packagesCtrl.add(package)
+
+        for bom_ref in component_refs:
+            canonical_id = self.packagesCtrl.canonical_id(self.ref_dict[bom_ref])
+            self.ref_dict[bom_ref] = canonical_id
+            self._document_refs[bom_ref] = canonical_id
+            bom_link = f"urn:cdx:{self.sbom.serial_number}/{self.sbom.version}#{bom_ref}"
+            self.bom_link_refs[bom_link] = canonical_id
 
     def merge_vulnerabilities_into_controller(self):
         """
