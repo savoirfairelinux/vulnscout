@@ -1452,6 +1452,50 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
 
     const deletingRun = (deletingIds?.length ?? 0) > 1;
 
+    const renderDescription = (scan: Scan) => editingDescId === scan.id ? (
+        <div className="mt-2 flex items-center gap-2 min-w-0 flex-1">
+            <input
+                autoFocus
+                type="text"
+                value={editingDescValue}
+                onChange={e => setEditingDescValue(e.target.value)}
+                onKeyDown={e => {
+                    if (e.key === 'Enter') saveDescription(scan.id);
+                    if (e.key === 'Escape') setEditingDescId(null);
+                }}
+                placeholder="Add a description…"
+                className="flex-1 min-w-0 text-sm px-2 py-1 rounded border border-neutral-500 bg-neutral-800 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-cyan-500"
+            />
+            <button
+                onClick={() => saveDescription(scan.id)}
+                title="Save"
+                className="text-green-400 hover:text-green-300 transition-colors"
+            >
+                <FontAwesomeIcon icon={faCheck} />
+            </button>
+            <button
+                onClick={() => setEditingDescId(null)}
+                title="Cancel"
+                className="text-neutral-400 hover:text-neutral-200 transition-colors"
+            >
+                <FontAwesomeIcon icon={faXmark} />
+            </button>
+        </div>
+    ) : (
+        <div className="mt-1.5 flex items-center gap-2 group/desc min-w-0 flex-1">
+            <span className="text-sm text-neutral-400 dark:text-neutral-400 italic flex-1 min-w-0 break-words">
+                {scan.description ?? ''}
+            </span>
+            <button
+                onClick={() => { setEditingDescId(scan.id); setEditingDescValue(scan.description ?? ''); }}
+                title="Edit description"
+                className="opacity-60 group-hover/desc:opacity-100 focus-visible:opacity-100 text-neutral-400 hover:text-cyan-400 transition-all"
+            >
+                <FontAwesomeIcon icon={faPencil} className="text-xs" />
+            </button>
+        </div>
+    );
+
     const renderRun = (entry: Extract<ScanTimelineEntry, { kind: 'run' }>, lane: (dot: ReactNode) => ReactNode) => {
         const { key, run, steps } = entry;
         const latest = steps[steps.length - 1];
@@ -1579,15 +1623,28 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                                         type="button"
                                         onClick={() => { setOpenDiffId(step.id); setOpenDiffType('tool'); }}
                                         title={`Show ${badge.label} changes`}
-                                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold hover:opacity-80 transition-opacity ${badge.className}`}
+                                        className={`inline-flex max-w-full flex-wrap items-center gap-1 px-2 py-0.5 rounded-full text-left text-xs font-bold hover:opacity-80 transition-opacity ${badge.className}`}
                                     >
                                         <FontAwesomeIcon icon={badge.icon} />
                                         {badge.label}
                                         <span className="font-normal">+{(step.newly_detected_vulns ?? 0).toLocaleString()} new</span>
+                                        {(step.vulns_removed ?? 0) > 0 && <span className="font-normal">−{step.vulns_removed?.toLocaleString()} vulnerabilities removed</span>}
+                                        {(step.findings_removed ?? 0) > 0 && <span className="font-normal">−{step.findings_removed?.toLocaleString()} matches removed</span>}
                                     </button>
                                 );
                             })}
                         </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-600 space-y-1.5">
+                        <h4 className="text-sm font-bold text-neutral-700 dark:text-neutral-100">Scanner notes</h4>
+                        {steps.map(step => (
+                            <div key={step.id} className="flex items-start gap-2 min-w-0">
+                                <span className="text-xs font-semibold text-neutral-500 dark:text-neutral-300 shrink-0 pt-2">
+                                    {badgeFor(step).label}
+                                </span>
+                                {renderDescription(step)}
+                            </div>
+                        ))}
                     </div>
                 </div>
                 </div>
@@ -2107,50 +2164,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                                 )}
 
 
-                                {/* Description row */}
-                                {editingDescId === scan.id ? (
-                                    <div className="mt-2 flex items-center gap-2">
-                                        <input
-                                            autoFocus
-                                            type="text"
-                                            value={editingDescValue}
-                                            onChange={e => setEditingDescValue(e.target.value)}
-                                            onKeyDown={e => {
-                                                if (e.key === 'Enter') saveDescription(scan.id);
-                                                if (e.key === 'Escape') setEditingDescId(null);
-                                            }}
-                                            placeholder="Add a description…"
-                                            className="flex-1 text-sm px-2 py-1 rounded border border-neutral-500 bg-neutral-800 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-cyan-500"
-                                        />
-                                        <button
-                                            onClick={() => saveDescription(scan.id)}
-                                            title="Save"
-                                            className="text-green-400 hover:text-green-300 transition-colors"
-                                        >
-                                            <FontAwesomeIcon icon={faCheck} />
-                                        </button>
-                                        <button
-                                            onClick={() => setEditingDescId(null)}
-                                            title="Cancel"
-                                            className="text-neutral-400 hover:text-neutral-200 transition-colors"
-                                        >
-                                            <FontAwesomeIcon icon={faXmark} />
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <div className="mt-1.5 flex items-center gap-2 group/desc">
-                                        <span className="text-sm text-neutral-400 dark:text-neutral-400 italic flex-1">
-                                            {scan.description ?? ''}
-                                        </span>
-                                        <button
-                                            onClick={() => { setEditingDescId(scan.id); setEditingDescValue(scan.description ?? ''); }}
-                                            title="Edit description"
-                                            className="opacity-0 group-hover/desc:opacity-100 text-neutral-400 hover:text-cyan-400 transition-all"
-                                        >
-                                            <FontAwesomeIcon icon={faPencil} className="text-xs" />
-                                        </button>
-                                    </div>
-                                )}
+                                {renderDescription(scan)}
                             </div>
                             </div>
                         </div>
