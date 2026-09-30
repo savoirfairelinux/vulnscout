@@ -16,6 +16,7 @@ if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
 fi
 # Re-derive VULNSCOUT_CONFIG_FILE in case VULNSCOUT_CACHE_DIR was updated by config
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-$DOCKER_IMAGE}"
 
 if command -v podman &> /dev/null; then
     CONTAINER_ENGINE="podman"
