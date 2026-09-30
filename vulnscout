@@ -59,7 +59,7 @@ Commands without --project or --variant:
     --version                       Show current version
 
     Development and web interface:
-    --dev                           Mount local src/ and start the frontend dev server
+    --dev                           Mount local src/ and vulnscout_mcp/ and start the frontend dev server
     --serve                         Run scan then start web UI (port 7275)
 
     Report assets:
@@ -167,9 +167,13 @@ exec_container() {
 }
 
 container_has_dev_mount() {
-    call_container_engine inspect "$CONTAINER_NAME" \
-        --format '{{range .Mounts}}{{.Destination}}{{println}}{{end}}' 2>/dev/null \
-        | grep -qx '/scan/src'
+    local mounts
+    mounts=$(call_container_engine inspect "$CONTAINER_NAME" \
+        --format '{{range .Mounts}}{{.Destination}}{{println}}{{end}}' 2>/dev/null) || return 1
+    grep -qx '/scan/src' <<< "$mounts" || return 1
+    if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
+        grep -qx '/scan/vulnscout_mcp' <<< "$mounts" || return 1
+    fi
 }
 
 ensure_running() {
@@ -293,6 +297,9 @@ EOF
     fi
     if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src:Z)
+        if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
+            vol_args+=(-v "$SCRIPT_DIR/vulnscout_mcp":/scan/vulnscout_mcp:Z)
+        fi
         env_args+=(-e DEV_MODE=true)
         echo "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
     fi

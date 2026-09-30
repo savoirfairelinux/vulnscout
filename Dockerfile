@@ -56,12 +56,13 @@ RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/i
 #     && rm /tmp/py_spy.whl
 
 # Install dependencies for python backend
-COPY requirements/base.txt ./
-RUN pip3 install --no-cache-dir -r base.txt --break-system-packages
+COPY requirements ./requirements
+RUN pip3 install --no-cache-dir -r requirements/base.txt --break-system-packages
 
 # Create /scan/src
 RUN mkdir -p src
 COPY src ./src
+COPY vulnscout_mcp ./vulnscout_mcp
 RUN chmod +x src/entrypoint.sh
 COPY --from=buildfront /src/static ./src/static
 

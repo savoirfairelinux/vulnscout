@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import queue
 import secrets
 import sys
 import threading
@@ -13,12 +14,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 
 
 READ_TOOLS = (
     "get_assessment", "list_assessments_by_vuln", "has_ai_assessment",
-    "get_vulnerability", "find_project_id", "find_variant_id",
+    "get_vulnerability", "find_project_id", "find_variant_id", "list_variants",
     "get_merged_context", "get_project_context", "get_custom_assessment",
     "list_custom_assessments",
 )
@@ -31,6 +32,7 @@ GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 GITHUB_DEVICE_URL = "https://github.com/login/device/code"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_VERIFY_URL = "https://github.com/login/device"
+PAGES = {"metrics", "packages", "vulnerabilities", "scans", "review", "exports", "settings", "ai", "unknown"}
 agent_blueprint = Blueprint("agent", __name__)
 
 
@@ -92,7 +94,9 @@ def _access_error():
 
 def _mcp_path():
     value = os.getenv("VULNSCOUT_MCP_SERVER_PATH", "")
-    return Path(value).expanduser().resolve() if value else None
+    if value:
+        return Path(value).expanduser().resolve()
+    return Path(__file__).resolve().parents[2] / "vulnscout_mcp" / "server.py"
 
 
 def _github_form(url, fields):
@@ -167,7 +171,97 @@ def _add_usage(previous, current):
             for key in ("cost", "input_tokens", "output_tokens")}
 
 
-async def _reply(conversation, message, allow_writes, path, model):
+def _bounded_string(value, limit, error):
+    if not isinstance(value, str) or len(value) > limit:
+        raise ValueError(error)
+    return value
+
+
+def _bounded_strings(values, count, limit, error):
+    if not isinstance(values, list) or len(values) > count or any(
+        not isinstance(item, str) or len(item) > limit for item in values
+    ):
+        raise ValueError(error)
+    return values
+
+
+def _bounded_count(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1000000:
+        raise ValueError("Invalid selection count.")
+    return value
+
+
+def _scan_option(value):
+    if not isinstance(value, bool):
+        raise ValueError("Invalid scan option.")
+    return value
+
+
+def _view_context(view):
+    if not isinstance(view, dict):
+        raise ValueError("Invalid view context.")
+    filtered = {}
+    for key in (
+        "openVulnerabilityId", "search", "section", "selectedProjectId", "selectedProjectName",
+        "selectedVariantId", "selectedVariantName", "openScanId", "exportType", "exportMode",
+        "exportCategory", "refreshMode",
+    ):
+        if view.get(key) is not None:
+            filtered[key] = _bounded_string(view[key], 200, "Invalid view selection.")
+    for key in (
+        "visibleVulnerabilityIds", "selectedVulnerabilityIds", "visiblePackageIds", "visibleScanIds",
+        "matchingVariantIds", "selectedVariantIds", "selectedExportKeys", "enabledExportDocuments",
+        "selectedScanTypes", "selectedRefreshTypes",
+    ):
+        if view.get(key) is not None:
+            filtered[key] = _bounded_strings(
+                view[key], 100, 200,
+                "Filter the table to 100 vulnerabilities or fewer before sending all displayed IDs.",
+            )
+    for key in ("visibleCount", "selectionCount"):
+        if key in view:
+            filtered[key] = _bounded_count(view[key])
+    for key in ("hideEmptyScans", "excludeKernel", "excludeNative"):
+        if key in view:
+            filtered[key] = _scan_option(view[key])
+    return filtered
+
+
+def _validated_context(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or value.get("page") not in PAGES:
+        raise ValueError("Invalid page context.")
+    context = {"page": value["page"]}
+    for key in ("projectId", "variantId", "baseVariantId", "compareOperation", "multiOperation"):
+        if value.get(key) is not None:
+            context[key] = _bounded_string(value[key], 100, "Invalid page scope.")
+    if value.get("variantIds") is not None:
+        context["variantIds"] = _bounded_strings(value["variantIds"], 50, 100, "Invalid variant selection.")
+    if "variantCount" in value:
+        context["variantCount"] = _bounded_count(value["variantCount"])
+    if value.get("view") is not None:
+        context["view"] = _view_context(value["view"])
+    return context
+
+
+def _publish_event(event, publish):
+    from copilot.session_events import AssistantMessageDeltaData, ToolExecutionStartData, ToolExecutionCompleteData
+
+    if publish is None:
+        return
+    event_data = event.data
+    if isinstance(event_data, AssistantMessageDeltaData):
+        publish({"type": "delta", "message_id": event_data.message_id,
+                 "text": event_data.delta_content})
+    elif isinstance(event_data, ToolExecutionStartData):
+        publish({"type": "tool_start", "id": event_data.tool_call_id,
+                 "name": event_data.mcp_tool_name or event_data.tool_name})
+    elif isinstance(event_data, ToolExecutionCompleteData):
+        publish({"type": "tool_end", "id": event_data.tool_call_id, "success": event_data.success})
+
+
+async def _reply(conversation, message, allow_writes, path, model, publish=None):
     from copilot.session import PermissionHandler
 
     tools = READ_TOOLS + WRITE_TOOLS if allow_writes else READ_TOOLS
@@ -177,6 +271,7 @@ async def _reply(conversation, message, allow_writes, path, model):
             raise UnavailableModelError("Selected model is not available for this account.")
         options = {
             "model": model,
+            "streaming": publish is not None,
             "on_permission_request": PermissionHandler.approve_all,
             "available_tools": [f"mcp:vulnscout-{tool}" for tool in tools],
             "mcp_servers": {"vulnscout": {
@@ -200,7 +295,12 @@ async def _reply(conversation, message, allow_writes, path, model):
             session = await client.create_session(**options)
         try:
             live_events = []
-            session.on(live_events.append)
+
+            def on_event(event):
+                live_events.append(event)
+                _publish_event(event, publish)
+
+            session.on(on_event)
             event = await asyncio.wait_for(session.send_and_wait(message), timeout=120)
             if event is None or not event.data.content:
                 raise RuntimeError("The agent did not return a response.")
@@ -384,15 +484,32 @@ def agent_message():
     model = data.get("model", conversation.model)
     if not isinstance(model, str) or not model or len(model) > 100:
         return _response({"error": "Invalid model selection."}, key, 400)
+    try:
+        context = _validated_context(data.get("context"))
+    except ValueError as exc:
+        return _response({"error": str(exc)}, key, 400)
     user_message = message.strip()
+    agent_prompt = user_message
+    if context:
+        agent_prompt = (f"{user_message}\n\nCurrent VulnScout browser view (selection only; verify facts with MCP): "
+                        f"{json.dumps(context, separators=(',', ':'))}")
     path = _mcp_path()
     if path is None or not path.is_file():
-        return _response({"error": "Set VULNSCOUT_MCP_SERVER_PATH to the vulnscout-mcp run_server.py path."}, key, 503)
+        return _response({"error": (
+            "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override."
+        )}, key, 503)
     if not conversation.lock.acquire(blocking=False):
         return _response({"error": "The agent is already responding."}, key, 409)
+    if request.headers.get("Accept") == "application/x-ndjson":
+        return _stream_reply(key, conversation, agent_prompt, user_message,
+                             data.get("allow_writes", False), path, model)
+    return _json_reply(key, conversation, agent_prompt, user_message, data.get("allow_writes", False), path, model)
+
+
+def _json_reply(key, conversation, agent_prompt, user_message, allow_writes, path, model):
     try:
         try:
-            reply, usage = asyncio.run(_reply(conversation, user_message, data.get("allow_writes", False), path, model))
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, allow_writes, path, model))
         except UnavailableModelError as exc:
             return _response({"error": str(exc)}, key, 400)
         except Exception:
@@ -407,6 +524,65 @@ def agent_message():
         return _response({"reply": reply, "model": model, "usage": usage}, key)
     finally:
         conversation.lock.release()
+
+
+def _stream_events(events, disconnected):
+    try:
+        yield json.dumps({"type": "status", "text": "Connecting to Copilot..."}) + "\n"
+        while True:
+            try:
+                event = events.get(timeout=10)
+            except queue.Empty:
+                yield json.dumps({"type": "heartbeat"}) + "\n"
+                continue
+            yield json.dumps(event) + "\n"
+            if event["type"] in ("done", "error"):
+                break
+    finally:
+        disconnected.set()
+
+
+def _stream_reply(key, conversation, agent_prompt, user_message, allow_writes, path, model):
+    events: queue.Queue = queue.Queue(maxsize=256)
+    disconnected = threading.Event()
+    logger = current_app.logger
+
+    def publish(event):
+        while not disconnected.is_set():
+            try:
+                events.put(event, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    def run():
+        try:
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, allow_writes, path, model, publish))
+            conversation.messages.extend(({"role": "user", "content": user_message},
+                                          {"role": "assistant", "content": reply}))
+            conversation.model = model
+            conversation.usage = usage
+            publish({"type": "done", "reply": reply, "model": model, "usage": usage})
+        except UnavailableModelError as exc:
+            publish({"type": "error", "error": str(exc)})
+        except Exception:
+            logger.exception("Agent streaming request failed")
+            publish({"type": "error",
+                     "error": "Agent request failed. Check Copilot sign-in, MCP server, and backend logs."})
+        finally:
+            conversation.last_used = time.monotonic()
+            conversation.lock.release()
+
+    response = Response(_stream_events(events, disconnected), mimetype="application/x-ndjson",
+                        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    response.set_cookie(COOKIE, key, httponly=True, samesite="Strict", secure=request.is_secure, max_age=3600)
+    response.call_on_close(disconnected.set)
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except Exception:
+        conversation.lock.release()
+        raise
+    return response
 
 
 def init_app(app):

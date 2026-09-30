@@ -5,6 +5,7 @@ import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import { queueExport } from "../handlers/exportQueue";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
+import type { AgentViewContext } from "../types/agent";
 
 export type ExportDocument = {
     id: string;
@@ -24,6 +25,7 @@ type Selection = {
 };
 
 type Props = {
+    onAgentContextChange?: (context: AgentViewContext) => void;
     isOpen: boolean;
     embedded?: boolean;
     project?: Project;
@@ -38,7 +40,7 @@ const reportCategories = [
     ["custom", "Custom reports"],
 ] as const;
 
-export default function ExportWizard({ isOpen, embedded = false, project, variants, documents, onClose }: Readonly<Props>) {
+export default function ExportWizard({ isOpen, embedded = false, project, variants, documents, onClose, onAgentContextChange }: Readonly<Props>) {
     const [step, setStep] = useState<WizardStep>("scope");
     const [exportType, setExportType] = useState<ExportType | null>(null);
     const [mode, setMode] = useState<ExportMode>("consolidated");
@@ -46,6 +48,16 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [enabledDocuments, setEnabledDocuments] = useState<Set<string>>(new Set());
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+    useEffect(() => {
+        if (!isOpen) return;
+        onAgentContextChange?.({
+            section: `export ${step}`, exportType: exportType ?? undefined, exportMode: mode,
+            exportCategory: category,
+            selectedVariantIds: [...selectedVariantIds],
+            enabledExportDocuments: [...enabledDocuments],
+            selectedExportKeys: [...selected].map(key => key.replace('\0', ' (') + ')'),
+        });
+    }, [isOpen, step, exportType, mode, category, selectedVariantIds, enabledDocuments, selected, onAgentContextChange]);
     const [exporting, setExporting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const dialogRef = useRef<HTMLDivElement>(null);

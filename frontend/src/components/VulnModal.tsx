@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faCommentDots } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
@@ -39,6 +39,7 @@ type Props = {
     isEditing?: boolean;
     readOnly?: boolean;
     onClose: () => void;
+    onOpenAgent?: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
@@ -136,7 +137,7 @@ type VariantScopedSnapshot = {
 };
 
   function VulnModal(props: Readonly<Props>) {
-        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
+        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, onOpenAgent, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
@@ -1516,6 +1517,7 @@ type VariantScopedSnapshot = {
 
     const headerActions = (
         <>
+            {onOpenAgent && <button type="button" onClick={onOpenAgent} aria-label={`Ask agent about ${vuln.id}`} aria-controls="agent-panel" title={`Ask agent about ${vuln.id}`} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-cyan-300 hover:bg-neutral-800 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"><FontAwesomeIcon icon={faCommentDots} /></button>}
             <div className="relative flex items-center gap-2 px-2 py-2">
                 <HelpPopover
                     ariaLabel="shortcut helper"
