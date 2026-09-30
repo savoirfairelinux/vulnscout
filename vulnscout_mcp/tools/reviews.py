@@ -1,7 +1,7 @@
 from typing import Optional
 
-from client import VulnScoutClient, VulnScoutError
-from tools.context import _find_project_id_or_raise, _find_variant_id_or_raise
+from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+from vulnscout_mcp.tools.context import _find_project_id_or_raise, _find_variant_id_or_raise
 
 
 def _strip_reference(reference: str) -> str:
@@ -93,6 +93,9 @@ def _list_custom_assessments_impl(
     """Core logic for list_custom_assessments — separated for testability."""
     params: dict = {"order": order, "limit": limit, "offset": offset}
 
+    if variant_name and not project_name and not variant_id:
+        return "Error: project_name is required when variant_name is provided"
+
     if variant_id:
         params["variant_id"] = variant_id
     elif project_name:
@@ -130,7 +133,7 @@ def _list_custom_assessments_impl(
             f"status_notes={a.get('status_notes')} "
             f"impact_statement={a.get('impact_statement')} "
             f"workaround={a.get('workaround')} timestamp={a.get('timestamp')} "
-            f"has_review={a.get('has_review')} (any target reviewed)"
+            f"has_review={a.get('has_review')} (aggregate target review state; see target_reviews)"
         )
         for tr in a.get("target_reviews") or []:
             lines.append(
@@ -254,10 +257,12 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     when project_name is given.
             variant_id: Variant UUID, if already known. Takes precedence over
                     project_name/variant_name.
-            has_review: True returns only assessments with a review on at least
-                    one target (see each row's `target_reviews` for which);
-                    False returns only assessments with no review on any target.
-                    Omit for both.
+            has_review: Aggregate server-side filter over target review state.
+                True returns assessments where every scoped target has a
+                current (non-stale) review. False returns assessments that
+                still have at least one unreviewed or stale target. Use
+                each row's `target_reviews` to see the exact targets.
+                Omit for both.
             order: "timestamp_desc" (newest first, the default) or "timestamp_asc".
             limit: Maximum rows to return. Defaults to 50.
             offset: Rows to skip, for paging through a large scope.

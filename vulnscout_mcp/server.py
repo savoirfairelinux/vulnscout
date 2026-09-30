@@ -1,16 +1,16 @@
 import os
 import sys
 
-# Ensure the mcp/ directory is on sys.path regardless of how this script is invoked.
-# This allows `from client import ...` and `from tools.assessments import ...` to resolve.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure repository root is on sys.path so package imports resolve when this
+# script is launched directly as a file path.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mcp.server.mcpserver import MCPServer
-from client import VulnScoutClient
-from tools.assessments import register_tools as register_assessment_tools
-from tools.context import register_tools as register_context_tools
-from tools.reviews import register_tools as register_review_tools
-from tools.vulnerabilities import register_tools as register_vulnerability_tools
+from vulnscout_mcp.client import VulnScoutClient
+from vulnscout_mcp.tools.assessments import register_tools as register_assessment_tools
+from vulnscout_mcp.tools.context import register_tools as register_context_tools
+from vulnscout_mcp.tools.reviews import register_tools as register_review_tools
+from vulnscout_mcp.tools.vulnerabilities import register_tools as register_vulnerability_tools
 
 
 def create_server(base_url: str) -> MCPServer:

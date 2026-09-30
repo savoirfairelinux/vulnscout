@@ -3,8 +3,8 @@ import asyncio
 import httpx
 import pytest
 
-from client import VulnScoutClient, VulnScoutError
-from server import create_server
+from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+from vulnscout_mcp.server import create_server
 
 
 def _patch_http(monkeypatch, handler) -> VulnScoutClient:
@@ -121,7 +121,7 @@ def test_list_assessment_reviews_returns_list(monkeypatch):
     assert [r["id"] for r in reviews] == ["r1", "r2"]
 
 
-from tools.reviews import (
+from vulnscout_mcp.tools.reviews import (
     _get_custom_assessment_impl,
     _list_custom_assessments_impl,
     _strip_reference,
@@ -296,6 +296,15 @@ def test_list_custom_assessments_reports_empty_result():
     client = FakeClient(rows=[])
 
     assert "no custom assessments" in _list_custom_assessments_impl(client).lower()
+
+
+def test_list_custom_assessments_rejects_variant_name_without_project_name():
+    client = FakeClient(rows=[{"id": "a1"}])
+
+    out = _list_custom_assessments_impl(client, variant_name="default")
+
+    assert out == "Error: project_name is required when variant_name is provided"
+    assert client.last_params is None
 
 
 def test_list_custom_assessments_shows_variant_ids_and_target_count():

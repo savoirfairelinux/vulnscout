@@ -84,10 +84,10 @@ Full documentation is available at https://vulnscout.readthedocs.io/
 ===  MCP Server Source
 
 The VulnScout MCP server source is now vendored in this repository under
-`mcp/`.
+`vulnscout_mcp/`.
 
 It is launched as a stdio process by MCP clients (for example VS Code /
-Copilot) via `mcp/run_server.py`.
+Copilot) via `vulnscout_mcp/run_server.py`.
 
 ===  Container Lifecycle
 
