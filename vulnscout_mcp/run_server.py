@@ -12,9 +12,14 @@ import venv
 from pathlib import Path
 
 
+def get_package_root():
+    """Get the directory where the MCP package lives."""
+    return Path(__file__).resolve().parent
+
+
 def get_project_root():
-    """Get the directory where this script is located."""
-    return Path(__file__).parent
+    """Get the repository root directory."""
+    return get_package_root().parent
 
 
 def get_venv_path():
@@ -37,14 +42,17 @@ def create_venv():
 
 
 def install_requirements():
-    """Install dependencies from requirements.txt."""
+    """Install MCP runtime dependencies from requirements/mcp.txt."""
     venv_path = get_venv_path()
     pip_path = venv_path / "bin" / "pip"
-    requirements_path = get_project_root() / "requirements.txt"
+    requirements_path = get_project_root() / "requirements" / "mcp.txt"
     
     if not requirements_path.exists():
-        print(f"Warning: requirements.txt not found at {requirements_path}", file=sys.stderr)
-        return
+        print(
+            f"Error: MCP requirements file not found at {requirements_path}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     
     print(f"Installing dependencies...", file=sys.stderr)
     result = subprocess.run(
@@ -64,7 +72,7 @@ def run_server():
     """Run the MCP server using the virtual environment Python."""
     venv_path = get_venv_path()
     python_path = venv_path / "bin" / "python"
-    server_path = get_project_root() / "server.py"
+    server_path = get_package_root() / "server.py"
     
     print(f"Starting MCP server...", file=sys.stderr)
     

@@ -1,5 +1,5 @@
 from typing import Optional
-from client import VulnScoutClient, VulnScoutError
+from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
 
 
 def _write_assessment_impl(
@@ -84,10 +84,18 @@ def _has_ai_assessment_impl(
             continue
         covered = a.get("variant_ids") or [a.get("variant_id")]
         if variant_id in covered:
+            scoped_packages = a.get("packages")
+            targets = a.get("targets") or []
+            if targets:
+                scoped_packages = [
+                    t.get("package")
+                    for t in targets
+                    if t.get("variant_id") == variant_id and t.get("package")
+                ]
             return (
                 f"AI assessment found: id={a.get('id')}, "
                 f"status={a.get('status')}, "
-                f"packages={a.get('packages')}, "
+                f"packages={scoped_packages}, "
                 f"variant_ids={a.get('variant_ids')}"
             )
     return f"No AI assessment found for {vuln_id} with variant {variant_id}"

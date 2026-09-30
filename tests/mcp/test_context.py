@@ -3,9 +3,9 @@ import pytest
 import respx
 import httpx
 
-# conftest.py puts mcp/ in sys.path
-from client import VulnScoutClient
-from tools.context import (
+# conftest.py adds repository root to sys.path
+from vulnscout_mcp.client import VulnScoutClient
+from vulnscout_mcp.tools.context import (
     _find_project_id_impl,
     _find_variant_id_impl,
     _get_merged_context_impl,
@@ -251,6 +251,7 @@ class TestUpdateVariantContextImpl:
                     json={
                         "variant_id": "v1",
                         "variant_description": None,
+                        "codebase_path": "/repo/src",
                         "environment": None,
                         "threat_model": "CVSS >= 7",
                         "risks": None,
@@ -259,17 +260,24 @@ class TestUpdateVariantContextImpl:
                     },
                 )
             )
-            result = _update_variant_context_impl(client, "v1", threat_model="CVSS >= 7")
+            result = _update_variant_context_impl(
+                client,
+                "v1",
+                codebase_path="/repo/src",
+                threat_model="CVSS >= 7",
+            )
         body = json.loads(route.calls[0].request.content)
         # All fields are always sent, even when None, per full-replacement semantics.
         assert body == {
             "variant_description": None,
+            "codebase_path": "/repo/src",
             "environment": None,
             "threat_model": "CVSS >= 7",
             "risks": None,
             "other_info": None,
         }
         assert "threat_model=CVSS >= 7" in result
+        assert "codebase_path=/repo/src" in result
 
     def test_api_error_returns_error_string(self, client):
         with respx.mock:

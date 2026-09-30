@@ -3,9 +3,9 @@ import pytest
 import respx
 import httpx
 
-# conftest.py puts mcp/ in sys.path
-from client import VulnScoutClient, VulnScoutError
-from tools.assessments import _write_assessment_impl, _has_ai_assessment_impl, _update_ai_assessment_impl
+# conftest.py adds repository root to sys.path
+from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+from vulnscout_mcp.tools.assessments import _write_assessment_impl, _has_ai_assessment_impl, _update_ai_assessment_impl
 
 
 BASE_URL = "http://vulnscout.test"
@@ -337,12 +337,18 @@ class TestHasAiAssessment:
         assessments = [self._make_assessment(
             "ai", None, "uuid-ai", "affected", variant_ids=["other-variant", self.VARIANT_ID],
         )]
+        assessments[0]["targets"] = [
+            {"variant_id": self.VARIANT_ID, "package": "openssl@1.0.0"},
+            {"variant_id": "other-variant", "package": "zlib@1.3.0"},
+        ]
         with respx.mock:
             respx.get(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234/assessments").mock(
                 return_value=httpx.Response(200, json=assessments)
             )
             result = _has_ai_assessment_impl(client, vuln_id="CVE-2024-1234", variant_id=self.VARIANT_ID)
         assert "uuid-ai" in result
+        assert "openssl@1.0.0" in result
+        assert "zlib@1.3.0" not in result
 
     def test_no_match_wrong_variant_id(self, client):
         assessments = [self._make_assessment("ai", "other-variant", "uuid-ai")]

@@ -1,4 +1,4 @@
-from client import VulnScoutClient, VulnScoutError
+from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
 
 
 def _get_vulnerability_impl(
@@ -8,7 +8,7 @@ def _get_vulnerability_impl(
 ) -> str:
     """Core logic for get_vulnerability — separated for testability."""
     try:
-        result = client.get_vulnerability(vuln_id, variant_id=variant_id)
+        result = client.get_vulnerability_for_variant(vuln_id, variant_id=variant_id)
         return str(result)
     except VulnScoutError as e:
         return f"Error: {e}"

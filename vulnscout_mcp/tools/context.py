@@ -1,5 +1,5 @@
 from typing import Optional
-from client import VulnScoutClient, VulnScoutError
+from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
 
 
 def _fmt_merged_context(ctx: dict) -> str:
@@ -32,6 +32,7 @@ def _fmt_variant_context(ctx: dict) -> str:
     return (
         f"variant_id={ctx.get('variant_id')}\n"
         f"variant_description={ctx.get('variant_description')}\n"
+        f"codebase_path={ctx.get('codebase_path')}\n"
         f"environment={ctx.get('environment')}\n"
         f"threat_model={ctx.get('threat_model')}\n"
         f"risks={ctx.get('risks')}\n"
@@ -118,6 +119,7 @@ def _update_variant_context_impl(
     client: VulnScoutClient,
     variant_id: str,
     variant_description: Optional[str] = None,
+    codebase_path: Optional[str] = None,
     environment: Optional[str] = None,
     threat_model: Optional[str] = None,
     risks: Optional[str] = None,
@@ -125,6 +127,7 @@ def _update_variant_context_impl(
 ) -> str:
     fields = {
         "variant_description": variant_description,
+        "codebase_path": codebase_path,
         "environment": environment,
         "threat_model": threat_model,
         "risks": risks,
@@ -229,6 +232,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
     def update_variant_context(
         variant_id: str,
         variant_description: Optional[str] = None,
+        codebase_path: Optional[str] = None,
         environment: Optional[str] = None,
         threat_model: Optional[str] = None,
         risks: Optional[str] = None,
@@ -247,6 +251,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         Args:
             variant_id: UUID of the variant to update.
             variant_description: Free-text description of this variant.
+            codebase_path: Path(s) to the codebase for this variant.
             environment: Free-text description of the deployment environment.
             threat_model: Free-text threat model notes for this variant.
             risks: Free-text notes about known risks for this variant.
@@ -256,6 +261,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
             client,
             variant_id,
             variant_description=variant_description,
+            codebase_path=codebase_path,
             environment=environment,
             threat_model=threat_model,
             risks=risks,

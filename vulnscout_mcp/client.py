@@ -22,7 +22,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.post(url, json=payload)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -38,7 +38,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -54,7 +54,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -70,7 +70,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -86,7 +86,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -106,7 +106,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url, params=params)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -122,7 +122,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -138,7 +138,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.put(url, json={"description": description})
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -154,7 +154,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.put(url, json=fields)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -174,7 +174,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.patch(url, json=payload)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -197,7 +197,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url, params=params)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -207,13 +207,60 @@ class VulnScoutClient:
             raise VulnScoutError(error_msg)
         return response.json()
 
+    def list_vulnerabilities(
+        self,
+        *,
+        variant_id: str | None = None,
+        project_id: str | None = None,
+        response_format: str = "list",
+    ) -> list | dict:
+        """GET /api/vulnerabilities with optional variant/project scoping."""
+        url = f"{self.base_url}/api/vulnerabilities"
+        params: dict[str, str] = {"format": response_format}
+        if variant_id is not None:
+            params["variant_id"] = variant_id
+        if project_id is not None:
+            params["project_id"] = project_id
+        try:
+            with httpx.Client() as http:
+                response = http.get(url, params=params)
+        except httpx.RequestError:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
+        if not response.is_success:
+            try:
+                error_msg = response.json().get("error", response.text)
+            except Exception:
+                error_msg = response.text
+            raise VulnScoutError(error_msg)
+        return response.json()
+
+    def get_vulnerability_for_variant(self, vuln_id: str, variant_id: str) -> dict:
+        """Return one vulnerability with variant-scoped fields applied."""
+        url = f"{self.base_url}/api/vulnerabilities/{vuln_id}"
+        params = {"variant_id": variant_id}
+        try:
+            with httpx.Client() as http:
+                response = http.get(url, params=params)
+        except httpx.RequestError:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
+        if not response.is_success:
+            try:
+                error_msg = response.json().get("error", response.text)
+            except Exception:
+                error_msg = response.text
+            raise VulnScoutError(error_msg)
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise VulnScoutError("Unexpected vulnerability payload")
+        return payload
+
     def list_assessments_by_vuln(self, vuln_id: str) -> list:
         """GET /api/vulnerabilities/<vuln_id>/assessments."""
         url = f"{self.base_url}/api/vulnerabilities/{vuln_id}/assessments"
         try:
             with httpx.Client() as http:
                 response = http.get(url)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -229,7 +276,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url, params=params)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -263,7 +310,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url, params=params)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if response.status_code == 404:
             return {}
@@ -281,7 +328,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.get(url)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:
@@ -297,7 +344,7 @@ class VulnScoutClient:
         try:
             with httpx.Client() as http:
                 response = http.put(url, json=payload)
-        except httpx.ConnectError:
+        except httpx.RequestError:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
         if not response.is_success:
             try:

@@ -17,7 +17,7 @@ Three pieces work together:
 
 - **VulnScout** — runs the API and web interface, stores assessments, and
   provides the review UI.
-- **vulnscout-mcp** — an [MCP](https://modelcontextprotocol.io)
+- **vulnscout_mcp** — an [MCP](https://modelcontextprotocol.io)
   (Model Context Protocol) server that exposes VulnScout's assessment and
   variant-context APIs as tools an AI agent can call.
 - **cve-assessment skill** — an agent skill (shipped in this repository under
@@ -29,7 +29,7 @@ CVE / GHSA id
     ↓
 AI agent + cve-assessment skill
     ↓  (calls MCP tools)
-vulnscout-mcp  ──HTTP──▶  VulnScout API
+vulnscout_mcp  ──HTTP──▶  VulnScout API
     ↓
 Pending AI assessment (origin = "ai")
     ↓
@@ -50,19 +50,20 @@ replaced.
   [Getting Started](getting-started.md)). By default the API is served at
   `http://localhost:7275`.
 - Python 3.9+ on the host that runs the MCP server.
-- A clone of the `vulnscout-mcp` repository.
+- A clone of this `vulnscout` repository (the MCP server is vendored under
+  `vulnscout_mcp/`).
 - An MCP-capable agent client — either the **GitHub Copilot CLI** or
   **VS Code** with the GitHub Copilot extension.
 
 ---
 
-## Step 1 — Configure the vulnscout-mcp server
+## Step 1 — Configure the vulnscout_mcp server
 
-`vulnscout-mcp` speaks MCP over stdio and is launched as a subprocess by the
+`vulnscout_mcp` speaks MCP over stdio and is launched as a subprocess by the
 agent client — there is no port or daemon to manage yourself. Its
-`run_server.py` launcher is self-bootstrapping: on first run it creates a local
-`venv/`, installs its dependencies, and then starts the server. You only need to
-clone the repository and point a client at the script.
+`vulnscout_mcp/run_server.py` launcher is self-bootstrapping: on first run it
+creates a local `venv/`, installs runtime dependencies from
+`requirements/mcp.txt`, and then starts the server.
 
 The server reads a single environment variable:
 
@@ -77,11 +78,11 @@ Add the server from the terminal:
 ```bash
 copilot mcp add vulnscout \
   --env VULNSCOUT_BASE_URL=http://localhost:7275 \
-  -- python3 /path/to/vulnscout-mcp/run_server.py
+  -- python3 /path/to/vulnscout/vulnscout_mcp/run_server.py
 ```
 
 Or run `/mcp add` in interactive mode and fill in the form (**Type:** STDIO,
-**Command:** `python3 /path/to/vulnscout-mcp/run_server.py`,
+**Command:** `python3 /path/to/vulnscout/vulnscout_mcp/run_server.py`,
 **Environment Variables:** `{"VULNSCOUT_BASE_URL":"http://localhost:7275"}`).
 
 Equivalently, edit `~/.copilot/mcp-config.json` directly:
@@ -92,7 +93,7 @@ Equivalently, edit `~/.copilot/mcp-config.json` directly:
     "vulnscout": {
       "type": "local",
       "command": "python3",
-      "args": ["/path/to/vulnscout-mcp/run_server.py"],
+      "args": ["/path/to/vulnscout/vulnscout_mcp/run_server.py"],
       "env": {
         "VULNSCOUT_BASE_URL": "http://localhost:7275"
       },
@@ -114,7 +115,7 @@ Add a server entry to your workspace `.vscode/mcp.json` (or run
     "vulnscout": {
       "type": "stdio",
       "command": "python3",
-      "args": ["/path/to/vulnscout-mcp/run_server.py"],
+      "args": ["/path/to/vulnscout/vulnscout_mcp/run_server.py"],
       "env": {
         "VULNSCOUT_BASE_URL": "http://localhost:7275"
       }

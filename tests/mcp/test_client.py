@@ -3,8 +3,8 @@ import pytest
 import respx
 import httpx
 
-# conftest.py adds mcp/ to sys.path so this import works
-from client import VulnScoutClient, VulnScoutError
+# conftest.py adds repository root to sys.path so package imports work
+from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
 
 
 BASE_URL = "http://vulnscout.test"
@@ -371,6 +371,47 @@ class TestGetVulnerability:
             )
             with pytest.raises(VulnScoutError, match="Could not connect to VulnScout at http://vulnscout.test"):
                 client.get_vulnerability("CVE-2024-1234")
+
+
+class TestGetVulnerabilityForVariant:
+
+    def test_returns_variant_scoped_vuln_from_dict_payload(self, client):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"id": "CVE-2024-1234", "packages": ["openssl@3.0.1"]},
+                )
+            )
+            result = client.get_vulnerability_for_variant("CVE-2024-1234", "v1")
+        assert result["id"] == "CVE-2024-1234"
+        assert result["packages"] == ["openssl@3.0.1"]
+
+    def test_sends_variant_param(self, client):
+        with respx.mock:
+            route = respx.get(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234").mock(
+                return_value=httpx.Response(200, json={"id": "CVE-2024-1234"})
+            )
+            client.get_vulnerability_for_variant("CVE-2024-1234", "variant-1")
+        assert route.called
+        params = route.calls[0].request.url.params
+        assert params["variant_id"] == "variant-1"
+
+    def test_not_found_raises_vuln_scout_error(self, client):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234").mock(
+                return_value=httpx.Response(404, text="Not found")
+            )
+            with pytest.raises(VulnScoutError, match="Not found"):
+                client.get_vulnerability_for_variant("CVE-2024-1234", "v1")
+
+    def test_read_timeout_raises_vuln_scout_error(self, client):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234").mock(
+                side_effect=httpx.ReadTimeout("timed out")
+            )
+            with pytest.raises(VulnScoutError, match="Could not connect to VulnScout at http://vulnscout.test"):
+                client.get_vulnerability_for_variant("CVE-2024-1234", "v1")
 
 
 class TestUpdateAssessment:
