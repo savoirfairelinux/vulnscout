@@ -13,6 +13,7 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import HelpPopover from "../components/HelpPopover";
 import useDismissablePopover from "../hooks/useDismissablePopover";
+import type { AgentViewContext } from "../types/agent";
 
 // Throwing fetch helpers for selector loads (existing handlers swallow HTTP errors)
 async function fetchProjectList(): Promise<Project[]> {
@@ -44,7 +45,7 @@ type SaveSnapshot = {
     fields: VariantContextData;
 };
 
-function AIContext() {
+function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (context: AgentViewContext) => void }>) {
     const unmountedRef = useRef(false);
     useEffect(() => {
         unmountedRef.current = false;
@@ -59,6 +60,14 @@ function AIContext() {
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
     const [selectedVariantId, setSelectedVariantId] = useState<string>('');
+    useEffect(() => {
+        onAgentContextChange?.({
+            selectedProjectId,
+            selectedProjectName: projects.find(project => project.id === selectedProjectId)?.name,
+            selectedVariantId,
+            selectedVariantName: variants.find(variant => variant.id === selectedVariantId)?.name,
+        });
+    }, [selectedProjectId, selectedVariantId, projects, variants, onAgentContextChange]);
 
     // Form fields
     const [description, setDescription] = useState<string>('');
@@ -314,16 +323,7 @@ function AIContext() {
         if (!unmountedRef.current) {
             showBanner(
                 <>
-                    Context saved successfully. To use this context in AI-assisted CVE assessments,
-                    clone and configure{' '}
-                    <a
-                        href="https://github.com/savoirfairelinux/vulnscout-mcp/"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline hover:text-green-100"
-                    >
-                        vulnscout-mcp
-                    </a>, the Model Context Protocol server that connects your AI client to VulnScout.
+                    Context saved successfully.
                 </>,
                 "success"
             );

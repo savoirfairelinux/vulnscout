@@ -1,29 +1,87 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowUp, faArrowUpRightFromSquare, faCircleNotch, faPlus, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faCircleNotch, faCopy, faLocationDot, faPlus, faRightFromBracket, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { AgentContext } from '../types/agent';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type Activity = { id: string; name: string; status: 'running' | 'done' | 'failed' };
+type Message = { role: 'user' | 'assistant'; content: string; activity?: Activity[] };
 type Usage = { cost: number | null; input_tokens: number | null; output_tokens: number | null };
 type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; messages: Message[]; model: string; usage: Usage };
 type DeviceCode = { user_code: string; verification_uri: string; interval: number };
 type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; login?: string | null };
 type ModelChoice = { id: string; name: string };
+type StreamEvent =
+    | { type: 'delta'; message_id: string; text: string }
+    | { type: 'tool_start'; id: string; name: string }
+    | { type: 'tool_end'; id: string; success: boolean }
+    | { type: 'status'; text: string }
+    | { type: 'heartbeat' }
+    | { type: 'done'; reply: string; model: string; usage: Usage }
+    | { type: 'error'; error: string };
 const emptyUsage: Usage = { cost: null, input_tokens: null, output_tokens: null };
+const pageLabels: Record<string, string> = { metrics: 'Overview', packages: 'SBOM', vulnerabilities: 'Vulnerabilities', scans: 'Scans', review: 'Review', exports: 'Export', settings: 'Settings', ai: 'AI context', unknown: 'Page not found' };
+const iconButton = 'flex h-9 w-9 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white';
+const skipDiscardKey = 'vulnscout.agent.skipDiscardConfirmation';
 
-async function agentRequest<T>(path: string, options?: RequestInit): Promise<T> {
+function errorMessage(reason: unknown) {
+    if (reason instanceof TypeError) return 'Connection lost. Check the backend and retry.';
+    return reason instanceof Error ? reason.message : 'Something went wrong. Please try again.';
+}
+
+async function agentRequest<T>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void): Promise<T> {
     const response = await fetch(`/api/agent${path}`, {
         credentials: 'same-origin',
         ...options,
-        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        headers: { 'Content-Type': 'application/json', ...(onEvent ? { Accept: 'application/x-ndjson' } : {}), ...options?.headers },
     });
+    if (response.ok && onEvent && response.headers.get('content-type')?.includes('application/x-ndjson') && response.body) {
+        const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+        let buffer = '';
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) throw new Error('Response interrupted. The agent may still finish this request; reload to check before retrying.');
+                buffer += value;
+                let boundary = buffer.indexOf('\n');
+                while (boundary !== -1) {
+                    const line = buffer.slice(0, boundary);
+                    buffer = buffer.slice(boundary + 1);
+                    if (line.trim()) {
+                        const event = JSON.parse(line) as StreamEvent;
+                        if (event.type === 'error') throw new Error(event.error);
+                        onEvent(event);
+                        if (event.type === 'done') return event as T;
+                    }
+                    boundary = buffer.indexOf('\n');
+                }
+            }
+        } finally {
+            await reader.cancel();
+            reader.releaseLock();
+        }
+    }
+    if (!response.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('Agent service unavailable. Check that agent chat is enabled on the backend, then retry.');
+    }
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `Agent request failed (${response.status})`);
     return data as T;
 }
 
-function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
+function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; pending?: boolean }>) {
+    if (!items.length) return null;
+    return <details open={pending || undefined} className="mb-3 rounded border border-neutral-200 p-3 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+        <summary className="cursor-pointer">Activity ({items.length})</summary>
+        <ul className="mt-3 space-y-2">{items.map(item => <li key={item.id} className="flex items-start gap-2">
+            <FontAwesomeIcon icon={item.status === 'running' ? faCircleNotch : item.status === 'done' ? faCheck : faXmark} spin={item.status === 'running'} className="mt-1 shrink-0" />
+            <span className="min-w-0 break-words">{item.name.replace(/_/g, ' ')}<span className="sr-only">: {item.status}</span></span>
+        </li>)}</ul>
+    </details>;
+}
+
+function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean }>) {
     const [state, setState] = useState<AgentState | null>(null);
     const [error, setError] = useState('');
     const [draft, setDraft] = useState('');
@@ -34,8 +92,25 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
     const [models, setModels] = useState<ModelChoice[]>([]);
     const [selectedModel, setSelectedModel] = useState('auto');
     const [neverAsk, setNeverAsk] = useState(false);
+    const [refresh, setRefresh] = useState(0);
+    const [pendingMessage, setPendingMessage] = useState('');
+    const [liveReply, setLiveReply] = useState('');
+    const [activity, setActivity] = useState<Activity[]>([]);
+    const [progress, setProgress] = useState('Connecting to Copilot...');
+    const [copied, setCopied] = useState<string | null>(null);
+    const [awayFromBottom, setAwayFromBottom] = useState(false);
     const confirmation = useRef<HTMLDialogElement>(null);
-    const bottom = useRef<HTMLDivElement>(null);
+    const conversationLog = useRef<HTMLDivElement>(null);
+    const composer = useRef<HTMLTextAreaElement>(null);
+    const followMessages = useRef(true);
+    const ready = Boolean(state?.authenticated && state.configured && models.length);
+    const pageLabel = pageLabels[context.page] ?? context.page;
+    const scopeLabel = context.view?.openVulnerabilityId ?? context.view?.selectedVariantName ?? context.view?.selectedProjectName;
+    const largeVulnerabilityView = context.page === 'vulnerabilities' && !context.view?.openVulnerabilityId &&
+        (context.view?.visibleVulnerabilityIds?.length ?? context.view?.visibleCount ?? 0) > 100;
+    const prompts = context.view?.openVulnerabilityId
+        ? [{ label: 'Assess this vulnerability', message: `Assess ${context.view.openVulnerabilityId} in the current scope. Retrieve its details with VulnScout MCP first.` }, { label: 'Review existing assessments', message: 'Review the existing assessments for the open vulnerability in the current scope.' }]
+        : [{ label: `Summarize ${pageLabel.toLowerCase()}`, message: `Summarize the current ${pageLabel.toLowerCase()} view and its project scope using VulnScout MCP.` }, { label: 'Prioritize next steps', message: 'Review the current scope and recommend the most important next steps. Do not make changes.' }];
 
     useEffect(() => {
         let active = true;
@@ -45,10 +120,10 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
                 setSelectedModel(result.model);
             }
         }).catch(reason => {
-            if (active) setError(String(reason));
+            if (active) setError(errorMessage(reason));
         });
         return () => { active = false; };
-    }, []);
+    }, [refresh]);
 
     useEffect(() => {
         if (!state?.authenticated) return;
@@ -56,12 +131,37 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
         agentRequest<{ models: ModelChoice[] }>('/models').then(result => {
             if (active) setModels(result.models);
         }).catch(reason => {
-            if (active) setError(String(reason));
+            if (active) setError(errorMessage(reason));
         });
         return () => { active = false; };
-    }, [state?.authenticated, state?.token_connected]);
+    }, [state?.authenticated, state?.token_connected, refresh]);
 
-    useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [state?.messages.length, busy]);
+    useEffect(() => {
+        if (active && followMessages.current && conversationLog.current) {
+            conversationLog.current.scrollTop = conversationLog.current.scrollHeight;
+        }
+    }, [active, state?.messages.length, pendingMessage, liveReply, activity]);
+
+    useEffect(() => {
+        if (!active || !composer.current) return;
+        composer.current.style.height = 'auto';
+        composer.current.style.height = `${Math.min(composer.current.scrollHeight, 160)}px`;
+    }, [active, draft, ready]);
+
+    useEffect(() => {
+        if (!copied) return;
+        const timer = window.setTimeout(() => setCopied(null), 2000);
+        return () => window.clearTimeout(timer);
+    }, [copied]);
+
+    async function copy(text: string, key: string) {
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopied(key);
+        } catch {
+            setError('Clipboard unavailable. Select the text to copy it manually.');
+        }
+    }
 
     useEffect(() => {
         if (!device) return;
@@ -82,7 +182,7 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
                 setDevice(null);
             } catch (reason) {
                 if (!active) return;
-                setError(String(reason));
+                setError(errorMessage(reason));
                 setDevice(null);
             }
         };
@@ -96,7 +196,7 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
         try {
             setDevice(await agentRequest<DeviceCode>('/auth', { method: 'POST' }));
         } catch (reason) {
-            setError(String(reason));
+            setError(errorMessage(reason));
         } finally {
             setBusy(false);
         }
@@ -111,8 +211,11 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
             setState(previous => previous && { ...previous, messages: [], usage: result.usage });
             setDraft('');
             setAllowWrites(false);
+            followMessages.current = true;
+            setAwayFromBottom(false);
+            composer.current?.focus();
         } catch (reason) {
-            setError(String(reason));
+            setError(errorMessage(reason));
         } finally {
             setBusy(false);
         }
@@ -128,59 +231,133 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
             setState(current => current && { ...current, model });
         } catch (reason) {
             setSelectedModel(previous);
-            setError(String(reason));
+            setError(errorMessage(reason));
         } finally {
             setModelBusy(false);
         }
     }
 
-    async function send(event?: FormEvent) {
+    async function send(event?: FormEvent, actionMessage?: string) {
         event?.preventDefault();
-        const message = draft.trim();
-        if (!message || busy) return;
+        const message = (actionMessage ?? draft).trim();
+        if (!message || busy || modelBusy || !ready) return;
         setBusy(true);
         setError('');
         setDraft('');
+        setPendingMessage(message);
+        setLiveReply('');
+        setActivity([]);
+        setProgress('Connecting to Copilot...');
+        let currentMessageId = '';
+        let turnActivity: Activity[] = [];
+        followMessages.current = true;
+        setAwayFromBottom(false);
         const writes = allowWrites;
         setAllowWrites(false);
         try {
+            const visibleIds = context.view?.visibleVulnerabilityIds;
+            const packageIds = context.view?.visiblePackageIds;
+            const scanIds = context.view?.visibleScanIds;
+            const exportKeys = context.view?.selectedExportKeys;
+            const enabledExportDocuments = context.view?.enabledExportDocuments;
+            const selectedVariantIds = context.view?.selectedVariantIds;
+            const selectedVulnerabilityIds = context.view?.selectedVulnerabilityIds;
+            const matchingVariantIds = context.view?.matchingVariantIds;
+            const contextForTurn: AgentContext = { ...context,
+                variantIds: context.variantIds && context.variantIds.length > 50 ? undefined : context.variantIds,
+                variantCount: context.variantIds && context.variantIds.length > 50 ? context.variantIds.length : undefined,
+                view: context.view && {
+                ...context.view,
+                visibleVulnerabilityIds: visibleIds && visibleIds.length > 100 ? undefined : visibleIds,
+                visiblePackageIds: packageIds && packageIds.length > 100 ? undefined : packageIds,
+                visibleScanIds: scanIds && scanIds.length > 100 ? undefined : scanIds,
+                selectedExportKeys: exportKeys && exportKeys.length > 100 ? undefined : exportKeys,
+                enabledExportDocuments: enabledExportDocuments && enabledExportDocuments.length > 100 ? undefined : enabledExportDocuments,
+                selectedVariantIds: selectedVariantIds && selectedVariantIds.length > 100 ? undefined : selectedVariantIds,
+                selectedVulnerabilityIds: selectedVulnerabilityIds && selectedVulnerabilityIds.length > 100 ? undefined : selectedVulnerabilityIds,
+                matchingVariantIds: matchingVariantIds && matchingVariantIds.length > 100 ? undefined : matchingVariantIds,
+                visibleCount: visibleIds || packageIds || scanIds
+                    ? Math.max(visibleIds?.length ?? 0, packageIds?.length ?? 0, scanIds?.length ?? 0) : undefined,
+                selectionCount: exportKeys || selectedVariantIds || enabledExportDocuments || selectedVulnerabilityIds || matchingVariantIds
+                    ? Math.max(exportKeys?.length ?? 0, selectedVariantIds?.length ?? 0, enabledExportDocuments?.length ?? 0, selectedVulnerabilityIds?.length ?? 0, matchingVariantIds?.length ?? 0) : undefined,
+            } };
             const result = await agentRequest<{ reply: string; model: string; usage: Usage }>('/messages', {
-                method: 'POST', body: JSON.stringify({ message, allow_writes: writes, model: selectedModel }),
+                method: 'POST', body: JSON.stringify({ message, allow_writes: writes, context: contextForTurn, model: selectedModel }),
+            }, event => {
+                if (event.type === 'status') setProgress(event.text);
+                if (event.type === 'delta') {
+                    const continued = currentMessageId === event.message_id;
+                    currentMessageId = event.message_id;
+                    setLiveReply(previous => (continued ? previous : '') + event.text);
+                    setProgress('Writing response...');
+                }
+                if (event.type === 'tool_start') {
+                    turnActivity = [...turnActivity, { id: event.id, name: event.name, status: 'running' as const }].slice(-50);
+                    setActivity(turnActivity);
+                    setProgress('Checking VulnScout...');
+                }
+                if (event.type === 'tool_end') {
+                    turnActivity = turnActivity.map(item => item.id === event.id ? { ...item, status: event.success ? 'done' : 'failed' } : item);
+                    setActivity(turnActivity);
+                    setProgress('Preparing response...');
+                }
             });
             setState(previous => previous && { ...previous, messages: [
                 ...previous.messages, { role: 'user', content: message },
-                { role: 'assistant', content: result.reply },
+                { role: 'assistant', content: result.reply, activity: turnActivity },
             ], model: result.model, usage: result.usage });
         } catch (reason) {
             setDraft(message);
-            setError(String(reason));
+            setError(errorMessage(reason));
         } finally {
+            setPendingMessage('');
             setBusy(false);
         }
     }
 
     function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-        if (event.key === 'Enter' && !event.shiftKey) {
+        if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             void send();
         }
     }
 
-    return <div className="flex h-full min-h-0 flex-col font-sans">
-        <header className="flex h-12 shrink-0 items-center justify-end gap-3 border-b border-neutral-800 px-4">
+    return <div className="flex h-full min-h-0 min-w-0 flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+        <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-neutral-200 px-3 dark:border-neutral-800">
+            <div className="min-w-0 flex-1 pr-2">
+                {state?.authenticated && <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || !models.length} className="w-full max-w-56 truncate rounded border-0 bg-transparent py-2 pl-1 pr-6 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:bg-neutral-950">
+                    {!models.length && <option value={selectedModel}>{error ? 'Models unavailable' : 'Loading models...'}</option>}
+                    {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+                </select>}
+            </div>
+            {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
             <button type="button" title="New conversation" aria-label="New conversation" onClick={() => {
                 let skipConfirmation = neverAsk;
-                try { skipConfirmation = localStorage.getItem('vulnscout.agent.skipDiscardConfirmation') === 'true'; } catch { skipConfirmation = neverAsk; }
+                try { skipConfirmation = localStorage.getItem(skipDiscardKey) === 'true'; } catch { skipConfirmation = neverAsk; }
                 if (skipConfirmation) {
                     void reset();
                 } else {
                     setNeverAsk(false);
                     confirmation.current?.showModal();
                 }
-            }} disabled={busy || modelBusy || !state} className="flex h-9 w-9 items-center justify-center rounded hover:bg-neutral-800 disabled:opacity-40"><FontAwesomeIcon icon={faPlus} /></button>
-            <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded hover:bg-neutral-800"><FontAwesomeIcon icon={faXmark} /></button>
+            }} disabled={busy || modelBusy || !state || (!state.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
+            {state?.authenticated && state.token_connected && <button type="button" title={state.login ? `Sign out of ${state.login}` : 'Sign out'} aria-label="Sign out" disabled={busy || modelBusy} className={iconButton} onClick={async () => {
+                setBusy(true);
+                setError('');
+                try {
+                    const result = await agentRequest<{ cleanup_error: string | null }>('/auth', { method: 'DELETE' });
+                    setModels([]);
+                    setDraft('');
+                    setAllowWrites(false);
+                    setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false, messages: [], model: 'auto', usage: emptyUsage });
+                    setSelectedModel('auto');
+                    if (result.cleanup_error) setError(result.cleanup_error);
+                } catch (reason) { setError(errorMessage(reason)); }
+                finally { setBusy(false); }
+            }}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
+            <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>
         </header>
-        <dialog ref={confirmation} aria-labelledby="agent-discard-title" aria-describedby="agent-discard-description" className="w-[calc(100%-2rem)] max-w-sm rounded border border-neutral-700 bg-neutral-900 p-5 text-neutral-100 backdrop:bg-black/60" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
+        <dialog ref={confirmation} aria-labelledby="agent-discard-title" aria-describedby="agent-discard-description" className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 event.stopPropagation();
@@ -189,93 +366,114 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
             }
         }}>
             <h2 id="agent-discard-title" className="text-base font-semibold">New conversation?</h2>
-            <p id="agent-discard-description" className="mt-3 text-sm">This conversation will be discarded forever. This cannot be undone.</p>
+            <p id="agent-discard-description" className="mt-3 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">This conversation will be discarded forever. This cannot be undone.</p>
             <label className="mt-4 flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={neverAsk} onChange={event => setNeverAsk(event.target.checked)} className="accent-cyan-500" />
                 Never ask again
             </label>
             <div className="mt-5 flex justify-end gap-3">
-                <button type="button" autoFocus onClick={() => { setNeverAsk(false); confirmation.current?.close(); }} className="rounded border border-neutral-600 px-3 py-2 text-sm hover:bg-neutral-800">Cancel</button>
+                <button type="button" autoFocus onClick={() => { setNeverAsk(false); confirmation.current?.close(); }} className="rounded border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-100 focus-visible:outline-cyan-600 dark:border-neutral-600 dark:hover:bg-neutral-800">Cancel</button>
                 <button type="button" onClick={() => {
-                    try { localStorage.setItem('vulnscout.agent.skipDiscardConfirmation', String(neverAsk)); } catch { setNeverAsk(neverAsk); }
+                    try { localStorage.setItem(skipDiscardKey, String(neverAsk)); } catch { setNeverAsk(neverAsk); }
                     confirmation.current?.close();
                     void reset();
-                }} className="rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:bg-cyan-600">Confirm</button>
+                }} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 focus-visible:outline-cyan-600">Confirm</button>
             </div>
         </dialog>
 
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-neutral-800 bg-neutral-900 px-4 py-2 text-xs">
-            <label className="flex min-w-0 items-center gap-2 text-neutral-300">Model
-                <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || !models.length} className="max-w-[170px] border border-neutral-600 bg-neutral-950 px-2 py-1 text-neutral-100 disabled:opacity-50">
-                    {!models.length && <option value={selectedModel}>Loading...</option>}
-                    {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-                </select>
-            </label>
-            <span title="Sum of cost values reported by the Copilot SDK for this conversation; no currency inferred" className="tabular-nums text-neutral-300">{state?.usage?.cost == null ? 'Cost not reported' : `SDK cost ${state.usage.cost.toFixed(4)}`}</span>
-            {state?.usage?.input_tokens != null && <span className="text-neutral-400">{state.usage.input_tokens.toLocaleString()} in · {(state.usage.output_tokens ?? 0).toLocaleString()} out tokens</span>}
-        </div>
-
-        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5" role="log" aria-label="Agent conversation" aria-live="polite">
-            {!state && !error && <p role="status" className="text-sm text-neutral-400">Connecting to agent...</p>}
-            {state && !state.configured && <div className="border-l-2 border-amber-400 bg-neutral-900 p-3 text-sm text-neutral-200">
-                Set <span className="font-mono">VULNSCOUT_MCP_SERVER_PATH</span> on the backend to the full path of the vulnscout-mcp <span className="font-mono">run_server.py</span>, then reopen this panel.
+        <div ref={conversationLog} className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-6" role="log" aria-label="Agent conversation" aria-live="polite" onScroll={event => {
+            const log = event.currentTarget;
+            followMessages.current = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+            setAwayFromBottom(!followMessages.current);
+        }}>
+            {!state && !error && <p role="status" className="flex items-center gap-2 py-6 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin /> Connecting...</p>}
+            {state?.authenticated && state.configured && !models.length && !error && <p role="status" className="flex items-center gap-2 py-6 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin /> Loading models...</p>}
+            {state && !state.configured && <div className="space-y-3 border-b border-neutral-200 pb-5 text-sm dark:border-neutral-800">
+                <h3 className="font-semibold">Agent setup required</h3>
+                <details className="text-neutral-500 dark:text-neutral-400">
+                    <summary className="cursor-pointer text-sm">Backend configuration</summary>
+                    <p className="mt-2 break-words text-xs leading-relaxed">The bundled MCP server is missing. Check the backend installation or remove an outdated <code>VULNSCOUT_MCP_SERVER_PATH</code> override.</p>
+                </details>
+                <button type="button" onClick={() => { setError(''); setRefresh(value => value + 1); }} className="inline-flex items-center gap-2 text-cyan-700 hover:underline dark:text-cyan-400"><FontAwesomeIcon icon={faArrowRotateRight} /> Check connection</button>
             </div>}
-            {state && !state.authenticated && <div className="space-y-3 border-l-2 border-cyan-500 bg-neutral-900 p-3 text-sm">
+            {state && !state.authenticated && <div className="space-y-5 py-6 text-sm">
                 {!device ? <>
-                    <p>Connect a GitHub account with Copilot access.</p>
-                    <button type="button" onClick={() => void signIn()} disabled={busy} className="block bg-cyan-700 px-3 py-2 font-semibold hover:bg-cyan-600 disabled:opacity-40">Sign in with GitHub</button>
+                    <h3 className="text-lg font-semibold">Connect to GitHub</h3>
+                    <p className="text-neutral-500 dark:text-neutral-400">A GitHub account with Copilot access is required.</p>
+                    <button type="button" onClick={() => void signIn()} disabled={busy} className="inline-flex min-h-10 items-center gap-2 rounded bg-cyan-700 px-4 py-2 font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">{busy && <FontAwesomeIcon icon={faCircleNotch} spin />} Sign in with GitHub <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></button>
                 </> : <>
-                    <p>Enter this code on GitHub:</p>
+                    <h3 className="text-base font-semibold">Authorize on GitHub</h3>
                     <div className="flex items-center gap-2">
-                        <code className="bg-neutral-950 px-3 py-2 font-mono text-lg tracking-widest text-cyan-100">{device.user_code}</code>
-                        <button type="button" onClick={() => void navigator.clipboard.writeText(device.user_code)} className="border border-neutral-600 px-2 py-2 text-xs hover:bg-neutral-800">Copy</button>
+                        <code className="select-all rounded border border-neutral-200 bg-neutral-50 px-4 py-3 font-mono text-xl dark:border-neutral-700 dark:bg-neutral-900">{device.user_code}</code>
+                        <button type="button" title={copied === 'device' ? 'Copied' : 'Copy code'} aria-label="Copy code" onClick={() => void copy(device.user_code, 'device')} className={iconButton}><FontAwesomeIcon icon={copied === 'device' ? faCheck : faCopy} /></button>
                     </div>
-                    <a className="inline-flex items-center gap-2 text-cyan-300 hover:underline" href={device.verification_uri} target="_blank" rel="noopener noreferrer">Open {device.verification_uri.replace('https://', '')} <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></a>
-                    <p role="status" className="flex items-center gap-2 text-xs text-neutral-400"><FontAwesomeIcon icon={faCircleNotch} spin /> Waiting for approval on GitHub...
-                        <button type="button" onClick={() => setDevice(null)} className="underline hover:text-white">Cancel</button></p>
+                    <a className="inline-flex min-h-10 items-center gap-2 rounded bg-cyan-700 px-4 py-2 font-semibold text-white hover:bg-cyan-600" href={device.verification_uri} target="_blank" rel="noopener noreferrer">Open GitHub <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></a>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500 dark:text-neutral-400"><span role="status"><FontAwesomeIcon icon={faCircleNotch} spin className="mr-2" />Waiting for approval...</span><button type="button" onClick={() => setDevice(null)} className="underline underline-offset-4">Cancel</button></div>
                 </>}
             </div>}
-            {state?.authenticated && state.token_connected && <button type="button" disabled={busy} onClick={async () => {
-                setBusy(true);
-                try {
-                    await agentRequest('/auth', { method: 'DELETE' });
-                    setState(await agentRequest<AgentState>(''));
-                } catch (reason) { setError(String(reason)); }
-                finally { setBusy(false); }
-            }} className="text-xs text-neutral-400 underline hover:text-white">Sign out</button>}
-            {state?.authenticated && state.messages.length === 0 && <div className="space-y-3 pt-6 text-sm text-neutral-400">
-                <p className="text-neutral-100">What would you like to investigate?</p>
-                <p>Ask about a CVE, compare assessments, or review variant context.</p>
+            {ready && state?.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
+                <h3 className="text-lg font-semibold leading-snug">What needs your attention?</h3>
+                <div className="space-y-3">
+                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || (largeVulnerabilityView && index === 0)} onClick={() => void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
+                    {largeVulnerabilityView && <p className="text-xs text-neutral-500 dark:text-neutral-400">Filter to 100 or fewer vulnerabilities to summarize the displayed rows.</p>}
+                </div>
             </div>}
-            {state?.messages.map((message, index) => <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[92%] break-words px-3 py-2 text-sm leading-relaxed ${message.role === 'user' ? 'whitespace-pre-wrap rounded bg-cyan-800 text-white' : 'border-l-2 border-cyan-600 bg-neutral-900 text-neutral-100'}`}>
+            {state?.messages.map((message, index) => <div key={index} className={`min-w-0 ${message.role === 'user' ? 'flex justify-end' : ''}`}>
+                <div className={`min-w-0 break-words text-sm leading-7 [overflow-wrap:anywhere] ${message.role === 'user' ? 'max-w-[90%] whitespace-pre-wrap rounded-lg bg-neutral-100 px-4 py-3 dark:bg-neutral-800' : ''}`}>
+                    {message.activity && <ActivityLog items={message.activity} />}
                     {message.role === 'assistant' ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                        a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-300 underline">{children}</a>,
-                        code: ({ children }) => <code className="rounded bg-neutral-800 px-1 font-mono text-xs text-cyan-100">{children}</code>,
-                        pre: ({ children }) => <pre className="my-2 overflow-x-auto bg-neutral-950 p-2">{children}</pre>,
-                        table: ({ children }) => <div className="my-2 max-w-full overflow-x-auto"><table className="w-full min-w-[420px] border-collapse text-left text-xs">{children}</table></div>,
-                        th: ({ children }) => <th className="border border-neutral-600 bg-neutral-800 p-2 font-semibold">{children}</th>,
-                        td: ({ children }) => <td className="border border-neutral-700 p-2 align-top">{children}</td>,
+                        p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+                        h1: ({ children }) => <h3 className="mb-3 mt-5 text-base font-semibold">{children}</h3>,
+                        h2: ({ children }) => <h3 className="mb-3 mt-5 text-base font-semibold">{children}</h3>,
+                        h3: ({ children }) => <h4 className="mb-2 mt-4 font-semibold">{children}</h4>,
+                        ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>,
+                        ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-5">{children}</ol>,
+                        blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-neutral-300 pl-4 text-neutral-500 dark:border-neutral-600 dark:text-neutral-400">{children}</blockquote>,
+                        a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-700 underline underline-offset-2 dark:text-cyan-400">{children}</a>,
+                        code: ({ children }) => <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-xs dark:bg-neutral-800">{children}</code>,
+                        pre: ({ children }) => <pre className="my-3 max-w-full overflow-x-auto rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900 [&_code]:bg-transparent [&_code]:p-0">{children}</pre>,
+                        table: ({ children }) => <div tabIndex={0} role="region" aria-label="Response table" className="my-3 max-w-full overflow-x-auto rounded border border-neutral-200 dark:border-neutral-700"><table className="w-full min-w-[360px] border-collapse text-left text-xs leading-5">{children}</table></div>,
+                        th: ({ children }) => <th className="border-b border-neutral-200 bg-neutral-50 p-3 font-semibold dark:border-neutral-700 dark:bg-neutral-900">{children}</th>,
+                        td: ({ children }) => <td className="border-b border-neutral-200 p-3 align-top dark:border-neutral-800">{children}</td>,
                     }}>{message.content}</ReactMarkdown> : message.content}
+                    {message.role === 'assistant' && <button type="button" title={copied === String(index) ? 'Copied' : 'Copy response'} aria-label="Copy response" onClick={() => void copy(message.content, String(index))} className={`${iconButton} mt-2`}><FontAwesomeIcon icon={copied === String(index) ? faCheck : faCopy} className="text-xs" /></button>}
                 </div>
             </div>)}
-            {busy && <div role="status" className="flex items-center gap-2 text-xs text-cyan-300"><FontAwesomeIcon icon={faCircleNotch} spin /> Working...</div>}
-            {error && <p role="alert" className="border-l-2 border-red-400 bg-red-950/50 p-3 text-sm text-red-100">{error}</p>}
-            <div ref={bottom} />
+            {pendingMessage && <><div className="flex justify-end"><div className="max-w-[90%] whitespace-pre-wrap break-words rounded-lg bg-neutral-100 px-4 py-3 text-sm leading-7 [overflow-wrap:anywhere] dark:bg-neutral-800">{pendingMessage}</div></div><div><ActivityLog items={activity} pending />{liveReply && <div className="mb-3 whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">{liveReply}</div>}<div role="status" className="flex items-center gap-2 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin />{progress}</div></div></>}
         </div>
+        {awayFromBottom && <button type="button" aria-label="Jump to latest message" title="Jump to latest message" onClick={() => { if (conversationLog.current) conversationLog.current.scrollTop = conversationLog.current.scrollHeight; }} className={`${iconButton} mx-auto mb-2 border border-neutral-200 dark:border-neutral-700`}><FontAwesomeIcon icon={faArrowDown} /></button>}
+        {error && <div className="mx-4 mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><p role="alert" className="min-w-0 flex-1 break-words leading-relaxed">{error}</p><button type="button" title="Retry connection" aria-label="Retry connection" disabled={busy} onClick={() => { setError(''); setRefresh(value => value + 1); }} className={iconButton}><FontAwesomeIcon icon={faArrowRotateRight} /></button><button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button></div>}
 
-        <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-800 bg-neutral-900 p-4">
-            <label htmlFor="agent-prompt" className="sr-only">Message the agent</label>
-            <div className="flex items-end gap-2 border border-neutral-600 bg-neutral-950 p-2 focus-within:border-cyan-500">
-                <textarea id="agent-prompt" rows={2} maxLength={8000} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!state?.authenticated || !state.configured || busy || modelBusy || !models.length} placeholder="Ask the agent..." className="min-w-0 flex-1 resize-none bg-transparent text-sm text-white outline-none placeholder:text-neutral-500 disabled:opacity-40" />
-                <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !state?.authenticated || !state.configured || !models.length} className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-cyan-700 hover:bg-cyan-600 disabled:bg-neutral-700 disabled:text-neutral-500"><FontAwesomeIcon icon={faArrowUp} /></button>
+        {state?.authenticated && state.configured && <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-200 px-4 pb-4 pt-3 dark:border-neutral-800">
+            <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+                <FontAwesomeIcon icon={faLocationDot} className="shrink-0" />
+                <span className="truncate" title={[pageLabel, scopeLabel].filter(Boolean).join(' / ')}>{pageLabel}{scopeLabel && ` / ${scopeLabel}`}</span>
+                {context.view?.visibleVulnerabilityIds && <span className="ml-auto shrink-0 tabular-nums">{context.view.visibleVulnerabilityIds.length} displayed</span>}
             </div>
-            <label className="flex cursor-pointer items-start gap-2 text-xs text-neutral-300">
-                <input type="checkbox" checked={allowWrites} onChange={event => setAllowWrites(event.target.checked)} disabled={busy} className="mt-0.5 accent-cyan-500" />
-                Allow assessment and context changes for the next message
-            </label>
-        </form>
+            {(context.view?.openVulnerabilityId || (context.page === 'vulnerabilities' && Boolean(context.view?.visibleVulnerabilityIds?.length))) && <div className="flex flex-wrap gap-3 text-xs">
+                {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready} onClick={() => void send(undefined, prompts[0].message)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
+                {context.page === 'vulnerabilities' && !!context.view?.visibleVulnerabilityIds?.length && <button type="button" onClick={() => {
+                    if ((context.view?.visibleVulnerabilityIds?.length ?? 0) > 100) {
+                        setError('Narrow the table to 100 vulnerabilities or fewer before assessing every displayed row.');
+                    } else {
+                        setError('');
+                        void send(undefined, 'Assess every vulnerability currently displayed in this filtered table. Use the attached list of IDs and current project/variant scope; report the result for each.');
+                    }
+                }} disabled={busy || modelBusy || !ready} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess displayed</button>}
+            </div>}
+            <label htmlFor="agent-prompt" className="sr-only">Message the agent</label>
+            <div className={`rounded-lg border p-3 transition-colors focus-within:ring-1 ${allowWrites ? 'border-amber-500 bg-amber-50/30 focus-within:ring-amber-500 dark:bg-amber-950/10' : 'border-neutral-300 bg-white focus-within:border-cyan-600 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900'}`}>
+                <textarea ref={composer} id="agent-prompt" rows={2} maxLength={8000} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
+                <div className="mt-2 flex items-center justify-between gap-2">
+                    <label className={`flex min-w-0 cursor-pointer items-center gap-2 text-xs ${allowWrites ? 'text-amber-700 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`} title="Allow assessment and context changes for the next message only">
+                        <input type="checkbox" checked={allowWrites} onChange={event => setAllowWrites(event.target.checked)} disabled={busy || !ready} className="h-3.5 w-3.5 shrink-0 accent-amber-600" />
+                        {allowWrites ? 'Changes allowed this message' : 'Allow changes'}
+                    </label>
+                    <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
+                </div>
+            </div>
+            {state.messages.length > 0 && <details className="text-xs text-neutral-500 dark:text-neutral-400"><summary className="w-fit cursor-pointer">Conversation usage</summary><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 tabular-nums"><span>{state.usage.cost == null ? 'Cost not reported' : `SDK cost ${state.usage.cost.toFixed(4)}`}</span><span>{state.usage.input_tokens?.toLocaleString() ?? '—'} input tokens</span><span>{state.usage.output_tokens?.toLocaleString() ?? '—'} output tokens</span></div></details>}
+        </form>}
     </div>;
 }
 

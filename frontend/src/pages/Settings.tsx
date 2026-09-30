@@ -41,8 +41,10 @@ import {
 } from "../helpers/refreshSources";
 import type { RefreshMode } from "../helpers/refreshSources";
 import CustomExportContentManager from "../components/CustomExportContentManager";
+import type { AgentViewContext } from "../types/agent";
 
 type Props = {
+  onAgentContextChange?: (context: AgentViewContext) => void;
   onDataChanged?: (message?: string) => void;
   onLoadingMessage?: (message: string | null) => void;
   projectId?: string;
@@ -55,9 +57,12 @@ type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
   | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
 
-function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab }: Readonly<Props>) {
+function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAgentContextChange }: Readonly<Props>) {
   // ---- Active category tab ----
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
+  useEffect(() => {
+    onAgentContextChange?.({ section: activeTab, selectedProjectId: projectId });
+  }, [activeTab, projectId, onAgentContextChange]);
 
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
