@@ -38,6 +38,8 @@ agent_blueprint = Blueprint("agent", __name__)
 class Conversation:
     token: str | None = None
     session_id: str | None = None
+    model: str = "auto"
+    usage: dict = field(default_factory=lambda: {"cost": None, "input_tokens": None, "output_tokens": None})
     messages: list[dict[str, str]] = field(default_factory=list)
     device_code: str | None = None
     device_expires: float = 0.0
@@ -131,17 +133,50 @@ async def _token_status(token):
         return auth
 
 
+async def _models(token):
+    async with _sdk_client(token) as client:
+        return [{"id": model.id, "name": model.name} for model in await client.list_models()
+                if model.policy is None or model.policy.state == "enabled"]
+
+
 async def _delete_session(token, session_id):
     async with _sdk_client(token) as client:
         await client.delete_session(session_id)
 
 
-async def _reply(conversation, message, allow_writes, path):
+class UnavailableModelError(ValueError):
+    pass
+
+
+def _session_usage(events):
+    from copilot.session_events import AssistantUsageData
+
+    usage = [event.data for event in events if isinstance(event.data, AssistantUsageData)]
+    costs = [event.cost for event in usage if event.cost is not None]
+    inputs = [event.input_tokens for event in usage if event.input_tokens is not None]
+    outputs = [event.output_tokens for event in usage if event.output_tokens is not None]
+    return {
+        "cost": sum(costs) if costs else None,
+        "input_tokens": sum(inputs) if inputs else None,
+        "output_tokens": sum(outputs) if outputs else None,
+    }
+
+
+def _add_usage(previous, current):
+    return {key: previous[key] if current[key] is None else (previous[key] or 0) + current[key]
+            for key in ("cost", "input_tokens", "output_tokens")}
+
+
+async def _reply(conversation, message, allow_writes, path, model):
     from copilot.session import PermissionHandler
 
     tools = READ_TOOLS + WRITE_TOOLS if allow_writes else READ_TOOLS
     async with _sdk_client(conversation.token) as client:
+        models = await client.list_models()
+        if model not in {choice.id for choice in models if choice.policy is None or choice.policy.state == "enabled"}:
+            raise UnavailableModelError("Selected model is not available for this account.")
         options = {
+            "model": model,
             "on_permission_request": PermissionHandler.approve_all,
             "available_tools": [f"mcp:vulnscout-{tool}" for tool in tools],
             "mcp_servers": {"vulnscout": {
@@ -164,11 +199,14 @@ async def _reply(conversation, message, allow_writes, path):
         else:
             session = await client.create_session(**options)
         try:
+            live_events = []
+            session.on(live_events.append)
             event = await asyncio.wait_for(session.send_and_wait(message), timeout=120)
             if event is None or not event.data.content:
                 raise RuntimeError("The agent did not return a response.")
             conversation.session_id = session.session_id
-            return event.data.content
+            usage = _add_usage(conversation.usage, _session_usage(live_events))
+            return event.data.content, usage
         finally:
             await session.disconnect()
 
@@ -187,7 +225,8 @@ def agent_status():
     return _response({**auth, "configured": configured,
                       "device_login": True,
                       "token_connected": conversation.token is not None,
-                      "messages": conversation.messages}, key)
+                      "messages": conversation.messages,
+                      "model": conversation.model, "usage": conversation.usage}, key)
 
 
 @agent_blueprint.route("/api/agent/auth", methods=["POST", "DELETE"])
@@ -207,6 +246,8 @@ def agent_auth():
             conversation.session_id = None
             conversation.device_code = None
             conversation.messages.clear()
+            conversation.model = "auto"
+            conversation.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
         return _response({"authenticated": False}, key)
     client_id = os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID
     try:
@@ -267,7 +308,46 @@ def agent_auth_poll():
         conversation.token = token
         conversation.session_id = None
         conversation.messages.clear()
+        conversation.model = "auto"
+        conversation.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
     return _response({"status": "connected", **auth}, key)
+
+
+@agent_blueprint.route("/api/agent/models", methods=["GET"])
+def agent_models():
+    if error := _access_error():
+        return error
+    key, conversation = _conversation()
+    try:
+        models = asyncio.run(_models(conversation.token))
+    except Exception:
+        current_app.logger.exception("Could not list agent models")
+        return _response({"error": "Unable to load available Copilot models."}, key, 503)
+    return _response({"models": models}, key)
+
+
+@agent_blueprint.route("/api/agent/model", methods=["POST"])
+def agent_model():
+    if error := _access_error():
+        return error
+    key, conversation = _conversation()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("model"), str) or len(data["model"]) > 100:
+        return _response({"error": "Invalid model selection."}, key, 400)
+    if not conversation.lock.acquire(blocking=False):
+        return _response({"error": "The agent is already responding."}, key, 409)
+    try:
+        try:
+            choices = asyncio.run(_models(conversation.token))
+        except Exception:
+            current_app.logger.exception("Could not verify agent model")
+            return _response({"error": "Unable to verify this Copilot model."}, key, 503)
+        if data["model"] not in {choice["id"] for choice in choices}:
+            return _response({"error": "Selected model is not available for this account."}, key, 400)
+        conversation.model = data["model"]
+        return _response({"model": conversation.model}, key)
+    finally:
+        conversation.lock.release()
 
 
 @agent_blueprint.route("/api/agent/conversation", methods=["DELETE"])
@@ -284,7 +364,8 @@ def agent_reset():
                 return _response({"error": "Could not delete the stored conversation."}, key, 503)
         conversation.session_id = None
         conversation.messages.clear()
-    return _response({"messages": []}, key)
+        conversation.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
+    return _response({"messages": [], "usage": conversation.usage}, key)
 
 
 @agent_blueprint.route("/api/agent/messages", methods=["POST"])
@@ -300,6 +381,9 @@ def agent_message():
         return _response({"error": "Enter a message of at most 8000 characters."}, key, 400)
     if not isinstance(data.get("allow_writes", False), bool):
         return _response({"error": "Invalid write permission."}, key, 400)
+    model = data.get("model", conversation.model)
+    if not isinstance(model, str) or not model or len(model) > 100:
+        return _response({"error": "Invalid model selection."}, key, 400)
     user_message = message.strip()
     path = _mcp_path()
     if path is None or not path.is_file():
@@ -308,7 +392,9 @@ def agent_message():
         return _response({"error": "The agent is already responding."}, key, 409)
     try:
         try:
-            reply = asyncio.run(_reply(conversation, user_message, data.get("allow_writes", False), path))
+            reply, usage = asyncio.run(_reply(conversation, user_message, data.get("allow_writes", False), path, model))
+        except UnavailableModelError as exc:
+            return _response({"error": str(exc)}, key, 400)
         except Exception:
             current_app.logger.exception("Agent request failed")
             return _response({
@@ -316,7 +402,9 @@ def agent_message():
             }, key, 503)
         conversation.messages.extend(({"role": "user", "content": user_message},
                                       {"role": "assistant", "content": reply}))
-        return _response({"reply": reply}, key)
+        conversation.model = model
+        conversation.usage = usage
+        return _response({"reply": reply, "model": model, "usage": usage}, key)
     finally:
         conversation.lock.release()
 
