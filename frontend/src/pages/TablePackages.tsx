@@ -1,6 +1,6 @@
 import type { Package, VulnCounts } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import TableGeneric from "../components/TableGeneric";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
@@ -16,6 +16,7 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import { useLocalStorageState } from '../handlers/localStorage';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
+import type { AgentViewContext } from '../types/agent';
 
 type Props = {
     packages: Package[];
@@ -24,6 +25,7 @@ type Props = {
     onLoadOutdatedPackages?: () => Promise<Package[]>;
     outdatedScopeKey?: string;
     preferenceScopeKey?: string;
+    onAgentContextChange?: (context: AgentViewContext) => void;
 };
 
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
@@ -44,10 +46,19 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 const emptyVulnerabilities: Vulnerability[] = [];
 
-function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey, preferenceScopeKey = 'unscoped' }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey, preferenceScopeKey = 'unscoped', onAgentContextChange }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const preferenceKey = `vulnscout.tables.packages.${encodeURIComponent(preferenceScopeKey)}`;
     const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
+    const [agentPackageIds, setAgentPackageIds] = useState<string[]>([]);
+    const updateAgentPackages = useCallback((rows: Package[]) => {
+        const ids = rows.map(pkg => pkg.id);
+        setAgentPackageIds(previous => previous.length === ids.length
+            && previous.every((id, index) => id === ids[index]) ? previous : ids);
+    }, []);
+    useEffect(() => {
+        onAgentContextChange?.({ visiblePackageIds: agentPackageIds, search });
+    }, [agentPackageIds, search, onAgentContextChange]);
     const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
     const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
     const [selectedSbomDocs, setSelectedSbomDocs] = useLocalStorageState<string[]>(`${preferenceKey}.sbomDocuments`, []);
@@ -700,7 +711,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         </div>
 
         <div ref={tableRef}>
-            <TableGeneric persistenceKey={preferenceKey} fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+            <TableGeneric persistenceKey={preferenceKey} fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} onFilteredDataChange={updateAgentPackages} />
         </div>
     </>);
 }

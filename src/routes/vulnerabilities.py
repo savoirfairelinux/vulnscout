@@ -1036,6 +1036,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query variant_id uuid optional Apply variant-scoped CVSS and effort overrides.
+        query agent_scoped string optional When '1', require active variant membership and return scoped packages.
         response 200 JsonObject Vulnerability payload.
         response 404 Error Vulnerability not found.
         """
@@ -1053,6 +1054,40 @@ def init_app(app: Flask) -> None:
                 return err
             if variant_uuid is None:
                 return {"error": "Internal error"}, 500
+            if request.args.get("agent_scoped") == "1":
+                active_ids = active_scan_ids_for_variant(variant_uuid)
+                package_ids = active_package_ids_for_scans(active_ids)
+                package_variant = aliased(Package)
+                package_match = db.and_(
+                    package_variant.name == Package.name,
+                    package_variant.version == Package.version,
+                )
+                package_query = (
+                    db.select(package_variant.name, package_variant.version, package_variant.supplier)
+                    .join(Package, package_match)
+                    .join(Finding, Finding.package_id == Package.id)
+                    .join(Observation, Observation.finding_id == Finding.id)
+                    .join(Scan, Scan.id == Observation.scan_id)
+                    .outerjoin(SBOMPackage, SBOMPackage.package_id == package_variant.id)
+                    .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+                    .where(Finding.vulnerability_id == record.id, Observation.scan_id.in_(active_ids))
+                    .where(db.or_(SBOMDocument.scan_id.in_(active_ids), package_variant.id == Package.id))
+                    .distinct()
+                )
+                package_filter = _sbom_pkg_filter(package_ids)
+                if package_filter is not None:
+                    package_query = package_query.where(package_filter)
+                package_rows = db.session.execute(package_query).all()
+                if not package_rows:
+                    return {"error": "Vulnerability is outside the current variant scope."}, 404
+                response["packages"] = sorted({
+                    f"{name}@{version}::{supplier}" if supplier else f"{name}@{version}"
+                    for name, version, supplier in package_rows
+                })
+                response["packages_current"] = response["packages"]
+                response["packages_current_by_variant"] = {str(variant_uuid): response["packages"]}
+                _populate_found_by([record], variant_uuid, active_scan_ids=active_ids)
+                response["found_by"] = list(record.found_by or [])
             overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
             text_variant_ids = [variant_uuid]

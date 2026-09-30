@@ -30,8 +30,8 @@ function navLiClass({ isActive }: { isActive: boolean }) {
 
 function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue, isAgentOpen, onToggleAgent }: Readonly<Props>) {
   return (
-  <nav aria-label="Main navigation" className="overflow-x-auto">
-    <ul className={["flex min-w-max flex-row font-bold items-stretch", bgColor].join(' ')}>
+  <nav aria-label="Main navigation" className={`flex ${bgColor}`}>
+    <ul className="flex min-w-0 flex-1 flex-row items-stretch overflow-x-auto font-bold [&>li]:shrink-0">
       {/* === VulnScout (Logo + text) === */}
       <li>
         <NavLink
@@ -136,12 +136,6 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
       {/* Spacer */}
       <li className="grow"></li>
 
-      <li className={[bgHoverColor, isAgentOpen && bgActiveColor].join(' ')}>
-        <button type="button" onClick={onToggleAgent} aria-label="Agent chat" aria-expanded={isAgentOpen} title="Agent chat" className="flex items-center h-full px-4 py-2">
-          <FontAwesomeIcon icon={faCommentDots} className="mr-2" />Agent
-        </button>
-      </li>
-
       {trackedScanCount > 0 && (
         <li className="flex items-stretch">
           <button
@@ -182,6 +176,9 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
       </li>
 
     </ul>
+    <button type="button" onClick={onToggleAgent} aria-label="Agent chat" aria-expanded={isAgentOpen} aria-controls="agent-panel" title="Agent chat" className={`flex shrink-0 items-center gap-2 border-l border-white/15 px-4 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white ${bgHoverColor} ${isAgentOpen ? bgActiveColor : ''}`}>
+      <FontAwesomeIcon icon={faCommentDots} /> <span className="hidden sm:inline">Agent</span>
+    </button>
   </nav>
   );
 }
