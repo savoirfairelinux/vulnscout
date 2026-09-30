@@ -23,6 +23,7 @@ import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
 import AIContext from './AIContext';
+import AgentChat from '../components/AgentChat';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
@@ -87,6 +88,7 @@ function Explorer() {
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
+    const [agentOpen, setAgentOpen] = useState(false);
     const [setupRequirement, setSetupRequirement] = useState<
         { kind: 'project' } | { kind: 'variant'; projectId: string } | { kind: 'error' } | null
     >(null);
@@ -449,11 +451,13 @@ function Explorer() {
                     finishedScanCount={finishedScanCount}
                     activeScanCount={activeScanCount}
                     onOpenOperationQueue={() => setOperationQueueOpen(true)}
+                    isAgentOpen={agentOpen}
+                    onToggleAgent={() => setAgentOpen(open => !open)}
                 />
             </header>
             <OperationQueueModal isOpen={operationQueueOpen} onClose={() => setOperationQueueOpen(false)} />
             <ModalShell
-                isOpen={tab === 'metrics' && setupRequirement !== null}
+                isOpen={!agentOpen && tab === 'metrics' && setupRequirement !== null}
                 title={setupRequirement?.kind === 'project'
                     ? 'Add your first project'
                     : setupRequirement?.kind === 'variant'
@@ -470,7 +474,14 @@ function Explorer() {
                             ? 'VulnScout needs a variant before it can display metrics for your project.'
                             : 'VulnScout could not load the project list. Check the connection and try again.'}
                 </p>
-                <div className="mt-5 flex justify-end">
+                <div className="mt-5 flex justify-end gap-2">
+                    <button
+                        type="button"
+                        onClick={() => { setSetupRequirement(null); setAgentOpen(true); }}
+                        className="rounded-md border border-sky-700 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-neutral-800"
+                    >
+                        Ask agent
+                    </button>
                     <button
                         type="button"
                         onClick={() => {
@@ -495,7 +506,8 @@ function Explorer() {
                 </div>
             </ModalShell>
 
-            <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex flex-1 min-h-0">
+            <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 min-w-0 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">
                 <MessageBanner
                     type={bannerType}
@@ -599,6 +611,10 @@ function Explorer() {
                 </Routes>
             </div>
             </main>
+            {agentOpen && <aside aria-label="Agent chat" className="fixed inset-0 z-[110] w-full border-l border-neutral-700 bg-neutral-950 text-neutral-100 md:w-1/3 md:min-w-[320px] md:shrink-0 md:static">
+                <AgentChat onClose={() => setAgentOpen(false)} />
+            </aside>}
+            </div>
         </div>
     )
 }

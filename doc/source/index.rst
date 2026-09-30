@@ -12,6 +12,7 @@ VulnScout Documentation
    interactive-mode
    ai-assessments
    custom-data-format
+   agent-chat
    templates
    ci_conditions
    api
