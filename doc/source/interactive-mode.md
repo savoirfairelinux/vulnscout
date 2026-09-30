@@ -330,10 +330,11 @@ The columns include:
 - **Notes**: free-text status notes attached to the assessment.
 - **Workaround**: any documented workaround.
 - **Assessment Date**: the timestamp of the most recent assessment in the group.
+- **AI review**: a second opinion on each target of a user-authored assessment. A single target shows ✓ when the review agrees, ⚠ when it differs, ⚠ stale when the assessment was edited since the review, or — when it has not been reviewed. Multi-target rows show counts for each state; hover for a breakdown. Open the vulnerability detail modal to read each target's review and rationale.
 
 ### Search and Filters
 
-The toolbar mirrors the vulnerability table's search bar. Filters are available for **Status** and **Justification**, and a **Reset Filters** button clears everything back to defaults.
+The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state. A **Reset Filters** button clears everything back to defaults. See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
 
 ### Import and Export
 
