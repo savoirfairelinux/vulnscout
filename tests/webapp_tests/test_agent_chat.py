@@ -60,6 +60,7 @@ def test_message_requires_text_and_configured_mcp(client):
 def test_new_conversation_does_not_clear_authentication(client):
     result = client.delete("/api/agent/conversation").get_json()
     assert result["messages"] == []
+    assert result["usage"]["cost"] is None
 
 
 def test_device_login_without_client_id(client, monkeypatch):
@@ -96,3 +97,15 @@ def test_status_uses_real_copilot_runtime(client):
     assert response.get_json()["token_connected"] is False
     assert response.get_json()["messages"] == []
     assert response.headers["Set-Cookie"].startswith("vulnscout_agent=")
+
+
+def test_models_use_signed_in_account(client):
+    response = client.get("/api/agent/models")
+    assert response.status_code == 200
+    assert any(model["id"] == "auto" for model in response.get_json()["models"])
+
+
+def test_selected_model_persists_without_sending(client):
+    assert client.post("/api/agent/model", json={"model": "nonexistent-model"}).status_code == 400
+    assert client.post("/api/agent/model", json={"model": "auto"}).get_json()["model"] == "auto"
+    assert client.get("/api/agent").get_json()["model"] == "auto"

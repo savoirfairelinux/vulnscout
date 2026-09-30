@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowUp, faArrowUpRightFromSquare, faCircleNotch, faRobot, faTrashCan, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faArrowUp, faArrowUpRightFromSquare, faCircleNotch, faPlus, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 type Message = { role: 'user' | 'assistant'; content: string };
-type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; messages: Message[] };
+type Usage = { cost: number | null; input_tokens: number | null; output_tokens: number | null };
+type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; messages: Message[]; model: string; usage: Usage };
 type DeviceCode = { user_code: string; verification_uri: string; interval: number };
 type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; login?: string | null };
+type ModelChoice = { id: string; name: string };
+const emptyUsage: Usage = { cost: null, input_tokens: null, output_tokens: null };
 
 async function agentRequest<T>(path: string, options?: RequestInit): Promise<T> {
     const response = await fetch(`/api/agent${path}`, {
@@ -27,17 +30,36 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
     const [device, setDevice] = useState<DeviceCode | null>(null);
     const [allowWrites, setAllowWrites] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [modelBusy, setModelBusy] = useState(false);
+    const [models, setModels] = useState<ModelChoice[]>([]);
+    const [selectedModel, setSelectedModel] = useState('auto');
+    const [neverAsk, setNeverAsk] = useState(false);
+    const confirmation = useRef<HTMLDialogElement>(null);
     const bottom = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         let active = true;
         agentRequest<AgentState>('').then(result => {
-            if (active) setState(result);
+            if (active) {
+                setState(result);
+                setSelectedModel(result.model);
+            }
         }).catch(reason => {
             if (active) setError(String(reason));
         });
         return () => { active = false; };
     }, []);
+
+    useEffect(() => {
+        if (!state?.authenticated) return;
+        let active = true;
+        agentRequest<{ models: ModelChoice[] }>('/models').then(result => {
+            if (active) setModels(result.models);
+        }).catch(reason => {
+            if (active) setError(String(reason));
+        });
+        return () => { active = false; };
+    }, [state?.authenticated, state?.token_connected]);
 
     useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [state?.messages.length, busy]);
 
@@ -55,7 +77,8 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
                     timer = window.setTimeout(() => void poll(), interval * 1000);
                     return;
                 }
-                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, messages: [] });
+                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, messages: [], model: 'auto', usage: emptyUsage });
+                setSelectedModel('auto');
                 setDevice(null);
             } catch (reason) {
                 if (!active) return;
@@ -80,15 +103,34 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
     }
 
     async function reset() {
+        if (busy || modelBusy) return;
         setBusy(true);
         setError('');
         try {
-            await agentRequest('/conversation', { method: 'DELETE' });
-            setState(previous => previous && { ...previous, messages: [] });
+            const result = await agentRequest<{ usage: Usage }>('/conversation', { method: 'DELETE' });
+            setState(previous => previous && { ...previous, messages: [], usage: result.usage });
+            setDraft('');
+            setAllowWrites(false);
         } catch (reason) {
             setError(String(reason));
         } finally {
             setBusy(false);
+        }
+    }
+
+    async function selectModel(model: string) {
+        const previous = selectedModel;
+        setSelectedModel(model);
+        setModelBusy(true);
+        setError('');
+        try {
+            await agentRequest('/model', { method: 'POST', body: JSON.stringify({ model }) });
+            setState(current => current && { ...current, model });
+        } catch (reason) {
+            setSelectedModel(previous);
+            setError(String(reason));
+        } finally {
+            setModelBusy(false);
         }
     }
 
@@ -102,13 +144,13 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
         const writes = allowWrites;
         setAllowWrites(false);
         try {
-            const result = await agentRequest<{ reply: string }>('/messages', {
-                method: 'POST', body: JSON.stringify({ message, allow_writes: writes }),
+            const result = await agentRequest<{ reply: string; model: string; usage: Usage }>('/messages', {
+                method: 'POST', body: JSON.stringify({ message, allow_writes: writes, model: selectedModel }),
             });
             setState(previous => previous && { ...previous, messages: [
                 ...previous.messages, { role: 'user', content: message },
                 { role: 'assistant', content: result.reply },
-            ] });
+            ], model: result.model, usage: result.usage });
         } catch (reason) {
             setDraft(message);
             setError(String(reason));
@@ -125,15 +167,53 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
     }
 
     return <div className="flex h-full min-h-0 flex-col font-sans">
-        <header className="flex h-16 shrink-0 items-center gap-3 border-b border-neutral-800 px-4">
-            <span className="flex h-8 w-8 items-center justify-center rounded bg-cyan-700 text-white"><FontAwesomeIcon icon={faRobot} /></span>
-            <div className="min-w-0 flex-1 leading-tight">
-                <h2 className="text-sm font-bold">VulnScout Agent</h2>
-                <span className="text-xs text-neutral-400">{state?.authenticated ? `Connected${state.login ? ` as ${state.login}` : ''}` : 'Not connected'}</span>
-            </div>
-            <button type="button" title="Clear chat" aria-label="Clear chat" onClick={() => void reset()} disabled={busy || !state} className="flex h-9 w-9 items-center justify-center rounded hover:bg-neutral-800 disabled:opacity-40"><FontAwesomeIcon icon={faTrashCan} /></button>
+        <header className="flex h-12 shrink-0 items-center justify-end gap-3 border-b border-neutral-800 px-4">
+            <button type="button" title="New conversation" aria-label="New conversation" onClick={() => {
+                let skipConfirmation = neverAsk;
+                try { skipConfirmation = localStorage.getItem('vulnscout.agent.skipDiscardConfirmation') === 'true'; } catch { skipConfirmation = neverAsk; }
+                if (skipConfirmation) {
+                    void reset();
+                } else {
+                    setNeverAsk(false);
+                    confirmation.current?.showModal();
+                }
+            }} disabled={busy || modelBusy || !state} className="flex h-9 w-9 items-center justify-center rounded hover:bg-neutral-800 disabled:opacity-40"><FontAwesomeIcon icon={faPlus} /></button>
             <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded hover:bg-neutral-800"><FontAwesomeIcon icon={faXmark} /></button>
         </header>
+        <dialog ref={confirmation} aria-labelledby="agent-discard-title" aria-describedby="agent-discard-description" className="w-[calc(100%-2rem)] max-w-sm rounded border border-neutral-700 bg-neutral-900 p-5 text-neutral-100 backdrop:bg-black/60" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                setNeverAsk(false);
+                confirmation.current?.close();
+            }
+        }}>
+            <h2 id="agent-discard-title" className="text-base font-semibold">New conversation?</h2>
+            <p id="agent-discard-description" className="mt-3 text-sm">This conversation will be discarded forever. This cannot be undone.</p>
+            <label className="mt-4 flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={neverAsk} onChange={event => setNeverAsk(event.target.checked)} className="accent-cyan-500" />
+                Never ask again
+            </label>
+            <div className="mt-5 flex justify-end gap-3">
+                <button type="button" autoFocus onClick={() => { setNeverAsk(false); confirmation.current?.close(); }} className="rounded border border-neutral-600 px-3 py-2 text-sm hover:bg-neutral-800">Cancel</button>
+                <button type="button" onClick={() => {
+                    try { localStorage.setItem('vulnscout.agent.skipDiscardConfirmation', String(neverAsk)); } catch { setNeverAsk(neverAsk); }
+                    confirmation.current?.close();
+                    void reset();
+                }} className="rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:bg-cyan-600">Confirm</button>
+            </div>
+        </dialog>
+
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-neutral-800 bg-neutral-900 px-4 py-2 text-xs">
+            <label className="flex min-w-0 items-center gap-2 text-neutral-300">Model
+                <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || !models.length} className="max-w-[170px] border border-neutral-600 bg-neutral-950 px-2 py-1 text-neutral-100 disabled:opacity-50">
+                    {!models.length && <option value={selectedModel}>Loading...</option>}
+                    {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+                </select>
+            </label>
+            <span title="Sum of cost values reported by the Copilot SDK for this conversation; no currency inferred" className="tabular-nums text-neutral-300">{state?.usage?.cost == null ? 'Cost not reported' : `SDK cost ${state.usage.cost.toFixed(4)}`}</span>
+            {state?.usage?.input_tokens != null && <span className="text-neutral-400">{state.usage.input_tokens.toLocaleString()} in · {(state.usage.output_tokens ?? 0).toLocaleString()} out tokens</span>}
+        </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5" role="log" aria-label="Agent conversation" aria-live="polite">
             {!state && !error && <p role="status" className="text-sm text-neutral-400">Connecting to agent...</p>}
@@ -188,8 +268,8 @@ function AgentChat({ onClose }: Readonly<{ onClose: () => void }>) {
         <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-800 bg-neutral-900 p-4">
             <label htmlFor="agent-prompt" className="sr-only">Message the agent</label>
             <div className="flex items-end gap-2 border border-neutral-600 bg-neutral-950 p-2 focus-within:border-cyan-500">
-                <textarea id="agent-prompt" rows={2} maxLength={8000} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!state?.authenticated || !state.configured || busy} placeholder="Ask the agent..." className="min-w-0 flex-1 resize-none bg-transparent text-sm text-white outline-none placeholder:text-neutral-500 disabled:opacity-40" />
-                <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || !state?.authenticated || !state.configured} className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-cyan-700 hover:bg-cyan-600 disabled:bg-neutral-700 disabled:text-neutral-500"><FontAwesomeIcon icon={faArrowUp} /></button>
+                <textarea id="agent-prompt" rows={2} maxLength={8000} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!state?.authenticated || !state.configured || busy || modelBusy || !models.length} placeholder="Ask the agent..." className="min-w-0 flex-1 resize-none bg-transparent text-sm text-white outline-none placeholder:text-neutral-500 disabled:opacity-40" />
+                <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !state?.authenticated || !state.configured || !models.length} className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-cyan-700 hover:bg-cyan-600 disabled:bg-neutral-700 disabled:text-neutral-500"><FontAwesomeIcon icon={faArrowUp} /></button>
             </div>
             <label className="flex cursor-pointer items-start gap-2 text-xs text-neutral-300">
                 <input type="checkbox" checked={allowWrites} onChange={event => setAllowWrites(event.target.checked)} disabled={busy} className="mt-0.5 accent-cyan-500" />
