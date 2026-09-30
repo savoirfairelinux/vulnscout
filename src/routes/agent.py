@@ -1,14 +1,17 @@
 """Local, opt-in Copilot chat backed by the VulnScout stdio MCP server."""
 
 import asyncio
+import json
 import os
 import secrets
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -24,13 +27,20 @@ WRITE_TOOLS = (
     "update_variant_context", "write_assessment_review",
 )
 COOKIE = "vulnscout_agent"
+GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+GITHUB_DEVICE_URL = "https://github.com/login/device/code"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_VERIFY_URL = "https://github.com/login/device"
 agent_blueprint = Blueprint("agent", __name__)
 
 
 @dataclass
 class Conversation:
+    token: str | None = None
     session_id: str | None = None
     messages: list[dict[str, str]] = field(default_factory=list)
+    device_code: str | None = None
+    device_expires: float = 0.0
     last_used: float = field(default_factory=time.monotonic)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -83,21 +93,46 @@ def _mcp_path():
     return Path(value).expanduser().resolve() if value else None
 
 
-def _sdk_client():
+def _github_form(url, fields):
+    github_request = urllib.request.Request(url, data=urlencode(fields).encode(),
+                                            headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(github_request, timeout=15) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        return json.loads(error.read() or b"{}")
+
+
+def _sdk_client(token):
     from copilot import CopilotClient
 
-    return CopilotClient(use_logged_in_user=True,
+    return CopilotClient(github_token=token, use_logged_in_user=token is None,
                          working_directory=str(Path(__file__).resolve().parents[2]))
 
 
-async def _auth_status():
-    async with _sdk_client() as client:
+async def _auth_status(token):
+    async with _sdk_client(token) as client:
         status = await client.get_auth_status()
         return {"authenticated": status.isAuthenticated, "login": status.login}
 
 
-async def _delete_session(session_id):
-    async with _sdk_client() as client:
+async def _token_status(token):
+    async with _sdk_client(token) as client:
+        status = await client.get_auth_status()
+        auth = {"authenticated": status.isAuthenticated, "login": status.login}
+        if status.isAuthenticated:
+            try:
+                await client.list_models()
+            except Exception as error:
+                # The SDK surfaces Copilot's HTTP denial only inside the JSON-RPC message.
+                if '"status":401' not in str(error) and '"status":403' not in str(error):
+                    raise
+                auth["authenticated"] = False
+        return auth
+
+
+async def _delete_session(token, session_id):
+    async with _sdk_client(token) as client:
         await client.delete_session(session_id)
 
 
@@ -105,7 +140,7 @@ async def _reply(conversation, message, allow_writes, path):
     from copilot.session import PermissionHandler
 
     tools = READ_TOOLS + WRITE_TOOLS if allow_writes else READ_TOOLS
-    async with _sdk_client() as client:
+    async with _sdk_client(conversation.token) as client:
         options = {
             "on_permission_request": PermissionHandler.approve_all,
             "available_tools": [f"mcp:vulnscout-{tool}" for tool in tools],
@@ -146,11 +181,93 @@ def agent_status():
     path = _mcp_path()
     configured = path is not None and path.is_file()
     try:
-        auth = asyncio.run(_auth_status())
+        auth = asyncio.run(_auth_status(conversation.token))
     except (ImportError, OSError, RuntimeError, ValueError):
         auth = {"authenticated": False, "login": None}
     return _response({**auth, "configured": configured,
+                      "device_login": True,
+                      "token_connected": conversation.token is not None,
                       "messages": conversation.messages}, key)
+
+
+@agent_blueprint.route("/api/agent/auth", methods=["POST", "DELETE"])
+def agent_auth():
+    if error := _access_error():
+        return error
+    key, conversation = _conversation()
+    if request.method == "DELETE":
+        with conversation.lock:
+            if conversation.session_id:
+                try:
+                    asyncio.run(_delete_session(conversation.token, conversation.session_id))
+                except Exception:
+                    current_app.logger.exception("Could not delete agent session")
+                    return _response({"error": "Could not delete the stored conversation."}, key, 503)
+            conversation.token = None
+            conversation.session_id = None
+            conversation.device_code = None
+            conversation.messages.clear()
+        return _response({"authenticated": False}, key)
+    client_id = os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID
+    try:
+        result = _github_form(GITHUB_DEVICE_URL, {"client_id": client_id, "scope": "read:user"})
+        interval = int(result.get("interval", 5))
+        expires_in = int(result.get("expires_in", 900))
+    except (OSError, ValueError):
+        current_app.logger.exception("Could not start GitHub device sign-in")
+        return _response({"error": "Could not reach GitHub."}, key, 503)
+    if not isinstance(result.get("device_code"), str) or not isinstance(result.get("user_code"), str):
+        return _response({"error": (
+            "GitHub rejected the sign-in request. Check VULNSCOUT_AGENT_GITHUB_CLIENT_ID and that "
+            "device flow is enabled for the OAuth App."
+        )}, key, 503)
+    verification_uri = result.get("verification_uri")
+    if not isinstance(verification_uri, str) or not verification_uri.startswith("https://github.com/"):
+        verification_uri = GITHUB_VERIFY_URL
+    with conversation.lock:
+        conversation.device_code = result["device_code"]
+        conversation.device_expires = time.monotonic() + expires_in
+    return _response({"user_code": result["user_code"], "verification_uri": verification_uri,
+                      "interval": interval}, key)
+
+
+@agent_blueprint.route("/api/agent/auth/poll", methods=["POST"])
+def agent_auth_poll():
+    if error := _access_error():
+        return error
+    key, conversation = _conversation()
+    with conversation.lock:
+        if not conversation.device_code or time.monotonic() > conversation.device_expires:
+            conversation.device_code = None
+            return _response({"error": "The GitHub sign-in code expired. Start again."}, key, 410)
+        try:
+            result = _github_form(GITHUB_TOKEN_URL, {
+                "client_id": os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID,
+                "device_code": conversation.device_code,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            })
+        except (OSError, ValueError):
+            current_app.logger.exception("Could not poll GitHub device sign-in")
+            return _response({"error": "Could not reach GitHub."}, key, 503)
+        if result.get("error") in ("authorization_pending", "slow_down"):
+            return _response({"status": "pending", "interval": result.get("interval")}, key)
+        conversation.device_code = None
+        token = result.get("access_token")
+        if not isinstance(token, str):
+            message = {"access_denied": "GitHub sign-in was cancelled.",
+                       "expired_token": "The GitHub sign-in code expired. Start again."}
+            return _response({"error": message.get(result.get("error"), "GitHub sign-in failed.")}, key, 401)
+        try:
+            auth = asyncio.run(_token_status(token))
+        except Exception:
+            current_app.logger.exception("Could not verify agent sign-in")
+            return _response({"error": "Could not verify Copilot access."}, key, 503)
+        if not auth["authenticated"]:
+            return _response({"error": "This GitHub account does not have Copilot access."}, key, 401)
+        conversation.token = token
+        conversation.session_id = None
+        conversation.messages.clear()
+    return _response({"status": "connected", **auth}, key)
 
 
 @agent_blueprint.route("/api/agent/conversation", methods=["DELETE"])
@@ -161,7 +278,7 @@ def agent_reset():
     with conversation.lock:
         if conversation.session_id:
             try:
-                asyncio.run(_delete_session(conversation.session_id))
+                asyncio.run(_delete_session(conversation.token, conversation.session_id))
             except Exception:
                 current_app.logger.exception("Could not delete agent session")
                 return _response({"error": "Could not delete the stored conversation."}, key, 503)

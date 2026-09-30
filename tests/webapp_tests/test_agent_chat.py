@@ -62,10 +62,37 @@ def test_new_conversation_does_not_clear_authentication(client):
     assert result["messages"] == []
 
 
+def test_device_login_without_client_id(client, monkeypatch):
+    monkeypatch.delenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID", raising=False)
+    assert client.get("/api/agent").get_json()["device_login"] is True
+    assert client.post("/api/agent/auth/poll").status_code == 410
+    response = client.post("/api/agent/auth")
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["user_code"]
+    assert result["verification_uri"] == "https://github.com/login/device"
+    assert result["interval"] > 0
+    assert "device_code" not in result
+    assert "access_token" not in result
+    response = client.post("/api/agent/auth/poll")
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "pending"
+
+
+def test_device_login_reports_unknown_github_client(client, monkeypatch):
+    monkeypatch.setenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID", "Iv1.0000000000000000")
+    assert client.get("/api/agent").get_json()["device_login"] is True
+    response = client.post("/api/agent/auth")
+    assert response.status_code == 503
+    assert "device flow" in response.get_json()["error"]
+    assert client.get("/api/agent").get_json()["token_connected"] is False
+
+
 def test_status_uses_real_copilot_runtime(client):
     response = client.get("/api/agent")
     assert response.status_code == 200
     assert response.get_json()["configured"] is False
     assert isinstance(response.get_json()["authenticated"], bool)
+    assert response.get_json()["token_connected"] is False
     assert response.get_json()["messages"] == []
     assert response.headers["Set-Cookie"].startswith("vulnscout_agent=")
