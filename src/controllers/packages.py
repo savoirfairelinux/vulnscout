@@ -3,6 +3,8 @@
 
 import re
 
+from sqlalchemy.orm import joinedload
+
 from ..models import Package, Finding, SBOMDocument, SBOMPackage
 from ..helpers.verbose import verbose
 from ..extensions import db
@@ -88,7 +90,8 @@ class PackagesController:
         self._provisional_epoch_metadata = {}
         if doc is not None:
             for link in db.session.execute(
-                db.select(SBOMPackage).where(SBOMPackage.sbom_document_id == doc.id)
+                db.select(SBOMPackage).options(joinedload(SBOMPackage.package))
+                .where(SBOMPackage.sbom_document_id == doc.id)
             ).scalars():
                 pkg = link.package
                 self._document_packages.setdefault((pkg.name, pkg.supplier), []).append(pkg)

@@ -547,6 +547,44 @@ def test_controller_current_sbom_document_defaults_to_none(app):
     assert ctrl.current_sbom_document is None
 
 
+def test_controller_reprocesses_populated_document_in_one_select(app):
+    from sqlalchemy import event
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("reprocess-proj")
+    variant = Variant.create("reprocess-variant", project.id)
+    scan = Scan.create("sbom", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("sbom.json", "test", scan.id)
+    for name in ("first", "second", "third"):
+        package = Package.create(name, "1.0.0")
+        SBOMPackage.create(document.id, package.id)
+    _db.session.flush()
+    document_id = document.id
+    _db.session.expunge_all()
+    document = _db.session.get(SBOMDocument, document_id)
+    assert document is not None
+
+    statements = []
+
+    def count_select(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(_db.engine, "before_cursor_execute", count_select)
+    try:
+        controller = PackagesController()
+        controller.current_sbom_document = document
+    finally:
+        event.remove(_db.engine, "before_cursor_execute", count_select)
+
+    assert len(statements) == 1
+    assert {package.name for peers in controller._document_packages.values() for package in peers} == {
+        "first", "second", "third",
+    }
+
+
 def test_active_package_ids_for_scans_returns_empty_for_non_sbom_scan(app):
     from src.helpers.active_scans import active_package_ids_for_scans
 
