@@ -1570,6 +1570,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         body JsonObject optional Assessment update payload.
+        body allowed_variant_ids uuid[] optional Reject if any current target is outside these variants.
         response 200 JsonObject Updated assessment payload.
         response 400 Error Invalid assessment update.
         response 404 Error Assessment not found.
@@ -1578,9 +1579,32 @@ def init_app(app: Flask) -> None:
         if not payload_data:
             return {"error": "Invalid request data"}, 400
 
-        existing = DBAssessment.get_by_id(assessment_id)
+        allowed_ids = None
+        if "allowed_variant_ids" in payload_data:
+            raw_ids = payload_data["allowed_variant_ids"]
+            if not isinstance(raw_ids, list) or not raw_ids or any(not isinstance(value, str) for value in raw_ids):
+                return {"error": "Invalid allowed_variant_ids"}, 400
+            try:
+                allowed_ids = {UUID(value) for value in raw_ids}
+                assessment_uuid = UUID(assessment_id)
+            except ValueError:
+                return {"error": "Invalid allowed_variant_ids or assessment ID"}, 400
+            existing = db.session.execute(
+                db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
+            ).scalar_one_or_none()
+        else:
+            existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
+        if allowed_ids is not None:
+            current_ids = db.session.execute(
+                db.select(AssessmentTarget.variant_id)
+                .where(AssessmentTarget.assessment_id == existing.id).with_for_update()
+            ).scalars().all()
+            if not current_ids or not set(current_ids) <= allowed_ids:
+                db.session.rollback()
+                return {"error": "Assessment targets changed or are outside the current agent scope."}, 409
+            db.session.expire(existing, ["target_rows"])
         if not existing.target_rows or any(
             find_valid_finding(
                 target.finding.package_id,

@@ -13,8 +13,12 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
+from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
+
+from ..models.project import Project
+from ..models.variant import Variant
 
 
 READ_TOOLS = (
@@ -40,11 +44,14 @@ agent_blueprint = Blueprint("agent", __name__)
 class Conversation:
     token: str | None = None
     session_id: str | None = None
+    session_scope: str | None = None
+    session_writes: bool = False
     model: str = "auto"
     usage: dict = field(default_factory=lambda: {"cost": None, "input_tokens": None, "output_tokens": None})
     messages: list[dict[str, str]] = field(default_factory=list)
     device_code: str | None = None
     device_expires: float = 0.0
+    device_interval: int = 5
     last_used: float = field(default_factory=time.monotonic)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -107,6 +114,11 @@ def _github_form(url, fields):
             return json.loads(response.read())
     except urllib.error.HTTPError as error:
         return json.loads(error.read() or b"{}")
+
+
+def _device_poll_interval(current, result):
+    return max(current + (5 if result.get("error") == "slow_down" else 0),
+               int(result.get("interval") or 0))
 
 
 def _sdk_client(token):
@@ -245,6 +257,35 @@ def _validated_context(value):
     return context
 
 
+def _scope_for_context(context):
+    ai_page = context is not None and context.get("page") == "ai"
+    view = (context.get("view") or {}) if ai_page else {}
+    project_id = view.get("selectedProjectId") if ai_page else context.get("projectId") if context else None
+    try:
+        project = Project.get_by_id(UUID(project_id)) if project_id else None
+    except ValueError as exc:
+        raise ValueError("Invalid project scope.") from exc
+    if project_id and project is None:
+        raise ValueError("Project not found.")
+    projects = [project] if project else [] if ai_page else Project.get_all()
+    allowed = {str(variant.id) for item in projects for variant in Variant.get_by_project(item.id)}
+    selected = []
+    if ai_page:
+        selected = [view["selectedVariantId"]] if view.get("selectedVariantId") else []
+    elif context:
+        selected = [value for value in (context.get("variantId"), context.get("baseVariantId")) if value]
+        selected.extend(context.get("variantIds") or [])
+    try:
+        selected_ids = {str(UUID(value)) for value in selected}
+    except ValueError as exc:
+        raise ValueError("Invalid variant scope.") from exc
+    if selected_ids and (not project or not selected_ids <= allowed):
+        raise ValueError("Selected variants do not belong to the current project.")
+    variants = sorted(selected_ids) if selected_ids else sorted(allowed)
+    return json.dumps({"project_ids": [str(item.id) for item in projects], "variant_ids": variants},
+                      separators=(",", ":"))
+
+
 def _publish_event(event, publish):
     from copilot.session_events import AssistantMessageDeltaData, ToolExecutionStartData, ToolExecutionCompleteData
 
@@ -261,7 +302,7 @@ def _publish_event(event, publish):
         publish({"type": "tool_end", "id": event_data.tool_call_id, "success": event_data.success})
 
 
-async def _reply(conversation, message, allow_writes, path, model, publish=None):
+async def _reply(conversation, message, allow_writes, path, model, scope, publish=None):
     from copilot.session import PermissionHandler
 
     tools = READ_TOOLS + WRITE_TOOLS if allow_writes else READ_TOOLS
@@ -277,8 +318,11 @@ async def _reply(conversation, message, allow_writes, path, model, publish=None)
             "mcp_servers": {"vulnscout": {
                 "type": "local", "command": sys.executable,
                 "args": [str(path)], "cwd": str(path.parent),
-                "env": {"VULNSCOUT_BASE_URL": os.getenv("VULNSCOUT_AGENT_API_URL", "http://localhost:7275")},
-                "tools": list(tools),
+                "env": {
+                    "VULNSCOUT_BASE_URL": os.getenv("VULNSCOUT_AGENT_API_URL", "http://localhost:7275"),
+                    "VULNSCOUT_AGENT_SCOPE": scope,
+                },
+                "tools": list(READ_TOOLS + WRITE_TOOLS),
             }},
             "system_message": {"mode": "append", "content": (
                 "You are the VulnScout agent. Use only VulnScout MCP tools for facts and actions. "
@@ -289,7 +333,10 @@ async def _reply(conversation, message, allow_writes, path, model, publish=None)
             "enable_skills": False,
             "enable_file_hooks": False,
         }
-        if conversation.session_id:
+        if (
+            conversation.session_id
+            and conversation.session_scope == scope
+        ):
             session = await client.resume_session(conversation.session_id, **options)
         else:
             session = await client.create_session(**options)
@@ -305,6 +352,8 @@ async def _reply(conversation, message, allow_writes, path, model, publish=None)
             if event is None or not event.data.content:
                 raise RuntimeError("The agent did not return a response.")
             conversation.session_id = session.session_id
+            conversation.session_scope = scope
+            conversation.session_writes = allow_writes
             usage = _add_usage(conversation.usage, _session_usage(live_events))
             return event.data.content, usage
         finally:
@@ -336,19 +385,24 @@ def agent_auth():
     key, conversation = _conversation()
     if request.method == "DELETE":
         with conversation.lock:
+            cleanup_error = None
             if conversation.session_id:
                 try:
                     asyncio.run(_delete_session(conversation.token, conversation.session_id))
                 except Exception:
                     current_app.logger.exception("Could not delete agent session")
-                    return _response({"error": "Could not delete the stored conversation."}, key, 503)
+                    cleanup_error = "Could not delete the stored conversation on the Copilot server."
             conversation.token = None
             conversation.session_id = None
+            conversation.session_scope = None
+            conversation.session_writes = False
             conversation.device_code = None
+            conversation.device_expires = 0.0
+            conversation.device_interval = 5
             conversation.messages.clear()
             conversation.model = "auto"
             conversation.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
-        return _response({"authenticated": False}, key)
+        return _response({"authenticated": False, "cleanup_error": cleanup_error}, key)
     client_id = os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID
     try:
         result = _github_form(GITHUB_DEVICE_URL, {"client_id": client_id, "scope": "read:user"})
@@ -368,6 +422,7 @@ def agent_auth():
     with conversation.lock:
         conversation.device_code = result["device_code"]
         conversation.device_expires = time.monotonic() + expires_in
+        conversation.device_interval = interval
     return _response({"user_code": result["user_code"], "verification_uri": verification_uri,
                       "interval": interval}, key)
 
@@ -391,7 +446,8 @@ def agent_auth_poll():
             current_app.logger.exception("Could not poll GitHub device sign-in")
             return _response({"error": "Could not reach GitHub."}, key, 503)
         if result.get("error") in ("authorization_pending", "slow_down"):
-            return _response({"status": "pending", "interval": result.get("interval")}, key)
+            conversation.device_interval = _device_poll_interval(conversation.device_interval, result)
+            return _response({"status": "pending", "interval": conversation.device_interval}, key)
         conversation.device_code = None
         token = result.get("access_token")
         if not isinstance(token, str):
@@ -407,6 +463,8 @@ def agent_auth_poll():
             return _response({"error": "This GitHub account does not have Copilot access."}, key, 401)
         conversation.token = token
         conversation.session_id = None
+        conversation.session_scope = None
+        conversation.session_writes = False
         conversation.messages.clear()
         conversation.model = "auto"
         conversation.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
@@ -463,6 +521,8 @@ def agent_reset():
                 current_app.logger.exception("Could not delete agent session")
                 return _response({"error": "Could not delete the stored conversation."}, key, 503)
         conversation.session_id = None
+        conversation.session_scope = None
+        conversation.session_writes = False
         conversation.messages.clear()
         conversation.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
     return _response({"messages": [], "usage": conversation.usage}, key)
@@ -498,18 +558,23 @@ def agent_message():
         return _response({"error": (
             "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override."
         )}, key, 503)
+    try:
+        scope = _scope_for_context(context)
+    except ValueError as exc:
+        return _response({"error": str(exc)}, key, 400)
     if not conversation.lock.acquire(blocking=False):
         return _response({"error": "The agent is already responding."}, key, 409)
     if request.headers.get("Accept") == "application/x-ndjson":
         return _stream_reply(key, conversation, agent_prompt, user_message,
-                             data.get("allow_writes", False), path, model)
-    return _json_reply(key, conversation, agent_prompt, user_message, data.get("allow_writes", False), path, model)
+                             data.get("allow_writes", False), path, model, scope)
+    return _json_reply(key, conversation, agent_prompt, user_message,
+                       data.get("allow_writes", False), path, model, scope)
 
 
-def _json_reply(key, conversation, agent_prompt, user_message, allow_writes, path, model):
+def _json_reply(key, conversation, agent_prompt, user_message, allow_writes, path, model, scope):
     try:
         try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, allow_writes, path, model))
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, allow_writes, path, model, scope))
         except UnavailableModelError as exc:
             return _response({"error": str(exc)}, key, 400)
         except Exception:
@@ -542,7 +607,7 @@ def _stream_events(events, disconnected):
         disconnected.set()
 
 
-def _stream_reply(key, conversation, agent_prompt, user_message, allow_writes, path, model):
+def _stream_reply(key, conversation, agent_prompt, user_message, allow_writes, path, model, scope):
     events: queue.Queue = queue.Queue(maxsize=256)
     disconnected = threading.Event()
     logger = current_app.logger
@@ -557,7 +622,7 @@ def _stream_reply(key, conversation, agent_prompt, user_message, allow_writes, p
 
     def run():
         try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, allow_writes, path, model, publish))
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, allow_writes, path, model, scope, publish))
             conversation.messages.extend(({"role": "user", "content": user_message},
                                           {"role": "assistant", "content": reply}))
             conversation.model = model

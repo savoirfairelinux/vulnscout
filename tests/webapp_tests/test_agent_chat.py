@@ -16,9 +16,12 @@ def client(monkeypatch, tmp_path):
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
     from src.bin.webapp import create_app
+    from src.extensions import db
 
     app = create_app()
     app.config.update(TESTING=True, SCAN_FILE=str(scan_file))
+    with app.app_context():
+        db.create_all()
     return app.test_client()
 
 
@@ -121,6 +124,15 @@ def test_device_login_without_client_id(client, monkeypatch):
     assert response.get_json()["status"] == "pending"
 
 
+def test_device_poll_interval_increases_when_github_omits_interval():
+    from src.routes.agent import _device_poll_interval
+
+    assert _device_poll_interval(5, {"error": "authorization_pending"}) == 5
+    assert _device_poll_interval(5, {"error": "slow_down"}) == 10
+    assert _device_poll_interval(10, {"error": "slow_down", "interval": 9}) == 15
+    assert _device_poll_interval(15, {"error": "slow_down", "interval": 25}) == 25
+
+
 def test_device_login_reports_unknown_github_client(client, monkeypatch):
     monkeypatch.setenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID", "Iv1.0000000000000000")
     assert client.get("/api/agent").get_json()["device_login"] is True
@@ -209,6 +221,21 @@ def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
             assert {event["type"] for event in events} <= {"status", "heartbeat", "delta", "tool_start", "tool_end", "done"}
             assert status["messages"][-1]["content"] == events[-1]["reply"]
             assert status["usage"] == events[-1]["usage"]
+            from src.routes.agent import COOKIE, _conversations
+
+            session = _conversations[client.get_cookie(COOKIE).value]
+            previous_session_id = session.session_id
+            follow_up = client.post("/api/agent/messages", json={
+                "message": "Which vulnerability did we just discuss? Do not make changes.",
+                "allow_writes": True,
+            }, headers={"Accept": "application/x-ndjson"}, buffered=False)
+            try:
+                follow_up_events = [json.loads(chunk) for chunk in follow_up.response]
+                assert follow_up_events[-1]["type"] == "done", follow_up_events[-1]
+                assert session.session_id == previous_session_id
+                assert session.session_writes is True
+            finally:
+                follow_up.close()
         else:
             assert events[-1]["type"] == "error"
             assert "Agent request failed" in events[-1]["error"]
@@ -261,6 +288,161 @@ def test_context_retains_only_allowed_fields():
     assert _validated_context(None) is None
 
 
+def test_agent_scope_verifies_membership_in_backend(client, monkeypatch):
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.routes.agent import _scope_for_context
+
+    with client.application.app_context():
+        selected_project = Project.create("Selected")
+        other_project = Project.create("Other")
+        selected_variant = Variant.create("Selected variant", selected_project.id)
+        other_variant = Variant.create("Other variant", other_project.id)
+        scope = json.loads(_scope_for_context({"projectId": str(selected_project.id),
+                                              "variantId": str(selected_variant.id)}))
+        assert scope == {"project_ids": [str(selected_project.id)], "variant_ids": [str(selected_variant.id)]}
+        with pytest.raises(ValueError, match="do not belong"):
+            _scope_for_context({"projectId": str(selected_project.id), "variantId": str(other_variant.id)})
+
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+    response = client.post("/api/agent/messages", json={"message": "Review", "context": {
+        "page": "metrics", "projectId": str(selected_project.id), "variantId": str(other_variant.id),
+    }})
+    assert response.status_code == 400
+    assert "do not belong" in response.get_json()["error"]
+
+
+def test_ai_context_scope_uses_its_own_selection(client):
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.routes.agent import _scope_for_context
+
+    with client.application.app_context():
+        explorer = Project.create("Explorer")
+        ai_project = Project.create("AI Context")
+        explorer_variant = Variant.create("Explorer variant", explorer.id)
+        ai_variant = Variant.create("AI variant", ai_project.id)
+        context = {"page": "ai", "projectId": str(explorer.id), "variantId": str(explorer_variant.id),
+                   "view": {"selectedProjectId": str(ai_project.id), "selectedVariantId": str(ai_variant.id)}}
+        assert json.loads(_scope_for_context(context)) == {
+            "project_ids": [str(ai_project.id)], "variant_ids": [str(ai_variant.id)]}
+        context["view"]["selectedVariantId"] = str(explorer_variant.id)
+        with pytest.raises(ValueError, match="do not belong"):
+            _scope_for_context(context)
+        context["view"] = {"selectedProjectId": "", "selectedVariantId": ""}
+        assert json.loads(_scope_for_context(context)) == {"project_ids": [], "variant_ids": []}
+
+
+def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
+    from werkzeug.serving import make_server
+
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+    from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutError
+
+    with client.application.app_context():
+        project_a = Project.create("Project A")
+        project_b = Project.create("Project B")
+        variant_a = Variant.create("Chosen", project_a.id)
+        variant_other = Variant.create("Other", project_a.id)
+        variant_b = Variant.create("Foreign", project_b.id)
+        Vulnerability.create_record(id="CVE-2024-1234", description="Description", status="high")
+        db.session.commit()
+        findings = []
+        for variant, name in ((variant_a, "allowed"), (variant_other, "other"), (variant_b, "foreign")):
+            scan = Scan.create(name, variant.id)
+            package = Package.find_or_create(name, "1.0", [], [], "")
+            db.session.commit()
+            finding = Finding.get_or_create(package.id, "CVE-2024-1234")
+            Observation.create(finding.id, scan.id)
+            document = SBOMDocument.create(path=f"/sbom/{name}.json", source_name="cdx", scan_id=scan.id)
+            SBOMPackage.create(document.id, package.id)
+            findings.append(finding)
+        Vulnerability.create_record(id="CVE-2024-5678", description="Foreign only")
+        foreign_only = Finding.get_or_create(package.id, "CVE-2024-5678")
+        Observation.create(foreign_only.id, scan.id)
+        shared = Assessment.create(status="affected", origin="ai", targets=[
+            (variant_a.id, findings[0].id), (variant_other.id, findings[1].id),
+        ])
+        foreign = Assessment.create(status="affected", origin="ai", targets=[(variant_b.id, findings[2].id)])
+        scope = {"project_ids": [str(project_a.id)], "variant_ids": [str(variant_a.id)]}
+        shared_id, foreign_id = str(shared.id), str(foreign.id)
+        chosen_id, other_id, foreign_variant_id = str(variant_a.id), str(variant_other.id), str(variant_b.id)
+        project_id = str(project_a.id)
+
+    server = make_server("127.0.0.1", 0, client.application, threaded=True)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        agent_client = ScopedVulnScoutClient(f"http://127.0.0.1:{server.server_port}", scope)
+        assert [project["id"] for project in agent_client.list_projects()] == [project_id]
+        assert [variant["id"] for variant in agent_client.list_variants()] == [chosen_id]
+        assessments = agent_client.list_assessments_by_vuln("CVE-2024-1234")
+        assert [assessment["id"] for assessment in assessments] == [shared_id]
+        assert assessments[0]["variant_ids"] == [chosen_id]
+        assert assessments[0]["packages"] == ["allowed@1.0"]
+        assert agent_client.get_assessment(shared_id)["targets"][0]["variant_id"] == chosen_id
+        with pytest.raises(VulnScoutError, match="outside"):
+            agent_client.get_assessment(foreign_id)
+        with pytest.raises(VulnScoutError, match="outside"):
+            agent_client.update_assessment(shared_id, {"status": "fixed"})
+        with pytest.raises(VulnScoutError, match="outside"):
+            agent_client.write_assessment("CVE-2024-1234", {"targets": [
+                {"variant_id": other_id, "package": "other@1.0"}], "status": "affected"})
+        with pytest.raises(VulnScoutError, match="outside"):
+            agent_client.update_variant_context(foreign_variant_id, {})
+        with pytest.raises(VulnScoutError, match="entire project"):
+            agent_client.update_project_context(project_id, "changed")
+        vulnerability = agent_client.get_vulnerability_for_variant("CVE-2024-1234", chosen_id)
+        assert vulnerability["packages"] == ["allowed@1.0"]
+        assert "other@1.0" not in str(vulnerability)
+        assert "foreign@1.0" not in str(vulnerability)
+        with pytest.raises(VulnScoutError, match="outside the current variant scope"):
+            agent_client.get_vulnerability_for_variant("CVE-2024-5678", chosen_id)
+
+        with client.application.app_context():
+            extra = Variant.create("Another allowed variant", project_a.id)
+            chosen = Assessment.create(status="affected", origin="custom", targets=[
+                (variant_a.id, findings[0].id)])
+            Assessment.create(status="affected", origin="custom", targets=[
+                (variant_other.id, findings[1].id)])
+            extra_id, chosen_assessment_id = str(extra.id), str(chosen.id)
+        multi_client = ScopedVulnScoutClient(f"http://127.0.0.1:{server.server_port}", {
+            "project_ids": [project_id], "variant_ids": [chosen_id, extra_id],
+        })
+        assert [row["id"] for row in multi_client.list_custom_assessments({"limit": 1})] == [
+            chosen_assessment_id]
+
+        with client.application.app_context():
+            protected = Assessment.create(status="affected", origin="ai", targets=[
+                (variant_a.id, findings[0].id)])
+            protected_id = str(protected.id)
+        assert agent_client.update_assessment(protected_id, {"status": "fixed"})["assessment"]["status"] == "fixed"
+        from src.models.assessment_target import AssessmentTarget
+
+        with client.application.app_context():
+            db.session.add(AssessmentTarget(assessment_id=protected.id, variant_id=variant_other.id,
+                                            finding_id=findings[1].id))
+            db.session.commit()
+        response = client.patch(f"/api/assessments/{protected_id}", json={
+            "status": "affected", "allowed_variant_ids": [chosen_id],
+        })
+        assert response.status_code == 409
+        assert client.get(f"/api/assessments/{protected_id}").get_json()["status"] == "fixed"
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+
+
 @pytest.mark.parametrize("model", [None, "", "x" * 101, 42])
 def test_message_rejects_invalid_model(client, model):
     response = client.post("/api/agent/messages", json={"message": "Review", "model": model})
@@ -309,6 +491,24 @@ def test_reset_retains_identity_and_signout_clears_it(client):
     assert conversation.token is None
     assert conversation.device_code is None
     assert conversation.model == "auto"
+
+
+def test_signout_clears_local_identity_when_remote_session_is_unavailable(client):
+    from src.routes.agent import COOKIE, _conversations
+
+    client.delete("/api/agent/conversation")
+    conversation = _conversations[client.get_cookie(COOKIE).value]
+    conversation.token = "invalid-test-credential"
+    conversation.session_id = "missing-session"
+    conversation.messages.append({"role": "user", "content": "Previous message"})
+    conversation.usage["cost"] = 1
+    response = client.delete("/api/agent/auth")
+    assert response.status_code == 200
+    assert response.get_json()["cleanup_error"]
+    assert conversation.token is None
+    assert conversation.session_id is None
+    assert conversation.messages == []
+    assert conversation.usage["cost"] is None
 
 
 def test_expired_device_code_is_cleared(client):

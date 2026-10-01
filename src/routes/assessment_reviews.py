@@ -74,7 +74,7 @@ def _resolve_target(
 
 def _scoped_variant_ids() -> "tuple[list[UUID] | None, ResponseReturnValue | None]":
     """Resolve variant_id / project_id query args into a variant ID list."""
-    variant_id = request.args.get('variant_id')
+    variant_ids = request.args.getlist('variant_id')
     project_id = request.args.get('project_id')
     project_uuid: UUID | None = None
     if project_id:
@@ -83,19 +83,22 @@ def _scoped_variant_ids() -> "tuple[list[UUID] | None, ResponseReturnValue | Non
             return None, err
         if project_uuid is None:
             return None, ({"error": "Internal error"}, 500)
-    if variant_id:
-        variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
-        if err:
-            return None, err
-        if variant_uuid is None:
-            return None, ({"error": "Internal error"}, 500)
-        if project_uuid is not None:
-            variant = Variant.get_by_id(variant_uuid)
-            if variant is None:
-                return None, ({"error": "Variant not found"}, 404)
-            if variant.project_id != project_uuid:
-                return None, ({"error": "Variant does not belong to project"}, 400)
-        return [variant_uuid], None
+    if variant_ids:
+        selected = []
+        for variant_id in variant_ids:
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return None, err
+            if variant_uuid is None:
+                return None, ({"error": "Internal error"}, 500)
+            if project_uuid is not None:
+                variant = Variant.get_by_id(variant_uuid)
+                if variant is None:
+                    return None, ({"error": "Variant not found"}, 404)
+                if variant.project_id != project_uuid:
+                    return None, ({"error": "Variant does not belong to project"}, 400)
+            selected.append(variant_uuid)
+        return list(dict.fromkeys(selected)), None
     if project_uuid is not None:
         return [v.id for v in Variant.get_by_project(project_uuid)], None
     return None, None
@@ -249,7 +252,7 @@ def init_app(app) -> None:
         """List assessments with origin 'custom', annotated with review presence.
 
         OpenAPI:
-        query variant_id uuid optional Filter by a single variant ID.
+        query variant_id uuid optional Filter by one or more variant IDs (repeat parameter).
         query project_id uuid optional Filter by a single project ID.
         query has_review string optional 'true' for any reviewed target or 'false' for any unreviewed target.
         query order string optional 'timestamp_desc' (default) or 'timestamp_asc'.
@@ -261,6 +264,8 @@ def init_app(app) -> None:
         variant_ids, err = _scoped_variant_ids()
         if err:
             return err
+        if variant_ids == []:
+            return [], 200
 
         try:
             limit = int(request.args.get('limit', 50))
@@ -384,6 +389,8 @@ def init_app(app) -> None:
         variant_ids, err = _scoped_variant_ids()
         if err:
             return err
+        if variant_ids == []:
+            return {}, 200
         reviews = AssessmentReview.get_for_variants(
             variant_ids, request.args.get("vulnerability_id")
         )

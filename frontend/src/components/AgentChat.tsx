@@ -106,6 +106,8 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     const ready = Boolean(state?.authenticated && state.configured && models.length);
     const pageLabel = pageLabels[context.page] ?? context.page;
     const scopeLabel = context.view?.openVulnerabilityId ?? context.view?.selectedVariantName ?? context.view?.selectedProjectName;
+    const largeVulnerabilityView = context.page === 'vulnerabilities' && !context.view?.openVulnerabilityId &&
+        (context.view?.visibleVulnerabilityIds?.length ?? context.view?.visibleCount ?? 0) > 100;
     const prompts = context.view?.openVulnerabilityId
         ? [{ label: 'Assess this vulnerability', message: `Assess ${context.view.openVulnerabilityId} in the current scope. Retrieve its details with VulnScout MCP first.` }, { label: 'Review existing assessments', message: 'Review the existing assessments for the open vulnerability in the current scope.' }]
         : [{ label: `Summarize ${pageLabel.toLowerCase()}`, message: `Summarize the current ${pageLabel.toLowerCase()} view and its project scope using VulnScout MCP.` }, { label: 'Prioritize next steps', message: 'Review the current scope and recommend the most important next steps. Do not make changes.' }];
@@ -343,11 +345,13 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 setBusy(true);
                 setError('');
                 try {
-                    await agentRequest('/auth', { method: 'DELETE' });
+                    const result = await agentRequest<{ cleanup_error: string | null }>('/auth', { method: 'DELETE' });
                     setModels([]);
                     setDraft('');
                     setAllowWrites(false);
-                    setState(await agentRequest<AgentState>(''));
+                    setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false, messages: [], model: 'auto', usage: emptyUsage });
+                    setSelectedModel('auto');
+                    if (result.cleanup_error) setError(result.cleanup_error);
                 } catch (reason) { setError(errorMessage(reason)); }
                 finally { setBusy(false); }
             }}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
@@ -410,7 +414,8 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             {ready && state?.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
                 <h3 className="text-lg font-semibold leading-snug">What needs your attention?</h3>
                 <div className="space-y-3">
-                    {prompts.map(prompt => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready} onClick={() => void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
+                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || (largeVulnerabilityView && index === 0)} onClick={() => void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
+                    {largeVulnerabilityView && <p className="text-xs text-neutral-500 dark:text-neutral-400">Filter to 100 or fewer vulnerabilities to summarize the displayed rows.</p>}
                 </div>
             </div>}
             {state?.messages.map((message, index) => <div key={index} className={`min-w-0 ${message.role === 'user' ? 'flex justify-end' : ''}`}>
