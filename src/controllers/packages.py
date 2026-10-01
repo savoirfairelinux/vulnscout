@@ -4,6 +4,8 @@
 import re
 import uuid
 
+from sqlalchemy.orm import joinedload
+
 from ..models import Package, Finding, SBOMDocument, SBOMPackage, PackageDependency, Variant
 from ..models.sbom_package import PackageEvidence
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant
@@ -127,7 +129,8 @@ class PackagesController:
         self._provisional_epoch_metadata = {}
         if doc is not None:
             for link in db.session.execute(
-                db.select(SBOMPackage).where(SBOMPackage.sbom_document_id == doc.id)
+                db.select(SBOMPackage).options(joinedload(SBOMPackage.package))
+                .where(SBOMPackage.sbom_document_id == doc.id)
             ).scalars():
                 pkg = link.package
                 self._document_packages.setdefault((pkg.name, pkg.supplier), []).append(pkg)
