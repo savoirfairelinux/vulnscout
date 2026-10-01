@@ -496,21 +496,21 @@ cmd_scan() {
         if [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running NVD scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp nvd-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || return $?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
         fi
 
         # If an OSV scan was requested, run it synchronously via the flask CLI.
         if [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp osv-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || return $?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
         fi
 
         # If an sbom-cve-check scan was requested, run it synchronously via the flask CLI.
         if [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running sbom-cve-check scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp sbom-cve-check-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || return $?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
         fi
 
         # merger_ci.py emits lines of the form  ::STATUS::<step>::<message>
