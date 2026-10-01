@@ -146,6 +146,35 @@ def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args):
         assert result.stdout.index("Running OSV scan") < result.stdout.index("Running sbom-cve-check scan")
 
 
+def test_failed_nvd_scan_still_runs_osv_and_processes_inputs(tmp_path):
+    env = os.environ.copy()
+    env["VULNSCOUT_CONFIG"] = str(tmp_path / "absent-config.env")
+    env["VULNSCOUT_BASE_DIR"] = str(ROOT)
+    env["VULNSCOUT_INPUTS_DIR"] = str(tmp_path / "inputs")
+    env["SBOM_CVE_CHECK_DATABASES_DIR"] = str(tmp_path / "local_databases")
+    env["SBOM_CVE_CHECK_AUTO_UPDATE"] = "false"
+    env["FLASK_SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{tmp_path / 'scan.db'}"
+
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scan-selection", "--add-cdx",
+         str(ROOT / "tests" / "end_to_end_tests" / "input_cdx.json"),
+         "--perform-scans", "nvd,osv,sbom-cve-check"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout.index("Running NVD scan") < result.stdout.index("Running OSV scan")
+    assert result.stdout.index("Running OSV scan") < result.stdout.index("Running sbom-cve-check scan")
+    assert not list((tmp_path / "inputs" / "cdx").glob("*.json"))
+    scans = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--list-scans"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert scans.returncode == 0, scans.stderr
+    assert "project scan-selection" in scans.stdout
+    assert "1 SBOMs" in scans.stdout
+
+
 @pytest.mark.parametrize("args", [["--perform-scans", "grype"], ["--perform-scans", "all"], ["--perform-grype-scan"]])
 def test_entrypoint_dispatches_grype_with_real_flask_cli(tmp_path, args):
     env = os.environ.copy()
