@@ -11,7 +11,6 @@ import pytest
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
-    monkeypatch.setenv("VULNSCOUT_AGENT_ENABLED", "1")
     monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", str(tmp_path / "missing_server.py"))
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
@@ -25,23 +24,26 @@ def client(monkeypatch, tmp_path):
     return app.test_client()
 
 
-def test_agent_is_opt_in(client, monkeypatch):
-    monkeypatch.delenv("VULNSCOUT_AGENT_ENABLED")
+def test_agent_enabled_by_default(client):
     response = client.get("/api/agent")
-    assert response.status_code == 404
+    assert response.status_code == 200
 
 
 def test_agent_rejects_remote_requests(client):
     response = client.get("/api/agent", environ_overrides={"REMOTE_ADDR": "192.0.2.1"})
     assert response.status_code == 403
-
-
-def test_agent_accepts_configured_trusted_client(client, monkeypatch):
-    monkeypatch.setenv("VULNSCOUT_AGENT_TRUSTED_CLIENTS", "172.17.0.1, ")
-    response = client.delete("/api/agent/conversation", environ_overrides={"REMOTE_ADDR": "172.17.0.1"})
-    assert response.status_code == 200
-    response = client.get("/api/agent", environ_overrides={"REMOTE_ADDR": "172.17.0.2"})
+    response = client.get("/api/agent", environ_overrides={"REMOTE_ADDR": None})
     assert response.status_code == 403
+
+
+def test_agent_accepts_container_gateway(client):
+    from src.routes.agent import _container_gateway
+
+    gateway = _container_gateway()
+    if gateway is None:
+        pytest.skip("Container gateway not available")
+    response = client.delete("/api/agent/conversation", environ_overrides={"REMOTE_ADDR": gateway})
+    assert response.status_code == 200
 
 
 def test_agent_rejects_non_local_host(client):
@@ -251,11 +253,10 @@ def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
     ("post", "/api/agent/model"), ("delete", "/api/agent/conversation"),
     ("post", "/api/agent/messages"),
 ])
-def test_every_agent_endpoint_requires_opt_in(client, monkeypatch, method, path):
-    monkeypatch.delenv("VULNSCOUT_AGENT_ENABLED")
-    response = getattr(client, method)(path)
-    assert response.status_code == 404
-    assert response.get_json()["error"] == "Agent chat is disabled on this server."
+def test_every_agent_endpoint_rejects_remote_requests(client, method, path):
+    response = getattr(client, method)(path, environ_overrides={"REMOTE_ADDR": "192.0.2.1"})
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "Agent chat is available only on localhost."
 
 
 @pytest.mark.parametrize("context", [

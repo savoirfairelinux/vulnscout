@@ -2,7 +2,7 @@
 
 The **Agent** button opens a chat panel alongside VulnScout on desktop and a full-screen panel on smaller screens. Closing the panel preserves its draft and any response in progress until the page is reloaded. The Flask backend uses the GitHub Copilot SDK to launch the bundled `vulnscout_mcp/server.py` over stdio with the backend's Python interpreter. MCP dependencies are included in `requirements/base.txt` and the normal container image; no separate repository or bootstrap environment is required. The agent can read vulnerabilities, assessments, variants, and project context. Assessment and context write tools are available only when **Allow changes** is selected; the selection resets after each message.
 
-This proof of concept is opt-in and **localhost-only**. It is intended for one developer running the backend and frontend on the same machine, not a shared or remotely accessible VulnScout deployment. Do not forward the agent port to other users: the server can access the local user's Copilot identity. Access tokens stay on the backend, in server memory until an hour of inactivity; they are not sent to the browser or persisted in browser storage. Copilot may keep session state in its own local directory.
+This proof of concept is **localhost-only** (with local host-to-container access through the container gateway). It is intended for one developer running the backend and frontend on the same machine, not a shared or remotely accessible VulnScout deployment. Do not forward the agent port to other users: the server can access the local user's Copilot identity. Access tokens stay on the backend, in server memory until an hour of inactivity; they are not sent to the browser or persisted in browser storage. Copilot may keep session state in its own local directory.
 
 ## Start locally
 
@@ -11,7 +11,6 @@ From the demo worktree, with Python 3.11+ and Node.js installed:
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements/base.txt
-export VULNSCOUT_AGENT_ENABLED=1
 export FLASK_SQLALCHEMY_DATABASE_URI="sqlite:///$PWD/instance/vulnscout.db"
 export FLASK_SCAN_FILE="$(pwd)/instance/agent-demo-status.txt"
 mkdir -p instance
@@ -40,15 +39,13 @@ Build the normal image from this repository; it includes both the Copilot SDK an
 docker build -t vulnscout:agent-demo .
 ```
 
-Add these lines to `.vulnscout/cache/config.env`, run `./vulnscout --stop`, and then run `./vulnscout --serve --dev`:
+Select the locally built image in `.vulnscout/cache/config.env`, run `./vulnscout --stop`, and then run `./vulnscout --serve --dev`:
 
 ```sh
 VULNSCOUT_IMAGE=vulnscout:agent-demo
-VULNSCOUT_AGENT_ENABLED=1
-VULNSCOUT_AGENT_TRUSTED_CLIENTS=172.17.0.1
 ```
 
-Remove any old `VULNSCOUT_MCP_SERVER_PATH` setting from `config.env`. Development mode mounts both `src/` and `vulnscout_mcp/`; rebuild the image when dependencies change. Requests from the host reach the container from the Docker bridge gateway (`docker network inspect bridge`), not loopback. `VULNSCOUT_AGENT_TRUSTED_CLIENTS` lists these extra client addresses. The container has no host Copilot sign-in. Select **Sign in with GitHub** in the panel; no token entry or OAuth App configuration is needed.
+Remove any old `VULNSCOUT_MCP_SERVER_PATH` setting from `config.env`. Development mode mounts both `src/` and `vulnscout_mcp/`; rebuild the image when dependencies change. Requests from the host reach the container through its default gateway, which the agent recognizes automatically. The container has no host Copilot sign-in. Select **Sign in with GitHub** in the panel; no token entry or OAuth App configuration is needed.
 
 ## Connect and chat
 

@@ -1,6 +1,7 @@
-"""Local, opt-in Copilot chat backed by the VulnScout stdio MCP server."""
+"""Local Copilot chat backed by the VulnScout stdio MCP server."""
 
 import asyncio
+import ipaddress
 import json
 import os
 import queue
@@ -60,6 +61,21 @@ _conversations: dict[str, Conversation] = {}
 _store_lock = threading.Lock()
 
 
+def _container_gateway():
+    if not (Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()):
+        return None
+    try:
+        with Path("/proc/net/route").open(encoding="ascii") as routes:
+            next(routes)
+            for route in routes:
+                fields = route.split()
+                if fields[1] == "00000000" and int(fields[3], 16) & 0x3 == 0x3:
+                    return str(ipaddress.IPv4Address(bytes.fromhex(fields[2])[::-1]))
+    except (OSError, ValueError, IndexError, StopIteration):
+        pass
+    return None
+
+
 def _conversation():
     key = request.cookies.get(COOKIE, "")
     with _store_lock:
@@ -85,10 +101,10 @@ def _response(payload, key, status=200):
 
 
 def _access_error():
-    if os.getenv("VULNSCOUT_AGENT_ENABLED") != "1":
-        return jsonify(error="Agent chat is disabled on this server."), 404
-    extra_clients = os.getenv("VULNSCOUT_AGENT_TRUSTED_CLIENTS", "").split(",")
-    trusted = {"127.0.0.1", "::1"} | {value.strip() for value in extra_clients if value.strip()}
+    trusted = {"127.0.0.1", "::1"}
+    gateway = _container_gateway()
+    if gateway:
+        trusted.add(gateway)
     if request.remote_addr not in trusted:
         return jsonify(error="Agent chat is available only on localhost."), 403
     if urlsplit(request.host_url).hostname not in ("127.0.0.1", "localhost", "::1"):
