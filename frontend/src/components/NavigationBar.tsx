@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faCommentDots } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import { ROUTES } from '../routes';
@@ -20,16 +20,18 @@ type Props = {
   finishedScanCount?: number;
   activeScanCount?: number;
   onOpenOperationQueue?: () => void;
+  isAgentOpen: boolean;
+  onToggleAgent: () => void;
 };
 
 function navLiClass({ isActive }: { isActive: boolean }) {
   return [bgHoverColor, isActive && bgActiveColor].join(' ');
 }
 
-function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue }: Readonly<Props>) {
+function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue, isAgentOpen, onToggleAgent }: Readonly<Props>) {
   return (
-  <nav aria-label="Main navigation">
-    <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
+  <nav aria-label="Main navigation" className={`flex ${bgColor}`}>
+    <ul className="flex min-w-0 flex-1 flex-row items-stretch overflow-x-auto font-bold [&>li]:shrink-0">
       {/* === VulnScout (Logo + text) === */}
       <li>
         <NavLink
@@ -174,6 +176,9 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
       </li>
 
     </ul>
+    <button type="button" onClick={onToggleAgent} aria-label="Agent chat" aria-expanded={isAgentOpen} aria-controls="agent-panel" title="Agent chat" className={`flex shrink-0 items-center gap-2 border-l border-white/15 px-4 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white ${bgHoverColor} ${isAgentOpen ? bgActiveColor : ''}`}>
+      <FontAwesomeIcon icon={faCommentDots} /> <span className="hidden sm:inline">Agent</span>
+    </button>
   </nav>
   );
 }

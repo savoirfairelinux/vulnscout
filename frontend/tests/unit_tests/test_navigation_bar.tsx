@@ -12,6 +12,8 @@ jest.mock('../../src/components/ProjectVariantSelector', () => ({ __esModule: tr
 
 const DEFAULT_PROPS = {
     onApply: jest.fn(),
+    isAgentOpen: false,
+    onToggleAgent: () => undefined,
 };
 
 function renderAt(path: string) {

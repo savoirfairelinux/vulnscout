@@ -28,6 +28,7 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
+import type { AgentViewContext } from '../types/agent';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -47,6 +48,8 @@ type Props = {
     variantId?: string;
     projectId?: string;
     onAssessmentChanged?: (mutation: AssessmentMutation) => void;
+    onAgentContextChange?: (context: AgentViewContext) => void;
+    onOpenAgent?: () => void;
 };
 
 export type { AssessmentMutation };
@@ -223,7 +226,7 @@ function hasOutdatedAssessment(row: ReviewRow): boolean {
     return row.targets.some(t => t.outdated);
 }
 
-function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
+function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<ReviewRow[]>([]);
@@ -283,6 +286,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnIds, setModalVulnIds] = useState<string[]>([]);
     const displayedVulnIdsRef = useRef<string[]>([]);
+    const [agentVisibleRows, setAgentVisibleRows] = useState<{ section: ReviewTab; ids: string[] }>({ section: 'assessments', ids: [] });
+
+    useEffect(() => {
+        onAgentContextChange?.({
+            section: activeTab,
+            search,
+            visibleVulnerabilityIds: agentVisibleRows.section === activeTab ? agentVisibleRows.ids : [],
+            openVulnerabilityId: modalVuln?.id,
+        });
+    }, [activeTab, search, agentVisibleRows, modalVuln?.id, onAgentContextChange]);
     const fetchGenRef = useRef(0);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -551,7 +564,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         }
         displayedVulnIdsRef.current = ids;
-    }, []);
+        if (onAgentContextChange) {
+            setAgentVisibleRows(previous => previous.section === activeTab
+                && previous.ids.length === ids.length
+                && previous.ids.every((id, index) => id === ids[index])
+                ? previous : { section: activeTab, ids });
+        }
+    }, [activeTab, onAgentContextChange]);
 
     const resetFilters = () => {
         setSearch('');
@@ -1885,6 +1904,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             {modalVuln && (
                 <VulnModal
                     vuln={modalVuln}
+                    onOpenAgent={onOpenAgent}
                     readOnly={true}
                     appendAssessment={() => {}}
                     appendCVSS={() => null}

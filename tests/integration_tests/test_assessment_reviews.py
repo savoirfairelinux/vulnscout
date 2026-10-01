@@ -774,6 +774,39 @@ def test_review_scope_uses_review_target_variant(client, finding, variant):
     }]
 
 
+def test_list_custom_assessments_filters_allowed_variants_before_review_and_limit(client, finding, variant):
+    allowed = Variant.get_or_create("other allowed", variant.project_id)
+    excluded = Variant.get_or_create("excluded", variant.project_id)
+    shared = make_assessment(finding, variant, targets=[(variant, finding), (excluded, finding)])
+    upsert_for(shared, finding, excluded)
+    other_allowed = make_assessment(finding, allowed)
+    make_assessment(finding, excluded)
+
+    rows = client.get("/api/custom-assessments", query_string=[
+        ("variant_id", str(variant.id)), ("variant_id", str(allowed.id)),
+        ("has_review", "false"), ("limit", "2"),
+    ]).get_json()
+
+    assert {row["id"] for row in rows} == {str(shared.id), str(other_allowed.id)}
+    assert all(row["has_review"] is False for row in rows)
+    assert {target["variant_id"] for row in rows for target in row["targets"]} <= {
+        str(variant.id), str(allowed.id),
+    }
+
+
+def test_empty_project_scope_cannot_return_global_assessments_or_reviews(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+    upsert_for(assessment, finding, variant)
+    empty_project = Project.create("No variants")
+
+    assert client.get("/api/custom-assessments", query_string={
+        "project_id": str(empty_project.id),
+    }).get_json() == []
+    assert client.get("/api/assessment-reviews", query_string={
+        "project_id": str(empty_project.id),
+    }).get_json() == {}
+
+
 def test_list_custom_assessments_limit_and_order(client, finding, variant):
     # Arrange
     older = make_assessment(finding, variant, status_notes="older")

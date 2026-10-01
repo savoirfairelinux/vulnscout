@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -6,7 +7,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mcp.server.mcpserver import MCPServer
-from vulnscout_mcp.client import VulnScoutClient
+from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient
 from vulnscout_mcp.tools.assessments import register_tools as register_assessment_tools
 from vulnscout_mcp.tools.context import register_tools as register_context_tools
 from vulnscout_mcp.tools.reviews import register_tools as register_review_tools
@@ -15,7 +16,8 @@ from vulnscout_mcp.tools.vulnerabilities import register_tools as register_vulne
 
 def create_server(base_url: str) -> MCPServer:
     """Create and configure the VulnScout MCP server."""
-    client = VulnScoutClient(base_url)
+    scope = os.environ.get("VULNSCOUT_AGENT_SCOPE")
+    client = ScopedVulnScoutClient(base_url, json.loads(scope)) if scope is not None else VulnScoutClient(base_url)
     mcp_server = MCPServer("vulnscout")
     register_assessment_tools(mcp_server, client)
     register_context_tools(mcp_server, client)

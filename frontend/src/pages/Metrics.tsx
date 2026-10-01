@@ -1,4 +1,5 @@
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
+  import type { AgentViewContext } from "../types/agent";
         import type { Package } from "../handlers/packages";
         import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability } from "../handlers/vulnerabilities";
@@ -57,6 +58,8 @@ import { useMemo, useState, useCallback } from "react";
             setTab: (tab: string) => void;
             appendCVSS: (vulnId: string, vector: string) => CVSS | null;
             projectId?: string;
+            onAgentContextChange?: (context: AgentViewContext) => void;
+            onOpenAgent?: () => void;
         };
 
         const pieOptions = {
@@ -150,7 +153,7 @@ import { useMemo, useState, useCallback } from "react";
 
 
 
-function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab, projectId }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab, projectId, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
             const [timeScale, setTimeScale] = useState<string>("6_months")
@@ -453,6 +456,14 @@ const packageColumns = [
     return rankTopVulns(vulnerabilities);
     }, [vulnerabilities]);
 
+    useEffect(() => {
+      onAgentContextChange?.({
+        section: 'most critical unfixed',
+        visibleVulnerabilityIds: TopVulns.map(item => item.cve),
+        openVulnerabilityId: modalVuln?.id,
+      });
+    }, [TopVulns, modalVuln?.id, onAgentContextChange]);
+
     const handleModalNavigation = (newIndex: number) => {
         if (newIndex >= 0 && newIndex < TopVulns.length) {
             setModalVuln(TopVulns[newIndex].original);
@@ -698,6 +709,7 @@ const packageColumns = [
         {modalVuln && (
           <VulnModal
             vuln={modalVuln}
+            onOpenAgent={onOpenAgent}
             isEditing={isEditing}
             onClose={() => {
               setModalVuln(undefined);
