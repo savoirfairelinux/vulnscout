@@ -6,8 +6,10 @@ An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that e
 
 - **Write VEX assessments** for a CVE across one or more packages, supporting both OpenVEX and CycloneDX VEX status/justification/response values.
 - **Read assessments**, either a single assessment by ID or the full history for a given CVE.
+- **Look up vulnerabilities** with variant-scoped details.
+- **Review user-authored assessments** with a separate AI second opinion per (variant, package) target, without changing the original assessment.
 - **Read and update variant context** (deployment environment, platform, objectives profile, notes) by variant UUID or by project/variant name.
-- Thin, dependency-light implementation: a single `httpx`-based API client plus a small set of [FastMCP](https://github.com/modelcontextprotocol/python-sdk) tool modules.
+- Thin, dependency-light implementation: a single `httpx`-based API client plus tool modules registered on the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)'s `MCPServer`.
 
 ## Requirements
 
@@ -124,12 +126,14 @@ python vulnscout_mcp/server.py
 > [!NOTE]
 > Every tool returns a plain string: either a formatted summary of the result or an `Error: ...` message. Tools never raise exceptions back to the agent.
 
+See [AI Assessments](../doc/source/ai-assessments.md) for the agent assessment and custom-assessment review workflows.
+
 ## Project structure
 
 ```
 vulnscout_mcp/
   client.py         VulnScoutClient: httpx wrapper around the VulnScout HTTP API
-  server.py         Builds the FastMCP server and registers tool modules
+  server.py         Builds the MCPServer and registers tool modules
   run_server.py     Self-bootstrapping launcher (creates venv, installs deps, execs server.py)
   tools/
     assessments.py  Tools for reading/writing VEX assessments
@@ -159,8 +163,6 @@ Run a single test:
 pytest tests/mcp/test_assessments.py::TestWriteAssessmentImpl::test_api_error_returns_error_string -q
 ```
 
-See [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for a deeper look at the architecture and codebase conventions.
-
 ## License
 
-This project is licensed under the [GNU General Public License v3.0 only](LICENSE).
+This project is licensed under the [GNU General Public License v3.0 only](../LICENSE.GPL-3.0-only).

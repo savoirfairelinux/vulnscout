@@ -7,7 +7,8 @@ never treated as official — it does **not** affect a vulnerability's status an
 is **not** included in the exported VEX — until a human reviewer explicitly
 **approves** it in the web interface.
 
-This page describes how to set up and use that workflow.
+This page describes how to set up and use that workflow, as well as how to
+request an AI second opinion on existing user-authored assessments.
 
 ---
 
@@ -23,6 +24,9 @@ Three pieces work together:
 - **cve-assessment skill** — an agent skill (shipped in this repository under
   `.github/skills/cve-assessment/`) that guides the agent through researching a
   CVE and submitting the result via the MCP tools.
+- **assessment-review skill** — an agent skill under
+  `.github/skills/assessment-review/` that independently reviews existing
+  user-authored assessments, without changing them.
 
 ```
 CVE / GHSA id
@@ -49,7 +53,7 @@ replaced.
 - A running VulnScout instance, reachable over HTTP (see
   [Getting Started](getting-started.md)). By default the API is served at
   `http://localhost:7275`.
-- Python 3.9+ on the host that runs the MCP server.
+- Python 3.10+ on the host that runs the MCP server.
 - A clone of this `vulnscout` repository (the MCP server is vendored under
   `vulnscout_mcp/`).
 - An MCP-capable agent client — either the **GitHub Copilot CLI** or
@@ -135,10 +139,15 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | `get_assessment`           | Retrieve a single VEX assessment by ID                      |
 | `list_assessments_by_vuln` | List all VEX assessments recorded for a CVE                 |
 | `has_ai_assessment`        | Check whether a pending AI assessment exists for a variant (informational; a new write replaces it automatically) |
+| `get_vulnerability`        | Retrieve a vulnerability with variant-scoped details        |
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
 | `list_variants`            | List every variant across all projects                      |
-| `get_merged_context`       | Fetch the merged project + variant context for an assessment |
-| `get_variant_context` / `update_variant_context` | Read / update variant context     |
+| `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, environment, threat model, risks, other info) |
+| `get_project_context` / `update_project_context` | Read / replace a project's description |
+| `update_variant_context`   | Replace a variant's context fields (description, environment, threat model, risks, other info) — full replacement, not a partial update |
+| `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |
+| `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
+| `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
 
 ---
 
@@ -206,7 +215,10 @@ Pending AI assessments must be reviewed by a human before they become official.
    assessment timeline, labelled **"AI-generated · Pending review"**. It shows
    the same details as a normal assessment (status, justification, impact
    statement, notes, packages, and variant).
-3. Use the panel's action buttons:
+3. Click **Edit** on the vulnerability modal to enter editing mode — the
+   **Approve** / **Reject** buttons only appear on the panel once editing mode
+   is active.
+4. Use the panel's action buttons:
    - **Approve** — promotes the assessment to an official (`custom`)
      assessment. It now affects the vulnerability's status and is included in
      the OpenVEX export.
@@ -214,6 +226,48 @@ Pending AI assessments must be reviewed by a human before they become official.
 
 Until it is approved, a pending AI assessment has no effect on the
 vulnerability's status, on scan history/diffs, or on any exported VEX.
+
+---
+
+## Step 4 — AI review of custom assessments
+
+This is a separate workflow from approving a pending AI assessment. Ask an
+agent with access to this repository and the `assessment-review` skill to
+review an existing **user-authored** assessment (`origin = "custom"`). The
+skill does not review scan-imported assessments or pending AI suggestions.
+For example:
+
+```
+Review assessment assessment:<uuid>.
+Review custom assessments for project "my-product", variant "production".
+Review all custom assessments.
+```
+
+You can copy an assessment ID from the **Review** page; the tool accepts a
+bare UUID or a copied `assessment:<uuid>` (and `group:<uuid>` for a
+multi-target assessment). If you specify a project without a variant, the
+skill uses its `"default"` variant. With no scope, it lists custom assessments
+across all variants; larger scopes are paginated. By default, it skips targets
+with a current review and revisits unreviewed or stale targets.
+
+The agent independently derives a conclusion for **each (variant, package)
+target**, then saves a separate review for each one via
+`vulnscout-write_assessment_review`. An assessment covering multiple targets
+can therefore have different review verdicts for different targets. Each
+write supplies the target's `variant_id` and `package` and the
+`assessment_fingerprint` obtained when the assessment was read. If the
+authored content changed meanwhile, the write is rejected: fetch the updated
+assessment and review it again rather than reusing the old conclusion.
+Re-reviewing a target replaces only that target's previous review; **no review
+changes the underlying assessment**.
+
+The **Review** page's **AI review** column and filter show which targets
+agree (✓), differ (⚠), are stale (⚠ stale), or have no review (—).
+Multi-target rows show counts for each state. Open the vulnerability detail
+modal to read each target's AI review and rationale (`why:`). A stale review
+warns that the assessment was edited after the review was generated; in edit
+mode, **Discard review** removes a target's review without changing the
+assessment.
 
 ---
 
@@ -233,3 +287,6 @@ vulnerability's status, on scan history/diffs, or on any exported VEX.
 - **409 Conflict on submission** — you are running a VulnScout version from
   before AI assessments replaced each other. Upgrade VulnScout, or approve or
   reject the existing pending assessment first.
+- **Review rejected because its assessment fingerprint changed** — the
+  user-authored assessment was edited since the agent read it. Fetch the
+  updated assessment and independently review the affected targets again.
