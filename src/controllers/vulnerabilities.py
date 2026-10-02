@@ -19,6 +19,7 @@ from ..controllers.epss_db import EPSS_DB
 from ..controllers.scc_engine import get_cve_json
 from ..controllers.nvd_extract import api_weaknesses_to_list_str, api_references_filter_patches
 from ..helpers.verbose import verbose
+from ..helpers.history_source import history_source
 from ._base import to_dict_with_fallback
 from .progress_reporter import NULL_REPORTER, ProgressReporter
 from ..models.cvss import CVSS
@@ -346,6 +347,7 @@ class VulnerabilitiesController:
             return True
         return False
 
+    @history_source("epss")
     def fetch_epss_scores(self, reporter: Optional[ProgressReporter] = None) -> EnrichmentResult:
         if reporter is None:
             reporter = NULL_REPORTER
@@ -437,6 +439,7 @@ class VulnerabilitiesController:
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
         return EnrichmentResult(successful=nb_vuln, failed=failed)
 
+    @history_source("euvd")
     def fetch_euvd_data(self) -> EnrichmentResult:
         """Enrich the currently loaded CVEs from the cached ENISA EUVD data."""
         from ..controllers.euvd_db import EUVD_DB
@@ -557,6 +560,7 @@ class VulnerabilitiesController:
                     except Exception:
                         pass
 
+    @history_source("nvd")
     def fetch_nvd_data(self, reporter: Optional[ProgressReporter] = None) -> EnrichmentResult:
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
@@ -654,8 +658,10 @@ class VulnerabilitiesController:
 
         # Fetch GHSA dates concurrently with a thread pool and a timeout
         if ghsa_vulns:
+            # Commit the pending NVD updates first so they keep their own source.
+            _batch_commit(done, total, "NVD")
             max_workers = min(10, len(ghsa_vulns))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with history_source("ghsa"), ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_id = {
                     executor.submit(self._fetch_ghsa_published, vid): vid
                     for vid in ghsa_vulns
@@ -685,6 +691,12 @@ class VulnerabilitiesController:
                         failed += 1
                     done += 1
                     reporter.report(done, total, f"NVD enrichment: {done}/{total} ({vid})")
+                try:
+                    db.session.commit()
+                except Exception as e:
+                    verbose(f"[fetch_nvd_data GHSA commit] {e}")
+                    db.session.rollback()
+                    failed += 1
 
         # Final commit for any remaining deferred NVD/GHSA updates.
         try:

@@ -21,6 +21,7 @@ from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.verbose import verbose, warn
 from ..helpers.env_vars import get_bool_env
+from ..helpers.history_source import history_source
 from ..extensions import batch_session, db as _db
 import click
 import json
@@ -171,6 +172,7 @@ def evaluate_condition(
     return failed_vulns
 
 
+@history_source("sbom")
 def read_inputs(controllers: ControllersCache, scan_id=None):
     """Parse all SBOM documents registered in the DB.
 
@@ -239,7 +241,10 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             elif fmt == "yocto_cve_check" or (fmt is None and "package" in data and "matches" not in data):
                 yocto.load_from_dict(data)
             elif fmt == "grype" or (fmt is None and "matches" in data):
-                grype.load_from_dict(data)
+                _db.session.flush()
+                with history_source("grype"):
+                    grype.load_from_dict(data)
+                    _db.session.flush()
             else:
                 print(f"Warning: unknown format for {doc.path}, skipping")
         except FileNotFoundError:
@@ -254,6 +259,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
         finally:
             pkgCtrl.current_sbom_document = None
 
+    _db.session.flush()
     return {
         "cdx": cdx,
         "templates": templates
