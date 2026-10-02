@@ -129,6 +129,7 @@ class CycloneDx:
         if "sbom" not in self.__dict__ or not self.sbom:
             return
 
+        component_refs = []
         for component in self.sbom.components:
             package = Package(component.name, component.version or "", [], [])
             if component.purl:
@@ -140,8 +141,12 @@ class CycloneDx:
 
             if component.bom_ref.value:
                 self.ref_dict[component.bom_ref.value] = package.string_id
+                component_refs.append(component.bom_ref.value)
 
             self.packagesCtrl.add(package)
+
+        for bom_ref in component_refs:
+            self.ref_dict[bom_ref] = self.packagesCtrl.canonical_id(self.ref_dict[bom_ref])
 
     def merge_vulnerabilities_into_controller(self):
         """
