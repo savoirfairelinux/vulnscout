@@ -538,7 +538,7 @@ class TestImportScan:
         with app.app_context():
             columns = set(Scan.__table__.columns.keys())
         assert columns == {
-            "id", "description", "scan_type", "scan_source", "timestamp",
+            "id", "description", "scan_type", "scan_source", "run_id", "timestamp",
             "variant_id",
         }
 

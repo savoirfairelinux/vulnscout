@@ -85,6 +85,15 @@ class Operations {
         return response.ok;
     }
 
+    /** Cancel every still-active operation of one enqueued batch. */
+    static async cancelQueue(queueId: string): Promise<boolean> {
+        const response = await fetch(api(`/api/operations/queue/${encodeURIComponent(queueId)}/cancel`), {
+            method: "POST",
+            mode: "cors",
+        });
+        return response.ok;
+    }
+
     /** Drop a finished operation so it disappears for every connected client. */
     static async dismiss(opId: string): Promise<boolean> {
         const response = await fetch(api(`/api/operations/${encodeURIComponent(opId)}`), {
