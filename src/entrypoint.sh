@@ -127,6 +127,8 @@ Commands without --project or --variant:
         Data listing:
         --list-projects                 List all projects and their variants (optionally in JSON format with --json)
         --list-scans                    List all past scans (optionally in JSON format with --json)
+        --list-matching <expr>          List IDs of vulnerabilities matching a condition, one per line
+                                        (scoped like --match-condition; --json for a JSON array)
 
         Configuration:
         --config <key> <value>          Set a config value
@@ -750,6 +752,11 @@ cmd_get_data() {
 
 cmd_do_get_data() {
     data_args=()
+    if [[ "$DATA_REQUESTED" == "--list-matching" ]]; then
+        data_args+=("$LIST_MATCHING_CONDITION")
+        if [[ "$PROJECT_SPECIFIED" == true ]]; then data_args+=(--project "$PROJECT_NAME"); fi
+        if [[ "$VARIANT_SPECIFIED" == true ]]; then data_args+=(--variant "$VARIANT_NAME"); fi
+    fi
     if [[ "$JSON_OUTPUT" == true ]]; then data_args+=("--json"); fi
 
     flask --app src.bin.webapp "${DATA_REQUESTED#--}" "${data_args[@]}"
@@ -834,6 +841,7 @@ EXPORT_FORMATS=()
 SCAN_REQUIRED=false
 JSON_OUTPUT=false
 DATA_REQUESTED=""
+LIST_MATCHING_CONDITION=""
 IMPORT_CUSTOM_TIMESTAMP_POLICY=""
 
 if [[ $# -eq 0 ]]; then
@@ -925,6 +933,8 @@ while [[ $# -gt 0 ]]; do
             IMPORT_CUSTOM_TIMESTAMP_POLICY=original; shift ;;
         --use-current-timestamps)
             IMPORT_CUSTOM_TIMESTAMP_POLICY=current; shift ;;
+        --list-matching)
+            LIST_MATCHING_CONDITION="$2"; cmd_get_data "$1"; shift 2 ;;
         --list-projects|--list-scans)
             cmd_get_data "$1"; shift ;;
         --config)
