@@ -80,6 +80,23 @@ class VulnScoutClient:
             raise VulnScoutError(error_msg)
         return response.json()
 
+    def list_variants_by_vuln(self, vuln_id: str) -> list:
+        """GET /api/vulnerabilities/<vuln_id>/variants. Returns {id, name, project_id} dicts
+        for variants where the vulnerability is present (empty list for an unknown ID)."""
+        url = f"{self.base_url}/api/vulnerabilities/{vuln_id}/variants"
+        try:
+            with httpx.Client() as http:
+                response = http.get(url)
+        except httpx.RequestError:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}")
+        if not response.is_success:
+            try:
+                error_msg = response.json().get("error", response.text)
+            except Exception:
+                error_msg = response.text
+            raise VulnScoutError(error_msg)
+        return response.json()
+
     def list_variants(self) -> list:
         """GET /api/variants. Returns a list of {id, name, project_id} dicts across all projects."""
         url = f"{self.base_url}/api/variants"
