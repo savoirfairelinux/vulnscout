@@ -47,6 +47,8 @@ test('device flow polls at the interval returned by the server', async () => {
 
     render(<AgentChat onClose={() => undefined} context={context} />);
     await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText('Step 1 of 2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     fireEvent.click(screen.getByRole('button', { name: /sign in with github/i }));
     await act(async () => { await Promise.resolve(); });
     expect(screen.getByText('ABCD-EFGH')).toBeInTheDocument();
@@ -59,8 +61,74 @@ test('device flow polls at the interval returned by the server', async () => {
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
 });
 
-test('streams split NDJSON events and only permits writes for the chosen turn', async () => {
-    const requests: { message: string; allow_writes: boolean }[] = [];
+test('connects a local provider when already signed in and restores the GitHub account on disconnect', async () => {
+    const connections: { provider: string; model: string; base_url: string; api_key: string }[] = [];
+    let connected = false;
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/provider') && options?.method === 'POST') {
+            connections.push(JSON.parse(String(options.body)));
+            connected = true;
+            return jsonResponse({ provider: 'local', model: 'Qwen/Qwen3-Coder' });
+        }
+        if (path.endsWith('/provider') && options?.method === 'DELETE') {
+            connected = false;
+            return jsonResponse({ provider: null, model: 'auto' });
+        }
+        if (path.endsWith('/models')) return jsonResponse(connected ? {
+            models: [{ id: 'Qwen/Qwen3-Coder', name: 'Qwen/Qwen3-Coder' }],
+        } : models);
+        return jsonResponse(connected ? { ...signedIn, provider: 'local', login: null,
+            token_connected: false, model: 'Qwen/Qwen3-Coder' } : signedIn);
+    };
+
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure model provider' }));
+    fireEvent.click(screen.getByRole('radio', { name: /local model/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Provider model' }), { target: { value: 'Qwen/Qwen3-Coder' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Provider API base URL' }), { target: { value: 'http://localhost:11434/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect provider' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue('Qwen/Qwen3-Coder'));
+    expect(connections).toEqual([{ provider: 'local', model: 'Qwen/Qwen3-Coder', base_url: 'http://localhost:11434/v1', api_key: '' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect provider' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue('auto'));
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+});
+
+test('connector wizard shows only the selected authentication fields', async () => {
+    global.fetch = async input => String(input).endsWith('/models') ? jsonResponse(models) : jsonResponse(signedOut);
+
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    await screen.findByText('Select a connector');
+    expect(screen.getByRole('radio', { name: /github copilot/i })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Provider API key')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('radio', { name: /microsoft foundry/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByRole('textbox', { name: 'Provider model' })).toBeRequired();
+    expect(screen.getByLabelText('Provider API key')).toBeRequired();
+    expect(screen.getByRole('textbox', { name: 'Provider API base URL' })).toBeRequired();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('radio', { name: /anthropic/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByLabelText('Provider API key')).toBeRequired();
+    expect(screen.getByRole('textbox', { name: 'Provider API base URL' })).not.toBeRequired();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('radio', { name: /local model/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByLabelText('Provider API key')).not.toBeRequired();
+    expect(screen.getByRole('textbox', { name: 'Provider API base URL' })).toBeRequired();
+});
+
+test('streams split NDJSON events without a write permission checkbox', async () => {
+    const requests: { message: string; allow_writes?: boolean }[] = [];
     global.fetch = async (input, options) => {
         const path = String(input);
         if (path.endsWith('/models')) return jsonResponse(models);
@@ -78,18 +146,17 @@ test('streams split NDJSON events and only permits writes for the chosen turn', 
 
     render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByRole('button', { name: 'Summarize vulnerabilities' });
-    fireEvent.click(screen.getByRole('checkbox', { name: /allow changes/i }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Assess this' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await screen.findByText('First answer');
-    expect(requests[0]).toMatchObject({ message: 'Assess this', allow_writes: true });
+    expect(requests[0]).toMatchObject({ message: 'Assess this' });
     expect(screen.getByText('get vulnerability')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /allow changes/i })).not.toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: /allow changes/i })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'One more' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(requests).toHaveLength(2));
-    expect(requests[1].allow_writes).toBe(false);
+    expect(requests[1].allow_writes).toBeUndefined();
 });
 
 test('reset discards messages but retains the connection', async () => {
@@ -111,7 +178,7 @@ test('reset discards messages but retains the connection', async () => {
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
 });
 
-test('interrupted response restores the draft and removes the write grant', async () => {
+test('interrupted response restores the draft', async () => {
     global.fetch = async input => {
         const path = String(input);
         if (path.endsWith('/models')) return jsonResponse(models);
@@ -121,12 +188,10 @@ test('interrupted response restores the draft and removes the write grant', asyn
 
     render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByRole('button', { name: 'Summarize vulnerabilities' });
-    fireEvent.click(screen.getByRole('checkbox', { name: /allow changes/i }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Continue' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Response interrupted');
     expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('Continue');
-    expect(screen.getByRole('checkbox', { name: /allow changes/i })).not.toBeChecked();
 });
 
 test('large vulnerability view disables the unavailable summary action', async () => {
@@ -151,13 +216,13 @@ test('sign-out shows a remote cleanup error after discarding local identity', as
     render(<AgentChat onClose={() => undefined} context={context} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete the stored conversation');
-    expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument();
+    expect(screen.getByText('Select a connector')).toBeInTheDocument();
 });
 
 test('keyboard send renders structured Markdown, usage, and response copy', async () => {
     const reply = '# Report\n\n## Findings\n\n### Details\n\n- First\n\n1. Second\n\n> Evidence\n\n[Source](https://example.com) with `code`.\n\n```text\nlog\n```\n\n| Name | Result |\n| --- | --- |\n| Example | Passed |';
     const copied: string[] = [];
-    const requests: { message: string; allow_writes: boolean }[] = [];
+    const requests: { message: string; allow_writes?: boolean }[] = [];
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
     global.fetch = async (input, options) => {
         const path = String(input);
@@ -180,7 +245,8 @@ test('keyboard send renders structured Markdown, usage, and response copy', asyn
     fireEvent.change(composer, { target: { value: 'Review evidence' } });
     fireEvent.keyDown(composer, { key: 'Enter', code: 'Enter' });
     expect(await screen.findByRole('heading', { name: 'Report' })).toBeInTheDocument();
-    expect(requests).toMatchObject([{ message: 'Review evidence', allow_writes: false }]);
+    expect(requests).toMatchObject([{ message: 'Review evidence' }]);
+    expect(requests[0].allow_writes).toBeUndefined();
     expect(screen.getByRole('heading', { name: 'Findings' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Details' })).toBeInTheDocument();
     expect(screen.getByRole('blockquote')).toHaveTextContent('Evidence');
@@ -259,6 +325,8 @@ test('device authorization can be cancelled and the code copied', async () => {
     };
 
     render(<AgentChat onClose={() => undefined} context={context} />);
+    await screen.findByText('Select a connector');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     fireEvent.click(await screen.findByRole('button', { name: /sign in with github/i }));
     await screen.findByText('ABCD-EFGH');
     fireEvent.click(screen.getByRole('button', { name: 'Copy code' }));

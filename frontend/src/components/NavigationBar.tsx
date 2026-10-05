@@ -154,6 +154,12 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
         </li>
       )}
 
+      <li className="flex items-stretch">
+        <button type="button" onClick={onToggleAgent} aria-label="Agent chat" aria-expanded={isAgentOpen} aria-controls="agent-panel" title="Agent chat" className={`flex h-full items-center gap-2 px-4 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white ${bgHoverColor} ${isAgentOpen ? bgActiveColor : ''}`}>
+          <FontAwesomeIcon icon={faCommentDots} /> <span className="hidden sm:inline">Agent</span>
+        </button>
+      </li>
+
       {/* === Project / Variant Selector === */}
       <li className="flex items-stretch">
         <ProjectVariantSelector
@@ -176,9 +182,6 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
       </li>
 
     </ul>
-    <button type="button" onClick={onToggleAgent} aria-label="Agent chat" aria-expanded={isAgentOpen} aria-controls="agent-panel" title="Agent chat" className={`flex shrink-0 items-center gap-2 border-l border-white/15 px-4 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white ${bgHoverColor} ${isAgentOpen ? bgActiveColor : ''}`}>
-      <FontAwesomeIcon icon={faCommentDots} /> <span className="hidden sm:inline">Agent</span>
-    </button>
   </nav>
   );
 }

@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -62,7 +63,6 @@ def test_agent_rejects_foreign_origin(client):
 def test_message_requires_text_and_configured_mcp(client):
     assert client.post("/api/agent/messages", json=["Hello"]).status_code == 400
     assert client.post("/api/agent/messages", json={"message": ""}).status_code == 400
-    assert client.post("/api/agent/messages", json={"message": "Hello", "allow_writes": "yes"}).status_code == 400
     response = client.post("/api/agent/messages", json={"message": "Hello"})
     assert response.status_code == 503
     assert "VULNSCOUT_MCP_SERVER_PATH" in response.get_json()["error"]
@@ -189,6 +189,66 @@ def test_selected_model_persists_without_sending(client):
     assert client.get("/api/agent").get_json()["model"] == "auto"
 
 
+@pytest.mark.parametrize("provider,model,base_url", [
+    ("openai", "gpt-4o", ""),
+    ("azure", "my-deployment", "https://resource.openai.azure.com/openai/v1"),
+    ("anthropic", "claude-sonnet-4-5", ""),
+    ("local", "Qwen/Qwen3-Coder", "http://127.0.0.1:11434/v1"),
+])
+def test_provider_connection_keeps_credentials_private(client, provider, model, base_url):
+    payload = {"provider": provider, "model": model, "base_url": base_url,
+               "api_key": "private-credential" if provider != "local" else ""}
+    response = client.post("/api/agent/provider", json=payload)
+    assert response.status_code == 200
+    assert response.get_json() == {"provider": provider, "model": model}
+    status = client.get("/api/agent").get_json()
+    assert status["authenticated"] is True
+    assert status["provider"] == provider
+    assert status["token_connected"] is False
+    assert "private-credential" not in json.dumps(status)
+    assert client.get("/api/agent/models").get_json() == {"models": [{"id": model, "name": model}]}
+    assert client.post("/api/agent/model", json={"model": "unavailable"}).status_code == 400
+    assert client.post("/api/agent/model", json={"model": model}).status_code == 200
+    assert client.delete("/api/agent/provider").get_json() == {"provider": None, "model": "auto"}
+    assert client.get("/api/agent").get_json()["provider"] is None
+
+
+@pytest.mark.parametrize("payload", [
+    {"provider": "unknown", "model": "gpt-4o", "api_key": "key"},
+    {"provider": "openai", "model": "gpt-4o"},
+    {"provider": "anthropic", "model": "gpt-4o", "api_key": "key", "base_url": "http://example.com"},
+    {"provider": "azure", "model": "deployment", "api_key": "key"},
+    {"provider": "local", "model": "qwen3:8b", "base_url": "http://example.com/v1"},
+    {"provider": "local", "model": "qwen3:8b", "base_url": "http://127.0.0.1:11434/v1#fragment"},
+])
+def test_provider_connection_rejects_invalid_configuration(client, payload):
+    assert client.post("/api/agent/provider", json=payload).status_code == 400
+    assert client.get("/api/agent").get_json()["provider"] is None
+
+
+def test_modal_threads_keep_global_history_separate_and_share_provider(client):
+    from src.routes.agent import COOKIE, _conversations
+
+    first, second = str(uuid4()), str(uuid4())
+    payload = {"provider": "local", "model": "qwen3:8b", "base_url": "http://localhost:11434/v1"}
+    assert client.post("/api/agent/provider", json=payload).status_code == 200
+    for thread_id in (first, second):
+        response = client.get("/api/agent", headers={"X-Agent-Thread": thread_id})
+        assert response.get_json()["provider"] == "local"
+        assert response.get_json()["messages"] == []
+
+    root = _conversations[client.get_cookie(COOKIE).value]
+    assert root.threads[first] is not root.threads[second]
+    assert root.threads[first].credentials is root.credentials
+    assert root.threads[first].lock is root.lock
+    assert client.delete("/api/agent/conversation", headers={"X-Agent-Thread": first}).status_code == 200
+    assert first not in root.threads
+    assert second in root.threads
+    assert client.delete("/api/agent/provider").status_code == 200
+    assert client.get("/api/agent", headers={"X-Agent-Thread": second}).get_json()["provider"] is None
+    assert client.get("/api/agent", headers={"X-Agent-Thread": "invalid"}).status_code == 400
+
+
 def test_streaming_validation_still_returns_json(client):
     response = client.post("/api/agent/messages", json={"message": ""},
                            headers={"Accept": "application/x-ndjson"})
@@ -204,7 +264,6 @@ def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
     authenticated = client.get("/api/agent").get_json()["authenticated"]
     response = client.post("/api/agent/messages", json={
         "message": "Use get_vulnerability to retrieve CVE-2009-3555 and summarize it in one sentence. Do not make changes.",
-        "allow_writes": False,
     }, headers={"Accept": "application/x-ndjson"}, buffered=False)
     try:
         assert response.status_code == 200
@@ -229,13 +288,11 @@ def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
             previous_session_id = session.session_id
             follow_up = client.post("/api/agent/messages", json={
                 "message": "Which vulnerability did we just discuss? Do not make changes.",
-                "allow_writes": True,
             }, headers={"Accept": "application/x-ndjson"}, buffered=False)
             try:
                 follow_up_events = [json.loads(chunk) for chunk in follow_up.response]
                 assert follow_up_events[-1]["type"] == "done", follow_up_events[-1]
                 assert session.session_id == previous_session_id
-                assert session.session_writes is True
             finally:
                 follow_up.close()
         else:
@@ -249,6 +306,7 @@ def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
 
 @pytest.mark.parametrize("method,path", [
     ("post", "/api/agent/auth"), ("delete", "/api/agent/auth"),
+    ("post", "/api/agent/provider"), ("delete", "/api/agent/provider"),
     ("post", "/api/agent/auth/poll"), ("get", "/api/agent/models"),
     ("post", "/api/agent/model"), ("delete", "/api/agent/conversation"),
     ("post", "/api/agent/messages"),
@@ -439,6 +497,15 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
         })
         assert response.status_code == 409
         assert client.get(f"/api/assessments/{protected_id}").get_json()["status"] == "fixed"
+
+        saved = agent_client.write_assessment("CVE-2024-1234", {
+            "targets": [{"variant_id": chosen_id, "package": "allowed@1.0"}],
+            "status": "under_investigation", "ai_generated": True,
+        })
+        assert saved["assessment"]["status"] == "under_investigation"
+        with client.application.app_context():
+            persisted = Assessment.get_by_id(saved["assessment"]["id"])
+            assert persisted.created_at is not None
     finally:
         server.shutdown()
         server_thread.join(timeout=5)
@@ -476,21 +543,21 @@ def test_reset_retains_identity_and_signout_clears_it(client):
 
     client.delete("/api/agent/conversation")
     conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.token = "invalid-test-credential"
-    conversation.device_code = "expired-code"
+    conversation.credentials.token = "invalid-test-credential"
+    conversation.credentials.device_code = "expired-code"
     conversation.model = "chosen-model"
     conversation.messages.append({"role": "user", "content": "Previous message"})
     conversation.usage["cost"] = 1
     response = client.delete("/api/agent/conversation")
     assert response.status_code == 200
-    assert conversation.token == "invalid-test-credential"
+    assert conversation.credentials.token == "invalid-test-credential"
     assert conversation.model == "chosen-model"
     assert conversation.messages == []
     assert conversation.usage["cost"] is None
     response = client.delete("/api/agent/auth")
     assert response.status_code == 200
-    assert conversation.token is None
-    assert conversation.device_code is None
+    assert conversation.credentials.token is None
+    assert conversation.credentials.device_code is None
     assert conversation.model == "auto"
 
 
@@ -499,14 +566,14 @@ def test_signout_clears_local_identity_when_remote_session_is_unavailable(client
 
     client.delete("/api/agent/conversation")
     conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.token = "invalid-test-credential"
+    conversation.credentials.token = "invalid-test-credential"
     conversation.session_id = "missing-session"
     conversation.messages.append({"role": "user", "content": "Previous message"})
     conversation.usage["cost"] = 1
     response = client.delete("/api/agent/auth")
     assert response.status_code == 200
     assert response.get_json()["cleanup_error"]
-    assert conversation.token is None
+    assert conversation.credentials.token is None
     assert conversation.session_id is None
     assert conversation.messages == []
     assert conversation.usage["cost"] is None
@@ -517,10 +584,10 @@ def test_expired_device_code_is_cleared(client):
 
     client.delete("/api/agent/conversation")
     conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.device_code = "expired-code"
-    conversation.device_expires = time.monotonic() - 1
+    conversation.credentials.device_code = "expired-code"
+    conversation.credentials.device_expires = time.monotonic() - 1
     assert client.post("/api/agent/auth/poll").status_code == 410
-    assert conversation.device_code is None
+    assert conversation.credentials.device_code is None
 
 
 def test_json_reply_failure_preserves_conversation_and_unlocks(client, monkeypatch):
@@ -529,7 +596,7 @@ def test_json_reply_failure_preserves_conversation_and_unlocks(client, monkeypat
     monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
     client.delete("/api/agent/conversation")
     conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.token = "invalid-test-credential"
+    conversation.credentials.token = "invalid-test-credential"
     response = client.post("/api/agent/messages", json={"message": "Review", "context": {"page": "metrics"}})
     assert response.status_code == 503
     assert "Agent request failed" in response.get_json()["error"]
