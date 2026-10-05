@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faCommentDots } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
@@ -31,6 +31,8 @@ import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
+import AgentChat from "./AgentChat";
+import type { AgentContext } from "../types/agent";
 
 type Props = {
     vuln: Vulnerability;
@@ -137,9 +139,12 @@ type VariantScopedSnapshot = {
 };
 
   function VulnModal(props: Readonly<Props>) {
-        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, onOpenAgent, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
+        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
+    const [assessmentChatOpen, setAssessmentChatOpen] = useState(false);
+    const [assessmentThreadId, setAssessmentThreadId] = useState(() => crypto.randomUUID());
+    const activeAssessmentThread = useRef<string | null>(null);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
@@ -178,6 +183,33 @@ type VariantScopedSnapshot = {
     const [editingAssessmentIsServerConfirmed, setEditingAssessmentIsServerConfirmed] = useState(false);
     const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [reviewToDiscard, setReviewToDiscard] = useState<AssessmentReview | null>(null);
+
+    const closeAssessmentChat = () => {
+        const threadId = activeAssessmentThread.current;
+        activeAssessmentThread.current = null;
+        setAssessmentChatOpen(false);
+        if (threadId) void fetch('/api/agent/conversation', {
+            method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
+        });
+    };
+
+    useEffect(() => {
+        return () => {
+            const threadId = activeAssessmentThread.current;
+            if (threadId) void fetch('/api/agent/conversation', {
+                method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
+            });
+        };
+    }, []);
+
+    useEffect(() => {
+        closeAssessmentChat();
+    }, [vuln.id]);
+
+    const assessmentAgentContext: AgentContext = {
+        page: 'vulnerabilities', projectId, variantId,
+        view: { openVulnerabilityId: vuln.id, matchingVariantIds: availableVariants.map(variant => variant.id) },
+    };
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
@@ -1517,7 +1549,6 @@ type VariantScopedSnapshot = {
 
     const headerActions = (
         <>
-            {onOpenAgent && <button type="button" onClick={onOpenAgent} aria-label={`Ask agent about ${vuln.id}`} aria-controls="agent-panel" title={`Ask agent about ${vuln.id}`} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-cyan-300 hover:bg-neutral-800 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"><FontAwesomeIcon icon={faCommentDots} /></button>}
             <div className="relative flex items-center gap-2 px-2 py-2">
                 <HelpPopover
                     ariaLabel="shortcut helper"
@@ -1620,7 +1651,7 @@ type VariantScopedSnapshot = {
             backdropClassName="!bg-gray-900/90"
             panelClassName="!h-[calc(100vh-6rem)] !max-w-[calc(100vw-6rem)]"
             surfaceClassName="!border-gray-600 !bg-gray-700"
-            contentClassName="relative flex min-h-0 flex-1 flex-col p-0 md:p-0"
+            contentClassName="relative flex min-h-0 flex-1 flex-col p-0 md:p-0 lg:flex-row"
             footer={footer}
         >
             {submittingMessage && (
@@ -1632,7 +1663,7 @@ type VariantScopedSnapshot = {
                 </div>
             )}
                     {/* Scrollable content region (only the body scrolls) */}
-                    <div className="flex-1 overflow-y-auto min-h-0">
+                    <div className="min-w-0 flex-1 overflow-y-auto min-h-0">
 
                     {/* Message Banner - Sticky at top */}
                     {showBanner && (
@@ -1903,7 +1934,19 @@ type VariantScopedSnapshot = {
                         </div>
 
                         <div className="mt-6">
-                            <h3 className="font-bold mb-2">Assessments</h3>
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                <h3 className="font-bold">Assessments</h3>
+                                {!readOnly && <button type="button" onClick={() => {
+                                    if (assessmentChatOpen) {
+                                        closeAssessmentChat();
+                                    } else {
+                                        const threadId = crypto.randomUUID();
+                                        activeAssessmentThread.current = threadId;
+                                        setAssessmentThreadId(threadId);
+                                        setAssessmentChatOpen(true);
+                                    }
+                                }} aria-label={`Assess ${vuln.id} with AI`} aria-expanded={assessmentChatOpen} aria-controls="assessment-agent-panel" title="Assess with AI" className="inline-flex items-center gap-2 rounded border border-cyan-500 px-3 py-1.5 text-sm font-semibold text-cyan-200 hover:bg-cyan-900/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"><FontAwesomeIcon icon={faWandMagicSparkles} />Assess with AI</button>}
+                            </div>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
                                     <h4 className="font-semibold text-gray-200 mb-2">Assessments on current SBOM packages and variants</h4>
@@ -2242,6 +2285,9 @@ type VariantScopedSnapshot = {
                     </div>
 
                     </div>
+                    {assessmentChatOpen && <aside id="assessment-agent-panel" role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} context={assessmentAgentContext} onClose={closeAssessmentChat} />
+                    </aside>}
         </ModalShell>
 
             <ConfirmationModal

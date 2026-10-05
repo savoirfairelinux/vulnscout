@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faCircleNotch, faCopy, faLocationDot, faPlus, faRightFromBracket, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faCircleNotch, faCloud, faCopy, faKey, faLocationDot, faPlug, faPlus, faRightFromBracket, faServer, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { AgentContext } from '../types/agent';
@@ -8,7 +9,7 @@ import type { AgentContext } from '../types/agent';
 type Activity = { id: string; name: string; status: 'running' | 'done' | 'failed' };
 type Message = { role: 'user' | 'assistant'; content: string; activity?: Activity[] };
 type Usage = { cost: number | null; input_tokens: number | null; output_tokens: number | null };
-type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; messages: Message[]; model: string; usage: Usage };
+type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; provider: string | null; messages: Message[]; model: string; usage: Usage };
 type DeviceCode = { user_code: string; verification_uri: string; interval: number };
 type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; login?: string | null };
 type ModelChoice = { id: string; name: string };
@@ -24,6 +25,15 @@ const emptyUsage: Usage = { cost: null, input_tokens: null, output_tokens: null 
 const pageLabels: Record<string, string> = { metrics: 'Overview', packages: 'SBOM', vulnerabilities: 'Vulnerabilities', scans: 'Scans', review: 'Review', exports: 'Export', settings: 'Settings', ai: 'AI context', unknown: 'Page not found' };
 const iconButton = 'flex h-9 w-9 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white';
 const skipDiscardKey = 'vulnscout.agent.skipDiscardConfirmation';
+const connectionChangedEvent = 'vulnscout:agent-connection-changed';
+const connectors = [
+    { id: 'github', label: 'GitHub Copilot', description: 'Sign in through GitHub on another device.', icon: faGithub },
+    { id: 'openai', label: 'OpenAI', description: 'Use an OpenAI API key and model.', icon: faCloud },
+    { id: 'azure', label: 'Microsoft Foundry', description: 'Connect an Azure endpoint and deployment.', icon: faCloud },
+    { id: 'anthropic', label: 'Anthropic', description: 'Use an Anthropic API key and model.', icon: faKey },
+    { id: 'local', label: 'Local model', description: 'Connect an OpenAI-compatible server, such as Qwen on Ollama.', icon: faServer },
+] as const;
+type Connector = (typeof connectors)[number]['id'];
 
 function errorMessage(reason: unknown) {
     if (reason instanceof TypeError) return 'Connection lost. Check the backend and retry.';
@@ -81,12 +91,21 @@ function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; p
     </details>;
 }
 
-function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean }>) {
+function AgentChat({ onClose, context, active = true, threadId }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string }>) {
+    const request = useCallback(<T,>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void) => agentRequest<T>(path, {
+        ...options,
+        headers: { ...options?.headers, ...(threadId ? { 'X-Agent-Thread': threadId } : {}) },
+    }, onEvent), [threadId]);
     const [state, setState] = useState<AgentState | null>(null);
     const [error, setError] = useState('');
     const [draft, setDraft] = useState('');
     const [device, setDevice] = useState<DeviceCode | null>(null);
-    const [allowWrites, setAllowWrites] = useState(false);
+    const [showConnections, setShowConnections] = useState(false);
+    const [setupStep, setSetupStep] = useState<1 | 2>(1);
+    const [providerChoice, setProviderChoice] = useState<Connector>('github');
+    const [providerModel, setProviderModel] = useState('');
+    const [providerKey, setProviderKey] = useState('');
+    const [providerUrl, setProviderUrl] = useState('');
     const [busy, setBusy] = useState(false);
     const [modelBusy, setModelBusy] = useState(false);
     const [models, setModels] = useState<ModelChoice[]>([]);
@@ -100,10 +119,11 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     const [copied, setCopied] = useState<string | null>(null);
     const [awayFromBottom, setAwayFromBottom] = useState(false);
     const confirmation = useRef<HTMLDialogElement>(null);
+    const connectionSource = useRef(Symbol('agent-chat'));
     const conversationLog = useRef<HTMLDivElement>(null);
     const composer = useRef<HTMLTextAreaElement>(null);
     const followMessages = useRef(true);
-    const ready = Boolean(state?.authenticated && state.configured && models.length);
+    const ready = Boolean(state?.authenticated && state.configured && models.length && !showConnections);
     const pageLabel = pageLabels[context.page] ?? context.page;
     const scopeLabel = context.view?.openVulnerabilityId ?? context.view?.selectedVariantName ?? context.view?.selectedProjectName;
     const largeVulnerabilityView = context.page === 'vulnerabilities' && !context.view?.openVulnerabilityId &&
@@ -113,8 +133,20 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         : [{ label: `Summarize ${pageLabel.toLowerCase()}`, message: `Summarize the current ${pageLabel.toLowerCase()} view and its project scope using VulnScout MCP.` }, { label: 'Prioritize next steps', message: 'Review the current scope and recommend the most important next steps. Do not make changes.' }];
 
     useEffect(() => {
+        const reload = (event: Event) => {
+            if ((event as CustomEvent).detail !== connectionSource.current) setRefresh(value => value + 1);
+        };
+        window.addEventListener(connectionChangedEvent, reload);
+        return () => window.removeEventListener(connectionChangedEvent, reload);
+    }, []);
+
+    const notifyConnectionChange = () => window.dispatchEvent(new CustomEvent(connectionChangedEvent, {
+        detail: connectionSource.current,
+    }));
+
+    useEffect(() => {
         let active = true;
-        agentRequest<AgentState>('').then(result => {
+        request<AgentState>('').then(result => {
             if (active) {
                 setState(result);
                 setSelectedModel(result.model);
@@ -123,18 +155,18 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             if (active) setError(errorMessage(reason));
         });
         return () => { active = false; };
-    }, [refresh]);
+    }, [refresh, request]);
 
     useEffect(() => {
         if (!state?.authenticated) return;
         let active = true;
-        agentRequest<{ models: ModelChoice[] }>('/models').then(result => {
+        request<{ models: ModelChoice[] }>('/models').then(result => {
             if (active) setModels(result.models);
         }).catch(reason => {
             if (active) setError(errorMessage(reason));
         });
         return () => { active = false; };
-    }, [state?.authenticated, state?.token_connected, refresh]);
+    }, [state?.authenticated, state?.token_connected, refresh, request]);
 
     useEffect(() => {
         if (active && followMessages.current && conversationLog.current) {
@@ -170,16 +202,19 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         let timer = 0;
         const poll = async () => {
             try {
-                const result = await agentRequest<DevicePoll>('/auth/poll', { method: 'POST' });
+                const result = await request<DevicePoll>('/auth/poll', { method: 'POST' });
                 if (!active) return;
                 if (result.status === 'pending') {
                     interval = result.interval ?? interval;
                     timer = window.setTimeout(() => void poll(), interval * 1000);
                     return;
                 }
-                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, messages: [], model: 'auto', usage: emptyUsage });
+                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, provider: null, messages: [], model: 'auto', usage: emptyUsage });
                 setSelectedModel('auto');
                 setDevice(null);
+                setShowConnections(false);
+                setSetupStep(1);
+                notifyConnectionChange();
             } catch (reason) {
                 if (!active) return;
                 setError(errorMessage(reason));
@@ -188,13 +223,56 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         };
         timer = window.setTimeout(() => void poll(), interval * 1000);
         return () => { active = false; window.clearTimeout(timer); };
-    }, [device]);
+    }, [device, request]);
 
     async function signIn() {
         setBusy(true);
         setError('');
         try {
-            setDevice(await agentRequest<DeviceCode>('/auth', { method: 'POST' }));
+            setDevice(await request<DeviceCode>('/auth', { method: 'POST' }));
+        } catch (reason) {
+            setError(errorMessage(reason));
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function connectProvider(event: FormEvent) {
+        event.preventDefault();
+        setBusy(true);
+        setError('');
+        try {
+            const result = await request<{ provider: string; model: string }>('/provider', {
+                method: 'POST', body: JSON.stringify({ provider: providerChoice, model: providerModel, api_key: providerKey, base_url: providerUrl }),
+            });
+            setProviderKey('');
+            setShowConnections(false);
+            setSetupStep(1);
+            setModels([]);
+            setSelectedModel(result.model);
+            setState(previous => previous && { ...previous, provider: result.provider, authenticated: true, login: null, model: result.model, messages: [], usage: emptyUsage });
+            notifyConnectionChange();
+        } catch (reason) {
+            setError(errorMessage(reason));
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function disconnectProvider() {
+        setBusy(true);
+        setError('');
+        try {
+            await request('/provider', { method: 'DELETE' });
+            setModels([]);
+            setDraft('');
+            setShowConnections(false);
+            setSetupStep(1);
+            setProviderChoice('github');
+            setState(previous => previous && { ...previous, provider: null, authenticated: false, login: null, model: 'auto', messages: [], usage: emptyUsage });
+            setSelectedModel('auto');
+            setRefresh(value => value + 1);
+            notifyConnectionChange();
         } catch (reason) {
             setError(errorMessage(reason));
         } finally {
@@ -207,10 +285,9 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         setBusy(true);
         setError('');
         try {
-            const result = await agentRequest<{ usage: Usage }>('/conversation', { method: 'DELETE' });
+            const result = await request<{ usage: Usage }>('/conversation', { method: 'DELETE' });
             setState(previous => previous && { ...previous, messages: [], usage: result.usage });
             setDraft('');
-            setAllowWrites(false);
             followMessages.current = true;
             setAwayFromBottom(false);
             composer.current?.focus();
@@ -227,7 +304,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         setModelBusy(true);
         setError('');
         try {
-            await agentRequest('/model', { method: 'POST', body: JSON.stringify({ model }) });
+            await request('/model', { method: 'POST', body: JSON.stringify({ model }) });
             setState(current => current && { ...current, model });
         } catch (reason) {
             setSelectedModel(previous);
@@ -252,8 +329,6 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         let turnActivity: Activity[] = [];
         followMessages.current = true;
         setAwayFromBottom(false);
-        const writes = allowWrites;
-        setAllowWrites(false);
         try {
             const visibleIds = context.view?.visibleVulnerabilityIds;
             const packageIds = context.view?.visiblePackageIds;
@@ -281,8 +356,8 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 selectionCount: exportKeys || selectedVariantIds || enabledExportDocuments || selectedVulnerabilityIds || matchingVariantIds
                     ? Math.max(exportKeys?.length ?? 0, selectedVariantIds?.length ?? 0, enabledExportDocuments?.length ?? 0, selectedVulnerabilityIds?.length ?? 0, matchingVariantIds?.length ?? 0) : undefined,
             } };
-            const result = await agentRequest<{ reply: string; model: string; usage: Usage }>('/messages', {
-                method: 'POST', body: JSON.stringify({ message, allow_writes: writes, context: contextForTurn, model: selectedModel }),
+            const result = await request<{ reply: string; model: string; usage: Usage }>('/messages', {
+                method: 'POST', body: JSON.stringify({ message, context: contextForTurn, model: selectedModel }),
             }, event => {
                 if (event.type === 'status') setProgress(event.text);
                 if (event.type === 'delta') {
@@ -331,6 +406,13 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 </select>}
             </div>
             {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
+            {state?.authenticated && <button type="button" title="Configure model provider" aria-label="Configure model provider" aria-expanded={showConnections} onClick={() => {
+                setShowConnections(value => !value);
+                setProviderChoice((state.provider as Connector | null) ?? 'github');
+                setSetupStep(1);
+                setDevice(null);
+                setError('');
+            }} disabled={busy || modelBusy} className={iconButton}><FontAwesomeIcon icon={faPlug} /></button>}
             <button type="button" title="New conversation" aria-label="New conversation" onClick={() => {
                 let skipConfirmation = neverAsk;
                 try { skipConfirmation = localStorage.getItem(skipDiscardKey) === 'true'; } catch { skipConfirmation = neverAsk; }
@@ -345,16 +427,17 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 setBusy(true);
                 setError('');
                 try {
-                    const result = await agentRequest<{ cleanup_error: string | null }>('/auth', { method: 'DELETE' });
+                    const result = await request<{ cleanup_error: string | null }>('/auth', { method: 'DELETE' });
                     setModels([]);
                     setDraft('');
-                    setAllowWrites(false);
                     setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false, messages: [], model: 'auto', usage: emptyUsage });
                     setSelectedModel('auto');
+                    notifyConnectionChange();
                     if (result.cleanup_error) setError(result.cleanup_error);
                 } catch (reason) { setError(errorMessage(reason)); }
                 finally { setBusy(false); }
             }}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
+            {state?.provider && <button type="button" title="Disconnect provider" aria-label="Disconnect provider" disabled={busy || modelBusy} className={iconButton} onClick={() => void disconnectProvider()}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
             <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>
         </header>
         <dialog ref={confirmation} aria-labelledby="agent-discard-title" aria-describedby="agent-discard-description" className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
@@ -396,19 +479,52 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 </details>
                 <button type="button" onClick={() => { setError(''); setRefresh(value => value + 1); }} className="inline-flex items-center gap-2 text-cyan-700 hover:underline dark:text-cyan-400"><FontAwesomeIcon icon={faArrowRotateRight} /> Check connection</button>
             </div>}
-            {state && !state.authenticated && <div className="space-y-5 py-6 text-sm">
-                {!device ? <>
-                    <h3 className="text-lg font-semibold">Connect to GitHub</h3>
-                    <p className="text-neutral-500 dark:text-neutral-400">A GitHub account with Copilot access is required.</p>
-                    <button type="button" onClick={() => void signIn()} disabled={busy} className="inline-flex min-h-10 items-center gap-2 rounded bg-cyan-700 px-4 py-2 font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">{busy && <FontAwesomeIcon icon={faCircleNotch} spin />} Sign in with GitHub <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></button>
-                </> : <>
-                    <h3 className="text-base font-semibold">Authorize on GitHub</h3>
-                    <div className="flex items-center gap-2">
-                        <code className="select-all rounded border border-neutral-200 bg-neutral-50 px-4 py-3 font-mono text-xl dark:border-neutral-700 dark:bg-neutral-900">{device.user_code}</code>
-                        <button type="button" title={copied === 'device' ? 'Copied' : 'Copy code'} aria-label="Copy code" onClick={() => void copy(device.user_code, 'device')} className={iconButton}><FontAwesomeIcon icon={copied === 'device' ? faCheck : faCopy} /></button>
+            {state && (!state.authenticated || showConnections) && <div className="space-y-5 py-2 text-sm">
+                <div className="border-b border-neutral-200 pb-4 dark:border-neutral-800">
+                    <h3 className="text-lg font-semibold">Connect an agent</h3>
+                    <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">Step {setupStep} of 2</p>
+                    <ol className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                        {['Connector', 'Connect'].map((label, index) => <li key={label} className={index + 1 <= setupStep ? 'font-semibold text-cyan-700 dark:text-cyan-300' : 'text-neutral-500'}><span className="mr-1">{index + 1}.</span>{label}</li>)}
+                    </ol>
+                </div>
+                {setupStep === 1 ? <>
+                    <h4 className="font-semibold">Select a connector</h4>
+                    <div className="grid gap-2">
+                        {connectors.map(({ id, label, description, icon }) => <label key={id} className={`flex cursor-pointer items-start gap-3 rounded border px-3 py-3 transition-colors ${providerChoice === id ? 'border-cyan-600 bg-cyan-50 text-neutral-900 dark:border-cyan-500 dark:bg-cyan-950/40 dark:text-white' : 'border-neutral-300 text-neutral-700 hover:border-cyan-600 dark:border-neutral-700 dark:text-neutral-300'}`}>
+                            <input type="radio" name="agent-connector" value={id} checked={providerChoice === id} onChange={() => {
+                                setProviderChoice(id);
+                                setProviderModel('');
+                                setProviderKey('');
+                                setProviderUrl('');
+                            }} className="mt-1 accent-cyan-600" />
+                            <FontAwesomeIcon icon={icon} className="mt-0.5 w-4 shrink-0 text-cyan-700 dark:text-cyan-300" />
+                            <span className="min-w-0"><span className="block font-medium">{label}</span><span className="mt-1 block text-xs text-neutral-500 dark:text-neutral-400">{description}</span></span>
+                        </label>)}
                     </div>
-                    <a className="inline-flex min-h-10 items-center gap-2 rounded bg-cyan-700 px-4 py-2 font-semibold text-white hover:bg-cyan-600" href={device.verification_uri} target="_blank" rel="noopener noreferrer">Open GitHub <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></a>
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500 dark:text-neutral-400"><span role="status"><FontAwesomeIcon icon={faCircleNotch} spin className="mr-2" />Waiting for approval...</span><button type="button" onClick={() => setDevice(null)} className="underline underline-offset-4">Cancel</button></div>
+                </> : providerChoice === 'github' ? <>
+                    <h4 className="font-semibold">GitHub Copilot</h4>
+                    {device ? <>
+                        <p className="text-neutral-500 dark:text-neutral-400">Enter this code on GitHub to authorize the agent.</p>
+                        <div className="flex items-center gap-2">
+                            <code className="select-all rounded border border-neutral-200 bg-neutral-50 px-4 py-3 font-mono text-xl dark:border-neutral-700 dark:bg-neutral-900">{device.user_code}</code>
+                            <button type="button" title={copied === 'device' ? 'Copied' : 'Copy code'} aria-label="Copy code" onClick={() => void copy(device.user_code, 'device')} className={iconButton}><FontAwesomeIcon icon={copied === 'device' ? faCheck : faCopy} /></button>
+                        </div>
+                        <a className="inline-flex min-h-10 items-center gap-2 rounded bg-cyan-700 px-4 py-2 font-semibold text-white hover:bg-cyan-600" href={device.verification_uri} target="_blank" rel="noopener noreferrer">Open GitHub <FontAwesomeIcon icon={faArrowUpRightFromSquare} /></a>
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500 dark:text-neutral-400"><span role="status"><FontAwesomeIcon icon={faCircleNotch} spin className="mr-2" />Waiting for approval...</span><button type="button" onClick={() => setDevice(null)} className="underline underline-offset-4">Cancel</button></div>
+                    </> : <p className="text-neutral-500 dark:text-neutral-400">{state.authenticated && !state.provider ? 'Your GitHub account is already connected.' : 'Sign in with a GitHub account that has Copilot access.'}</p>}
+                </> : <>
+                    <h4 className="font-semibold">{connectors.find(connector => connector.id === providerChoice)?.label}</h4>
+                    <form id="agent-provider-form" onSubmit={event => void connectProvider(event)} className="space-y-3">
+                        <label className="block space-y-1">Model
+                            <input aria-label="Provider model" required maxLength={100} value={providerModel} onChange={event => setProviderModel(event.target.value)} placeholder={providerChoice === 'local' ? 'e.g. qwen3:8b' : 'Model or deployment name'} className="w-full rounded border border-neutral-300 bg-white p-2 dark:border-neutral-700 dark:bg-neutral-900" />
+                        </label>
+                        <label className="block space-y-1">API key {providerChoice === 'local' && <span className="text-neutral-500">(optional)</span>}
+                            <input aria-label="Provider API key" type="password" autoComplete="off" required={providerChoice !== 'local'} value={providerKey} onChange={event => setProviderKey(event.target.value)} className="w-full rounded border border-neutral-300 bg-white p-2 dark:border-neutral-700 dark:bg-neutral-900" />
+                        </label>
+                        <label className="block space-y-1">API base URL {providerChoice !== 'local' && providerChoice !== 'azure' && <span className="text-neutral-500">(optional)</span>}
+                            <input aria-label="Provider API base URL" type="url" required={providerChoice === 'azure' || providerChoice === 'local'} value={providerUrl} onChange={event => setProviderUrl(event.target.value)} placeholder={providerChoice === 'local' ? 'http://127.0.0.1:11434/v1' : providerChoice === 'azure' ? 'https://your-resource.openai.azure.com/openai/v1/' : 'Default provider endpoint'} className="w-full rounded border border-neutral-300 bg-white p-2 dark:border-neutral-700 dark:bg-neutral-900" />
+                        </label>
+                    </form>
                 </>}
             </div>}
             {ready && state?.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
@@ -444,7 +560,14 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         {awayFromBottom && <button type="button" aria-label="Jump to latest message" title="Jump to latest message" onClick={() => { if (conversationLog.current) conversationLog.current.scrollTop = conversationLog.current.scrollHeight; }} className={`${iconButton} mx-auto mb-2 border border-neutral-200 dark:border-neutral-700`}><FontAwesomeIcon icon={faArrowDown} /></button>}
         {error && <div className="mx-4 mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><p role="alert" className="min-w-0 flex-1 break-words leading-relaxed">{error}</p><button type="button" title="Retry connection" aria-label="Retry connection" disabled={busy} onClick={() => { setError(''); setRefresh(value => value + 1); }} className={iconButton}><FontAwesomeIcon icon={faArrowRotateRight} /></button><button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button></div>}
 
-        {state?.authenticated && state.configured && <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-200 px-4 pb-4 pt-3 dark:border-neutral-800">
+        {state && (!state.authenticated || showConnections) && <div className="flex shrink-0 items-center justify-between gap-3 border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
+            <button type="button" onClick={() => { setDevice(null); setSetupStep(1); }} disabled={setupStep === 1 || busy} className="rounded border border-neutral-300 px-4 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800">Back</button>
+            {setupStep === 1 ? <button type="button" onClick={() => setSetupStep(2)} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600">Next</button>
+                : providerChoice === 'github' ? <button type="button" onClick={() => state.authenticated && !state.provider ? setShowConnections(false) : void signIn()} disabled={busy || Boolean(device)} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">{device ? 'Waiting for approval' : state.authenticated && !state.provider ? 'Use GitHub connection' : 'Sign in with GitHub'}</button>
+                    : <button type="submit" form="agent-provider-form" disabled={busy} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">Connect provider</button>}
+        </div>}
+
+        {state?.authenticated && state.configured && !showConnections && <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-200 px-4 pb-4 pt-3 dark:border-neutral-800">
             <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
                 <FontAwesomeIcon icon={faLocationDot} className="shrink-0" />
                 <span className="truncate" title={[pageLabel, scopeLabel].filter(Boolean).join(' / ')}>{pageLabel}{scopeLabel && ` / ${scopeLabel}`}</span>
@@ -462,13 +585,9 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 }} disabled={busy || modelBusy || !ready} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess displayed</button>}
             </div>}
             <label htmlFor="agent-prompt" className="sr-only">Message the agent</label>
-            <div className={`rounded-lg border p-3 transition-colors focus-within:ring-1 ${allowWrites ? 'border-amber-500 bg-amber-50/30 focus-within:ring-amber-500 dark:bg-amber-950/10' : 'border-neutral-300 bg-white focus-within:border-cyan-600 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900'}`}>
+            <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">
                 <textarea ref={composer} id="agent-prompt" rows={2} maxLength={8000} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
-                <div className="mt-2 flex items-center justify-between gap-2">
-                    <label className={`flex min-w-0 cursor-pointer items-center gap-2 text-xs ${allowWrites ? 'text-amber-700 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`} title="Allow assessment and context changes for the next message only">
-                        <input type="checkbox" checked={allowWrites} onChange={event => setAllowWrites(event.target.checked)} disabled={busy || !ready} className="h-3.5 w-3.5 shrink-0 accent-amber-600" />
-                        {allowWrites ? 'Changes allowed this message' : 'Allow changes'}
-                    </label>
+                <div className="mt-2 flex justify-end">
                     <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
                 </div>
             </div>

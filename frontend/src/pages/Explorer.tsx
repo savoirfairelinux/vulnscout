@@ -434,7 +434,7 @@ function Explorer() {
     const tab: RouteKey = tabForPath(location.pathname);
     const activeAgentView = tab === 'vulnerabilities' ? vulnerabilityAgentView : tab === 'review' ? reviewAgentView : tab === 'packages' ? packagesAgentView : tab === 'metrics' ? metricsAgentView : tab === 'scans' ? scansAgentView : tab === 'exports' ? exportsAgentView : tab === 'settings' ? settingsAgentView : tab === 'ai' ? aiAgentView : undefined;
     const openAgentVulnerabilityId = activeAgentView?.openVulnerabilityId;
-    const agentOverlay = compactAgent || Boolean(openAgentVulnerabilityId);
+    const agentOverlay = compactAgent && !openAgentVulnerabilityId;
 
     useEffect(() => {
         const update = () => setCompactAgent(window.innerWidth < 1024);
@@ -718,7 +718,7 @@ function Explorer() {
                         first?.focus();
                     }
                 }
-            }} className={`fixed inset-0 z-[110] h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
+            }} className={`fixed inset-0 ${openAgentVulnerabilityId ? 'z-[90]' : 'z-[110]'} h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
                 <AgentChat active={agentOpen} context={agentContext} onClose={() => setAgentOpen(false)} />
             </aside>}
             </div>

@@ -13,10 +13,14 @@ from alembic.operations import Operations
 migration = importlib.import_module(
     "src.migrations.versions.z2c3d4e5f6a7_add_variant_context_updated_at"
 )
+repair = importlib.import_module(
+    "src.migrations.versions.4e6c9a71b35f_repair_assessment_context_timestamps"
+)
 
 
 def _bind_alembic_op(connection):
     migration.op = Operations(MigrationContext.configure(connection))
+    repair.op = Operations(MigrationContext.configure(connection))
 
 
 def _column_names(connection, table):
@@ -112,3 +116,39 @@ def test_downgrade_removes_context_and_assessment_timestamps():
     assert "created_at" not in assessment_columns
     assert "updated_at" not in variant_context_columns
     assert "updated_at" not in project_context_columns
+
+
+def test_repair_fills_missing_columns_on_a_stamped_database():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_pre_upgrade_schema(connection)
+        connection.exec_driver_sql(
+            "INSERT INTO assessments (id, timestamp) VALUES ('a1', '2099-01-01 00:00:00')"
+        )
+        _bind_alembic_op(connection)
+
+        before = datetime.now(timezone.utc) - timedelta(seconds=1)
+        repair.upgrade()
+        after = datetime.now(timezone.utc) + timedelta(seconds=1)
+        repair.upgrade()
+
+        row = connection.exec_driver_sql(
+            "SELECT timestamp, created_at FROM assessments WHERE id = 'a1'"
+        ).mappings().one()
+        assert 'updated_at' in _column_names(connection, 'variant_context')
+        assert 'updated_at' in _column_names(connection, 'project_context')
+        assert 'created_at' in _column_names(connection, 'assessments')
+
+    created_at = datetime.fromisoformat(row['created_at']).replace(tzinfo=timezone.utc)
+    assert before <= created_at <= after
+    assert row['created_at'] != row['timestamp']
+
+
+def test_repair_preserves_an_already_upgraded_database():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_pre_upgrade_schema(connection)
+        _bind_alembic_op(connection)
+        migration.upgrade()
+        repair.upgrade()
+        assert 'created_at' in _column_names(connection, 'assessments')

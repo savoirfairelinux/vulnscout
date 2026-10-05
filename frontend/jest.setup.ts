@@ -6,7 +6,9 @@
 // jsdom doesn't provide TextEncoder/TextDecoder, but react-router-dom
 // references them at import time.
 import { TextEncoder, TextDecoder } from 'node:util';
+import { randomUUID } from 'node:crypto';
 Object.assign(global, { TextEncoder, TextDecoder });
+Object.defineProperty(globalThis.crypto, 'randomUUID', { configurable: true, value: randomUUID });
 
 // Mock the global fetch function
 global.fetch = jest.fn(() =>
