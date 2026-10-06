@@ -248,10 +248,10 @@ cmd_add_file() {
             cp "$f" "$INPUTS_DIR/$type/$(basename "$f")"
             echo "Added spdx input (from archive): $INPUTS_DIR/$type/$(basename "$f")"
             count=$(( count + 1 ))
-        done < <(find "$tmp_extract" -name "*.spdx.json" -print0)
+        done < <(find "$tmp_extract" \( -name "*.spdx.json" -o -name "*.jsonld" \) -print0)
         rm -rf "$tmp_extract"
         if [[ $count -eq 0 ]]; then
-            echo "Warning: no .spdx.json files found inside archive $src"
+            echo "Warning: no .spdx.json or .jsonld files found inside archive $src"
         fi
     else
         local dest
@@ -388,16 +388,16 @@ cmd_scan() {
     local has_inputs=false
 
     if [[ -d "$INPUTS_DIR/spdx" ]]; then
-        for f in "$INPUTS_DIR/spdx"/*.spdx.json; do
+        for f in "$INPUTS_DIR/spdx"/*.spdx.json "$INPUTS_DIR/spdx"/*.jsonld; do
             [[ -f "$f" ]] && INIT_APP_ARGS+=(--spdx "$f") && has_inputs=true
         done
         # Warn about files that don't match the SPDX naming convention
         for f in "$INPUTS_DIR/spdx"/*; do
             [[ -f "$f" ]] || continue
             case "$f" in
-                *.spdx.json) ;;  # valid SPDX 3 JSON
-                *.spdx)      ;;  # valid SPDX 2 tag-value
-                *) echo "Warning: '$f' was added with --add-spdx but does not match the expected SPDX naming convention (*.spdx.json or *.spdx). File will be ignored. See https://spdx.github.io/spdx-spec/v2.3/conformance/#44-standard-data-format-requirements" >&2 ;;
+                *.spdx.json|*.jsonld) ;;  # SPDX JSON / JSON-LD
+                *.spdx)               ;;  # SPDX tag-value
+                *) echo "Warning: '$f' was added with --add-spdx but does not match a supported SPDX filename (*.spdx.json, *.jsonld, or *.spdx). File will be ignored." >&2 ;;
             esac
         done
     fi

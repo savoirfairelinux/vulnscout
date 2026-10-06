@@ -170,7 +170,7 @@ command exits with an error listing the failed sources.
 --add-spdx <path>
 ```
 
-Path to an SPDX 2 or SPDX 3 SBOM file. Supports JSON, tag-value (`.spdx`), and archive formats (`.tar`, `.tar.gz`, `.tar.zst`).
+Path to an SPDX 2 or SPDX 3 SBOM file. SPDX 3 JSON-LD files (`.jsonld`), including Zephyr-generated SBOMs, are supported. Also supports SPDX JSON, tag-value (`.spdx`), and archive formats (`.tar`, `.tar.gz`, `.tar.zst`).
 
 ---
 

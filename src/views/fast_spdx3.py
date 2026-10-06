@@ -151,12 +151,26 @@ class FastSPDX3:
     def extract_purl(self, element: Dict[str, Any]) -> Optional[str]:
         """
         Extract Package URL (PURL) from SPDX element.
+
+        SPDX 3 represents package URLs as ExternalIdentifier entries, which
+        some producers (including Zephyr's SBOM generator) use instead of the
+        legacy top-level properties.
         """
         if 'packageUrl' in element:
             return element['packageUrl']
 
         if 'software_packageUrl' in element:
             return element['software_packageUrl']
+
+        external_identifiers = element.get('externalIdentifier')
+        if isinstance(external_identifiers, list):
+            for ext_id in external_identifiers:
+                if not isinstance(ext_id, dict):
+                    continue
+                if ext_id.get('externalIdentifierType') in {'packageUrl', 'purl'}:
+                    identifier = ext_id.get('identifier')
+                    if isinstance(identifier, str) and identifier:
+                        return identifier
         return None
 
     def extract_cpes(self, element: Dict[str, Any]) -> List[str]:
