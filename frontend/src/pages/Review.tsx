@@ -28,7 +28,7 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
-import type { AgentViewContext } from '../types/agent';
+import { AGENT_WRITE_EVENT, type AgentViewContext } from '../types/agent';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -834,6 +834,14 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         setAssessments(reviewRows.map(a => toReviewRow(a, vulnDescriptions)));
         setAiAssessments(aiRows.map(a => toReviewRow(a, vulnDescriptions)));
     }, [variantId, projectId, vulnDescriptions]);
+
+    useEffect(() => {
+        const refresh = () => {
+            void Promise.all([refreshAssessmentLists(), refreshReviews()]).catch(() => {});
+        };
+        window.addEventListener(AGENT_WRITE_EVENT, refresh);
+        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
+    }, [refreshAssessmentLists, refreshReviews]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;

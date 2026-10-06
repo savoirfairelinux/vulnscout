@@ -6,6 +6,7 @@ import { TextEncoder } from 'node:util';
 import React from 'react';
 
 import AgentChat from '../../src/components/AgentChat';
+import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type { AgentContext } from '../../src/types/agent';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
@@ -47,29 +48,33 @@ test('device flow polls at the interval returned by the server', async () => {
 
     render(<AgentChat onClose={() => undefined} context={context} />);
     await act(async () => { await Promise.resolve(); });
-    expect(screen.getByText('Step 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 3')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     fireEvent.click(screen.getByRole('button', { name: /sign in with github/i }));
     await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText('Step 3 of 3')).toBeInTheDocument();
     expect(screen.getByText('ABCD-EFGH')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start using' })).toBeDisabled();
     await act(async () => { jest.advanceTimersByTime(1000); await Promise.resolve(); });
     expect(requests.filter(item => item.endsWith('/auth/poll'))).toHaveLength(1);
     await act(async () => { jest.advanceTimersByTime(1000); await Promise.resolve(); });
     expect(requests.filter(item => item.endsWith('/auth/poll'))).toHaveLength(1);
     await act(async () => { jest.advanceTimersByTime(1000); await Promise.resolve(); });
     expect(requests.filter(item => item.endsWith('/auth/poll'))).toHaveLength(2);
+    expect(screen.getByText('Connection verified')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start using' }));
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
 });
 
 test('connects a local provider when already signed in and restores the GitHub account on disconnect', async () => {
-    const connections: { provider: string; model: string; base_url: string; api_key: string }[] = [];
+    const connections: { provider: string; base_url: string; api_key: string }[] = [];
     let connected = false;
     global.fetch = async (input, options) => {
         const path = String(input);
         if (path.endsWith('/provider') && options?.method === 'POST') {
             connections.push(JSON.parse(String(options.body)));
             connected = true;
-            return jsonResponse({ provider: 'local', model: 'Qwen/Qwen3-Coder' });
+            return jsonResponse({ provider: 'local', model: '' });
         }
         if (path.endsWith('/provider') && options?.method === 'DELETE') {
             connected = false;
@@ -79,18 +84,26 @@ test('connects a local provider when already signed in and restores the GitHub a
             models: [{ id: 'Qwen/Qwen3-Coder', name: 'Qwen/Qwen3-Coder' }],
         } : models);
         return jsonResponse(connected ? { ...signedIn, provider: 'local', login: null,
-            token_connected: false, model: 'Qwen/Qwen3-Coder' } : signedIn);
+            token_connected: false, model: '' } : signedIn);
     };
 
     render(<AgentChat onClose={() => undefined} context={context} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Configure model provider' }));
     fireEvent.click(screen.getByRole('radio', { name: /local model/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Provider model' }), { target: { value: 'Qwen/Qwen3-Coder' } });
+    expect(screen.queryByRole('textbox', { name: 'Provider model' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Provider API base URL' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Use custom endpoint URL/ }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Provider API base URL' }), { target: { value: 'http://localhost:11434/v1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Connect provider' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Verify connection' }));
+    expect(await screen.findByText('Connection verified')).toBeInTheDocument();
+    expect(connections).toEqual([{ provider: 'local', base_url: 'http://localhost:11434/v1', api_key: '' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Start using' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue(''));
+    expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Agent model' }), { target: { value: 'Qwen/Qwen3-Coder' } });
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue('Qwen/Qwen3-Coder'));
-    expect(connections).toEqual([{ provider: 'local', model: 'Qwen/Qwen3-Coder', base_url: 'http://localhost:11434/v1', api_key: '' }]);
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect provider' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue('auto'));
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
@@ -110,21 +123,23 @@ test('connector wizard shows only the selected authentication fields', async () 
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('radio', { name: /microsoft foundry/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    expect(screen.getByRole('textbox', { name: 'Provider model' })).toBeRequired();
+    expect(screen.queryByRole('textbox', { name: 'Provider model' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Provider API key')).toBeRequired();
-    expect(screen.getByRole('textbox', { name: 'Provider API base URL' })).toBeRequired();
+    expect(screen.queryByRole('textbox', { name: 'Provider API base URL' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Use custom endpoint URL/ }));
+    expect(screen.getByRole('textbox', { name: 'Provider API base URL' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('radio', { name: /anthropic/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.getByLabelText('Provider API key')).toBeRequired();
-    expect(screen.getByRole('textbox', { name: 'Provider API base URL' })).not.toBeRequired();
+    expect(screen.queryByRole('textbox', { name: 'Provider API base URL' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('radio', { name: /local model/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.getByLabelText('Provider API key')).not.toBeRequired();
-    expect(screen.getByRole('textbox', { name: 'Provider API base URL' })).toBeRequired();
+    expect(screen.getByRole('button', { name: /Use custom endpoint URL \(required\)/ })).toBeInTheDocument();
 });
 
 test('streams split NDJSON events without a write permission checkbox', async () => {
@@ -157,6 +172,35 @@ test('streams split NDJSON events without a write permission checkbox', async ()
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests[1].allow_writes).toBeUndefined();
+});
+
+test('notifies views only after a successful write tool completes', async () => {
+    const writes: string[] = [];
+    const onWrite = (event: Event) => writes.push((event as CustomEvent<{ tool: string }>).detail.tool);
+    window.addEventListener(AGENT_WRITE_EVENT, onWrite);
+    global.fetch = async input => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) return streamResponse([
+            '{"type":"tool_start","id":"read","name":"get_assessment"}\n',
+            '{"type":"tool_end","id":"read","success":true,"write":false}\n',
+            '{"type":"tool_start","id":"failed","name":"update_project_context"}\n',
+            '{"type":"tool_end","id":"failed","success":false,"write":true}\n',
+            '{"type":"tool_start","id":"saved","name":"write_assessment"}\n',
+            '{"type":"tool_end","id":"saved","success":true,"write":true}\n',
+            '{"type":"done","reply":"Saved","model":"auto","usage":' + JSON.stringify(usage) + '}\n',
+        ]);
+        return jsonResponse(signedIn);
+    };
+
+    try {
+        render(<AgentChat onClose={() => undefined} context={context} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Summarize vulnerabilities' }));
+        await screen.findByText('Saved');
+        expect(writes).toEqual(['write_assessment']);
+    } finally {
+        window.removeEventListener(AGENT_WRITE_EVENT, onWrite);
+    }
 });
 
 test('reset discards messages but retains the connection', async () => {
@@ -331,7 +375,7 @@ test('device authorization can be cancelled and the code copied', async () => {
     await screen.findByText('ABCD-EFGH');
     fireEvent.click(screen.getByRole('button', { name: 'Copy code' }));
     await waitFor(() => expect(copied).toEqual(['ABCD-EFGH']));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument();
 });
 

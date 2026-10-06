@@ -32,7 +32,7 @@ import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import AgentChat from "./AgentChat";
-import type { AgentContext } from "../types/agent";
+import { AGENT_WRITE_EVENT, type AgentContext } from "../types/agent";
 
 type Props = {
     vuln: Vulnerability;
@@ -328,6 +328,17 @@ type VariantScopedSnapshot = {
             // covers the case where nothing ever loaded successfully.
         }
     }, [vuln.id, projectId]);
+
+    useEffect(() => {
+        const refresh = () => {
+            void refreshAllVulnAssessments();
+            void refreshAssessmentRows();
+            refreshReviews();
+            setSnapshotVersion(version => version + 1);
+        };
+        window.addEventListener(AGENT_WRITE_EVENT, refresh);
+        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
+    }, [refreshAllVulnAssessments, refreshAssessmentRows, refreshReviews]);
 
     useEffect(() => {
         const controller = new AbortController();
