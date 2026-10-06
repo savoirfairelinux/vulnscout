@@ -21,6 +21,7 @@
     "@fortawesome/free-regular-svg-icons": "^6.5.2",
     "@fortawesome/free-solid-svg-icons": "^6.5.2",
     "@fortawesome/react-fontawesome": "^0.2.2",
+    "@lobehub/icons-static-svg": "1.95.1",
     "@tanstack/react-table": "^8.17.3",
     "@tanstack/react-virtual": "^3.5.1",
     "ae-cvss-calculator": "^1.0.8",

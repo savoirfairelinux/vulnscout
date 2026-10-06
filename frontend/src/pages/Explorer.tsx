@@ -24,7 +24,7 @@ import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
 import AIContext from './AIContext';
 import AgentChat from '../components/AgentChat';
-import type { AgentContext, AgentViewContext } from '../types/agent';
+import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
@@ -310,6 +310,17 @@ function Explorer() {
     const handleRefreshComplete = useCallback(() => {
         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
     }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+
+    useEffect(() => {
+        const refresh = () => {
+            loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+                currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
+            void loadSetupRequirement();
+        };
+        window.addEventListener(AGENT_WRITE_EVENT, refresh);
+        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
+    }, [loadData, loadSetupRequirement, currentBaseVariantId, currentVariantId, currentProjectId,
+        currentOperation, currentVariantIds, currentMultiOperation]);
 
     useEffect(() => {
         const previous = observedOperationStatuses.current;

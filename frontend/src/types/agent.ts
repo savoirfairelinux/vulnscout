@@ -1,3 +1,5 @@
+export const AGENT_WRITE_EVENT = 'vulnscout:agent-write';
+
 export type AgentViewContext = {
     visibleVulnerabilityIds?: string[];
     visiblePackageIds?: string[];

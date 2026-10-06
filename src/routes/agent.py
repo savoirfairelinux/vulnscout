@@ -49,6 +49,7 @@ class ProviderConnection:
     model: str
     api_key: str
     base_url: str
+    models: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -246,10 +247,10 @@ def _provider_connection(data):
     if not isinstance(data, dict) or data.get("provider") not in ("openai", "azure", "anthropic", "local"):
         raise ValueError("Select a supported provider.")
     kind = data["provider"]
-    model = data.get("model")
+    model = data.get("model", "")
     api_key = data.get("api_key", "")
-    if not isinstance(model, str) or not model.strip() or len(model) > 100:
-        raise ValueError("Enter a valid model name (at most 100 characters).")
+    if not isinstance(model, str) or len(model) > 100:
+        raise ValueError("Invalid model name (at most 100 characters).")
     if not isinstance(api_key, str) or len(api_key) > 4096 or "\n" in api_key or "\r" in api_key:
         raise ValueError("Invalid API key.")
     if kind != "local" and not api_key.strip():
@@ -257,11 +258,71 @@ def _provider_connection(data):
     return ProviderConnection(kind, model.strip(), api_key, _provider_url(kind, data.get("base_url", "")))
 
 
-def _provider_options(connection):
+class _NoProviderRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        return None
+
+
+def _provider_headers(connection):
+    headers = {"Accept": "application/json"}
+    if connection.kind == "anthropic":
+        headers.update({"x-api-key": connection.api_key, "anthropic-version": "2023-06-01"})
+    elif connection.kind == "azure":
+        headers["api-key"] = connection.api_key
+    elif connection.api_key:
+        headers["Authorization"] = f"Bearer {connection.api_key}"
+    return headers
+
+
+def _fetch_provider_models(connection, base_url):
+    provider_request = urllib.request.Request(
+        f"{base_url}/models", headers=_provider_headers(connection))
+    try:
+        with urllib.request.build_opener(_NoProviderRedirect).open(provider_request, timeout=10) as response:
+            payload = response.read(2_000_001)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError("Provider credentials were rejected.") from None
+        raise ValueError("Could not list models. Check the provider endpoint and API key.") from None
+    except OSError:
+        raise ValueError("Could not reach the provider endpoint.") from None
+    if len(payload) > 2_000_000:
+        raise ValueError("Provider model list is too large.")
+    return payload
+
+
+def _parse_provider_models(payload):
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        raise ValueError("Provider returned an invalid model list.") from None
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        raise ValueError("Provider returned an invalid model list.")
+    models = {}
+    for item in data["data"][:500]:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and 0 < len(item["id"]) <= 100:
+            name = item.get("display_name") or item["id"]
+            models[item["id"]] = name if isinstance(name, str) and len(name) <= 150 else item["id"]
+    if not models:
+        raise ValueError("Provider did not return any models.")
+    return [{"id": model_id, "name": models[model_id]} for model_id in sorted(models)]
+
+
+def _provider_models(connection):
+    if connection.model:
+        return [{"id": connection.model, "name": connection.model}]
+    base_url = connection.base_url or {
+        "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com/v1",
+    }.get(connection.kind, "")
+    return _parse_provider_models(_fetch_provider_models(connection, base_url))
+
+
+def _provider_options(connection, model):
     options = {
         "type": "openai" if connection.kind == "local" else connection.kind,
         "model_id": "claude-sonnet-4.5" if connection.kind == "anthropic" else "gpt-4o",
-        "wire_model": connection.model,
+        "wire_model": model,
     }
     if connection.api_key:
         options["api_key"] = connection.api_key
@@ -423,7 +484,7 @@ def _scope_for_context(context):
                       separators=(",", ":"))
 
 
-def _publish_event(event, publish):
+def _publish_event(event, publish, write_calls=None):
     from copilot.session_events import AssistantMessageDeltaData, ToolExecutionStartData, ToolExecutionCompleteData
 
     if publish is None:
@@ -433,10 +494,14 @@ def _publish_event(event, publish):
         publish({"type": "delta", "message_id": event_data.message_id,
                  "text": event_data.delta_content})
     elif isinstance(event_data, ToolExecutionStartData):
+        name = event_data.mcp_tool_name or event_data.tool_name
+        if write_calls is not None and name in WRITE_TOOLS:
+            write_calls.add(event_data.tool_call_id)
         publish({"type": "tool_start", "id": event_data.tool_call_id,
-                 "name": event_data.mcp_tool_name or event_data.tool_name})
+                 "name": name})
     elif isinstance(event_data, ToolExecutionCompleteData):
-        publish({"type": "tool_end", "id": event_data.tool_call_id, "success": event_data.success})
+        publish({"type": "tool_end", "id": event_data.tool_call_id, "success": event_data.success,
+                 "write": write_calls is not None and event_data.tool_call_id in write_calls})
 
 
 async def _reply(conversation, message, path, model, scope, publish=None):
@@ -444,14 +509,14 @@ async def _reply(conversation, message, path, model, scope, publish=None):
 
     async with _sdk_client(conversation.credentials.token) as client:
         if conversation.credentials.provider:
-            if model != conversation.credentials.provider.model:
+            if model not in {choice["id"] for choice in conversation.credentials.provider.models}:
                 raise UnavailableModelError("Selected model is not available for this provider.")
         else:
             models = await client.list_models()
             if model not in {choice.id for choice in models
                              if choice.policy is None or choice.policy.state == "enabled"}:
                 raise UnavailableModelError("Selected model is not available for this account.")
-        provider_options = (_provider_options(conversation.credentials.provider)
+        provider_options = (_provider_options(conversation.credentials.provider, model)
                             if conversation.credentials.provider else None)
         options = {
             "model": provider_options["model_id"] if provider_options else model,
@@ -488,10 +553,11 @@ async def _reply(conversation, message, path, model, scope, publish=None):
             session = await client.create_session(**options)
         try:
             live_events = []
+            write_calls: set[str] = set()
 
             def on_event(event):
                 live_events.append(event)
-                _publish_event(event, publish)
+                _publish_event(event, publish, write_calls)
 
             session.on(on_event)
             event = await asyncio.wait_for(session.send_and_wait(message), timeout=120)
@@ -535,6 +601,7 @@ def agent_provider():
     if request.method == "POST":
         try:
             connection = _provider_connection(request.get_json(silent=True))
+            connection.models = _provider_models(connection)
         except ValueError as exc:
             return _response({"error": str(exc)}, key, 400)
     else:
@@ -646,8 +713,7 @@ def agent_models():
         return error
     key, conversation = _conversation()
     if conversation.credentials.provider:
-        model = conversation.credentials.provider.model
-        return _response({"models": [{"id": model, "name": model}]}, key)
+        return _response({"models": conversation.credentials.provider.models}, key)
     try:
         models = asyncio.run(_models(conversation.credentials.token))
     except Exception:
@@ -668,7 +734,7 @@ def agent_model():
         return _response({"error": BUSY_AGENT_ERROR}, key, 409)
     try:
         if conversation.credentials.provider:
-            choices = [{"id": conversation.credentials.provider.model}]
+            choices = conversation.credentials.provider.models
         else:
             try:
                 choices = asyncio.run(_models(conversation.credentials.token))

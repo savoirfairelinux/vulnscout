@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import socket
 import threading
 import time
 from types import SimpleNamespace
@@ -223,6 +224,27 @@ def test_provider_connection_keeps_credentials_private(client, provider, model, 
 ])
 def test_provider_connection_rejects_invalid_configuration(client, payload):
     assert client.post("/api/agent/provider", json=payload).status_code == 400
+    assert client.get("/api/agent").get_json()["provider"] is None
+
+
+def test_provider_credentials_do_not_require_a_model():
+    from src.routes.agent import _provider_connection
+
+    connection = _provider_connection({
+        "provider": "local", "base_url": "http://127.0.0.1:11434/v1",
+    })
+    assert connection.model == ""
+
+
+def test_provider_enrollment_requires_a_reachable_model_endpoint(client):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        response = client.post("/api/agent/provider", json={
+            "provider": "local", "base_url": f"http://127.0.0.1:{port}/v1",
+        })
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Could not reach the provider endpoint."
     assert client.get("/api/agent").get_json()["provider"] is None
 
 
@@ -656,6 +678,7 @@ def test_public_event_projection_excludes_tool_payloads():
     from src.routes.agent import _publish_event
 
     records = []
+    write_calls = set()
     payloads = [AssistantMessageDeltaData.from_dict({"messageId": "message", "deltaContent": "Answer"}),
                 ToolExecutionStartData.from_dict({"toolCallId": "call", "toolName": "mcp-tool",
                                                    "mcpToolName": "get_vulnerability",
@@ -663,10 +686,15 @@ def test_public_event_projection_excludes_tool_payloads():
                 ToolExecutionCompleteData.from_dict({"toolCallId": "call", "success": True,
                                                       "result": {"content": "private tool result"}})]
     for payload in payloads:
-        _publish_event(SimpleNamespace(data=payload), records.append)
+        _publish_event(SimpleNamespace(data=payload), records.append, write_calls)
     assert records == [{"type": "delta", "message_id": "message", "text": "Answer"},
                        {"type": "tool_start", "id": "call", "name": "get_vulnerability"},
-                       {"type": "tool_end", "id": "call", "success": True}]
+                       {"type": "tool_end", "id": "call", "success": True, "write": False}]
+    for payload in (ToolExecutionStartData.from_dict({"toolCallId": "write", "toolName": "mcp-tool",
+                                                      "mcpToolName": "write_assessment"}),
+                    ToolExecutionCompleteData.from_dict({"toolCallId": "write", "success": True})):
+        _publish_event(SimpleNamespace(data=payload), records.append, write_calls)
+    assert records[-1] == {"type": "tool_end", "id": "write", "success": True, "write": True}
     _publish_event(SimpleNamespace(data={"private": "secret"}), records.append)
     _publish_event(SimpleNamespace(data=payloads[0]), None)
-    assert len(records) == 3
+    assert len(records) == 5

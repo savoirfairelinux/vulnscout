@@ -13,7 +13,7 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import HelpPopover from "../components/HelpPopover";
 import useDismissablePopover from "../hooks/useDismissablePopover";
-import type { AgentViewContext } from "../types/agent";
+import { AGENT_WRITE_EVENT, type AgentViewContext } from "../types/agent";
 
 // Throwing fetch helpers for selector loads (existing handlers swallow HTTP errors)
 async function fetchProjectList(): Promise<Project[]> {
@@ -228,6 +228,16 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     useEffect(() => {
         loadVariantContext();
     }, [loadVariantContext]);
+
+    useEffect(() => {
+        const refresh = (event: Event) => {
+            const tool = (event as CustomEvent<{ tool?: string }>).detail?.tool;
+            if (tool === 'update_project_context') loadProjectContext();
+            if (tool === 'update_variant_context') loadVariantContext();
+        };
+        window.addEventListener(AGENT_WRITE_EVENT, refresh);
+        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
+    }, [loadProjectContext, loadVariantContext]);
 
     const validate = (): boolean => {
         const errors: Record<string, string> = {};
