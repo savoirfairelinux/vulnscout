@@ -407,9 +407,15 @@ function AssessmentDiffTable({ entries, label, colorClass = "text-white" }: {
             e.justification.toLowerCase().includes(filter.toLowerCase()) ||
             e.impact_statement.toLowerCase().includes(filter.toLowerCase()) ||
             e.status_notes.toLowerCase().includes(filter.toLowerCase())
+            || (e.targets || []).some(target =>
+                target.package_name.toLowerCase().includes(filter.toLowerCase()) ||
+                target.package_version.toLowerCase().includes(filter.toLowerCase()) ||
+                target.variant_id.toLowerCase().includes(filter.toLowerCase())
+            )
             || (e.sources || []).some(source => source.toLowerCase().includes(filter.toLowerCase()))
         )
         : entries;
+    const hasTargets = entries.some(entry => entry.targets?.length);
 
     return (
         <div className="mb-6">
@@ -433,6 +439,7 @@ function AssessmentDiffTable({ entries, label, colorClass = "text-white" }: {
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
                             <tr>
                                 <th className="px-3 py-2">Vulnerability</th>
+                                {hasTargets && <th className="px-3 py-2">Target</th>}
                                 <th className="px-3 py-2">Status</th>
                                 <th className="px-3 py-2">Justification</th>
                                 <th className="px-3 py-2">Impact</th>
@@ -442,8 +449,23 @@ function AssessmentDiffTable({ entries, label, colorClass = "text-white" }: {
                         </thead>
                         <tbody>
                             {filtered.map((e, i) => (
-                                <tr key={e.vulnerability_id + i} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                <tr key={e.assessment_id ?? `${e.vulnerability_id}:${i}`} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
+                                    {hasTargets && (
+                                        <td className="px-3 py-1.5 text-gray-400">
+                                            <div className="flex flex-col gap-1">
+                                                {(e.targets ?? []).map(target => (
+                                                    <span
+                                                        key={`${target.variant_id}:${target.finding_id}`}
+                                                        title={`Variant ${target.variant_id}; finding ${target.finding_id}`}
+                                                    >
+                                                        {target.package_name}@{target.package_version}
+                                                        {target.package_supplier ? ` (${extractSupplierName(target.package_supplier)})` : ''}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </td>
+                                    )}
                                     <td className="px-3 py-1.5">{e.simplified_status}</td>
                                     <td className="px-3 py-1.5 text-gray-400">{e.justification || '—'}</td>
                                     <td className="px-3 py-1.5 text-gray-400 max-w-xs truncate" title={e.impact_statement}>{e.impact_statement || '—'}</td>
@@ -1111,14 +1133,24 @@ function ScanRunDiffModal({ steps, onClose }: { steps: Scan[]; onClose: () => vo
                         vulnerabilitySources.set(vulnerabilityId, sources);
                     });
                     (diff.newly_detected_assessments_list ?? []).forEach(assessment => {
-                        const key = JSON.stringify([
-                            assessment.vulnerability_id, assessment.status, assessment.justification,
-                            assessment.impact_statement, assessment.status_notes,
-                        ]);
+                        const targetKey = (target: NonNullable<AssessmentDiffEntry['targets']>[number]) =>
+                            `${target.variant_id}:${target.finding_id}`;
+                        const key = assessment.assessment_id
+                            ?? `${step.id}:${assessment.vulnerability_id}:${(assessment.targets ?? []).map(targetKey).sort().join(',')}`;
                         const existing = assessmentMap.get(key);
                         const sources = new Set(existing?.sources ?? []);
                         sources.add(source);
-                        assessmentMap.set(key, {...(existing ?? assessment), sources: [...sources].sort()});
+                        const targets = new Map(
+                            [...(existing?.targets ?? []), ...(assessment.targets ?? [])]
+                                .map(target => [targetKey(target), target]),
+                        );
+                        assessmentMap.set(key, {
+                            ...(existing ?? assessment),
+                            sources: [...sources].sort(),
+                            targets: [...targets.values()].sort((left, right) =>
+                                `${left.package_name}@${left.package_version}`.localeCompare(`${right.package_name}@${right.package_version}`)
+                            ),
+                        });
                     });
                 });
                 setResult({
@@ -2345,14 +2377,12 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete }: Reado
                                                 </ChangeLine>
                                                 <ChangeLine icon={faClipboardCheck} label="Assessments">
                                                     <ChangeStat count={scan.assessment_count ?? 0} label="detected" tone="total" />
-                                                    {(scan.assessment_count ?? 0) > 0 && (<>
-                                                        <Dot />
-                                                        <ChangeStat count={scan.assessments_added ?? 0} label="new" tone="added" />
-                                                        <Dot />
-                                                        <ChangeStat count={scan.assessments_removed ?? 0} label="no longer present" tone="removed" />
-                                                        <Dot />
-                                                        <ChangeStat count={scan.assessments_unchanged ?? 0} label="still present" tone="neutral" />
-                                                    </>)}
+                                                    <Dot />
+                                                    <ChangeStat count={scan.assessments_added ?? 0} label="new" tone="added" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.assessments_removed ?? 0} label="no longer present" tone="removed" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.assessments_unchanged ?? 0} label="still present" tone="neutral" />
                                                 </ChangeLine>
                                             </>
                                         )}

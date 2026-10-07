@@ -1616,29 +1616,54 @@ def init_app(app: Flask) -> None:
                 from ..models.finding import Finding as _Finding
                 from ..models.assessment_target import AssessmentTarget as _AssessmentTarget
                 _assess_rows = db.session.execute(
-                    db.select(_Assessment.id, _Finding.vulnerability_id, _Assessment.status,
+                    db.select(_Assessment.id, _AssessmentTarget.variant_id,
+                              _AssessmentTarget.finding_id, _Finding.vulnerability_id,
+                              _Finding.package_id, Package.name, Package.version, Package.supplier,
+                              _Assessment.status,
                               _Assessment.simplified_status, _Assessment.justification,
                               _Assessment.impact_statement, _Assessment.status_notes)
                     .join(_AssessmentTarget, _AssessmentTarget.assessment_id == _Assessment.id)
                     .join(_Finding, _Finding.id == _AssessmentTarget.finding_id)
+                    .join(Package, Package.id == _Finding.package_id)
                     .where(_Assessment.id.in_(_new_assess_ids))
                 ).all()
-                # A multi-target assessment produces one row per target, so
-                # dedupe by assessment id to keep the list one entry per
-                # assessment (matching the scalar-column query it replaces).
-                _seen_new_assess: set[uuid_module.UUID] = set()
-                _new_assess_entries = []
-                for aid, vid, status, simp, just, impact, notes in _assess_rows:
-                    if aid in _seen_new_assess:
-                        continue
-                    _seen_new_assess.add(aid)
-                    _new_assess_entries.append(
-                        {"vulnerability_id": vid, "status": status or "under_investigation",
-                         "simplified_status": simp or "Pending Assessment", "justification": just or "",
-                         "impact_statement": impact or "", "status_notes": notes or ""}
-                    )
+                # Preserve assessment identity and all package/variant targets.
+                # Distinct assessments can have identical text and vulnerability
+                # IDs while applying to different findings/packages.
+                _new_assess_by_id: dict[uuid_module.UUID, dict] = {}
+                for (aid, target_variant_id, target_finding_id, vid, package_id,
+                     package_name, package_version, package_supplier, status,
+                     simp, just, impact, notes) in _assess_rows:
+                    entry = _new_assess_by_id.setdefault(aid, {
+                        "assessment_id": str(aid),
+                        "vulnerability_id": vid,
+                        "status": status or "under_investigation",
+                        "simplified_status": simp or "Pending Assessment",
+                        "justification": just or "",
+                        "impact_statement": impact or "",
+                        "status_notes": notes or "",
+                        "targets": [],
+                    })
+                    target = {
+                        "variant_id": str(target_variant_id),
+                        "finding_id": str(target_finding_id),
+                        "package_id": str(package_id),
+                        "package_name": package_name or "unknown",
+                        "package_version": package_version or "",
+                        "package_supplier": package_supplier or "",
+                    }
+                    if target not in entry["targets"]:
+                        entry["targets"].append(target)
+                _new_assess_entries = list(_new_assess_by_id.values())
+                for entry in _new_assess_entries:
+                    entry["targets"].sort(key=lambda target: (
+                        target["package_name"], target["package_version"],
+                        target["package_supplier"], target["variant_id"],
+                        target["finding_id"],
+                    ))
                 newly_detected_assessments_list = sorted(
-                    _new_assess_entries, key=lambda a: a["vulnerability_id"]
+                    _new_assess_entries,
+                    key=lambda a: (a["vulnerability_id"], a["assessment_id"]),
                 )
             else:
                 newly_detected_assessments_list = []

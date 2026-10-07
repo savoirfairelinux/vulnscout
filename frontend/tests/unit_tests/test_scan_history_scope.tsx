@@ -442,6 +442,25 @@ describe('ScanHistory selected variant scope', () => {
         fireEvent.click(screen.getByRole('button', {name: 'Close'}));
     });
 
+    test('shows SBOM assessment removals when no assessments remain active', async () => {
+        mockList.mockResolvedValue([{
+            ...scan('scan-1', 'v1'),
+            is_first: false,
+            assessments_added: 0,
+            assessments_removed: 2,
+            assessments_unchanged: 0,
+            assessment_count: 0,
+        }]);
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+
+        const scanCard = (await screen.findByText('Import SBOM')).closest('.group\\/card') as HTMLElement;
+        const assessmentRow = within(scanCard).getByText('Assessments:').parentElement?.parentElement;
+        expect(assessmentRow).toHaveTextContent('0 detected');
+        expect(assessmentRow).toHaveTextContent('0 new');
+        expect(assessmentRow).toHaveTextContent('2 no longer present');
+        expect(assessmentRow).toHaveTextContent('0 still present');
+    });
+
     test('renders tool scan and detail error branches', async () => {
         mockList.mockResolvedValue([{
             ...scan('tool-scan', 'v1'), scan_type: 'tool', scan_source: 'grype',
@@ -572,13 +591,27 @@ describe('ScanHistory selected variant scope', () => {
 
         test('opens one source-attributed diff for a grouped run', async () => {
             mockList.mockResolvedValue(history());
+            const assessmentFor = (assessmentId: string, packageId: string, packageName: string) => ({
+                ...assessment,
+                assessment_id: assessmentId,
+                targets: [{
+                    variant_id: 'v1', finding_id: `finding-${packageId}`, package_id: packageId,
+                    package_name: packageName, package_version: '1.0', package_supplier: '',
+                }],
+            });
+            const firstTargetAssessment = assessmentFor('assessment-one', 'pkg-1', 'openssl');
+            const secondTargetAssessment = assessmentFor('assessment-two', 'pkg-2', 'zlib');
             mockGetDiff
-                .mockResolvedValueOnce({...richDiff, all_findings: [finding], all_vulns: ['CVE-2026-0001']})
+                .mockResolvedValueOnce({
+                    ...richDiff,
+                    newly_detected_assessments_list: [firstTargetAssessment, secondTargetAssessment],
+                    all_findings: [finding], all_vulns: ['CVE-2026-0001'],
+                })
                 .mockResolvedValueOnce({
                     ...richDiff,
                     newly_detected_findings_list: [],
                     newly_detected_vulns_list: [],
-                    newly_detected_assessments_list: [],
+                    newly_detected_assessments_list: [firstTargetAssessment],
                     all_findings: [finding],
                     all_vulns: ['CVE-2026-0001'],
                 });
@@ -609,6 +642,13 @@ describe('ScanHistory selected variant scope', () => {
             expect(mockGetDiff).toHaveBeenCalledWith('nvd-step');
             expect(screen.getByRole('columnheader', {name: 'Source'})).toBeInTheDocument();
             expect(screen.getAllByText('Grype, NVD CPE')).toHaveLength(1);
+            fireEvent.click(within(runDiffModal).getByRole('button', {name: /Assessments/}));
+            expect(within(runDiffModal).getByText('openssl@1.0')).toBeInTheDocument();
+            expect(within(runDiffModal).getByText('zlib@1.0')).toBeInTheDocument();
+            const assessmentRows = within(runDiffModal).getAllByRole('row');
+            expect(assessmentRows).toHaveLength(3);
+            expect(within(assessmentRows[1]).getByText('Grype, NVD CPE')).toBeInTheDocument();
+            expect(within(assessmentRows[2]).getByText('Grype')).toBeInTheDocument();
             fireEvent.click(await screen.findByRole('button', {name: 'Close'}));
 
             fireEvent.click(within(runCard).getByRole('button', {name: 'View Scan Result'}));

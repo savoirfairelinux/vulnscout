@@ -97,7 +97,18 @@ type AssessmentDiffEntry = {
     justification: string;
     impact_statement: string;
     status_notes: string;
+    assessment_id?: string;
+    targets?: AssessmentDiffTarget[];
     sources?: string[];
+};
+
+type AssessmentDiffTarget = {
+    variant_id: string;
+    finding_id: string;
+    package_id: string;
+    package_name: string;
+    package_version: string;
+    package_supplier: string;
 };
 
 type ScanDiff = {
