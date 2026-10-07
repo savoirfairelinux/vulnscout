@@ -1625,7 +1625,11 @@ def init_app(app: Flask) -> None:
                     .join(_AssessmentTarget, _AssessmentTarget.assessment_id == _Assessment.id)
                     .join(_Finding, _Finding.id == _AssessmentTarget.finding_id)
                     .join(Package, Package.id == _Finding.package_id)
-                    .where(_Assessment.id.in_(_new_assess_ids))
+                    .where(
+                        _Assessment.id.in_(_new_assess_ids),
+                        _AssessmentTarget.variant_id == scan.variant_id,
+                        _AssessmentTarget.finding_id.in_(_global_after_f),
+                    )
                 ).all()
                 # Preserve assessment identity and all package/variant targets.
                 # Distinct assessments can have identical text and vulnerability
