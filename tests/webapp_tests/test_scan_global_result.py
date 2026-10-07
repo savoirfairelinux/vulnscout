@@ -142,3 +142,15 @@ class TestGetScanGlobalResult:
         assert "CVE-2021-2222" in vuln_ids
         # Packages should come from SBOM
         assert data["package_count"] >= 1
+
+    def test_global_result_does_not_eager_load_scan_observations(self, client, ids, monkeypatch):
+        """The compact global-result queries should avoid loading a second ORM graph."""
+        import src.routes.scans as scans_route
+
+        def fail_on_eager_load(*args, **kwargs):
+            raise AssertionError("global-result should not eager-load observations")
+
+        monkeypatch.setattr(scans_route, "_load_scan_with_findings", fail_on_eager_load)
+        response = client.get(f"/api/scans/{ids['tool_scan_id']}/global-result")
+
+        assert response.status_code == 200
