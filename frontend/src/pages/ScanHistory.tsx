@@ -1617,6 +1617,11 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
         : entry.steps.some(sourceVisible)
             && (!hideEmptyScans || entry.steps.some(step => sourceVisible(step) && scanHasChanges(step))));
 
+    // Keep agent context aligned with the individual scans represented by the
+    // currently visible timeline, including steps grouped into a single card.
+    const filteredScans = scans.filter(scan =>
+        sourceVisible(scan) && (!hideEmptyScans || scanHasChanges(scan))
+    );
     const visibleScanIds = filteredScans.map(scan => scan.id).join(',');
     const selectedScanTypesKey = [...selectedScanTypes].sort().join(',');
     const selectedRefreshTypesKey = [...selectedRefreshTypes].sort().join(',');
