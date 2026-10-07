@@ -219,3 +219,53 @@ class TestGetScanGlobalResult:
         }
         assert set(targets_by_name) == {"openssl", "zlib"}
         assert all(target["finding_id"] and target["package_id"] for target in targets_by_name.values())
+
+    def test_tool_diff_limits_multivariant_assessment_targets_to_active_scan_scope(self, app, client, ids):
+        """A newly visible assessment must not export targets from another variant or stale packages."""
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.scan import Scan
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = _db.session.get(Project, uuid.UUID(ids["project_id"]))
+            current_variant = _db.session.get(Variant, uuid.UUID(ids["variant_id"]))
+            other_variant = Variant.create("OtherVariant", project.id)
+            tool_scan = _db.session.get(Scan, uuid.UUID(ids["tool_scan_id"]))
+
+            active_package = Package.find_or_create("openssl", "1.1.1")
+            historical_package = Package.find_or_create("legacy-lib", "0.9")
+            active_finding = Finding.get_or_create(active_package.id, "CVE-2021-2222")
+            historical_finding = Finding.get_or_create(historical_package.id, "CVE-2021-2222")
+            Observation.create(finding_id=historical_finding.id, scan_id=tool_scan.id)
+            _db.session.commit()
+
+            assessment = Assessment.create(
+                status="under_investigation",
+                targets=[
+                    (current_variant.id, active_finding.id),
+                    (current_variant.id, historical_finding.id),
+                    (other_variant.id, active_finding.id),
+                ],
+                simplified_status="Pending Assessment",
+                justification="component_not_present",
+                impact_statement="shared judgement",
+                status_notes="shared note",
+                commit=True,
+            )
+            assessment_id = str(assessment.id)
+
+        response = client.get(f"/api/scans/{ids['tool_scan_id']}/diff")
+
+        assert response.status_code == 200
+        entries = response.get_json()["newly_detected_assessments_list"]
+        matching = [entry for entry in entries if entry["assessment_id"] == assessment_id]
+        assert len(matching) == 1
+        targets = matching[0]["targets"]
+        assert len(targets) == 1
+        assert targets[0]["variant_id"] == ids["variant_id"]
+        assert targets[0]["finding_id"] == str(active_finding.id)
+        assert targets[0]["package_name"] == "openssl"
