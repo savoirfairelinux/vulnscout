@@ -249,7 +249,7 @@ SBOM uploads and document exports appear in the same queue. Exports download aut
 
 ### Source Visibility Toggles
 
-Four coloured toggle buttons in the toolbar (Grype, NVD, OSV, sbom-cve-check) let you show or hide scan entries by source. This affects the history view only; it does not cancel or skip queued work.
+Use **SBOM imports only** to hide every scanner scan/run while keeping SBOM imports visible. The individual source toggles (Grype, NVD, OSV, and sbom-cve-check) remain available when you want to show or hide particular scanners instead.
 
 ### Importing and Exporting Scan Data
 
@@ -269,7 +269,7 @@ A few properties are worth knowing:
 
 ### Timeline Layout
 
-Scans are displayed in a vertical timeline, most recent first. Each entry shows the timestamp of the import, the project and variant it belongs to, and a set of colour-coded badges summarising the delta:
+Scans are displayed in a vertical timeline, most recent first. Each entry shows the timestamp of the import, the project and variant it belongs to, and a set of colour-coded badges summarising the delta. Scan-run badges use a different colour from SBOM-import badges. On a grouped scan run, select a scanner badge under **Tool scan diff details** to open that scanner's diff:
 
 - **Green** badges indicate additions: new packages, new findings, or new vulnerabilities that appeared in this scan.
 - **Red** badges indicate removals: packages, findings, or vulnerabilities that were present before but are no longer in the SBOM.
