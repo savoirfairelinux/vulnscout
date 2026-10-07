@@ -33,6 +33,8 @@ WRITE_TOOLS = (
     "update_variant_context", "write_assessment_review",
 )
 COOKIE = "vulnscout_agent"
+MAX_SCOPE_VARIANTS = 1000
+MAX_PROMPT_VARIANTS = 50
 INVALID_PROVIDER_URL = "Invalid provider URL."
 BUSY_AGENT_ERROR = "The agent is already responding."
 GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
@@ -447,12 +449,22 @@ def _validated_context(value):
         if value.get(key) is not None:
             context[key] = _bounded_string(value[key], 100, "Invalid page scope.")
     if value.get("variantIds") is not None:
-        context["variantIds"] = _bounded_strings(value["variantIds"], 50, 100, "Invalid variant selection.")
-    if "variantCount" in value:
-        context["variantCount"] = _bounded_count(value["variantCount"])
+        context["variantIds"] = _bounded_strings(
+            value["variantIds"], MAX_SCOPE_VARIANTS, 100,
+            f"Select at most {MAX_SCOPE_VARIANTS} variants before asking the agent.",
+        )
     if value.get("view") is not None:
         context["view"] = _view_context(value["view"])
     return context
+
+
+def _prompt_context(context):
+    variant_ids = context.get("variantIds") or []
+    if len(variant_ids) <= MAX_PROMPT_VARIANTS:
+        return context
+    prompt = {key: value for key, value in context.items() if key != "variantIds"}
+    prompt["variantCount"] = len(variant_ids)
+    return prompt
 
 
 def _scope_for_context(context):
@@ -794,7 +806,7 @@ def agent_message():
     agent_prompt = user_message
     if context:
         agent_prompt = (f"{user_message}\n\nCurrent VulnScout browser view (selection only; verify facts with MCP): "
-                        f"{json.dumps(context, separators=(',', ':'))}")
+                        f"{json.dumps(_prompt_context(context), separators=(',', ':'))}")
     path = _mcp_path()
     if path is None or not path.is_file():
         return _response({"error": (

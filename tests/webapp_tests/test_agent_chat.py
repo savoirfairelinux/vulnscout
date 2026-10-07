@@ -4,6 +4,7 @@ import queue
 import socket
 import threading
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -89,19 +90,30 @@ def test_page_selections_pass_validation_before_mcp_setup(client):
     assert "VULNSCOUT_MCP_SERVER_PATH" in response.get_json()["error"]
 
 
-def test_large_project_scope_uses_count_without_partial_ids(client):
+def test_large_variant_selection_keeps_full_scope_and_compacts_prompt(client):
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.routes.agent import MAX_PROMPT_VARIANTS, _prompt_context, _scope_for_context, _validated_context
+
+    with client.application.app_context():
+        project = Project.create("Large")
+        variants = [str(Variant.create(f"Variant {index}", project.id).id)
+                    for index in range(MAX_PROMPT_VARIANTS + 2)]
+        selected = variants[1:]
+        context = _validated_context({"page": "vulnerabilities", "projectId": str(project.id),
+                                      "variantIds": selected})
+        assert json.loads(_scope_for_context(context))["variant_ids"] == sorted(selected)
+    prompt = _prompt_context(context)
+    assert "variantIds" not in prompt
+    assert prompt["variantCount"] == len(selected)
+    assert context["variantIds"] == selected
+    small = {"page": "metrics", "variantIds": ["variant"]}
+    assert _prompt_context(small) is small
     response = client.post("/api/agent/messages", json={
-        "message": "Summarize", "context": {"page": "ai", "variantCount": 85, "view": {
-            "selectedProjectName": "AgentDemo", "selectedVariantName": "Sample",
-            "exportCategory": "all", "enabledExportDocuments": ["spdx2"],
-        }},
+        "message": "Summarize", "context": {"page": "metrics", "variantIds": ["x"] * 1001},
     })
-    assert response.status_code == 503
-    assert "VULNSCOUT_MCP_SERVER_PATH" in response.get_json()["error"]
-    invalid = client.post("/api/agent/messages", json={
-        "message": "Summarize", "context": {"page": "ai", "variantCount": -1},
-    })
-    assert invalid.status_code == 400
+    assert response.status_code == 400
+    assert "at most 1000 variants" in response.get_json()["error"]
 
 
 def test_new_conversation_does_not_clear_authentication(client):
@@ -342,7 +354,7 @@ def test_every_agent_endpoint_rejects_remote_requests(client, method, path):
 @pytest.mark.parametrize("context", [
     [], {"page": "metrics", "projectId": 42}, {"page": "metrics", "projectId": "x" * 101},
     {"page": "metrics", "variantIds": "variant"}, {"page": "metrics", "variantIds": [42]},
-    {"page": "metrics", "variantIds": ["x"] * 51}, {"page": "metrics", "view": []},
+    {"page": "metrics", "variantIds": ["x"] * 1001}, {"page": "metrics", "view": []},
     {"page": "metrics", "view": {"search": "x" * 201}},
     {"page": "metrics", "view": {"selectionCount": True}},
     {"page": "metrics", "view": {"visibleCount": 1000001}},
@@ -363,6 +375,7 @@ def test_context_retains_only_allowed_fields():
                         "visibleCount": 0, "hideEmptyScans": False, "secret": "not-for-the-agent"}}
     result = _validated_context(context)
     assert "secret" not in result
+    assert "variantCount" not in result
     assert "secret" not in result["view"]
     assert result["variantIds"] == ["variant"]
     assert result["view"]["selectionCount"] == 1
@@ -424,6 +437,7 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
     from src.models.package import Package
     from src.models.project import Project
     from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_observation import SBOMObservation
     from src.models.sbom_package import SBOMPackage
     from src.models.scan import Scan
     from src.models.variant import Variant
@@ -439,6 +453,7 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
         Vulnerability.create_record(id="CVE-2024-1234", description="Description", status="high")
         db.session.commit()
         findings = []
+        documents = []
         for variant, name in ((variant_a, "allowed"), (variant_other, "other"), (variant_b, "foreign")):
             scan = Scan.create(name, variant.id)
             package = Package.find_or_create(name, "1.0", [], [], "")
@@ -448,6 +463,17 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
             document = SBOMDocument.create(path=f"/sbom/{name}.json", source_name="cdx", scan_id=scan.id)
             SBOMPackage.create(document.id, package.id)
             findings.append(finding)
+            documents.append(document)
+        unaffected_supplier = Package.find_or_create("allowed", "1.0", [], [], "", "VendorB")
+        db.session.commit()
+        SBOMPackage.create(documents[0].id, unaffected_supplier.id)
+        SBOMObservation.create("CVE-2024-1234", documents[0].id, "current note", "Current evidence")
+        historical = Scan.create("historical", variant_a.id)
+        historical.timestamp = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        db.session.commit()
+        historical_document = SBOMDocument.create(
+            path="/sbom/historical.json", source_name="cdx", scan_id=historical.id)
+        SBOMObservation.create("CVE-2024-1234", historical_document.id, "historical note", "Obsolete evidence")
         Vulnerability.create_record(id="CVE-2024-5678", description="Foreign only")
         foreign_only = Finding.get_or_create(package.id, "CVE-2024-5678")
         Observation.create(foreign_only.id, scan.id)
@@ -487,6 +513,10 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
         assert vulnerability["packages"] == ["allowed@1.0"]
         assert "other@1.0" not in str(vulnerability)
         assert "foreign@1.0" not in str(vulnerability)
+        assert "VendorB" not in str(vulnerability)
+        texts = {text["content"] for text in vulnerability["texts"]}
+        assert "Current evidence" in texts
+        assert "Obsolete evidence" not in texts
         with pytest.raises(VulnScoutError, match="outside the current variant scope"):
             agent_client.get_vulnerability_for_variant("CVE-2024-5678", chosen_id)
 
@@ -522,12 +552,13 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
 
         saved = agent_client.write_assessment("CVE-2024-1234", {
             "targets": [{"variant_id": chosen_id, "package": "allowed@1.0"}],
-            "status": "under_investigation", "ai_generated": True,
+            "status": "under_investigation", "ai_generated": False,
         })
         assert saved["assessment"]["status"] == "under_investigation"
         with client.application.app_context():
             persisted = Assessment.get_by_id(saved["assessment"]["id"])
             assert persisted.created_at is not None
+            assert persisted.origin == "ai"
     finally:
         server.shutdown()
         server_thread.join(timeout=5)

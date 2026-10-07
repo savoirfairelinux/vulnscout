@@ -174,6 +174,29 @@ test('streams split NDJSON events without a write permission checkbox', async ()
     expect(requests[1].allow_writes).toBeUndefined();
 });
 
+test('sends every selected variant so the backend enforces the displayed scope', async () => {
+    const variantIds = Array.from({ length: 60 }, (_, index) => `variant-${index}`);
+    const requests: { context: AgentContext }[] = [];
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) {
+            requests.push(JSON.parse(String(options?.body)));
+            return streamResponse([`{"type":"done","reply":"Scoped","model":"auto","usage":${JSON.stringify(usage)}}\n`]);
+        }
+        return jsonResponse(signedIn);
+    };
+
+    render(<AgentChat onClose={() => undefined} context={{ page: 'metrics', projectId: 'project', variantIds }} />);
+    const input = await screen.findByRole('textbox', { name: 'Message the agent' });
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: 'Summarize' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await screen.findByText('Scoped');
+    expect(requests[0].context.variantIds).toEqual(variantIds);
+    expect(requests[0].context).not.toHaveProperty('variantCount');
+});
+
 test('notifies views only after a successful write tool completes', async () => {
     const writes: string[] = [];
     const onWrite = (event: Event) => writes.push((event as CustomEvent<{ tool: string }>).detail.tool);

@@ -442,7 +442,7 @@ class ScopedVulnScoutClient(VulnScoutClient):
             raise VulnScoutError("Assessment targets require a scoped variant.")
         for variant_id in ids:
             self._variant(variant_id)
-        result = super().write_assessment(vuln_id, payload)
+        result = super().write_assessment(vuln_id, {**payload, "ai_generated": True})
         if "assessment" in result:
             result["assessment"] = self._assessment(result["assessment"])
         result["replaced"] = [
