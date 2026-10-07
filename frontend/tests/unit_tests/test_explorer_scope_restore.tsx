@@ -261,7 +261,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(null);
         mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
         mockVariantsListAll.mockResolvedValue([{ id: 'default-variant', project_id: 'default-project', name: 'Default Variant' }]);
-        render(<Explorer />);
+        render(<Explorer />, { wrapper: MemoryRouter });
 
         TestEventSource.current.send('snapshot', { seq: 1, operations: [
             { op_id: 'scan:grype:v1', kind: 'scan', status: 'done', queue_id: 'q-1' },
