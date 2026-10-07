@@ -229,16 +229,6 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
         loadVariantContext();
     }, [loadVariantContext]);
 
-    useEffect(() => {
-        const refresh = (event: Event) => {
-            const tool = (event as CustomEvent<{ tool?: string }>).detail?.tool;
-            if (tool === 'update_project_context') loadProjectContext();
-            if (tool === 'update_variant_context') loadVariantContext();
-        };
-        window.addEventListener(AGENT_WRITE_EVENT, refresh);
-        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
-    }, [loadProjectContext, loadVariantContext]);
-
     const validate = (): boolean => {
         const errors: Record<string, string> = {};
         if (!description.trim()) {
@@ -259,6 +249,29 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
         risks: risks.trim() || null,
         other_info: otherInfo.trim() || null,
     });
+
+    // Agent updates reload only clean forms, so unsaved edits are never replaced.
+    const agentRefreshRef = useRef<(tool?: string) => void>(() => undefined);
+    useEffect(() => {
+        agentRefreshRef.current = (tool?: string) => {
+            if (tool === 'update_project_context') {
+                if ((description.trim() || null) === savedDescriptionRef.current) loadProjectContext();
+                else showBanner("The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.", "error");
+            }
+            if (tool === 'update_variant_context') {
+                const saved = savedVariantFieldsRef.current;
+                const fields = currentVariantFields();
+                if (saved === null || (Object.keys(fields) as (keyof VariantContextData)[]).every(k => fields[k] === saved[k]))
+                    loadVariantContext();
+                else showBanner("The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.", "error");
+            }
+        };
+    });
+    useEffect(() => {
+        const refresh = (event: Event) => agentRefreshRef.current((event as CustomEvent<{ tool?: string }>).detail?.tool);
+        window.addEventListener(AGENT_WRITE_EVENT, refresh);
+        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
+    }, []);
 
     // Editing the variant context marks every pending AI assessment of that variant
     // as outdated, and editing the project description does the same for every

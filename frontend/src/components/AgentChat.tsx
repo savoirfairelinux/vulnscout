@@ -369,8 +369,6 @@ function AgentChat({ onClose, context, active = true, threadId }: Readonly<{ onC
             const selectedVulnerabilityIds = context.view?.selectedVulnerabilityIds;
             const matchingVariantIds = context.view?.matchingVariantIds;
             const contextForTurn: AgentContext = { ...context,
-                variantIds: context.variantIds && context.variantIds.length > 50 ? undefined : context.variantIds,
-                variantCount: context.variantIds && context.variantIds.length > 50 ? context.variantIds.length : undefined,
                 view: context.view && {
                 ...context.view,
                 visibleVulnerabilityIds: visibleIds && visibleIds.length > 100 ? undefined : visibleIds,

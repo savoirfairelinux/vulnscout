@@ -1048,6 +1048,7 @@ def init_app(app: Flask) -> None:
         project_id = request.args.get("project_id")
         response = record.to_dict()
         text_variant_ids: list[uuid.UUID] | None = None
+        text_scan_ids: list[uuid.UUID] | None = None
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -1056,22 +1057,15 @@ def init_app(app: Flask) -> None:
                 return {"error": "Internal error"}, 500
             if request.args.get("agent_scoped") == "1":
                 active_ids = active_scan_ids_for_variant(variant_uuid)
+                text_scan_ids = active_ids
                 package_ids = active_package_ids_for_scans(active_ids)
-                package_variant = aliased(Package)
-                package_match = db.and_(
-                    package_variant.name == Package.name,
-                    package_variant.version == Package.version,
-                )
+                # Exact finding package identity: assessment writes accept only observed packages.
                 package_query = (
-                    db.select(package_variant.name, package_variant.version, package_variant.supplier)
-                    .join(Package, package_match)
+                    db.select(Package.name, Package.version, Package.supplier)
                     .join(Finding, Finding.package_id == Package.id)
                     .join(Observation, Observation.finding_id == Finding.id)
                     .join(Scan, Scan.id == Observation.scan_id)
-                    .outerjoin(SBOMPackage, SBOMPackage.package_id == package_variant.id)
-                    .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                     .where(Finding.vulnerability_id == record.id, Observation.scan_id.in_(active_ids))
-                    .where(db.or_(SBOMDocument.scan_id.in_(active_ids), package_variant.id == Package.id))
                     .distinct()
                 )
                 package_filter = _sbom_pkg_filter(package_ids)
@@ -1090,7 +1084,8 @@ def init_app(app: Flask) -> None:
                 response["found_by"] = list(record.found_by or [])
             overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
-            text_variant_ids = [variant_uuid]
+            if text_scan_ids is None:
+                text_variant_ids = [variant_uuid]
         elif project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
@@ -1119,6 +1114,7 @@ def init_app(app: Flask) -> None:
         vuln_texts = fetch_vulnerabilities_texts(
             [id],
             variant_ids=text_variant_ids,
+            scan_ids=text_scan_ids,
             include_packages=True,
         )
         response["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[id]))

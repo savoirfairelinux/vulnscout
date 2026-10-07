@@ -6,6 +6,7 @@ fetchMock.enableMocks();
 import React from 'react';
 
 import AIContext from '../../src/pages/AIContext';
+import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 
 beforeEach(() => fetchMock.resetMocks());
 
@@ -302,6 +303,50 @@ describe('AIContext page', () => {
         expect(
             (screen.getByLabelText("Project Description") as HTMLTextAreaElement).value
         ).toBe('Unsaved description');
+    });
+
+    test('agent context updates reload clean forms and keep unsaved edits', async () => {
+        const requests: string[] = [];
+        let stored = 'Agent v1';
+        fetchMock.mockResponse(async request => {
+            requests.push(request.url);
+            if (request.url.endsWith('/api/projects')) return JSON.stringify([{ id: 'p1', name: 'Project A' }]);
+            if (request.url.endsWith('/variants')) return JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]);
+            if (request.url.endsWith('/api/projects/p1/context')) return JSON.stringify({ project_id: 'p1', description: stored });
+            return JSON.stringify({
+                project_id: 'p1', description: stored, variant_id: 'v1', variant_description: null,
+                environment: null, threat_model: stored, risks: null, other_info: null, files: [],
+            });
+        });
+        const agentWrite = (tool: string) => act(() => {
+            window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool } }));
+        });
+
+        render(<AIContext />);
+        await screen.findByRole('option', { name: 'Project A' });
+        fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+        await screen.findByRole('option', { name: 'Variant 1' });
+        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+        await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('Agent v1'));
+        await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Agent v1'));
+
+        stored = 'Agent v2';
+        agentWrite('update_project_context');
+        agentWrite('update_variant_context');
+        await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Agent v2'));
+        await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('Agent v2'));
+
+        fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'Unsaved description' } });
+        fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'Unsaved threat model' } });
+        stored = 'Agent v3';
+        const loaded = requests.length;
+        agentWrite('update_project_context');
+        expect(await screen.findByText(/agent updated the project description/i)).toBeInTheDocument();
+        agentWrite('update_variant_context');
+        expect(await screen.findByText(/agent updated the variant context/i)).toBeInTheDocument();
+        expect(requests).toHaveLength(loaded);
+        expect(screen.getByLabelText("Project Description")).toHaveValue('Unsaved description');
+        expect(screen.getByLabelText(/threat model/i)).toHaveValue('Unsaved threat model');
     });
 
     function setupWithVariant() {

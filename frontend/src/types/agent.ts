@@ -37,7 +37,6 @@ export type AgentContext = {
     baseVariantId?: string;
     compareOperation?: string;
     variantIds?: string[];
-    variantCount?: number;
     multiOperation?: string;
     view?: AgentViewContext;
 };
