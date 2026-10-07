@@ -1,7 +1,7 @@
 """add run_id column to scans
 
-Revision ID: z2c3d4e5f6a7
-Revises: y1b2c3d4e5f6
+Revision ID: b4c5d6e7f809
+Revises: 4e6c9a71b35f
 Create Date: 2026-09-25 00:00:00.000000
 
 """
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = 'z2c3d4e5f6a7'
-down_revision = 'y1b2c3d4e5f6'
+revision = 'b4c5d6e7f809'
+down_revision = '4e6c9a71b35f'
 branch_labels = None
 depends_on = None
 

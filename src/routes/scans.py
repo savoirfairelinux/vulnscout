@@ -1400,7 +1400,11 @@ def init_app(app: Flask) -> None:
         except ValueError:
             return jsonify({"error": "Invalid scan id"}), 400
 
-        scan = _load_scan_with_findings(scan_uuid)
+        # The global-result builder uses compact batch queries for observations
+        # and packages. Eager-loading the scan's full ORM observation/finding/
+        # package graph here duplicates that work and can be very expensive for
+        # large scans; only the scan metadata is needed to choose active sources.
+        scan = ScanController.get(scan_uuid)
         if scan is None:
             return jsonify({"error": "Scan not found"}), 404
 
