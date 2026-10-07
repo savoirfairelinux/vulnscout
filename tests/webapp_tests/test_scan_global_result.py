@@ -154,3 +154,68 @@ class TestGetScanGlobalResult:
         response = client.get(f"/api/scans/{ids['tool_scan_id']}/global-result")
 
         assert response.status_code == 200
+
+    def test_tool_diff_preserves_identical_assessments_for_distinct_package_targets(self, app, client, ids, monkeypatch):
+        """Separate assessments for one CVE must survive identical content and show their targets."""
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+
+        with app.app_context():
+            variant_id = uuid.UUID(ids["variant_id"])
+            tool_scan = _db.session.get(Scan, uuid.UUID(ids["tool_scan_id"]))
+            sbom_doc = _db.session.execute(
+                _db.select(SBOMDocument).where(SBOMDocument.scan_id == uuid.UUID(ids["sbom_scan_id"]))
+            ).scalar_one()
+            openssl = Package.find_or_create("openssl", "1.1.1")
+            zlib = Package.find_or_create("zlib", "1.2.13")
+            SBOMPackage.create(sbom_doc.id, zlib.id)
+            finding_one = Finding.get_or_create(openssl.id, "CVE-2021-2222")
+            finding_two = Finding.get_or_create(zlib.id, "CVE-2021-2222")
+            Observation.create(finding_id=finding_two.id, scan_id=tool_scan.id)
+            _db.session.commit()
+
+            assessment_one = Assessment.create(
+                status="under_investigation",
+                targets=[(variant_id, finding_one.id)],
+                simplified_status="Pending Assessment",
+                justification="component_not_present",
+                impact_statement="same text",
+                status_notes="same notes",
+                commit=False,
+            )
+            assessment_two = Assessment.create(
+                status="under_investigation",
+                targets=[(variant_id, finding_two.id)],
+                simplified_status="Pending Assessment",
+                justification="component_not_present",
+                impact_statement="same text",
+                status_notes="same notes",
+                commit=False,
+            )
+            _db.session.commit()
+            assessment_ids = {assessment_one.id, assessment_two.id}
+
+        import src.routes.scans as scans_route
+
+        monkeypatch.setattr(
+            scans_route,
+            "_global_assessment_ids_for",
+            lambda _sbom, tools, **_kwargs: assessment_ids if tools else set(),
+        )
+        response = client.get(f"/api/scans/{ids['tool_scan_id']}/diff")
+
+        assert response.status_code == 200
+        assessments = response.get_json()["newly_detected_assessments_list"]
+        assert len(assessments) == 2
+        assert {entry["assessment_id"] for entry in assessments} == {str(value) for value in assessment_ids}
+        targets_by_name = {
+            entry["targets"][0]["package_name"]: entry["targets"][0]
+            for entry in assessments
+        }
+        assert set(targets_by_name) == {"openssl", "zlib"}
+        assert all(target["finding_id"] and target["package_id"] for target in targets_by_name.values())
