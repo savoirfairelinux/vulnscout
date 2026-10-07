@@ -62,6 +62,7 @@ type FindingDiffEntry = {
     package_id: string;
     vulnerability_id: string;
     origin?: string;
+    sources?: string[];
 };
 
 type PackageDiffEntry = {
@@ -96,6 +97,7 @@ type AssessmentDiffEntry = {
     justification: string;
     impact_statement: string;
     status_notes: string;
+    sources?: string[];
 };
 
 type ScanDiff = {

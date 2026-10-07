@@ -396,14 +396,14 @@ describe('ScanHistory selected variant scope', () => {
         mockList.mockResolvedValue([{...scan('scan-1', 'v1'), is_first: false}]);
         render(<ScanHistory projectId="project" variantIds={['v1']} />);
 
-        const details = await screen.findAllByRole('button', {name: 'Details'});
-        fireEvent.click(details[0]);
+        fireEvent.click(await screen.findByRole('button', {name: 'View Scan Result'}));
         expect(await screen.findByText('Scan Result — Active Items')).toBeInTheDocument();
         expect(screen.getByText('openssl')).toBeInTheDocument();
 
         const resultModal = screen.getByTestId('scan-result-modal-backdrop');
         const resultFilter = resultModal.querySelector<HTMLInputElement>('input[type="text"]');
         expect(resultFilter).not.toBeNull();
+        expect(resultFilter).toHaveAttribute('placeholder', 'Filter…');
         fireEvent.change(resultFilter!, {target: {value: 'missing'}});
         expect(screen.queryByText('openssl')).not.toBeInTheDocument();
         fireEvent.change(resultFilter!, {target: {value: ''}});
@@ -413,6 +413,9 @@ describe('ScanHistory selected variant scope', () => {
         expect(screen.getByText('CVE-2026-0001')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', {name: /Assessments/}));
         expect(screen.getByText('Exploitable')).toBeInTheDocument();
+        expect(screen.queryByText('Active assessments')).not.toBeInTheDocument();
+        expect(resultModal.querySelectorAll('input[type="text"]')).toHaveLength(1);
+        expect(resultModal.querySelector('.overflow-auto.max-h-\\[70vh\\]')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', {name: 'Close'}));
         expect(screen.queryByText('Scan Result — Active Items')).not.toBeInTheDocument();
     });
@@ -421,15 +424,15 @@ describe('ScanHistory selected variant scope', () => {
         mockList.mockResolvedValue([{...scan('scan-1', 'v1'), is_first: false}]);
         render(<ScanHistory projectId="project" variantIds={['v1']} />);
 
-        const details = await screen.findAllByRole('button', {name: 'Details'});
-        fireEvent.click(details[1]);
-        expect(await screen.findByText('Scan diff details')).toBeInTheDocument();
+        fireEvent.click(await screen.findByRole('button', {name: 'View Scan Diff'}));
+        expect(await screen.findByTestId('scan-diff-modal-backdrop')).toBeInTheDocument();
         expect(screen.getByText('Added packages (1)')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', {name: /Findings/}));
         expect(screen.getByText('Findings on upgraded packages (1)')).toBeInTheDocument();
         const diffModal = screen.getByTestId('scan-diff-modal-backdrop');
         const filters = diffModal.querySelectorAll<HTMLInputElement>('input[type="text"]');
         expect(filters.length).toBeGreaterThan(0);
+        expect(filters[0]).toHaveAttribute('placeholder', 'Filter…');
         fireEvent.change(filters[0], {target: {value: 'does-not-match'}});
         fireEvent.change(filters[0], {target: {value: ''}});
         fireEvent.click(screen.getByRole('button', {name: /Vulnerabilities/}));
@@ -448,13 +451,11 @@ describe('ScanHistory selected variant scope', () => {
         mockGetDiff.mockResolvedValueOnce({...richDiff, scan_type: 'tool'});
         render(<ScanHistory projectId="project" variantIds={['v1']} />);
 
-        let details = await screen.findAllByRole('button', {name: 'Details'});
-        fireEvent.click(details[0]);
+        fireEvent.click(await screen.findByRole('button', {name: 'View Scan Result'}));
         expect(await screen.findByText('Failed to load scan result.')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', {name: 'Close'}));
 
-        details = screen.getAllByRole('button', {name: 'Details'});
-        fireEvent.click(details[1]);
+        fireEvent.click(screen.getByRole('button', {name: 'View Scan Diff'}));
         expect(await screen.findByText('Tool scan diff details')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', {name: /New Discovered/}));
         expect(screen.getByText('New findings discovered (1)')).toBeInTheDocument();
@@ -569,28 +570,52 @@ describe('ScanHistory selected variant scope', () => {
             } as Scan,
         ];
 
-        test('shows every step of a run as one card with per-scanner details', async () => {
+        test('opens one source-attributed diff for a grouped run', async () => {
             mockList.mockResolvedValue(history());
+            mockGetDiff
+                .mockResolvedValueOnce({...richDiff, all_findings: [finding], all_vulns: ['CVE-2026-0001']})
+                .mockResolvedValueOnce({
+                    ...richDiff,
+                    newly_detected_findings_list: [],
+                    newly_detected_vulns_list: [],
+                    newly_detected_assessments_list: [],
+                    all_findings: [finding],
+                    all_vulns: ['CVE-2026-0001'],
+                });
             render(<ScanHistory projectId="project" variantIds={['v1']} />);
 
             expect(await screen.findByText(/Scan run · 2 scanners/)).toBeInTheDocument();
             expect(screen.getAllByText(/Scan run · /)).toHaveLength(1);
+            const runCard = screen.getByText(/Scan run · 2 scanners/).closest('.group\\/card') as HTMLElement;
+            expect(within(runCard).getByText('Grype', {exact: true})).toBeInTheDocument();
+            expect(within(runCard).getByText('NVD CPE', {exact: true})).toBeInTheDocument();
+            const actionButtons = within(runCard).getAllByRole('button').filter(button =>
+                ['View Scan Result', 'View Scan Diff'].includes(button.textContent?.trim() ?? '')
+            );
+            expect(actionButtons).toHaveLength(2);
+            actionButtons.forEach(button => {
+                expect(button).toHaveClass('bg-cyan-700', 'min-h-10', 'min-w-36');
+            });
+            expect(within(runCard).getByText('Changes since previous scan').parentElement)
+                .toContainElement(within(runCard).getByRole('button', {name: 'View Scan Diff'}));
             expect(screen.getByText('OSV Scan')).toBeInTheDocument();
             expect(screen.queryByText('Grype Scan')).not.toBeInTheDocument();
             ['99', '21', '17', '22', '18', '23', '19'].forEach(count =>
                 expect(screen.getByText(count)).toBeInTheDocument());
-            expect(screen.getByTitle('Show Grype changes')).toHaveTextContent('+3 new');
-
-            fireEvent.click(screen.getByTitle('Show NVD CPE changes'));
-            await waitFor(() => expect(mockGetDiff).toHaveBeenCalledWith('nvd-step'));
+            fireEvent.click(within(runCard).getByRole('button', {name: 'View Scan Diff'}));
+            const runDiffModal = await screen.findByTestId('scan-run-diff-modal-backdrop');
+            expect(within(runDiffModal).getByRole('heading', {name: 'Scan diff details'})).toBeInTheDocument();
+            await waitFor(() => expect(mockGetDiff).toHaveBeenCalledWith('grype-step'));
+            expect(mockGetDiff).toHaveBeenCalledWith('nvd-step');
+            expect(screen.getByRole('columnheader', {name: 'Source'})).toBeInTheDocument();
+            expect(screen.getAllByText('Grype, NVD CPE')).toHaveLength(1);
             fireEvent.click(await screen.findByRole('button', {name: 'Close'}));
 
-            const runCard = screen.getByText(/Scan run · 2 scanners/).closest('.group\\/card') as HTMLElement;
-            fireEvent.click(within(runCard).getByRole('button', {name: 'Details'}));
+            fireEvent.click(within(runCard).getByRole('button', {name: 'View Scan Result'}));
             await waitFor(() => expect(mockGetGlobalResult).toHaveBeenCalledWith('nvd-step'));
         });
 
-        test('keeps removal-only runs visible and lets users read and edit each scanner note', async () => {
+        test('keeps removal-only runs visible and saves one note across scanner steps', async () => {
             mockList.mockResolvedValue(history().map(entry => {
                 const unchangedRun = entry.run ? {...entry, run: {
                     ...entry.run, newly_detected_vulns: 0,
@@ -608,17 +633,16 @@ describe('ScanHistory selected variant scope', () => {
             const runCard = (await screen.findByText(/Scan run · 2 scanners/)).closest('.group\\/card') as HTMLElement;
             fireEvent.click(screen.getByTitle('Showing all scans'));
             expect(runCard).toBeInTheDocument();
-            expect(within(runCard).getByTitle('Show Grype changes')).toHaveTextContent('−2 vulnerabilities removed');
-            expect(within(runCard).getByTitle('Show Grype changes')).toHaveTextContent('−4 matches removed');
-            expect(within(runCard).getByTitle('Show NVD CPE changes')).not.toHaveTextContent('removed');
             expect(within(runCard).getByText('Grype note')).toBeInTheDocument();
-            const nvdNote = within(runCard).getByText('NVD note');
-            fireEvent.click(within(nvdNote.parentElement!).getByTitle('Edit description'));
+            expect(within(runCard).getByText('Scan note')).toBeInTheDocument();
+            expect(within(runCard).queryByText('NVD note')).not.toBeInTheDocument();
+            fireEvent.click(within(runCard).getByTitle('Edit scan run note'));
             fireEvent.change(within(runCard).getByPlaceholderText('Add a description…'), {
                 target: {value: 'NVD updated'},
             });
-            fireEvent.click(within(runCard).getByTitle('Save'));
+            fireEvent.click(within(runCard).getByTitle('Save scan note'));
             await waitFor(() => expect(within(runCard).getByText('NVD updated')).toBeInTheDocument());
+            expect(mockSetDescription).toHaveBeenCalledWith('grype-step', 'NVD updated');
             expect(mockSetDescription).toHaveBeenCalledWith('nvd-step', 'NVD updated');
         });
 
@@ -628,11 +652,28 @@ describe('ScanHistory selected variant scope', () => {
             await screen.findByText(/Scan run · 2 scanners/);
 
             fireEvent.click(screen.getByTitle('Grype scans visible'));
-            expect(screen.queryByTitle('Show Grype changes')).not.toBeInTheDocument();
-            expect(screen.getByTitle('Show NVD CPE changes')).toBeInTheDocument();
+            const runCard = screen.getByText(/Scan run · 2 scanners/).closest('.group\\/card') as HTMLElement;
+            expect(runCard).toBeInTheDocument();
 
             fireEvent.click(screen.getByTitle('NVD scans visible'));
             expect(screen.queryByText(/Scan run · /)).not.toBeInTheDocument();
+        });
+
+        test('hide vulnerability scan filter hides scanners but preserves SBOM imports', async () => {
+            mockList.mockResolvedValue(history());
+            render(<ScanHistory projectId="project" variantIds={['v1']} />);
+            await screen.findByText(/Scan run · 2 scanners/);
+
+            const hideScans = screen.getByRole('button', {name: /Hide Vulnerability Scan/});
+            fireEvent.click(hideScans);
+
+            expect(hideScans).toHaveAttribute('aria-pressed', 'true');
+            expect(screen.getByText('Import SBOM')).toBeInTheDocument();
+            expect(screen.queryByText(/Scan run · /)).not.toBeInTheDocument();
+            expect(screen.queryByText('OSV Scan')).not.toBeInTheDocument();
+
+            fireEvent.click(hideScans);
+            expect(screen.getByText(/Scan run · 2 scanners/)).toBeInTheDocument();
         });
 
         test('hides a run without changes only when every step is empty', async () => {
@@ -645,6 +686,21 @@ describe('ScanHistory selected variant scope', () => {
 
             expect(screen.queryByText(/Scan run · /)).not.toBeInTheDocument();
             expect(screen.getByText('OSV Scan')).toBeInTheDocument();
+        });
+
+        test('hide empty scans hides first-source detections that add nothing new', async () => {
+            const duplicateOnly = history().map(entry => entry.scan_type === 'tool'
+                ? {...entry, is_first: true, newly_detected_findings: 0, newly_detected_vulns: 0, newly_detected_assessments: 0}
+                : entry);
+            mockList.mockResolvedValue(duplicateOnly);
+            render(<ScanHistory projectId="project" variantIds={['v1']} />);
+            await screen.findByText(/Scan run · 2 scanners/);
+
+            fireEvent.click(screen.getByTitle('Showing all scans'));
+
+            expect(screen.queryByText(/Scan run · /)).not.toBeInTheDocument();
+            expect(screen.queryByText('OSV Scan')).not.toBeInTheDocument();
+            expect(screen.getByText('Import SBOM')).toBeInTheDocument();
         });
 
         test('ignores changes from hidden scanners when hiding empty runs', async () => {
