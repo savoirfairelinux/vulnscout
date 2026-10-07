@@ -124,6 +124,19 @@ Commands with optional --project and --variant (uses "default" project and varia
                                      --project without --variant tests all project variants
                                      No scope tests the default project/variant
 
+    Run AI CVE assessments with a local GitHub Copilot CLI (one headless session per CVE):
+    cve-assessment (--cve <id>... | --filter <expr>) --dir <path> [options]
+                                     --cve and --filter are mutually exclusive
+                                     --filter uses the --match-condition grammar and scope
+                                     --dir <path>      Copilot working directory (source tree)
+                                     --timeout <sec>   Per-CVE timeout (default 900)
+                                     --log-dir <path>  Log directory (default ./cve-assessment-logs/<time>)
+                                     --model <name>    Copilot model
+                                     --allow-tool <p>  Extra Copilot tool permission (repeatable)
+                                     --force           Re-assess CVEs that already have AI assessments
+                                     --json            Also write summary.json
+                                     --dry-run         Print Copilot commands without running them
+
 Commands only requiring --project (uses default project if not specified):
 
     Import or export custom VulnScout data for a project:
@@ -150,6 +163,7 @@ Environment variables:
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
   vulnscout --project test --match-condition "cvss >= 9.0"
+  vulnscout cve-assessment --project test --filter "cvss >= 9.0" --dir ~/src/product
   vulnscout --project test --variant x86 --report summary.adoc
   vulnscout --serve
   vulnscout --report summary.adoc
@@ -363,6 +377,66 @@ start_frontend_dev() {
     trap _cleanup_frontend SIGINT SIGTERM EXIT
 }
 
+# Run the host-side Copilot assessment runner. --filter is resolved to CVE IDs
+# inside the container; Copilot itself runs on the host.
+cve_assessment_cmd() {
+    local -a cves=() runner_args=() scope_args=()
+    local filter="" filter_set=false work_dir="" project="" variant="" line="" output=""
+    [ "$PROJECT_SPECIFIED" = true ] && project="$PROJECT"
+    [ "$VARIANT_SPECIFIED" = true ] && variant="$VARIANT"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cve|--filter|--project|--variant|--dir|--timeout|--log-dir|--model|--allow-tool)
+                if [ $# -lt 2 ]; then
+                    echo "Error: $1 requires a value" >&2; return 1
+                fi ;;
+        esac
+        case "$1" in
+            --cve) cves+=("$2"); shift 2 ;;
+            --filter) filter="$2"; filter_set=true; shift 2 ;;
+            --project) project="$2"; shift 2 ;;
+            --variant) variant="$2"; shift 2 ;;
+            --dir) work_dir="$2"; runner_args+=(--dir "$2"); shift 2 ;;
+            --timeout|--log-dir|--model|--allow-tool) runner_args+=("$1" "$2"); shift 2 ;;
+            --force|--json|--dry-run) runner_args+=("$1"); shift ;;
+            --dev) shift ;;
+            *) echo "Error: unknown cve-assessment option: $1" >&2; return 1 ;;
+        esac
+    done
+    if [ ${#cves[@]} -gt 0 ] && [ "$filter_set" = true ]; then
+        echo "Error: --cve and --filter cannot be used together" >&2; return 1
+    fi
+    if [ ${#cves[@]} -eq 0 ] && [ "$filter_set" = false ]; then
+        echo "Error: one of --cve or --filter is required" >&2; return 1
+    fi
+    if [ -z "$work_dir" ]; then
+        echo "Error: --dir is required" >&2; return 1
+    fi
+    if [ ! -d "$work_dir" ]; then
+        echo "Error: --dir is not a directory: $work_dir" >&2; return 1
+    fi
+    if [ -n "$project" ]; then scope_args+=(--project "$project"); fi
+    if [ -n "$variant" ]; then scope_args+=(--variant "$variant"); fi
+    if [ "$filter_set" = true ]; then
+        ensure_running
+        output="$(exec_container ${scope_args[@]+"${scope_args[@]}"} --list-matching "$filter")" || return $?
+        # Keep only whitespace-free lines: log output is never a bare ID
+        while IFS= read -r line; do
+            if [[ -n "$line" && "$line" != *[[:space:]]* ]]; then cves+=("$line"); fi
+        done <<< "$output"
+        if [ ${#cves[@]} -eq 0 ]; then
+            echo "No CVEs matched filter."; return 0
+        fi
+    fi
+    runner_args+=(${scope_args[@]+"${scope_args[@]}"})
+    for line in "${cves[@]}"; do runner_args+=(--cve "$line"); done
+    local python_bin="${VULNSCOUT_PYTHON:-}"
+    if [ -z "$python_bin" ]; then
+        if [ -x "$SCRIPT_DIR/venv/bin/python" ]; then python_bin="$SCRIPT_DIR/venv/bin/python"; else python_bin=python3; fi
+    fi
+    PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -m vulnscout_assess "${runner_args[@]}"
+}
+
 parse_and_run() {
     # Pre-scan args for --dev so it takes effect regardless of position
     for _arg in "$@"; do
@@ -508,6 +582,11 @@ parse_and_run() {
                 shift ;;
             config-clear|--config-clear)
                 config_clear "$2"; shift 2 ;;
+            cve-assessment|--cve-assessment)
+                shift
+                local _assess_exit=0
+                cve_assessment_cmd "$@" || _assess_exit=$?
+                return $_assess_exit ;;
             help|--help|-h)
                 show_help; shift ;;
             version|--version)

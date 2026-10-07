@@ -75,6 +75,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | Flag | Description |
 |------|-------------|
 | `--list-projects` | List all projects and their variants |
+| `--list-matching <expr>` | List IDs of vulnerabilities matching a match-condition expression, one per line (`--json` for an array). Scoped like `--match-condition`; exits 0 even when nothing matches |
 | `--list-scans` | List all past scans |
 | `--json` | Output objects in JSON format |
 
