@@ -31,7 +31,7 @@ import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
-import AgentChat from "./AgentChat";
+import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
 import { AGENT_WRITE_EVENT, type AgentContext } from "../types/agent";
 
 type Props = {
@@ -145,6 +145,7 @@ type VariantScopedSnapshot = {
     const [assessmentChatOpen, setAssessmentChatOpen] = useState(false);
     const [assessmentThreadId, setAssessmentThreadId] = useState(() => crypto.randomUUID());
     const activeAssessmentThread = useRef<string | null>(null);
+    const [queuedAgentMessage, setQueuedAgentMessage] = useState<QueuedAgentMessage | undefined>(undefined);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
@@ -188,6 +189,7 @@ type VariantScopedSnapshot = {
         const threadId = activeAssessmentThread.current;
         activeAssessmentThread.current = null;
         setAssessmentChatOpen(false);
+        setQueuedAgentMessage(undefined);
         if (threadId) void fetch('/api/agent/conversation', {
             method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
         });
@@ -205,6 +207,43 @@ type VariantScopedSnapshot = {
     useEffect(() => {
         closeAssessmentChat();
     }, [vuln.id]);
+
+    const openAssessmentChat = (message?: string) => {
+        if (!activeAssessmentThread.current) {
+            const threadId = crypto.randomUUID();
+            activeAssessmentThread.current = threadId;
+            setAssessmentThreadId(threadId);
+        }
+        setAssessmentChatOpen(true);
+        setIsEditing(true);
+        if (message) setQueuedAgentMessage({ id: crypto.randomUUID(), text: message });
+    };
+
+    const toggleAssessmentChat = () => {
+        if (assessmentChatOpen) closeAssessmentChat();
+        else openAssessmentChat();
+    };
+
+    const assessWithAi = (targets: AssessmentTargetPair[]) => {
+        const lines = targets.map(target => {
+            const variant = availableVariants.find(v => v.id === target.variant_id);
+            const variantLabel = variant ? `"${variant.name}" (variant_id ${target.variant_id})` : `variant_id ${target.variant_id}`;
+            return `- variant ${variantLabel}, package ${target.package}`;
+        });
+        openAssessmentChat(
+            `Assess ${vuln.id} for exactly these targets:\n${lines.join('\n')}\n` +
+            `Retrieve the vulnerability details and each variant's merged context with VulnScout MCP first, ` +
+            `then record the result with write_assessment for these targets only.`
+        );
+    };
+
+    const reviewWithAi = (assessmentId: string) => {
+        openAssessmentChat(
+            `Review the user assessment ${assessmentId} for ${vuln.id}. Retrieve it with get_custom_assessment, ` +
+            `independently re-derive the verdict for each of its targets using VulnScout MCP data, and record one ` +
+            `review per target with write_assessment_review. Do not modify the assessment itself.`
+        );
+    };
 
     const assessmentAgentContext: AgentContext = {
         page: 'vulnerabilities', projectId, variantId,
@@ -1609,6 +1648,20 @@ type VariantScopedSnapshot = {
             )}
             {!readOnly && (
                 <button
+                    onClick={toggleAssessmentChat}
+                    type="button"
+                    aria-label={`Toggle AI chat for ${vuln.id}`}
+                    aria-expanded={assessmentChatOpen}
+                    aria-controls="assessment-agent-panel"
+                    title={assessmentChatOpen ? "Close AI chat" : "Open AI chat"}
+                    className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${assessmentChatOpen ? "border-cyan-400 bg-cyan-900/50 text-cyan-100" : "border-cyan-500 text-cyan-200 hover:bg-cyan-900/40"}`}
+                >
+                    <FontAwesomeIcon icon={faWandMagicSparkles} className="mr-2" />
+                    AI
+                </button>
+            )}
+            {!readOnly && (
+                <button
                     onClick={() => setIsEditing(!isEditing)}
                     type="button"
                     className={`rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${isEditing ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-600 hover:bg-blue-700"}`}
@@ -1947,16 +2000,6 @@ type VariantScopedSnapshot = {
                         <div className="mt-6">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                 <h3 className="font-bold">Assessments</h3>
-                                {!readOnly && <button type="button" onClick={() => {
-                                    if (assessmentChatOpen) {
-                                        closeAssessmentChat();
-                                    } else {
-                                        const threadId = crypto.randomUUID();
-                                        activeAssessmentThread.current = threadId;
-                                        setAssessmentThreadId(threadId);
-                                        setAssessmentChatOpen(true);
-                                    }
-                                }} aria-label={`Assess ${vuln.id} with AI`} aria-expanded={assessmentChatOpen} aria-controls="assessment-agent-panel" title="Assess with AI" className="inline-flex items-center gap-2 rounded border border-cyan-500 px-3 py-1.5 text-sm font-semibold text-cyan-200 hover:bg-cyan-900/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"><FontAwesomeIcon icon={faWandMagicSparkles} />Assess with AI</button>}
                             </div>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
@@ -1990,6 +2033,7 @@ type VariantScopedSnapshot = {
                                             findingsLoading={!variantPackageMapLoaded}
                                             findingsError={variantPackageMapError ?? undefined}
                                             exactTargetSelection={true}
+                                            onAssessWithAi={readOnly ? undefined : assessWithAi}
                                         />
                                     </li>
                                 )}
@@ -2131,6 +2175,18 @@ type VariantScopedSnapshot = {
                                                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${originBadgeClass(row.origin)}`} title={`Assessment origin: ${row.origin}`}>
                                                         {originLabel(row.origin)}
                                                     </span>
+                                                )}
+                                                {!readOnly && row.origin === "custom" && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => reviewWithAi(row.id)}
+                                                        aria-label={`Review assessment ${row.id} with AI`}
+                                                        title="Review with AI"
+                                                        className="inline-flex items-center gap-1 rounded border border-cyan-500 px-2 py-0.5 text-xs font-medium text-cyan-200 hover:bg-cyan-900/40"
+                                                    >
+                                                        <FontAwesomeIcon icon={faWandMagicSparkles} className="h-3 w-3" />
+                                                        Review with AI
+                                                    </button>
                                                 )}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
@@ -2297,7 +2353,7 @@ type VariantScopedSnapshot = {
 
                     </div>
                     {assessmentChatOpen && <aside id="assessment-agent-panel" role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
-                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} context={assessmentAgentContext} onClose={closeAssessmentChat} />
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} context={assessmentAgentContext} onClose={closeAssessmentChat} queuedMessage={queuedAgentMessage} />
                     </aside>}
         </ModalShell>
 
