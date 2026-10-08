@@ -61,6 +61,7 @@ type ExplorerNavState = {
 function Explorer() {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
+    const [dataRevision, setDataRevision] = useState(0);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const vulnsRef = useRef<Vulnerability[]>([]);
     const location = useLocation();
@@ -111,6 +112,8 @@ function Explorer() {
     const hadActiveScans = useRef(false);
     const observedOperationStatuses = useRef(new Map<string, string>());
     const setupCheckGeneration = useRef(0);
+    const loadGeneration = useRef(0);
+    const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
     const queueItems = groupQueueItems(operationEntries);
     const trackedScanCount = queueItems.length;
@@ -159,6 +162,7 @@ function Explorer() {
     };
 
     const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string) => {
+        const generation = ++loadGeneration.current;
         setIsLoadingData(true);
 
         const multiActive = !!(variantIds && variantIds.length >= 2);
@@ -185,13 +189,16 @@ function Explorer() {
                 assessments = await Assessments.list(variantId, projectId);
             }
 
+            if (generation !== loadGeneration.current) return;
             setIsLoadingData(false);
             setLoadingMessage("Loading data...");
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessments);
             setVulns(enriched_vulns);
             const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
             setPkgs(enrichedPkgs);
+            setDataRevision(value => value + 1);
         }).catch(error => {
+            if (generation !== loadGeneration.current) return;
             console.error(error);
             setIsLoadingData(false);
             setLoadingMessage("Loading data...");
@@ -202,6 +209,7 @@ function Explorer() {
     // On mount: fetch default project/variant from config, then load data
     useEffect(() => {
         let cancelled = false;
+        scopeReady.current = false;
 
         Config.get()
             .then(async config => {
@@ -252,6 +260,7 @@ function Explorer() {
                 setCurrentOperation(compareActive ? scope?.compare_operation : undefined);
                 setCurrentVariantIds(multiActive ? scope?.variant_ids : undefined);
                 setCurrentMultiOperation(multiActive ? 'union' : undefined);
+                scopeReady.current = true;
                 loadData(
                     multiActive ? undefined : variantId,
                     (multiActive || !variantId) ? projectId : undefined,
@@ -262,9 +271,12 @@ function Explorer() {
                 );
             })
             .catch(() => {
-                if (!cancelled) loadData(undefined);
+                if (!cancelled) {
+                    scopeReady.current = true;
+                    loadData(undefined);
+                }
             });
-        return () => { cancelled = true; };
+        return () => { cancelled = true; scopeReady.current = false; };
     }, [loadData]);
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
@@ -304,12 +316,14 @@ function Explorer() {
     }, [loadData, navigate, location.pathname]);
 
     const handleScanComplete = useCallback(() => {
-        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-    }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+        loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+            currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
+    }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
     const handleRefreshComplete = useCallback(() => {
-        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-    }, [loadData, currentVariantId, currentProjectId, currentVariantIds, currentMultiOperation]);
+        loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+            currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
+    }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
     useEffect(() => {
         const refresh = () => {
@@ -330,7 +344,7 @@ function Explorer() {
             && ['done', 'error', 'cancelled'].includes(operation.status)
             && previous.get(operation.op_id) !== operation.status);
         observedOperationStatuses.current = next;
-        if (finished) handleRefreshComplete();
+        if (finished && scopeReady.current) handleRefreshComplete();
     }, [operationEntries, handleRefreshComplete]);
 
 
@@ -642,6 +656,12 @@ function Explorer() {
                         preferenceScopeKey={tablePreferenceScopeKey}
                         onAgentContextChange={setPackagesAgentView}
                         onShowVulns={showVulnsForPackage}
+                        variantId={currentBaseVariantId ?? currentVariantId}
+                        projectId={currentProjectId}
+                        variantIds={currentVariantIds}
+                        compareVariantId={currentBaseVariantId ? currentVariantId : undefined}
+                        operation={currentBaseVariantId ? currentOperation : currentMultiOperation}
+                        dataRevision={dataRevision}
                         onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
                         outdatedScopeKey={outdatedPackagesScopeKey}
                     />

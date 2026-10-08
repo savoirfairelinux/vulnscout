@@ -1,11 +1,11 @@
 import type { Package, VulnCounts } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef, useEffect, useCallback } from "react";
+import { lazy, Suspense, useMemo, useState, useRef, useEffect, useCallback } from "react";
 import TableGeneric from "../components/TableGeneric";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faC, faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faC, faCircleQuestion, faCircleInfo, faBook, faDiagramProject } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { extractSupplierName } from '../helpers/pkgId';
 import { formatSourceName, getOriginalSourceName } from '../helpers/sourceNames';
@@ -17,11 +17,23 @@ import { useLocalStorageState } from '../handlers/localStorage';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
 import type { AgentViewContext } from '../types/agent';
+import { listDependencyCounts } from '../handlers/dependencies';
+import type { DependencyCounts } from '../handlers/dependencies';
+
+const DependencyModal = lazy(() => import('../components/DependencyModal'));
+
+type PackageRow = Package & { dependencyCount?: { in: number; out: number }; dependenciesUnrecorded?: boolean };
 
 type Props = {
     packages: Package[];
     vulnerabilities?: Vulnerability[];
     onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
+    variantId?: string;
+    projectId?: string;
+    variantIds?: string[];
+    compareVariantId?: string;
+    operation?: string;
+    dataRevision?: number;
     onLoadOutdatedPackages?: () => Promise<Package[]>;
     outdatedScopeKey?: string;
     preferenceScopeKey?: string;
@@ -46,7 +58,9 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 const emptyVulnerabilities: Vulnerability[] = [];
 
-function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey, preferenceScopeKey = 'unscoped', onAgentContextChange }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages,
+    outdatedScopeKey, preferenceScopeKey = 'unscoped', onAgentContextChange, variantId, projectId, variantIds,
+    compareVariantId, operation, dataRevision }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const preferenceKey = `vulnscout.tables.packages.${encodeURIComponent(preferenceScopeKey)}`;
     const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
@@ -74,6 +88,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMatchConditionHelper, setShowMatchConditionHelper] = useState(false);
+    const [dependencyCounts, setDependencyCounts] = useState<DependencyCounts | null>(null);
+    const [dependencyError, setDependencyError] = useState(false);
+    const [selectedDependencyPackage, setSelectedDependencyPackage] = useState<string | null>(null);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -138,12 +155,31 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
     const defaultVisibleColumns = useMemo(() => {
-        const cols = ['Name', 'Version', 'Vulnerabilities', 'Variants', 'Sources'];
+        const cols = ['Name', 'Version', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
         if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
         return cols;
     }, [hasSupplierInfo]);
 
     const [visibleColumns, setVisibleColumns] = useLocalStorageState<string[]>(`${preferenceKey}.visibleColumns`, defaultVisibleColumns);
+    const [dependencyColumnDefaulted, setDependencyColumnDefaulted] = useLocalStorageState(`${preferenceKey}.dependencyColumnDefaulted`, false);
+    // Column choices saved before the Dependency column existed still get it once.
+    useEffect(() => {
+        if (dependencyColumnDefaulted) return;
+        setDependencyColumnDefaulted(true);
+        setVisibleColumns(columns => columns.includes('Dependency') ? columns : [...columns, 'Dependency']);
+    }, [dependencyColumnDefaulted, setDependencyColumnDefaulted, setVisibleColumns]);
+    const variantIdsKey = variantIds?.join(',');
+    const showDependencyColumn = visibleColumns.includes('Dependency');
+    useEffect(() => {
+        if (!showDependencyColumn) return;
+        let cancelled = false;
+        setDependencyCounts(null);
+        setDependencyError(false);
+        listDependencyCounts(variantId, projectId, variantIdsKey?.split(','), compareVariantId, operation)
+            .then(counts => { if (!cancelled) setDependencyCounts(counts); })
+            .catch(() => { if (!cancelled) setDependencyError(true); });
+        return () => { cancelled = true; };
+    }, [showDependencyColumn, variantId, projectId, variantIdsKey, compareVariantId, operation, dataRevision]);
 
     const matchingVulnerabilityCounts = useMemo(() => {
         const counts = new Map<string, number>();
@@ -242,6 +278,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const columnDisplayNames = useMemo(() => ({
         'name': 'Name',
         'version': 'Version',
+        'dependencies': 'Dependency',
         'cpe': 'CPE',
         'purl': 'PURL',
         'supplier': 'Supplier',
@@ -252,7 +289,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }), []);
 
     const allColumns = useMemo(() => {
-        const columnHelper = createColumnHelper<Package>()
+        const columnHelper = createColumnHelper<PackageRow>()
         return [
             columnHelper.accessor('name', {
                 id: 'name',
@@ -273,6 +310,27 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 header: () => <div className="flex items-center justify-center">Version</div>,
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
                 size: 80
+            }),
+            columnHelper.accessor(row => (row.dependencyCount?.in ?? 0) + (row.dependencyCount?.out ?? 0), {
+                id: 'dependencies',
+                header: () => <div className="flex items-center justify-center">Dependency</div>,
+                cell: info => {
+                    const counts = info.row.original.dependencyCount;
+                    // Dependency data covers active scans only, so historical rows have no graph to open.
+                    if (info.row.original.outdated) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
+                        title="Dependencies are only available for packages of active scans">Not in active scan</div>;
+                    if (info.row.original.dependenciesUnrecorded) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
+                        title="Its SBOM was imported before dependency support; import it again to record relationships">Not recorded</div>;
+                    return <button type="button"
+                        className="flex items-center justify-center gap-2 w-full h-full p-4 text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        onClick={() => setSelectedDependencyPackage(info.row.original.id)}
+                        aria-label={`View dependency graph for ${info.row.original.name}`}>
+                        <FontAwesomeIcon icon={faDiagramProject} />
+                        {dependencyError ? 'Unavailable' : counts ? `In ${counts.in} / Out ${counts.out}` : 'Loading…'}
+                    </button>;
+                },
+                sortDescFirst: true,
+                size: 160,
             }),
             columnHelper.accessor('cpe', {
                 id: 'cpe',
@@ -471,7 +529,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 size: 10
             })
         ]
-    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts]);
+    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -509,7 +567,24 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         });
     }, [packages, packagesWithOutdated, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers]);
 
+    // Counts live in the row data so an active sort re-runs when they arrive.
+    const tableRows = useMemo<PackageRow[]>(() => {
+        if (!showDependencyColumn || !dependencyCounts) return filteredPackages;
+        const unrecorded = new Set(dependencyCounts.unrecorded);
+        return filteredPackages.map(pkg => {
+            if (pkg.outdated) return pkg;
+            const counts = dependencyCounts.counts[pkg.id];
+            if (!counts && unrecorded.has(pkg.id)) return { ...pkg, dependenciesUnrecorded: true };
+            return { ...pkg, dependencyCount: counts ?? { in: 0, out: 0 } };
+        });
+    }, [filteredPackages, showDependencyColumn, dependencyCounts]);
+
     return (<>
+        {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency graph…</div>}>
+            <DependencyModal variantId={variantId} projectId={projectId} variantIds={variantIds}
+                compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
+                packageId={selectedDependencyPackage} onClose={() => setSelectedDependencyPackage(null)} />
+        </Suspense>}
         {showOnlyOutdated && outdatedLoading && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" role="status" aria-live="polite">
                 <div className="flex flex-col items-center gap-3 text-white">
@@ -623,6 +698,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 options={[
                     'Name',
                     'Version',
+                    'Dependency',
                     'CPE',
                     'PURL',
                     'Supplier',
@@ -711,7 +787,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         </div>
 
         <div ref={tableRef}>
-            <TableGeneric persistenceKey={preferenceKey} fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} onFilteredDataChange={updateAgentPackages} />
+            <TableGeneric persistenceKey={preferenceKey} fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={tableRows} estimateRowHeight={57} onFilteredDataChange={updateAgentPackages} />
         </div>
     </>);
 }
