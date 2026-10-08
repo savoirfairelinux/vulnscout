@@ -44,3 +44,35 @@ html {
     display: block;
     animation: 0.15s linear 0.5s forwards delayedShow;
 }
+
+/* Thin scrollbar: thumb only, no arrow buttons and no visible track. */
+.scrollbar-minimal::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.scrollbar-minimal::-webkit-scrollbar-track,
+.scrollbar-minimal::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+.scrollbar-minimal::-webkit-scrollbar-button {
+    display: none;
+}
+
+.scrollbar-minimal::-webkit-scrollbar-thumb {
+    background-color: rgba(115, 115, 115, 0.55);
+    border-radius: 9999px;
+}
+
+.scrollbar-minimal::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(115, 115, 115, 0.85);
+}
+
+/* Browsers without ::-webkit-scrollbar (Firefox) use the standard properties. */
+@supports not selector(::-webkit-scrollbar) {
+    .scrollbar-minimal {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(115, 115, 115, 0.55) transparent;
+    }
+}
