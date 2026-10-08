@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faFolderOpen,
@@ -34,6 +35,8 @@ import InlineAddInput from "../components/InlineAddInput";
 import MessageBanner from "../components/MessageBanner";
 import ModalShell from "../components/ModalShell";
 import Transfer from "./Transfer";
+import NotFound from "./NotFound";
+import { ROUTES, SETTINGS_PATHS, parseSettingsPath, settingsProjectPath, settingsVariantPath } from "../routes";
 import type { RefreshType } from "../helpers/refreshSources";
 import {
   allVulnerabilityRefreshTypes,
@@ -49,22 +52,39 @@ type Props = {
   onDataChanged?: (message?: string) => void;
   onLoadingMessage?: (message: string | null) => void;
   projectId?: string;
-  initialTab?: SettingsTab;
 };
 
-type SettingsTab = "general" | "transfer" | "custom-export" | "projects" | "variants";
+/** Navigation state understood by the Settings page. */
+export type SettingsNavState = { settingsFlash?: string; openNewProject?: boolean };
+
 type FeedbackMsg = { text: string; type: "success" | "error" } | null;
 type AddKey = "project" | `tree-variant:${string}` | "page-variant" | null;
 type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
   | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
 
-function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAgentContextChange }: Readonly<Props>) {
-  // ---- Active category tab ----
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
+function nextRequest(seqs: Record<string, number>, key: string) {
+  seqs[key] = (seqs[key] ?? 0) + 1;
+  return seqs[key];
+}
+
+function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextChange }: Readonly<Props>) {
+  // ---- Section, project and variant come from the URL ----
+  const location = useLocation();
+  const navigate = useNavigate();
+  const route = parseSettingsPath(location.pathname);
+  const selectedProjectId = route.kind === "project" || route.kind === "variant" ? route.projectId : "";
+  const selectedVariantId = route.kind === "variant" ? route.variantId : "";
+  const navState = location.state as SettingsNavState | null;
+  // Lets async continuations detect that the user moved to another project/variant meanwhile.
+  const routeIdsRef = useRef({ projectId: selectedProjectId, variantId: selectedVariantId });
+  routeIdsRef.current = { projectId: selectedProjectId, variantId: selectedVariantId };
+  const locationKeyRef = useRef(location.key);
+  locationKeyRef.current = location.key;
+
   useEffect(() => {
-    onAgentContextChange?.({ section: activeTab, selectedProjectId: projectId });
-  }, [activeTab, projectId, onAgentContextChange]);
+    onAgentContextChange?.({ section: route.kind, selectedProjectId: selectedProjectId || projectId });
+  }, [route.kind, selectedProjectId, projectId, onAgentContextChange]);
 
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
@@ -82,14 +102,24 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
 
   // ---- Shared data ----
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [projectsLoadFailed, setProjectsLoadFailed] = useState(false);
   const [projectVariants, setProjectVariants] = useState<Record<string, Variant[]>>({});
+  const [variantLoadFailedIds, setVariantLoadFailedIds] = useState<Set<string>>(new Set());
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
   const [openAddKey, setOpenAddKey] = useState<AddKey>(null);
+  // Per-project request counter so an older Variants.list response never overwrites a newer one.
+  const variantRequestSeqRef = useRef<Record<string, number>>({});
 
   const loadProjects = useCallback(() => {
+    // A failed reload keeps the previous list; only a never-loaded list is an error.
     Projects.list()
-      .then(setProjects)
-      .catch(() => setProjects([]));
+      .then((list) => {
+        setProjects(list);
+        setProjectsLoaded(true);
+        setProjectsLoadFailed(false);
+      })
+      .catch(() => setProjectsLoadFailed(true));
   }, []);
 
   const [configBusy, setConfigBusy] = useState(false);
@@ -214,13 +244,25 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   useEffect(() => {
     let cancelled = false;
 
-    Promise.all(projects.map(async (project) => [project.id, await Variants.list(project.id)] as const))
-      .then((entries) => {
-        if (!cancelled) setProjectVariants(Object.fromEntries(entries));
-      })
-      .catch(() => {
-        if (!cancelled) setProjectVariants({});
+    const seqs = projects.map((project) => nextRequest(variantRequestSeqRef.current, project.id));
+    Promise.allSettled(projects.map((project) => Variants.list(project.id))).then((results) => {
+      if (cancelled) return;
+      // A newer request for a project (create/reload) already owns its list.
+      const isFresh = (index: number) => variantRequestSeqRef.current[projects[index].id] === seqs[index];
+      // A failed fetch keeps that project's previous list; with none, it stays unloaded and is flagged.
+      setProjectVariants((prev) => {
+        const next: Record<string, Variant[]> = {};
+        projects.forEach((project, index) => {
+          const result = results[index];
+          if (isFresh(index) && result.status === "fulfilled") next[project.id] = result.value;
+          else if (prev[project.id]) next[project.id] = prev[project.id];
+        });
+        return next;
       });
+      setVariantLoadFailedIds(new Set(projects
+        .filter((_, index) => isFresh(index) && results[index].status === "rejected")
+        .map((project) => project.id)));
+    });
 
     return () => { cancelled = true; };
   }, [projects]);
@@ -234,31 +276,10 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
     });
   };
 
-  const clearProjectMsgs = () => {
-    setRenameProjectMsg(null);
-    setDeleteProjectMsg(null);
-  };
-
-  const clearVariantMsgs = () => {
-    setRenameVariantMsg(null);
-    setDeleteVariantMsg(null);
-  };
-
-  const selectProjectFromTree = (project: Project) => {
-    clearProjectMsgs();
-    setRenameProjectId(project.id);
-    setRenameProjectName(project.name);
-    setActiveTab("projects");
-  };
-
-  const selectVariantFromTree = (projectId: string, variant: Variant) => {
-    clearVariantMsgs();
-    clearImportState();
-    setVariantProjectId(projectId);
-    setRenameVariantId(variant.id);
-    setRenameVariantName(variant.name);
-    setActiveTab("variants");
-  };
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    setExpandedProjectIds((current) => current.has(selectedProjectId) ? current : new Set(current).add(selectedProjectId));
+  }, [selectedProjectId]);
 
   // Load NVD API key status on mount
   useEffect(() => {
@@ -435,69 +456,67 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   };
 
   // ---- Manage Projects ----
-  const [renameProjectId, setRenameProjectId] = useState<string>("");
   const [renameProjectName, setRenameProjectName] = useState<string>("");
   const [renameProjectBusy, setRenameProjectBusy] = useState(false);
   const [renameProjectMsg, setRenameProjectMsg] = useState<FeedbackMsg>(null);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
   const [deleteProjectMsg, setDeleteProjectMsg] = useState<FeedbackMsg>(null);
-  const initialProjectAppliedRef = useRef(false);
-
-  useEffect(() => {
-    if (initialProjectAppliedRef.current || initialTab !== "projects" || !projectId) return;
-    const project = projects.find((item) => item.id === projectId);
-    if (!project) return;
-    setRenameProjectId(project.id);
-    setRenameProjectName(project.name);
-    initialProjectAppliedRef.current = true;
-  }, [initialTab, projectId, projects]);
 
   const handleRenameProject = async () => {
-    if (!renameProjectId || !renameProjectName.trim()) return;
+    const targetId = selectedProjectId;
+    if (!targetId || !renameProjectName.trim()) return;
     setRenameProjectBusy(true);
     setRenameProjectMsg(null);
     try {
-      const updated = await Projects.rename(renameProjectId, renameProjectName.trim());
+      const updated = await Projects.rename(targetId, renameProjectName.trim());
       loadProjects();
+      onDataChanged?.("Renaming project...");
+      if (routeIdsRef.current.projectId !== targetId) return;
       setRenameProjectName(updated.name);
       setRenameProjectMsg({ text: "Project renamed.", type: "success" });
-      onDataChanged?.("Renaming project...");
     } catch (e: any) {
-      setRenameProjectMsg({ text: e.message, type: "error" });
+      if (routeIdsRef.current.projectId === targetId) setRenameProjectMsg({ text: e.message, type: "error" });
     } finally {
       setRenameProjectBusy(false);
     }
   };
 
+  // Only Projects.create failures reject: a failed list reload must not make
+  // the user retry (and hit a duplicate name) for a project that now exists.
   const createProject = async (name: string) => {
+    const submitKey = locationKeyRef.current;
     const created = await Projects.create(name);
-    setProjects(await Projects.list());
-    selectProjectFromTree(created);
-    setRenameProjectMsg({ text: `Project "${created.name}" created.`, type: "success" });
+    try {
+      const list = await Projects.list();
+      setProjects(list);
+      setProjectsLoaded(true);
+      setProjectsLoadFailed(false);
+    } catch {
+      setProjects((current) => current.some((p) => p.id === created.id) ? current : [...current, created]);
+    }
+    // Don't pull the user back if they left Settings or moved elsewhere meanwhile.
+    if (!unmountedRef.current && locationKeyRef.current === submitKey) {
+      navigate(settingsProjectPath(created.id), {
+        state: { settingsFlash: `Project "${created.name}" created.` } satisfies SettingsNavState,
+      });
+    }
     onDataChanged?.("Creating project...");
   };
 
   const handleDeleteProject = async () => {
-    if (!renameProjectId || deleteProjectBusy) return;
+    const targetId = selectedProjectId;
+    if (!targetId || deleteProjectBusy) return;
     setDeleteProjectBusy(true);
     setDeleteProjectMsg(null);
     try {
-      await Projects.delete(renameProjectId);
-      // Invalidate variant section (and its Import SBOM context) if it references the deleted project
-      if (variantProjectId === renameProjectId) {
-        setVariantProjectId("");
-        setVariantProjectVariants([]);
-        setRenameVariantId("");
-        setRenameVariantName("");
-      }
-      setRenameProjectId("");
-      setRenameProjectName("");
+      await Projects.delete(targetId);
       setConfirmDeleteProject(false);
       loadProjects();
+      if (routeIdsRef.current.projectId === targetId) navigate(ROUTES.settings);
       onDataChanged?.("Deleting project...");
     } catch (e: any) {
-      setDeleteProjectMsg({ text: e.message, type: "error" });
+      if (routeIdsRef.current.projectId === targetId) setDeleteProjectMsg({ text: e.message, type: "error" });
       setConfirmDeleteProject(false);
     } finally {
       setDeleteProjectBusy(false);
@@ -505,9 +524,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   };
 
   // ---- Manage Variants ----
-  const [variantProjectId, setVariantProjectId] = useState<string>("");
-  const [variantProjectVariants, setVariantProjectVariants] = useState<Variant[]>([]);
-  const [renameVariantId, setRenameVariantId] = useState<string>("");
   const [renameVariantName, setRenameVariantName] = useState<string>("");
   const [renameVariantBusy, setRenameVariantBusy] = useState(false);
   const [renameVariantMsg, setRenameVariantMsg] = useState<FeedbackMsg>(null);
@@ -516,50 +532,58 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
   const [deleteVariantMsg, setDeleteVariantMsg] = useState<FeedbackMsg>(null);
 
-  const reloadVariants = useCallback((projectId: string) => {
-    if (!projectId) { setVariantProjectVariants([]); return; }
-    Variants.list(projectId)
-      .then(setVariantProjectVariants)
-      .catch(() => setVariantProjectVariants([]));
-  }, []);
-
-  // Keeps the sidebar tree and Projects tab "Variants overview" list in sync with variant changes
+  // Keeps the sidebar tree and the project page's Variants list in sync with variant changes
   const reloadProjectVariants = useCallback((projectId: string) => {
     if (!projectId) return;
+    const seq = nextRequest(variantRequestSeqRef.current, projectId);
     Variants.list(projectId)
-      .then((list) => setProjectVariants((prev) => ({ ...prev, [projectId]: list })))
+      .then((list) => {
+        if (variantRequestSeqRef.current[projectId] === seq) setProjectVariants((prev) => ({ ...prev, [projectId]: list }));
+      })
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    reloadVariants(variantProjectId);
-  }, [variantProjectId, reloadVariants]);
-
   const handleRenameVariant = async () => {
-    if (!renameVariantId || !renameVariantName.trim()) return;
+    const targetProjectId = selectedProjectId;
+    const targetId = selectedVariantId;
+    if (!targetId || !renameVariantName.trim()) return;
+    const isStillSelected = () => routeIdsRef.current.variantId === targetId;
     setRenameVariantBusy(true);
     setRenameVariantMsg(null);
     try {
-      const updated = await Variants.rename(renameVariantId, renameVariantName.trim());
-      reloadVariants(variantProjectId);
-      reloadProjectVariants(variantProjectId);
+      const updated = await Variants.rename(targetId, renameVariantName.trim());
+      reloadProjectVariants(targetProjectId);
+      onDataChanged?.("Renaming variant...");
+      if (!isStillSelected()) return;
       setRenameVariantName(updated.name);
       setRenameVariantMsg({ text: "Variant renamed.", type: "success" });
-      onDataChanged?.("Renaming variant...");
     } catch (e: any) {
-      setRenameVariantMsg({ text: e.message, type: "error" });
+      if (isStillSelected()) setRenameVariantMsg({ text: e.message, type: "error" });
     } finally {
       setRenameVariantBusy(false);
     }
   };
 
+  // Only Variants.create failures reject; see createProject.
   const createVariant = async (projectId: string, name: string) => {
+    const submitKey = locationKeyRef.current;
     const created = await Variants.create(projectId, name);
-    const list = await Variants.list(projectId);
-    setProjectVariants((prev) => ({ ...prev, [projectId]: list }));
-    setExpandedProjectIds((current) => new Set(current).add(projectId));
-    selectVariantFromTree(projectId, created);
-    setRenameVariantMsg({ text: `Variant "${created.name}" created.`, type: "success" });
+    const seq = nextRequest(variantRequestSeqRef.current, projectId);
+    try {
+      const list = await Variants.list(projectId);
+      if (variantRequestSeqRef.current[projectId] === seq) setProjectVariants((prev) => ({ ...prev, [projectId]: list }));
+    } catch {
+      setProjectVariants((prev) => {
+        const current = prev[projectId] ?? [];
+        return { ...prev, [projectId]: current.some((v) => v.id === created.id) ? current : [...current, created] };
+      });
+    }
+    // Don't pull the user back if they left Settings or moved elsewhere meanwhile.
+    if (!unmountedRef.current && locationKeyRef.current === submitKey) {
+      navigate(settingsVariantPath(projectId, created.id), {
+        state: { settingsFlash: `Variant "${created.name}" created.` } satisfies SettingsNavState,
+      });
+    }
     onDataChanged?.("Creating variant...");
   };
 
@@ -570,12 +594,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
     setDeleteVariantMsg(null);
     try {
       await Variants.delete(deletedId);
-      if (renameVariantId === deletedId) {
-        setRenameVariantId("");
-        setRenameVariantName("");
-      }
       setPendingDeleteVariant(null);
-      if (variantProjectId === deletedProjectId) reloadVariants(deletedProjectId);
       reloadProjectVariants(deletedProjectId);
       onDataChanged?.("Deleting variant...");
     } catch (e: any) {
@@ -596,11 +615,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   );
   const importRefreshSources = resolveRefreshSources(importRefreshMode, importCustomRefreshSources);
 
-  const clearImportState = () => {
-    setImportFiles([]);
-    setImportMsg(null);
-  };
-
   const handleFileSelected = (index: number, file: File | null) => {
     setImportMsg(null);
     if (!file) return;
@@ -617,15 +631,17 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   };
 
   const handleUploadSBOM = async () => {
-    if (!variantProjectId || !renameVariantId || importFiles.length === 0) return;
+    const targetVariantId = selectedVariantId;
+    if (!selectedProjectId || !targetVariantId || importFiles.length === 0) return;
+    const isStillSelected = () => routeIdsRef.current.variantId === targetVariantId;
     setImportBusy(true);
     setImportMsg(null);
     const count = importFiles.length;
     onLoadingMessage?.(`Uploading ${count} file${count > 1 ? "s" : ""}...`);
     try {
       const result = await Variants.uploadSBOM(
-        variantProjectId,
-        renameVariantId,
+        selectedProjectId,
+        targetVariantId,
         importFiles,
         Array.from(importRefreshSources),
       );
@@ -638,13 +654,13 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
       }, controller.signal);
       if (unmountedRef.current) return;
       if (operation.status === "done") {
-        setImportFiles([]);
+        if (isStillSelected()) setImportFiles([]);
         onDataChanged?.("Importing SBOM...");
-      } else {
+      } else if (isStillSelected()) {
         setImportMsg(operation.error || operation.progress.message || "SBOM import did not complete.");
       }
     } catch (e: any) {
-      if (!unmountedRef.current) setImportMsg(e.message);
+      if (!unmountedRef.current && isStillSelected()) setImportMsg(e.message);
     } finally {
       uploadWaitRef.current = null;
       if (!unmountedRef.current) {
@@ -653,6 +669,63 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
       }
     }
   };
+
+  // ---- Project / variant in scope, resolved from the URL ----
+  const contextProject = projects.find((p) => p.id === selectedProjectId);
+  const contextVariants: Variant[] | undefined = projectVariants[selectedProjectId];
+  const contextVariant = contextVariants?.find((v) => v.id === selectedVariantId);
+  const notFound =
+    route.kind === "unknown" ||
+    (projectsLoaded && !!selectedProjectId && !contextProject) ||
+    (route.kind === "variant" && !!contextProject && contextVariants !== undefined && !contextVariant);
+  const contextLoading =
+    !!selectedProjectId && (!projectsLoaded || (route.kind === "variant" && contextVariants === undefined));
+  let contextLoadError: string | null = null;
+  if (contextLoading) {
+    if (!projectsLoaded) {
+      if (projectsLoadFailed) contextLoadError = "Could not load projects.";
+    } else if (variantLoadFailedIds.has(selectedProjectId)) {
+      contextLoadError = "Could not load variants.";
+    }
+  }
+
+  useEffect(() => {
+    setRenameProjectMsg(null);
+    setDeleteProjectMsg(null);
+    setRenameVariantMsg(null);
+    setDeleteVariantMsg(null);
+    setImportFiles([]);
+    setImportMsg(null);
+    setPendingDeleteVariant(null);
+    setOpenAddKey(null);
+  }, [route.kind, selectedProjectId, selectedVariantId]);
+
+  // One-shot navigation state (flash, openNewProject) is moved out of history so
+  // back/forward cannot replay it; the flash stays visible while the URL remains
+  // the page it was created for. Declared after the clearing effect above so
+  // opening the New Project input wins on the same navigation.
+  const [flash, setFlash] = useState<{ message: string; pathname: string } | null>(null);
+  useEffect(() => {
+    const message = navState?.settingsFlash;
+    if (message) setFlash({ message, pathname: location.pathname });
+    else setFlash((current) => (current?.pathname === location.pathname ? current : null));
+    if (navState?.openNewProject) setOpenAddKey("project");
+    if (navState && (message || navState.openNewProject)) {
+      const { settingsFlash: _flash, openNewProject: _open, ...rest } = navState;
+      navigate(
+        { pathname: location.pathname, search: location.search, hash: location.hash },
+        { replace: true, state: Object.keys(rest).length ? rest : null },
+      );
+    }
+  }, [location.key]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setRenameProjectName(contextProject?.name ?? "");
+  }, [contextProject?.id, contextProject?.name]);
+
+  useEffect(() => {
+    setRenameVariantName(contextVariant?.name ?? "");
+  }, [contextVariant?.id, contextVariant?.name]);
 
   // ---- Styles ----
   const inputClass =
@@ -670,38 +743,36 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   const dangerCardBody =
     "bg-slate-800/60 p-4 rounded-b-lg ring-1 ring-red-900/50 shadow-lg shadow-black/20";
 
-  // ---- Breadcrumb / title context, driven by whichever project or variant is in scope ----
-  const contextProject = projects.find((p) => p.id === (activeTab === "variants" ? variantProjectId : renameProjectId));
-  const contextVariant = variantProjectVariants.find((v) => v.id === renameVariantId);
-  const crumbs: string[] = ["Settings"];
+  if (notFound) return <NotFound />;
+
+  // ---- Breadcrumb / title context, driven by the route ----
+  const crumbs: { label: string; to?: string }[] = [];
   let pageTitle = "General Settings";
   let pageTag: { label: string; className: string } | null = null;
-  if (activeTab === "projects") {
-    crumbs.push("Projects");
-    pageTitle = contextProject?.name ?? "Projects";
-    if (contextProject) {
-      crumbs.push(contextProject.name);
+  if (route.kind === "project" || route.kind === "variant") {
+    crumbs.push({ label: "Settings", to: ROUTES.settings });
+    if (route.kind === "project") {
+      pageTitle = contextProject?.name ?? "";
+      crumbs.push({ label: pageTitle });
       pageTag = { label: "Project", className: "bg-cyan-950 text-cyan-300" };
-    }
-  } else if (activeTab === "variants") {
-    crumbs.push(contextProject?.name ?? "Variants");
-    if (contextVariant || renameVariantId) {
-      pageTitle = contextVariant?.name ?? renameVariantName;
-      crumbs.push(pageTitle);
-      pageTag = { label: "Variant", className: "bg-violet-950 text-violet-300" };
     } else {
-      pageTitle = variantProjectId ? "Add Variant" : "Variants";
-      if (variantProjectId) crumbs.push("Add Variant");
+      crumbs.push({ label: contextProject?.name ?? "", to: settingsProjectPath(route.projectId) });
+      pageTitle = contextVariant?.name ?? "";
+      crumbs.push({ label: pageTitle });
+      pageTag = { label: "Variant", className: "bg-violet-950 text-violet-300" };
     }
-  } else if (activeTab === "transfer") {
-    crumbs.push("Transfer");
+  } else if (route.kind === "transfer") {
+    crumbs.push({ label: "Settings" }, { label: "Transfer" });
     pageTitle = "Transfer Assessments";
-  } else if (activeTab === "custom-export") {
-    crumbs.push("Custom reports & assets");
+  } else if (route.kind === "custom-export") {
+    crumbs.push({ label: "Settings" }, { label: "Custom reports & assets" });
     pageTitle = "Custom reports & assets";
   } else {
-    crumbs.push("General Settings");
+    crumbs.push({ label: "Settings" }, { label: "General Settings" });
   }
+  const sidebarItemClass = (active: boolean) => `flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+    active ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
+  }`;
 
   return (
     <div className="w-full">
@@ -713,33 +784,27 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
           <nav aria-label="Settings navigation" className="p-2">
             <button
               type="button"
-              onClick={() => setActiveTab("general")}
-              aria-current={activeTab === "general" ? "page" : undefined}
-              className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                activeTab === "general" ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
-              }`}
+              onClick={() => navigate(ROUTES.settings)}
+              aria-current={route.kind === "general" ? "page" : undefined}
+              className={sidebarItemClass(route.kind === "general")}
             >
               <FontAwesomeIcon icon={faGear} className="w-4 text-sky-400" aria-hidden="true" />
               General Settings
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("transfer")}
-              aria-current={activeTab === "transfer" ? "page" : undefined}
-              className={`mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                activeTab === "transfer" ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
-              }`}
+              onClick={() => navigate(SETTINGS_PATHS.transfer)}
+              aria-current={route.kind === "transfer" ? "page" : undefined}
+              className={"mt-1 " + sidebarItemClass(route.kind === "transfer")}
             >
               <FontAwesomeIcon icon={faRightLeft} className="w-4 text-sky-400" aria-hidden="true" />
               Transfer Assessments
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("custom-export")}
-              aria-current={activeTab === "custom-export" ? "page" : undefined}
-              className={`mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                activeTab === "custom-export" ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
-              }`}
+              onClick={() => navigate(SETTINGS_PATHS.customExport)}
+              aria-current={route.kind === "custom-export" ? "page" : undefined}
+              className={"mt-1 " + sidebarItemClass(route.kind === "custom-export")}
             >
               <FontAwesomeIcon icon={faFileExport} className="w-4 text-sky-400" aria-hidden="true" />
               Custom reports &amp; assets
@@ -754,9 +819,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
               {projects.map((project) => {
                 const variants = projectVariants[project.id] ?? [];
                 const isExpanded = expandedProjectIds.has(project.id);
-                const isSelected =
-                  (activeTab === "projects" && renameProjectId === project.id) ||
-                  (activeTab === "variants" && variantProjectId === project.id && !renameVariantId);
+                const isSelected = route.kind === "project" && selectedProjectId === project.id;
 
                 return (
                   <div key={project.id}>
@@ -772,7 +835,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
                       </button>
                       <button
                         type="button"
-                        onClick={() => selectProjectFromTree(project)}
+                        onClick={() => navigate(settingsProjectPath(project.id))}
+                        aria-current={isSelected ? "page" : undefined}
                         className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 text-left text-sm text-slate-200"
                       >
                         <FontAwesomeIcon icon={faFolder} className="text-sky-400" aria-hidden="true" />
@@ -782,13 +846,17 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
                     </div>
                     {isExpanded && (
                       <div className="ml-4 border-l border-slate-700 pl-2">
-                        {variants.map((variant) => (
+                        {variants.map((variant) => {
+                          const isVariantSelected =
+                            route.kind === "variant" && selectedProjectId === project.id && selectedVariantId === variant.id;
+                          return (
                           <button
                             type="button"
                             key={variant.id}
-                            onClick={() => selectVariantFromTree(project.id, variant)}
+                            onClick={() => navigate(settingsVariantPath(project.id, variant.id))}
+                            aria-current={isVariantSelected ? "page" : undefined}
                             className={`mt-1 flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm transition-colors ${
-                              activeTab === "variants" && variantProjectId === project.id && renameVariantId === variant.id
+                              isVariantSelected
                                 ? "bg-violet-950 text-white"
                                 : "text-slate-400 hover:bg-slate-700 hover:text-white"
                             }`}
@@ -796,7 +864,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
                             <span className="h-2 w-2 rounded-full bg-violet-400" aria-hidden="true" />
                             <span className="truncate">{variant.name}</span>
                           </button>
-                        ))}
+                          );
+                        })}
                         <InlineAddInput
                           isOpen={openAddKey === `tree-variant:${project.id}`}
                           onOpenChange={(open) => setOpenAddKey(open ? `tree-variant:${project.id}` : null)}
@@ -833,8 +902,41 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
         </aside>
 
         <main className="min-w-0 space-y-6">
+          {flash && (
+            <MessageBanner
+              type="success"
+              message={flash.message}
+              isVisible={true}
+              onClose={() => setFlash(null)}
+            />
+          )}
+          {contextLoadError ? (
+            <p role="alert" className="text-sm text-red-400">{contextLoadError}</p>
+          ) : contextLoading ? (
+            <div aria-busy="true" className="text-sm text-slate-400">
+              <FontAwesomeIcon icon={faSpinner} spin className="mr-2" aria-hidden="true" />
+              Loading…
+            </div>
+          ) : (
+          <>
           <header className="border-b border-slate-700 pb-4">
-            <p className="text-xs font-medium text-slate-500">{crumbs.join(" / ")}</p>
+            <p className="text-xs font-medium text-slate-500">
+              {crumbs.map((crumb, index) => (
+                <span key={index}>
+                  {index > 0 && " / "}
+                  {crumb.to ? (
+                    <button
+                      type="button"
+                      aria-label={`Go to ${crumb.label}`}
+                      onClick={() => navigate(crumb.to!)}
+                      className="hover:text-sky-300 hover:underline"
+                    >
+                      {crumb.label}
+                    </button>
+                  ) : crumb.label}
+                </span>
+              ))}
+            </p>
             <h1 className="mt-1 flex items-center gap-3 text-2xl font-bold text-white">
               {pageTitle}
               {pageTag && (
@@ -846,7 +948,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
           </header>
 
         {/* ======== General Settings tab ======== */}
-        {activeTab === "general" && (
+        {route.kind === "general" && (
         <>
         {/* ======== Report Metadata ======== */}
         <div>
@@ -1160,10 +1262,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
         </>)
         }
 
-        {/* ======== Projects Settings tab ======== */}
-        {activeTab === "projects" && (
-        <>
-        {contextProject && (
+        {/* ======== Project page ======== */}
+        {route.kind === "project" && contextProject && (
         <>
         {/* ======== Variants overview ======== */}
         <section aria-labelledby="settings-heading-project-variants">
@@ -1205,7 +1305,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
                 <div className="flex shrink-0 items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => selectVariantFromTree(contextProject.id, v)}
+                    onClick={() => navigate(settingsVariantPath(contextProject.id, v.id))}
                     className="flex h-8 w-8 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-slate-700 hover:text-sky-300"
                     aria-label={`Edit ${v.name}`}
                     title="Edit variant"
@@ -1314,19 +1414,17 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
         </section>
         </>
         )}
-        </>
-        )}
 
-        {activeTab === "transfer" && (
+        {route.kind === "transfer" && (
           <Transfer projectId={projectId} onDataChanged={onDataChanged} />
         )}
 
-        {activeTab === "custom-export" && (
+        {route.kind === "custom-export" && (
           <CustomExportContentManager />
         )}
 
-        {/* ======== Variants Settings tab ======== */}
-        {activeTab === "variants" && variantProjectId && renameVariantId && (
+        {/* ======== Variant page ======== */}
+        {route.kind === "variant" && contextVariant && (
         <>
         {/* ======== Import SBOM ======== */}
         <section aria-labelledby="settings-heading-import">
@@ -1336,7 +1434,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
           </div>
           <div className={cardBody + " space-y-3"}>
             <p className="text-sm text-zinc-400">
-              Files are imported into <strong className="text-zinc-300">{contextVariant?.name ?? renameVariantName}</strong>.
+              Files are imported into <strong className="text-zinc-300">{contextVariant.name}</strong>.
             </p>
 
             {/* ---- File picker(s) ---- */}
@@ -1515,6 +1613,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
           </div>
         </section>
 
+        </>
+        )}
         </>
         )}
         </main>
