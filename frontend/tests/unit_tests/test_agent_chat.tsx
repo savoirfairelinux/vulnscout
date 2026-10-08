@@ -416,3 +416,40 @@ test('scrolling away from the latest message exposes a return control', async ()
     fireEvent.click(screen.getByRole('button', { name: 'Jump to latest message' }));
     expect(log.scrollTop).toBe(300);
 });
+test('sends a queued message once when ready and again only for a new queued id', async () => {
+    const sent: string[] = [];
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) {
+            const { message } = JSON.parse(String(options?.body));
+            sent.push(message);
+            return streamResponse([`{"type":"done","reply":"Reply ${sent.length}","model":"auto","usage":${JSON.stringify(usage)}}\n`]);
+        }
+        return jsonResponse(signedIn);
+    };
+
+    const first = { id: 'q1', text: 'Assess the selected targets' };
+    const { rerender } = render(<AgentChat onClose={() => undefined} context={context} queuedMessage={first} />);
+    await screen.findByText('Reply 1');
+    rerender(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ ...first }} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(sent).toEqual(['Assess the selected targets']);
+
+    rerender(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q2', text: 'Review assessment' }} />);
+    await screen.findByText('Reply 2');
+    expect(sent).toEqual(['Assess the selected targets', 'Review assessment']);
+});
+
+test('does not send a queued message while signed out', async () => {
+    const sent: string[] = [];
+    global.fetch = async input => {
+        const path = String(input);
+        if (path.endsWith('/messages')) sent.push(path);
+        return jsonResponse(signedOut);
+    };
+
+    render(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q1', text: 'Assess' }} />);
+    await screen.findByText('Step 1 of 3');
+    expect(sent).toEqual([]);
+});

@@ -91,7 +91,9 @@ function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; p
     </details>;
 }
 
-function AgentChat({ onClose, context, active = true, threadId }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string }>) {
+export type QueuedAgentMessage = { id: string; text: string };
+
+function AgentChat({ onClose, context, active = true, threadId, queuedMessage }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string; queuedMessage?: QueuedAgentMessage }>) {
     const request = useCallback(<T,>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void) => agentRequest<T>(path, {
         ...options,
         headers: { ...options?.headers, ...(threadId ? { 'X-Agent-Thread': threadId } : {}) },
@@ -124,6 +126,7 @@ function AgentChat({ onClose, context, active = true, threadId }: Readonly<{ onC
     const conversationLog = useRef<HTMLDivElement>(null);
     const composer = useRef<HTMLTextAreaElement>(null);
     const followMessages = useRef(true);
+    const sentQueuedMessageId = useRef<string | null>(null);
     const ready = Boolean(state?.authenticated && state.configured && models.length && selectedModel && !showConnections);
     const pageLabel = pageLabels[context.page] ?? context.page;
     const scopeLabel = context.view?.openVulnerabilityId ?? context.view?.selectedVariantName ?? context.view?.selectedProjectName;
@@ -421,6 +424,13 @@ function AgentChat({ onClose, context, active = true, threadId }: Readonly<{ onC
             setBusy(false);
         }
     }
+
+    useEffect(() => {
+        if (!queuedMessage || sentQueuedMessageId.current === queuedMessage.id || !ready || busy || modelBusy) return;
+        sentQueuedMessageId.current = queuedMessage.id;
+        void send(undefined, queuedMessage.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [queuedMessage, ready, busy, modelBusy]);
 
     function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
