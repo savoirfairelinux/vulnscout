@@ -143,6 +143,7 @@ type VariantScopedSnapshot = {
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [assessmentChatOpen, setAssessmentChatOpen] = useState(false);
+    const [assessmentChatMounted, setAssessmentChatMounted] = useState(false);
     const [assessmentThreadId, setAssessmentThreadId] = useState(() => crypto.randomUUID());
     const activeAssessmentThread = useRef<string | null>(null);
     const [queuedAgentMessage, setQueuedAgentMessage] = useState<QueuedAgentMessage | undefined>(undefined);
@@ -185,9 +186,16 @@ type VariantScopedSnapshot = {
     const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [reviewToDiscard, setReviewToDiscard] = useState<AssessmentReview | null>(null);
 
+    // Closing only hides the panel; the chat stays mounted so its session (and
+    // any in-flight reply) persists until the modal closes or the CVE changes.
     const closeAssessmentChat = () => {
+        setAssessmentChatOpen(false);
+    };
+
+    const discardAssessmentChat = () => {
         const threadId = activeAssessmentThread.current;
         activeAssessmentThread.current = null;
+        setAssessmentChatMounted(false);
         setAssessmentChatOpen(false);
         setQueuedAgentMessage(undefined);
         if (threadId) void fetch('/api/agent/conversation', {
@@ -205,7 +213,7 @@ type VariantScopedSnapshot = {
     }, []);
 
     useEffect(() => {
-        closeAssessmentChat();
+        discardAssessmentChat();
     }, [vuln.id]);
 
     const openAssessmentChat = (message?: string) => {
@@ -214,6 +222,7 @@ type VariantScopedSnapshot = {
             activeAssessmentThread.current = threadId;
             setAssessmentThreadId(threadId);
         }
+        setAssessmentChatMounted(true);
         setAssessmentChatOpen(true);
         setIsEditing(true);
         if (message) setQueuedAgentMessage({ id: crypto.randomUUID(), text: message });
@@ -2352,8 +2361,8 @@ type VariantScopedSnapshot = {
                     </div>
 
                     </div>
-                    {assessmentChatOpen && <aside id="assessment-agent-panel" role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
-                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} context={assessmentAgentContext} onClose={closeAssessmentChat} queuedMessage={queuedAgentMessage} />
+                    {assessmentChatMounted && <aside id="assessment-agent-panel" hidden={!assessmentChatOpen} role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queuedMessage={queuedAgentMessage} />
                     </aside>}
         </ModalShell>
 
