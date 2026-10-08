@@ -242,6 +242,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 grype.load_from_dict(data)
             else:
                 print(f"Warning: unknown format for {doc.path}, skipping")
+                continue
+            doc.dependencies_recorded = True
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
         except Exception as e:
@@ -253,6 +255,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 print(f"Ignored: Error parsing {doc.path}: {e}")
         finally:
             pkgCtrl.current_sbom_document = None
+    pkgCtrl.flush_spdx_dependencies()
+    _db.session.commit()
 
     return {
         "cdx": cdx,

@@ -4,6 +4,7 @@
 from ..models.package import Package
 from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
+from .fast_spdx import spdx2_dependency_edge
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
@@ -62,6 +63,7 @@ class SPDX:
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.ref_dict: dict[str, str] = {}
         self.pkg_to_ref: dict[str, str] = {}
+        self._document_refs: dict[str, str] = {}
 
     def load_from_dict(self, spdx: dict):
         """Read data from SPDX json parsed format."""
@@ -91,6 +93,7 @@ class SPDX:
         Internal method.
         Merge components from SBOM into controller.
         """
+        self._document_refs = {}
         for package in self.sbom.packages:
             supplier = ""
             try:
@@ -121,12 +124,23 @@ class SPDX:
             if package.spdx_id:
                 self.ref_dict[package.spdx_id] = pkg.string_id
                 self.pkg_to_ref[pkg.string_id] = package.spdx_id
+                self._document_refs[package.spdx_id] = pkg.string_id
 
             self.packagesCtrl.add(pkg)
 
     def parse_and_merge(self):
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
+        edges = set()
+        for relation in self.sbom.relationships:
+            edge = spdx2_dependency_edge(relation.spdx_element_id, relation.relationship_type.name,
+                                         relation.related_spdx_element_id)
+            if edge:
+                edges.add(edge)
+        creation_info = self.sbom.creation_info
+        external_documents = {ref.document_ref_id: ref.document_uri for ref in creation_info.external_document_refs}
+        self.packagesCtrl.add_spdx_dependencies(creation_info.document_namespace, self._document_refs,
+                                                external_documents, edges)
 
     def register_components(self, with_cpe=False):
         """
