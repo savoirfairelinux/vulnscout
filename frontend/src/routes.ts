@@ -39,11 +39,60 @@ export function normalizeRoutePath(pathname: string): string {
     return trimmed === '' ? '/' : trimmed;
 }
 
+export const SETTINGS_PATHS = {
+    transfer: `${ROUTES.settings}/transfer`,
+    customExport: `${ROUTES.settings}/custom-export`,
+} as const;
+
+export function settingsProjectPath(projectId: string): string {
+    return `${ROUTES.settings}/${encodeURIComponent(projectId)}`;
+}
+
+export function settingsVariantPath(projectId: string, variantId: string): string {
+    return `${settingsProjectPath(projectId)}/${encodeURIComponent(variantId)}`;
+}
+
+export type SettingsRoute =
+    | { kind: 'general' }
+    | { kind: 'transfer' }
+    | { kind: 'custom-export' }
+    | { kind: 'project'; projectId: string }
+    | { kind: 'variant'; projectId: string; variantId: string }
+    | { kind: 'unknown' };
+
+/** Map a pathname under `/settings` to the settings view it renders. */
+export function parseSettingsPath(pathname: string): SettingsRoute {
+    const path = normalizeRoutePath(pathname);
+    if (path === ROUTES.settings) return { kind: 'general' };
+    if (!path.startsWith(`${ROUTES.settings}/`)) return { kind: 'unknown' };
+
+    let segments: string[];
+    try {
+        segments = path.slice(ROUTES.settings.length + 1).split('/').map(decodeURIComponent);
+    } catch {
+        return { kind: 'unknown' };
+    }
+    if (segments.some((segment) => segment === '')) return { kind: 'unknown' };
+
+    if (segments.length === 1) {
+        if (segments[0] === 'transfer') return { kind: 'transfer' };
+        if (segments[0] === 'custom-export') return { kind: 'custom-export' };
+        return { kind: 'project', projectId: segments[0] };
+    }
+    if (segments.length === 2) {
+        return { kind: 'variant', projectId: segments[0], variantId: segments[1] };
+    }
+    return { kind: 'unknown' };
+}
+
 /**
  * Resolve a URL pathname back to its tab key, or `UNKNOWN_ROUTE` when no
- * route owns it. Callers gating dashboard-only UI must check for 'metrics'
+ * route owns it. Any path under `/settings/` belongs to the settings tab.
+ * Callers gating dashboard-only UI must check for 'metrics'
  * explicitly rather than relying on a fallback.
  */
 export function tabForPath(pathname: string): RouteKey {
-    return PATH_TO_TAB[normalizeRoutePath(pathname)] ?? UNKNOWN_ROUTE;
+    const path = normalizeRoutePath(pathname);
+    if (path.startsWith(`${ROUTES.settings}/`)) return 'settings';
+    return PATH_TO_TAB[path] ?? UNKNOWN_ROUTE;
 }
