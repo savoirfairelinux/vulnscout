@@ -24,6 +24,7 @@
     "@lobehub/icons-static-svg": "1.95.1",
     "@tanstack/react-table": "^8.17.3",
     "@tanstack/react-virtual": "^3.5.1",
+    "@xyflow/react": "^12.12.0",
     "ae-cvss-calculator": "^1.0.8",
     "chart.js": "^4.4.3",
     "dotenv": "^16.4.5",

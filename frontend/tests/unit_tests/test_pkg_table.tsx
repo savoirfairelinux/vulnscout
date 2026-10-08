@@ -519,6 +519,90 @@ describe('Packages Table', () => {
         expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
     })
 
+    test('dependency column is shown after Version and its whole cell opens a package modal', async () => {
+        render(<TablePackages preferenceScopeKey="dependency-default" packages={packages} />);
+        const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
+        expect(headers.slice(0, 4)).toEqual(['Name', 'Version', 'Dependency', 'Vulnerabilities']);
+
+        await waitFor(() => expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length));
+        const dependencyButton = screen.getByRole('button', { name: 'View dependency graph for aaabbbccc' });
+        expect(dependencyButton.className).toContain('w-full h-full p-4');
+        expect(dependencyButton.parentElement?.tagName).toBe('TD');
+        expect(dependencyButton.parentElement?.className).not.toContain('p-4');
+
+        const user = userEvent.setup();
+        await user.click(dependencyButton);
+        expect(await screen.findByRole('dialog', { name: 'Dependencies: aaabbbccc@1.0.0' })).toBeTruthy();
+        await user.click(screen.getByRole('button', { name: 'Close modal' }));
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    test('sorting by dependency puts the largest In + Out total first', async () => {
+        const originalFetch = global.fetch;
+        global.fetch = (async () => ({
+            ok: true,
+            json: async () => ({ counts: {
+                'aaabbbccc@1.0.0': { in: 1, out: 0 },
+                'xxxyyyzzz@2.0.0': { in: 2, out: 3 },
+                'dddeeefff@1.5.0': { in: 0, out: 2 },
+            }, unrecorded: [] }),
+        })) as unknown as typeof fetch;
+        try {
+            render(<TablePackages preferenceScopeKey="dependency-sort" variantId="v1" packages={packages} />);
+            expect(await screen.findByText('In 2 / Out 3')).toBeTruthy();
+
+            await userEvent.setup().click(screen.getByRole('columnheader', { name: 'Dependency' }));
+            await waitFor(() => {
+                const html = document.body.innerHTML;
+                expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('dddeeefff'));
+                expect(html.indexOf('dddeeefff')).toBeLessThan(html.indexOf('aaabbbccc'));
+            });
+        } finally {
+            global.fetch = originalFetch;
+        }
+    });
+
+    test('dependency column offers no graph for outdated or unrecorded packages', async () => {
+        const originalFetch = global.fetch;
+        global.fetch = (async () => ({
+            ok: true,
+            json: async () => ({ counts: { 'xxxyyyzzz@2.0.0': { in: 1, out: 0 } }, unrecorded: ['aaabbbccc@1.0.0'] }),
+        })) as unknown as typeof fetch;
+        try {
+            const view = render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages} />);
+            expect(await screen.findByText('In 1 / Out 0')).toBeTruthy();
+            expect(screen.getByText('Not recorded')).toBeTruthy();
+            expect(screen.queryByRole('button', { name: 'View dependency graph for aaabbbccc' })).toBeNull();
+            expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length - 2);
+            view.unmount();
+
+            const outdatedPackage: Package = { ...packages[1], id: 'xxxyyyzzz@1.0.0', version: '1.0.0', outdated: true };
+            window.localStorage.setItem('vulnscout.tables.packages.dependency-states.outdatedOnly', 'true');
+            render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages}
+                onLoadOutdatedPackages={async () => [...packages, outdatedPackage]} />);
+            expect(await screen.findByText('Not in active scan')).toBeTruthy();
+            expect(screen.queryByRole('button', { name: /View dependency graph/ })).toBeNull();
+        } finally {
+            global.fetch = originalFetch;
+        }
+    });
+
+    test('saved column choices get the dependency column once', async () => {
+        window.localStorage.setItem('vulnscout.tables.packages.saved-columns.visibleColumns', JSON.stringify(['Name', 'Version']));
+        const view = render(<TablePackages preferenceScopeKey="saved-columns" packages={packages} />);
+        expect(await screen.findByRole('columnheader', { name: 'Dependency' })).toBeTruthy();
+
+        const user = userEvent.setup();
+        await user.click(screen.getByText('Columns'));
+        await user.click(screen.getByRole('checkbox', { name: 'Dependency' }));
+        expect(screen.queryByRole('columnheader', { name: 'Dependency' })).toBeNull();
+        view.unmount();
+
+        render(<TablePackages preferenceScopeKey="saved-columns" packages={packages} />);
+        expect(screen.getByRole('columnheader', { name: 'Version' })).toBeTruthy();
+        expect(screen.queryByRole('columnheader', { name: 'Dependency' })).toBeNull();
+    });
+
     test('package without CPE shows dash placeholder', async () => {
         // ARRANGE
         const packagesNoCpe: Package[] = [
@@ -659,6 +743,7 @@ describe('Packages Table', () => {
 
     test('ArrowDown and ArrowUp navigate focused table row', async () => {
         const { container } = render(<TablePackages packages={packages} />);
+        await waitFor(() => expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length));
 
         const user = userEvent.setup();
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
@@ -684,6 +769,7 @@ describe('Packages Table', () => {
 
     test('Home and End navigate to first and last focused table row', async () => {
         const { container } = render(<TablePackages packages={packages} />);
+        await waitFor(() => expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length));
 
         const user = userEvent.setup();
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
