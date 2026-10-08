@@ -30,6 +30,7 @@ import NvdApiKey from "../handlers/nvdApiKey";
 import ScansHandler from "../handlers/scans";
 import type { EmptyScanPreview, OrphanedVulnerabilityPreview, OutdatedDataPreview } from "../handlers/scans";
 import ConfirmationModal from "../components/ConfirmationModal";
+import InlineAddInput from "../components/InlineAddInput";
 import MessageBanner from "../components/MessageBanner";
 import ModalShell from "../components/ModalShell";
 import Transfer from "./Transfer";
@@ -53,6 +54,7 @@ type Props = {
 
 type SettingsTab = "general" | "transfer" | "custom-export" | "projects" | "variants";
 type FeedbackMsg = { text: string; type: "success" | "error" } | null;
+type AddKey = "project" | `tree-variant:${string}` | "page-variant" | null;
 type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
   | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
@@ -82,6 +84,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectVariants, setProjectVariants] = useState<Record<string, Variant[]>>({});
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
+  const [openAddKey, setOpenAddKey] = useState<AddKey>(null);
 
   const loadProjects = useCallback(() => {
     Projects.list()
@@ -232,13 +235,11 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   };
 
   const clearProjectMsgs = () => {
-    setAddProjectMsg(null);
     setRenameProjectMsg(null);
     setDeleteProjectMsg(null);
   };
 
   const clearVariantMsgs = () => {
-    setAddVariantMsg(null);
     setRenameVariantMsg(null);
     setDeleteVariantMsg(null);
   };
@@ -250,37 +251,12 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
     setActiveTab("projects");
   };
 
-  const startNewProject = () => {
-    clearProjectMsgs();
-    setRenameProjectId("");
-    setRenameProjectName("");
-    setActiveTab("projects");
-  };
-
   const selectVariantFromTree = (projectId: string, variant: Variant) => {
     clearVariantMsgs();
     clearImportState();
     setVariantProjectId(projectId);
     setRenameVariantId(variant.id);
     setRenameVariantName(variant.name);
-    setActiveTab("variants");
-  };
-
-  const requestDeleteVariant = (projectId: string, variant: Variant) => {
-    clearVariantMsgs();
-    clearImportState();
-    setVariantProjectId(projectId);
-    setRenameVariantId(variant.id);
-    setRenameVariantName(variant.name);
-    setConfirmDeleteVariant(true);
-  };
-
-  const startNewVariant = (projectId: string) => {
-    clearVariantMsgs();
-    clearImportState();
-    setVariantProjectId(projectId);
-    setRenameVariantId("");
-    setRenameVariantName("");
     setActiveTab("variants");
   };
 
@@ -463,9 +439,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   const [renameProjectName, setRenameProjectName] = useState<string>("");
   const [renameProjectBusy, setRenameProjectBusy] = useState(false);
   const [renameProjectMsg, setRenameProjectMsg] = useState<FeedbackMsg>(null);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [createProjectBusy, setCreateProjectBusy] = useState(false);
-  const [addProjectMsg, setAddProjectMsg] = useState<FeedbackMsg>(null);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
   const [deleteProjectMsg, setDeleteProjectMsg] = useState<FeedbackMsg>(null);
@@ -497,24 +470,12 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
     }
   };
 
-  const handleCreateProject = async () => {
-    if (!newProjectName.trim()) return;
-    setCreateProjectBusy(true);
-    setAddProjectMsg(null);
-    try {
-      const created = await Projects.create(newProjectName.trim());
-      setNewProjectName("");
-      loadProjects();
-      // Select the newly created project; success feedback shows in the management view that replaces this form
-      setRenameProjectId(created.id);
-      setRenameProjectName(created.name);
-      setRenameProjectMsg({ text: `Project "${created.name}" created.`, type: "success" });
-      onDataChanged?.("Creating project...");
-    } catch (e: any) {
-      setAddProjectMsg({ text: e.message, type: "error" });
-    } finally {
-      setCreateProjectBusy(false);
-    }
+  const createProject = async (name: string) => {
+    const created = await Projects.create(name);
+    setProjects(await Projects.list());
+    selectProjectFromTree(created);
+    setRenameProjectMsg({ text: `Project "${created.name}" created.`, type: "success" });
+    onDataChanged?.("Creating project...");
   };
 
   const handleDeleteProject = async () => {
@@ -545,22 +506,15 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
 
   // ---- Manage Variants ----
   const [variantProjectId, setVariantProjectId] = useState<string>("");
-  const variantProjectIdRef = useRef(variantProjectId);
   const [variantProjectVariants, setVariantProjectVariants] = useState<Variant[]>([]);
   const [renameVariantId, setRenameVariantId] = useState<string>("");
   const [renameVariantName, setRenameVariantName] = useState<string>("");
   const [renameVariantBusy, setRenameVariantBusy] = useState(false);
   const [renameVariantMsg, setRenameVariantMsg] = useState<FeedbackMsg>(null);
-  const [newVariantName, setNewVariantName] = useState("");
-  const [createVariantBusy, setCreateVariantBusy] = useState(false);
-  const [addVariantMsg, setAddVariantMsg] = useState<FeedbackMsg>(null);
-  const [confirmDeleteVariant, setConfirmDeleteVariant] = useState(false);
+  const [pendingDeleteVariant, setPendingDeleteVariant] =
+    useState<{ projectId: string; id: string; name: string } | null>(null);
   const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
   const [deleteVariantMsg, setDeleteVariantMsg] = useState<FeedbackMsg>(null);
-
-  useEffect(() => {
-    variantProjectIdRef.current = variantProjectId;
-  }, [variantProjectId]);
 
   const reloadVariants = useCallback((projectId: string) => {
     if (!projectId) { setVariantProjectVariants([]); return; }
@@ -599,52 +553,34 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
     }
   };
 
-  const handleCreateVariant = async () => {
-    if (!newVariantName.trim() || !variantProjectId) return;
-    const projectId = variantProjectId;
-    const variantName = newVariantName.trim();
-    setCreateVariantBusy(true);
-    setAddVariantMsg(null);
-    try {
-      const created = await Variants.create(projectId, variantName);
-      reloadProjectVariants(projectId);
-      if (variantProjectIdRef.current !== projectId) return;
-      setNewVariantName("");
-      reloadVariants(projectId);
-      // Select the newly created variant; success feedback shows in the management view that replaces this form
-      setRenameVariantId(created.id);
-      setRenameVariantName(created.name);
-      setRenameVariantMsg({ text: `Variant "${created.name}" created.`, type: "success" });
-      onDataChanged?.("Creating variant...");
-    } catch (e: any) {
-      setAddVariantMsg({ text: e.message, type: "error" });
-    } finally {
-      setCreateVariantBusy(false);
-    }
+  const createVariant = async (projectId: string, name: string) => {
+    const created = await Variants.create(projectId, name);
+    const list = await Variants.list(projectId);
+    setProjectVariants((prev) => ({ ...prev, [projectId]: list }));
+    setExpandedProjectIds((current) => new Set(current).add(projectId));
+    selectVariantFromTree(projectId, created);
+    setRenameVariantMsg({ text: `Variant "${created.name}" created.`, type: "success" });
+    onDataChanged?.("Creating variant...");
   };
 
   const handleDeleteVariant = async () => {
-    if (!renameVariantId || deleteVariantBusy) return;
+    if (!pendingDeleteVariant || deleteVariantBusy) return;
+    const { projectId: deletedProjectId, id: deletedId } = pendingDeleteVariant;
     setDeleteVariantBusy(true);
     setDeleteVariantMsg(null);
     try {
-      await Variants.delete(renameVariantId);
-      setRenameVariantId("");
-      setRenameVariantName("");
-      setConfirmDeleteVariant(false);
-      reloadVariants(variantProjectId);
-      reloadProjectVariants(variantProjectId);
-      // Return to the parent project view rather than an orphaned variant view
-      const parent = projects.find((p) => p.id === variantProjectId);
-      if (parent) {
-        setRenameProjectId(parent.id);
-        setRenameProjectName(parent.name);
+      await Variants.delete(deletedId);
+      if (renameVariantId === deletedId) {
+        setRenameVariantId("");
+        setRenameVariantName("");
       }
-      setActiveTab("projects");
+      setPendingDeleteVariant(null);
+      if (variantProjectId === deletedProjectId) reloadVariants(deletedProjectId);
+      reloadProjectVariants(deletedProjectId);
       onDataChanged?.("Deleting variant...");
     } catch (e: any) {
       setDeleteVariantMsg({ text: e.message, type: "error" });
-      setConfirmDeleteVariant(false);
+      setPendingDeleteVariant(null);
     } finally {
       setDeleteVariantBusy(false);
     }
@@ -742,7 +678,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
   let pageTag: { label: string; className: string } | null = null;
   if (activeTab === "projects") {
     crumbs.push("Projects");
-    pageTitle = contextProject?.name ?? "Add Project";
+    pageTitle = contextProject?.name ?? "Projects";
     if (contextProject) {
       crumbs.push(contextProject.name);
       pageTag = { label: "Project", className: "bg-cyan-950 text-cyan-300" };
@@ -812,15 +748,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
             <div className="my-3 border-t border-slate-700" />
             <div className="flex items-center justify-between px-3 pb-2">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Projects</span>
-              <button
-                type="button"
-                onClick={startNewProject}
-                className="flex h-6 w-6 items-center justify-center rounded border border-dashed border-sky-500 text-sky-400 transition-colors hover:bg-sky-900"
-                aria-label="Add project"
-                title="Add project"
-              >
-                <FontAwesomeIcon icon={faPlus} aria-hidden="true" />
-              </button>
             </div>
 
             <div className="space-y-1">
@@ -870,27 +797,37 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
                             <span className="truncate">{variant.name}</span>
                           </button>
                         ))}
-                        <button
-                          type="button"
-                          onClick={() => startNewVariant(project.id)}
-                          className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed border-slate-600 px-3 py-1.5 text-left text-xs italic text-slate-500 transition-colors hover:border-sky-500 hover:text-sky-400"
+                        <InlineAddInput
+                          isOpen={openAddKey === `tree-variant:${project.id}`}
+                          onOpenChange={(open) => setOpenAddKey(open ? `tree-variant:${project.id}` : null)}
+                          onSubmit={(name) => createVariant(project.id, name)}
+                          inputAriaLabel="New variant name"
+                          submitAriaLabel="Create variant"
+                          placeholder="New variant name"
+                          buttonClassName="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed border-slate-600 px-3 py-1.5 text-left text-xs italic text-slate-500 transition-colors hover:border-sky-500 hover:text-sky-400"
+                          className="mt-1"
                         >
                           <FontAwesomeIcon icon={faPlus} className="text-[10px]" aria-hidden="true" />
                           Add variant…
-                        </button>
+                        </InlineAddInput>
                       </div>
                     )}
                   </div>
                 );
               })}
-              <button
-                type="button"
-                onClick={startNewProject}
-                className="mt-2 flex w-full items-center gap-2 rounded-md border border-dashed border-slate-600 px-3 py-2 text-left text-xs italic text-slate-500 transition-colors hover:border-sky-500 hover:text-sky-400"
+              <InlineAddInput
+                isOpen={openAddKey === "project"}
+                onOpenChange={(open) => setOpenAddKey(open ? "project" : null)}
+                onSubmit={createProject}
+                inputAriaLabel="New project name"
+                submitAriaLabel="Create project"
+                placeholder="New project name"
+                buttonClassName="mt-2 flex w-full items-center gap-2 rounded-md border border-dashed border-slate-600 px-3 py-2 text-left text-xs italic text-slate-500 transition-colors hover:border-sky-500 hover:text-sky-400"
+                className="mt-2"
               >
                 <FontAwesomeIcon icon={faPlus} className="text-[10px]" aria-hidden="true" />
                 New Project
-              </button>
+              </InlineAddInput>
             </div>
           </nav>
         </aside>
@@ -1226,56 +1163,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
         {/* ======== Projects Settings tab ======== */}
         {activeTab === "projects" && (
         <>
-        {/* ======== Add Project (only when no project is selected) ======== */}
-        {!contextProject && (
-        <section aria-labelledby="settings-heading-project-add">
-          <div className={cardHeader}>
-            <FontAwesomeIcon icon={faPlus} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-project-add" className="text-xl font-bold text-white">Add Project</h2>
-          </div>
-          <div className={cardBody + " space-y-4"}>
-            <div className="space-y-2">
-              <label htmlFor="new-project-name" className="block text-sm text-zinc-300 font-semibold">Project name</label>
-              <div className="flex gap-2">
-                <input
-                  id="new-project-name"
-                  type="text"
-                  value={newProjectName}
-                  onChange={(e) => { setNewProjectName(e.target.value); setAddProjectMsg(null); }}
-                  placeholder="New project name"
-                  className={inputClass + " flex-1"}
-                  aria-required="true"
-                  onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
-                />
-                <button
-                  onClick={handleCreateProject}
-                  disabled={createProjectBusy || !newProjectName.trim()}
-                  className={btnPrimary}
-                  aria-busy={createProjectBusy}
-                >
-                  {createProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                  ) : (
-                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
-                  )}
-                  Add
-                </button>
-              </div>
-            </div>
-
-            {/* -- Feedback -- */}
-            {addProjectMsg && (
-              <MessageBanner
-                type={addProjectMsg.type}
-                message={addProjectMsg.text}
-                isVisible={true}
-                onClose={() => setAddProjectMsg(null)}
-              />
-            )}
-          </div>
-        </section>
-        )}
-
         {contextProject && (
         <>
         {/* ======== Variants overview ======== */}
@@ -1283,16 +1170,29 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
           <div className={cardHeader}>
             <FontAwesomeIcon icon={faFolder} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-project-variants" className="text-xl font-bold text-white">Variants</h2>
-            <button
-              type="button"
-              onClick={() => startNewVariant(contextProject.id)}
-              className={btnPrimary + " ml-auto py-1.5 text-xs"}
+            <InlineAddInput
+              isOpen={openAddKey === "page-variant"}
+              onOpenChange={(open) => setOpenAddKey(open ? "page-variant" : null)}
+              onSubmit={(name) => createVariant(contextProject.id, name)}
+              inputAriaLabel="New variant name"
+              submitAriaLabel="Create variant"
+              placeholder="New variant name"
+              buttonClassName={btnPrimary + " ml-auto py-1.5 text-xs"}
+              className="ml-auto w-64"
             >
               <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
               Add Variant
-            </button>
+            </InlineAddInput>
           </div>
           <div className={cardBody + " space-y-2"}>
+            {deleteVariantMsg && (
+              <MessageBanner
+                type={deleteVariantMsg.type}
+                message={deleteVariantMsg.text}
+                isVisible={true}
+                onClose={() => setDeleteVariantMsg(null)}
+              />
+            )}
             {(projectVariants[contextProject.id] ?? []).map((v) => (
               <div
                 key={v.id}
@@ -1314,7 +1214,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
                   </button>
                   <button
                     type="button"
-                    onClick={() => requestDeleteVariant(contextProject.id, v)}
+                    onClick={() => setPendingDeleteVariant({ projectId: contextProject.id, id: v.id, name: v.name })}
                     className="flex h-8 w-8 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-red-950 hover:text-red-400"
                     aria-label={`Delete ${v.name}`}
                     title="Delete variant"
@@ -1426,73 +1326,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
         )}
 
         {/* ======== Variants Settings tab ======== */}
-        {activeTab === "variants" && !variantProjectId && (
-        <section aria-labelledby="settings-heading-variant-empty">
-          <div className={cardHeader}>
-            <FontAwesomeIcon icon={faFolder} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-variant-empty" className="text-xl font-bold text-white">Variants</h2>
-          </div>
-          <div className={cardBody}>
-            <p className="text-sm text-zinc-400">Select a variant from the sidebar, or expand a project and use “Add variant…” to create one.</p>
-          </div>
-        </section>
-        )}
-
-        {activeTab === "variants" && variantProjectId && !renameVariantId && (
-        <>
-        {/* ======== Add Variant ======== */}
-        <section aria-labelledby="settings-heading-variant-add">
-          <div className={cardHeader}>
-            <FontAwesomeIcon icon={faPlus} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-variant-add" className="text-xl font-bold text-white">Add Variant</h2>
-          </div>
-          <div className={cardBody + " space-y-4"}>
-            <p className="text-sm text-zinc-400">
-              New variant in project <strong className="text-zinc-300">{contextProject?.name ?? ""}</strong>.
-            </p>
-            <div className="space-y-2">
-              <label htmlFor="new-variant-name" className="block text-sm text-zinc-300 font-semibold">Variant name</label>
-              <div className="flex gap-2">
-                <input
-                  id="new-variant-name"
-                  type="text"
-                  value={newVariantName}
-                  onChange={(e) => { setNewVariantName(e.target.value); setAddVariantMsg(null); }}
-                  placeholder="New variant name"
-                  className={inputClass + " flex-1"}
-                  aria-required="true"
-                  onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
-                />
-                <button
-                  onClick={handleCreateVariant}
-                  disabled={createVariantBusy || !newVariantName.trim()}
-                  className={btnPrimary}
-                  aria-busy={createVariantBusy}
-                >
-                  {createVariantBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                  ) : (
-                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
-                  )}
-                  Add
-                </button>
-              </div>
-            </div>
-
-            {/* -- Feedback -- */}
-            {addVariantMsg && (
-              <MessageBanner
-                type={addVariantMsg.type}
-                message={addVariantMsg.text}
-                isVisible={true}
-                onClose={() => setAddVariantMsg(null)}
-              />
-            )}
-          </div>
-        </section>
-        </>
-        )}
-
         {activeTab === "variants" && variantProjectId && renameVariantId && (
         <>
         {/* ======== Import SBOM ======== */}
@@ -1682,41 +1515,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
           </div>
         </section>
 
-        {/* ======== Danger Zone ======== */}
-        <section aria-labelledby="settings-heading-variant-delete">
-          <div className={dangerCardHeader}>
-            <FontAwesomeIcon icon={faTrash} className="text-red-400" aria-hidden="true" />
-            <h2 id="settings-heading-variant-delete" className="text-xl font-bold text-red-300">Danger Zone</h2>
-          </div>
-          <div className={dangerCardBody + " space-y-3"}>
-            <div className="flex items-center gap-4 flex-wrap">
-              <div className="flex-1 min-w-[16rem]">
-                <p className="text-sm font-semibold text-red-300">Delete Variant</p>
-                <p className="text-xs text-zinc-400">
-                  Permanently removes <strong className="text-zinc-300">{contextVariant?.name ?? renameVariantName}</strong> and all its data.
-                </p>
-              </div>
-              <button
-                onClick={() => setConfirmDeleteVariant(true)}
-                className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium transition-colors duration-150"
-              >
-                <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-                Delete Variant
-              </button>
-            </div>
-
-            {/* -- Feedback -- */}
-            {deleteVariantMsg && (
-              <MessageBanner
-                type={deleteVariantMsg.type}
-                message={deleteVariantMsg.text}
-                isVisible={true}
-                onClose={() => setDeleteVariantMsg(null)}
-              />
-            )}
-          </div>
-        </section>
-
         </>
         )}
         </main>
@@ -1735,14 +1533,14 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
         onCancel={() => setConfirmDeleteProject(false)}
       />
       <ConfirmationModal
-        isOpen={confirmDeleteVariant}
+        isOpen={pendingDeleteVariant !== null}
         title="Delete Variant"
-        message={`Are you sure you want to delete "${contextVariant?.name ?? renameVariantName ?? "this variant"}" and all its data? This action cannot be undone.`}
+        message={`Are you sure you want to delete "${pendingDeleteVariant?.name ?? "this variant"}" and all its data? This action cannot be undone.`}
         confirmText="Yes, delete"
         cancelText="Cancel"
         showTitleIcon={true}
         onConfirm={handleDeleteVariant}
-        onCancel={() => setConfirmDeleteVariant(false)}
+        onCancel={() => setPendingDeleteVariant(null)}
       />
       <ConfirmationModal
         isOpen={confirmRemoveNvdKey}

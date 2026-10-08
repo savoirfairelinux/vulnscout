@@ -174,7 +174,7 @@ describe("Settings scoped project and variant views", () => {
     expect(await screen.findByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Variants" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete Project" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Add Project" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add project" })).not.toBeInTheDocument();
   });
 
   test("opens an initial project from the project list", async () => {
@@ -185,14 +185,17 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.queryByRole("heading", { name: "Add Project" })).not.toBeInTheDocument();
   });
 
-  test("the project add-variant action opens an add form scoped to that project", async () => {
+  test("project page Add Variant turns into an inline input", async () => {
     render(<Settings />);
 
     fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Add Variant" }));
-
-    expect(await screen.findByLabelText("Variant name")).toBeInTheDocument();
-    expect(screen.getByText(/New variant in project/i)).toHaveTextContent("Apollo");
+    fireEvent.click(screen.getByRole("button", { name: "Add Variant" }));
+    const input = screen.getByLabelText("New variant name");
+    fireEvent.change(input, { target: { value: "Next" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText('Variant "Next" created.')).toBeInTheDocument();
+    expect(variantsCreate).toHaveBeenCalledWith(project.id, "Next");
+    expect(screen.getByRole("heading", { name: "Import SBOM" })).toBeInTheDocument();
   });
 
   test("selecting a sidebar variant shows its import and lifecycle controls", async () => {
@@ -205,7 +208,7 @@ describe("Settings scoped project and variant views", () => {
       expect(screen.getByRole("heading", { name: "Import SBOM" })).toBeInTheDocument();
     });
     expect(screen.getByRole("heading", { name: "Rename Variant" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete Variant" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete Variant" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("SBOM Files")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Complete refresh/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /Custom refresh/ })).not.toBeChecked();
@@ -258,9 +261,9 @@ describe("Settings scoped project and variant views", () => {
     projectsCreate.mockResolvedValue(createdProject);
     render(<Settings />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add project" }));
-    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Zeus" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("button", { name: "New Project" }));
+    fireEvent.change(screen.getByLabelText("New project name"), { target: { value: "Zeus" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
     expect(await screen.findByText('Project "Zeus" created.')).toBeInTheDocument();
     expect(projectsCreate).toHaveBeenCalledWith("Zeus");
 
@@ -283,9 +286,22 @@ describe("Settings scoped project and variant views", () => {
     expect(await screen.findByText("Variant renamed.")).toBeInTheDocument();
     expect(variantsRename).toHaveBeenCalledWith(variant.id, "Release Renamed");
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Variant" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Release" }));
     fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
     await waitFor(() => expect(variantsDelete).toHaveBeenCalledWith(variant.id));
+    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+  });
+
+  test("deleting a variant row keeps the project page open", async () => {
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Release" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
+    await waitFor(() => expect(variantsDelete).toHaveBeenCalledWith(variant.id));
+    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Import SBOM" })).not.toBeInTheDocument();
   });
 
   test("previews and deletes empty scans from data maintenance", async () => {
@@ -322,10 +338,10 @@ describe("Settings scoped project and variant views", () => {
   test("creates a variant scoped to the selected project", async () => {
     render(<Settings />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Add Variant" }));
-    fireEvent.change(await screen.findByLabelText("Variant name"), { target: { value: "Next" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add variant…" }));
+    fireEvent.change(screen.getByLabelText("New variant name"), { target: { value: "Next" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create variant" }));
 
     expect(await screen.findByText('Variant "Next" created.')).toBeInTheDocument();
     expect(variantsCreate).toHaveBeenCalledWith(project.id, "Next");
@@ -504,10 +520,22 @@ describe("Settings scoped project and variant views", () => {
     render(<Settings />);
 
     fireEvent.click(await screen.findByRole("button", { name: "New Project" }));
-    expect(await screen.findAllByRole("heading", { name: "Add Project" })).toHaveLength(2);
+    expect(screen.getByLabelText("New project name")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText("New project name"), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "New Project" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
     fireEvent.click(screen.getByRole("button", { name: "Collapse Apollo" }));
+  });
+
+  test("only one inline add input is open at a time", async () => {
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add variant…" }));
+    expect(screen.queryByLabelText("New project name")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("New variant name")).toBeInTheDocument();
   });
 
   test("uses keyboard submits and project variant overview actions", async () => {
@@ -515,8 +543,8 @@ describe("Settings scoped project and variant views", () => {
     projectsList.mockResolvedValueOnce([]).mockResolvedValue([createdProject, project]);
     render(<Settings />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add project" }));
-    const projectName = screen.getByLabelText("Project name");
+    fireEvent.click(await screen.findByRole("button", { name: "New Project" }));
+    const projectName = screen.getByLabelText("New project name");
     fireEvent.change(projectName, { target: { value: "Zeus" } });
     fireEvent.keyDown(projectName, { key: "Enter" });
     expect(await screen.findByText('Project "Zeus" created.')).toBeInTheDocument();
@@ -555,10 +583,13 @@ describe("Settings scoped project and variant views", () => {
     projectsDelete.mockRejectedValueOnce(new Error("Delete failed"));
     render(<Settings />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add project" }));
-    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Broken" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    expect(await screen.findByText("Create failed")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "New Project" }));
+    const brokenInput = screen.getByLabelText("New project name");
+    fireEvent.change(brokenInput, { target: { value: "Broken" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Create failed");
+    expect(brokenInput).toHaveValue("Broken");
+    fireEvent.keyDown(brokenInput, { key: "Escape" });
 
     fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
     fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
@@ -579,10 +610,11 @@ describe("Settings scoped project and variant views", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add Variant" }));
-    const variantName = await screen.findByLabelText("Variant name");
+    const variantName = await screen.findByLabelText("New variant name");
     fireEvent.change(variantName, { target: { value: "Broken" } });
     fireEvent.keyDown(variantName, { key: "Enter" });
-    expect(await screen.findByText("Variant create failed")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Variant create failed");
+    fireEvent.keyDown(variantName, { key: "Escape" });
 
     fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
@@ -592,7 +624,8 @@ describe("Settings scoped project and variant views", () => {
     fireEvent.keyDown(newName, { key: "Enter" });
     expect(await screen.findByText("Variant rename failed")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Variant" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Release" }));
     fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
     expect(await screen.findByText("Variant delete failed")).toBeInTheDocument();
   });
@@ -626,9 +659,8 @@ describe("Settings scoped project and variant views", () => {
     expect(projectsDelete).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
-    fireEvent.click(screen.getByRole("button", { name: "Release" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Delete Variant" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Release" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(variantsDelete).not.toHaveBeenCalled();
 
