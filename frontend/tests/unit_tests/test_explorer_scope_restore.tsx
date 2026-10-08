@@ -175,21 +175,25 @@ jest.mock('../../src/pages/Review', () => ({
         <button onClick={() => onAssessmentChanged({ type: 'delete', vulnId: 'CVE-1', ids: [] })}>assessment changed</button>
     ),
 }));
-jest.mock('../../src/pages/Settings', () => ({
-    __esModule: true,
-    default: ({ onDataChanged, onLoadingMessage, initialTab, projectId }: {
+jest.mock('../../src/pages/Settings', () => {
+    const { useLocation } = jest.requireActual<typeof import('react-router-dom')>('react-router-dom');
+    function MockSettings({ onDataChanged, onLoadingMessage, projectId }: {
         onDataChanged: (message: string) => void;
         onLoadingMessage: (message: string) => void;
-        initialTab?: string;
         projectId?: string;
-    }) => <div>
-        <span data-testid="settings-initial-tab">{initialTab}</span>
+    }) {
+        const location = useLocation();
+        return <div>
+        <span data-testid="settings-path">{location.pathname}</span>
+        <span data-testid="settings-state">{JSON.stringify(location.state)}</span>
         <span data-testid="settings-project-id">{projectId}</span>
         <button onClick={() => onDataChanged('Saving')}>settings changed</button>
         <button onClick={() => onLoadingMessage('Loading settings')}>settings loading</button>
         <button onClick={() => onLoadingMessage('')}>settings loaded</button>
-    </div>,
-}));
+    </div>;
+    }
+    return { __esModule: true, default: MockSettings };
+});
 jest.mock('../../src/pages/Transfer', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../src/pages/Exports', () => ({ __esModule: true, default: () => <div>exports page</div> }));
 jest.mock('../../src/pages/AIContext', () => ({ __esModule: true, default: () => <div>ai context page</div> }));
@@ -366,8 +370,8 @@ describe('Explorer saved-scope validation', () => {
         expect(screen.getByText('Add your first project')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Go to settings' }));
 
-        expect(screen.getByTestId('settings-initial-tab')).toHaveTextContent('projects');
-        expect(screen.getByTestId('settings-project-id')).toBeEmptyDOMElement();
+        expect(screen.getByTestId('settings-path')).toHaveTextContent(/^\/settings$/);
+        expect(screen.getByTestId('settings-state')).toHaveTextContent('"openNewProject":true');
     });
 
     test('opens the existing project in settings when it has no variants', async () => {
@@ -381,8 +385,8 @@ describe('Explorer saved-scope validation', () => {
         expect(screen.getByText('Add a project variant')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Go to settings' }));
 
-        expect(screen.getByTestId('settings-initial-tab')).toHaveTextContent('projects');
-        expect(screen.getByTestId('settings-project-id')).toHaveTextContent('project-1');
+        expect(screen.getByTestId('settings-path')).toHaveTextContent(/^\/settings\/project-1$/);
+        expect(screen.getByTestId('settings-state')).not.toHaveTextContent('openNewProject');
     });
 
     test('keeps metrics visible when projects and variants exist', async () => {
@@ -485,6 +489,19 @@ describe('Explorer saved-scope validation', () => {
         fireEvent.click(screen.getByRole('link', {name: 'scans'}));
 
         expect(screen.getByTestId('scan-history-variant-ids')).toHaveTextContent('v1,v2');
+    });
+
+    test('renders settings sub-routes with the current project', async () => {
+        mockGetFrontendScope.mockReturnValue(savedScope('saved-project', ['v1']));
+        mockProjectsList.mockResolvedValue([{ id: 'saved-project', name: 'Saved Project' }]);
+        mockVariantsList.mockResolvedValue([{ id: 'v1', name: 'V1', project_id: 'saved-project' }]);
+
+        render(<Explorer />, { wrapper: ({ children }) => (
+            <MemoryRouter initialEntries={['/settings/other-project/other-variant']}>{children}</MemoryRouter>
+        ) });
+
+        expect(screen.getByTestId('settings-path')).toHaveTextContent('/settings/other-project/other-variant');
+        await waitFor(() => expect(screen.getByTestId('settings-project-id')).toHaveTextContent('saved-project'));
     });
 
     test('routes to the export and AI context pages', async () => {
