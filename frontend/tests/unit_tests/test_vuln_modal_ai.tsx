@@ -10,11 +10,15 @@ import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import type { AssessmentTargetPair } from "../../src/handlers/assessments";
 import VulnModal from '../../src/components/VulnModal';
 
-const chatProps: { queuedMessage?: { id: string; text: string } }[] = [];
+type ChatProps = { threadId?: string; active?: boolean; queuedMessage?: { id: string; text: string } };
+const chatProps: ChatProps[] = [];
+let chatMounts = 0;
 
 jest.mock('../../src/components/AgentChat', () => ({
     __esModule: true,
-    default: (props: { onClose: () => void; queuedMessage?: { id: string; text: string } }) => {
+    default: function MockAgentChat(props: ChatProps & { onClose: () => void }) {
+        const ReactLib = jest.requireActual('react');
+        ReactLib.useEffect(() => { chatMounts += 1; }, []);
         chatProps.push(props);
         return <div data-testid="agent-chat">
             <span data-testid="queued-message">{props.queuedMessage?.text ?? ''}</span>
@@ -80,6 +84,7 @@ function renderModal(props: Partial<React.ComponentProps<typeof VulnModal>> = {}
 describe('VulnModal AI actions', () => {
     beforeEach(() => {
         chatProps.length = 0;
+        chatMounts = 0;
         fetchMock.resetMocks();
         fetchMock.mockResponse(req => {
             if (req.url.endsWith(`/api/vulnerabilities/${vulnerability.id}/variants`)) {
@@ -109,7 +114,7 @@ describe('VulnModal AI actions', () => {
         expect(screen.getByTestId('queued-message')).toHaveTextContent('');
 
         await user.click(aiButton);
-        expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
+        expect(screen.getByTestId('agent-chat')).not.toBeVisible();
         expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
     });
 
@@ -119,7 +124,7 @@ describe('VulnModal AI actions', () => {
 
         await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
         await user.click(screen.getByRole('button', { name: 'Close chat' }));
-        expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
+        expect(screen.getByTestId('agent-chat')).not.toBeVisible();
         expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
     });
 
@@ -157,6 +162,55 @@ describe('VulnModal AI actions', () => {
         const firstId = chatProps[chatProps.length - 1].queuedMessage?.id;
         await user.click(reviewButtons[0]);
         expect(chatProps[chatProps.length - 1].queuedMessage?.id).not.toEqual(firstId);
+    });
+
+    const deleteCalls = () => fetchMock.mock.calls.filter(([req, init]) =>
+        String(req instanceof Request ? req.url : req).endsWith('/api/agent/conversation') && init?.method === 'DELETE');
+
+    test('closing and reopening the chat keeps the same session', async () => {
+        const user = userEvent.setup();
+        renderModal();
+        const aiButton = screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` });
+
+        await user.click(aiButton);
+        const threadId = chatProps[chatProps.length - 1].threadId;
+        expect(threadId).toBeTruthy();
+        await user.click(screen.getByRole('button', { name: 'Close chat' }));
+        expect(chatProps[chatProps.length - 1].active).toBe(false);
+        await user.click(aiButton);
+
+        expect(screen.getByTestId('agent-chat')).toBeVisible();
+        expect(chatProps[chatProps.length - 1]).toMatchObject({ threadId, active: true });
+        expect(chatMounts).toBe(1);
+        expect(deleteCalls()).toHaveLength(0);
+    });
+
+    test('navigating to another CVE discards the session', async () => {
+        const user = userEvent.setup();
+        const { rerender } = renderModal();
+        await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
+        const threadId = chatProps[chatProps.length - 1].threadId;
+
+        const other = { ...vulnerability, id: 'CVE-2010-9999' } as Vulnerability;
+        rerender(<VulnModal vuln={other} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
+        expect(deleteCalls()).toHaveLength(1);
+        expect((deleteCalls()[0][1]?.headers as Record<string, string>)['X-Agent-Thread']).toBe(threadId);
+
+        await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${other.id}` }));
+        expect(chatProps[chatProps.length - 1].threadId).not.toBe(threadId);
+    });
+
+    test('closing the modal discards the session', async () => {
+        const user = userEvent.setup();
+        const { unmount } = renderModal();
+        await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
+        await user.click(screen.getByRole('button', { name: 'Close chat' }));
+        expect(deleteCalls()).toHaveLength(0);
+
+        unmount();
+        expect(deleteCalls()).toHaveLength(1);
     });
 
     test('read-only modal hides all AI actions', () => {
