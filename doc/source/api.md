@@ -260,6 +260,25 @@ GET /api/packages
 
 When `compare_variant_id` is provided together with `variant_id`, the endpoint computes a diff or intersection of packages between the two variants.
 
+### Package Dependencies
+
+```
+GET /api/package-dependencies
+```
+
+**Query parameters:** at least one of `variant_id`, `project_id` or `variant_ids` is required.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | Filter by variant |
+| `project_id` | UUID | Filter by project |
+| `variant_ids` | string | Comma-separated variant IDs |
+| `compare_variant_id` | UUID | Second variant for comparison (requires `variant_id`) |
+| `operation` | string | `"difference"` (default for comparison), `"intersection"` or `"union"` (default for `variant_ids`) |
+| `counts` | string | `"1"` to return only per-package `in`/`out` totals |
+
+**Response:** `{"documents": [...]}` where each active SBOM document lists its `variant_id`, `variant_name`, `dependencies_recorded`, `packages` and directed `edges` (`package_id` depends on `dependency_id`), or `{"counts": {"name@version": {"in": n, "out": n}}, "unrecorded": ["name@version", ...]}` when `counts=1` (`in`: packages it depends on, `out`: packages that depend on it). `dependencies_recorded` is `false` for documents imported before dependency support, and `unrecorded` lists packages found only in such documents, whose relationships are unknown rather than zero. An edge is listed under the dependent package's document; its dependency may appear in another document of the same scan (SPDX 2 `DocumentRef-` links). Package selection follows the same comparison rules as `GET /api/packages`.
+
 ---
 
 ## Vulnerabilities

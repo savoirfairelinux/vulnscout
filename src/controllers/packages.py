@@ -1,10 +1,25 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..models import Package, Finding, SBOMDocument, SBOMPackage
+import uuid
+
+from sqlalchemy import tuple_
+
+from ..models import Package, Finding, SBOMDocument, SBOMPackage, PackageDependency
 from ..helpers.verbose import verbose
 from ..extensions import db
 from ._base import to_dict_with_fallback
+
+SpdxKey = tuple[str, str]
+
+
+def _spdx_key(ref: str, namespace: str | None, external_documents: dict[str, str]) -> SpdxKey | None:
+    """Qualify an SPDX 2 element reference with the namespace of the document defining it."""
+    if ref.startswith("DocumentRef-"):
+        document_ref, _, element = ref.partition(":")
+        uri = external_documents.get(document_ref)
+        return (uri, element) if uri and element else None
+    return (namespace, ref) if namespace else None
 
 
 class PackagesController:
@@ -28,6 +43,11 @@ class PackagesController:
         # _persist_vuln_to_db and reused by _persist_assessment_to_db to
         # avoid redundant Finding.get_or_create SELECTs.
         self._finding_cache: dict = {}
+        # (scan_id, namespace, SPDXID) -> (document_id, string_id) for packages read in this session.
+        self._spdx_refs: dict[tuple[uuid.UUID, str, str], tuple[uuid.UUID, str]] = {}
+        self._spdx_documents: dict[uuid.UUID, uuid.UUID] = {}
+        self._spdx_edges: list[tuple[uuid.UUID, str, str]] = []
+        self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey]] = []
 
     def _preload_cache(self) -> None:
         """Bulk-load all packages from the DB into the session caches.
@@ -91,6 +111,98 @@ class PackagesController:
             self._db_id_cache[string_id] = pkg.id
             return pkg.id
         return None
+
+    def add_dependencies(self, references: dict[str, str], edges: set[tuple[str, str]]) -> None:
+        """Persist source -> dependency references belonging to the active document."""
+        document = self._current_sbom_document
+        if document is None:
+            return
+        pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+        if edges:
+            package_ids = set(db.session.execute(
+                db.select(SBOMPackage.package_id).where(SBOMPackage.sbom_document_id == document.id)
+            ).scalars())
+            for source, target in edges:
+                if source not in references or target not in references:
+                    continue
+                source_id = self.get_or_resolve_db_id(references[source])
+                target_id = self.get_or_resolve_db_id(references[target])
+                if source_id != target_id and source_id in package_ids and target_id in package_ids:
+                    pairs.add((source_id, target_id))
+        existing = {tuple(row) for row in db.session.execute(
+            db.select(PackageDependency.package_id, PackageDependency.dependency_id)
+            .where(PackageDependency.sbom_document_id == document.id)
+        )}
+        stale = existing - pairs
+        added = pairs - existing
+        if stale:
+            db.session.execute(db.delete(PackageDependency).where(
+                PackageDependency.sbom_document_id == document.id,
+                tuple_(PackageDependency.package_id, PackageDependency.dependency_id).in_(stale),
+            ))
+        db.session.add_all(
+            PackageDependency(sbom_document_id=document.id, package_id=source, dependency_id=target)
+            for source, target in added
+        )
+        if stale or added:
+            db.session.commit()
+
+    def add_spdx_dependencies(self, namespace: str | None, references: dict[str, str],
+                              external_documents: dict[str, str], edges: set[tuple[str, str]]) -> None:
+        """Queue the active document's SPDX 2 edges; :meth:`flush_spdx_dependencies` persists them."""
+        document = self._current_sbom_document
+        if document is None:
+            return
+        self._spdx_documents[document.id] = document.scan_id
+        if namespace:
+            for ref, string_id in references.items():
+                self._spdx_refs[(document.scan_id, namespace, ref)] = (document.id, string_id)
+        for source, target in edges:
+            if not source.startswith("DocumentRef-") and not target.startswith("DocumentRef-"):
+                if source in references and target in references:
+                    self._spdx_edges.append((document.id, references[source], references[target]))
+                continue
+            source_key = _spdx_key(source, namespace, external_documents)
+            target_key = _spdx_key(target, namespace, external_documents)
+            if source_key is not None and target_key is not None:
+                self._pending_spdx_edges.append((document.scan_id, source_key, target_key))
+
+    def flush_spdx_dependencies(self) -> None:
+        """Replace the edges of every queued document; cross-document ones go to the dependent's document."""
+        documents, self._spdx_documents = self._spdx_documents, {}
+        edges, self._spdx_edges = self._spdx_edges, []
+        pending, self._pending_spdx_edges = self._pending_spdx_edges, []
+        if not documents:
+            return
+        for scan_id, source_key, target_key in pending:
+            source_ref = self._spdx_refs.get((scan_id, *source_key))
+            target_ref = self._spdx_refs.get((scan_id, *target_key))
+            if source_ref is not None and target_ref is not None:
+                edges.append((source_ref[0], source_ref[1], target_ref[1]))
+        rows: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = set()
+        for document_id, source, target in edges:
+            source_id = self.get_or_resolve_db_id(source)
+            target_id = self.get_or_resolve_db_id(target)
+            if source_id is not None and target_id is not None and source_id != target_id:
+                rows.add((document_id, source_id, target_id))
+        existing = {tuple(row) for row in db.session.execute(
+            db.select(PackageDependency.sbom_document_id, PackageDependency.package_id,
+                      PackageDependency.dependency_id)
+            .join(SBOMDocument, SBOMDocument.id == PackageDependency.sbom_document_id)
+            .where(SBOMDocument.scan_id.in_(set(documents.values())))
+        ) if row[0] in documents}
+        stale = sorted(existing - rows)
+        added = rows - existing
+        for start in range(0, len(stale), 500):
+            db.session.execute(db.delete(PackageDependency).where(tuple_(
+                PackageDependency.sbom_document_id, PackageDependency.package_id, PackageDependency.dependency_id,
+            ).in_(stale[start:start + 500])))
+        db.session.add_all(
+            PackageDependency(sbom_document_id=document_id, package_id=source, dependency_id=target)
+            for document_id, source, target in added
+        )
+        if stale or added:
+            db.session.commit()
 
     # ------------------------------------------------------------------
     # Core mutators

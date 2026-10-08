@@ -443,5 +443,11 @@ class Package(Base):
 
     def delete(self) -> None:
         """Delete this package from the database."""
+        from .package_dependency import PackageDependency
+
+        # SQLite foreign keys stay off, so edges on either side are removed explicitly.
+        db.session.execute(db.delete(PackageDependency).where(db.or_(
+            PackageDependency.package_id == self.id, PackageDependency.dependency_id == self.id,
+        )))
         db.session.delete(self)
         db.session.commit()

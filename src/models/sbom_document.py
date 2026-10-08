@@ -5,13 +5,13 @@ import typing
 import uuid
 
 from sqlalchemy.orm import Mapped, relationship, mapped_column
-from sqlalchemy import Text, ForeignKey
+from sqlalchemy import Text, ForeignKey, false
 
 from ..extensions import db, Base
 from . import Variant, Scan
 
 if typing.TYPE_CHECKING:
-    from . import SBOMPackage, SBOMObservation
+    from . import SBOMPackage, SBOMObservation, PackageDependency
 
 
 class SBOMDocument(Base):
@@ -24,6 +24,8 @@ class SBOMDocument(Base):
     source_name: Mapped[str]
     format: Mapped[str | None]  # e.g. 'spdx', 'cdx', 'openvex', 'yocto_cve_check'
     scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scans.id"), index=True)
+    # False until parsed with dependency support, so missing relationships are not reported as zero.
+    dependencies_recorded: Mapped[bool] = mapped_column(default=False, server_default=false())
 
     scan: Mapped["Scan"] = relationship("Scan", back_populates="sbom_documents")
     sbom_packages: Mapped[list["SBOMPackage"]] = relationship(
@@ -32,6 +34,11 @@ class SBOMDocument(Base):
     )
     sbom_observations: Mapped[list["SBOMObservation"]] = relationship(
         back_populates="sbom_document",
+        cascade="all, delete-orphan",
+    )
+    package_dependencies: Mapped[list["PackageDependency"]] = relationship(
+        "PackageDependency",
+        primaryjoin="SBOMDocument.id == foreign(PackageDependency.sbom_document_id)",
         cascade="all, delete-orphan",
     )
 

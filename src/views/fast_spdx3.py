@@ -51,6 +51,7 @@ class FastSPDX3:
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.uri_to_package: Dict[str, str] = {}
+        self._document_refs: Dict[str, str] = {}
 
     def find_spdx_version(self, spdx: Dict[str, Any]) -> Optional[str]:
         """
@@ -81,6 +82,7 @@ class FastSPDX3:
         """
         Extract package information from components objects and create Package objects.
         """
+        self._document_refs = {}
         if not isinstance(components_dict, dict):
             return
 
@@ -110,6 +112,7 @@ class FastSPDX3:
             spdx_id = component.get('spdxId')
             if spdx_id:
                 self.uri_to_package[spdx_id] = package.string_id
+                self._document_refs[spdx_id] = package.string_id
 
             self.packagesCtrl.add(package)
 
@@ -564,11 +567,39 @@ class FastSPDX3:
         """
         self.merge_components_into_controller(spdx)
 
+    def merge_dependencies_into_controller(self, spdx: Dict[str, Any]) -> None:
+        graph = spdx.get('@graph', [])
+        if not isinstance(graph, list):
+            return
+        edges: set[tuple[str, str]] = set()
+        for relationship in graph:
+            if not isinstance(relationship, dict) or relationship.get('type') not in (
+                'Relationship', 'LifecycleScopedRelationship'
+            ):
+                continue
+            relation = relationship.get('relationshipType')
+            source = relationship.get('from')
+            targets = relationship.get('to')
+            if not isinstance(source, str):
+                continue
+            if isinstance(targets, str):
+                targets = [targets]
+            if not isinstance(targets, list):
+                continue
+            for target in targets:
+                if isinstance(target, str):
+                    if relation == 'dependsOn':
+                        edges.add((source, target))
+                    elif relation == 'dependencyOf':
+                        edges.add((target, source))
+        self.packagesCtrl.add_dependencies(self._document_refs, edges)
+
     def parse_from_dict(self, spdx: Dict[str, Any]):
         """
         Read data from SPDX 3 format and populate controllers.
         """
         self.merge_components_into_controller(spdx)
+        self.merge_dependencies_into_controller(spdx)
         self.merge_vulnerabilities_into_controller(spdx)
         self.process_vex_relationships(spdx)
         self._remove_vulnerabilities_without_assessments()

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from .packages import init_app as init_pkg_app
+from .dependencies import init_app as init_dependencies_app
 from .vulnerabilities import init_app as init_vuln_app
 from .assessments import init_app as init_assess_app
 from .assessment_reviews import init_app as init_assess_review_app
@@ -21,6 +22,7 @@ from .agent import init_app as init_agent_app
 
 def init_app(app):
     init_pkg_app(app)
+    init_dependencies_app(app)
     init_vuln_app(app)
     init_assess_app(app)
     init_assess_review_app(app)
