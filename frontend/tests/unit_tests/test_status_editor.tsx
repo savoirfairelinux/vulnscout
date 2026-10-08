@@ -183,6 +183,62 @@ describe('StatusEditor', () => {
         });
     });
 
+    test('does not render Assess with AI without a handler', () => {
+        render(<StatusEditor {...defaultProps} />);
+        expect(screen.queryByRole('button', { name: 'Assess with AI' })).not.toBeInTheDocument();
+    });
+
+    test('Assess with AI is enabled only once an exact target is selected', async () => {
+        const user = userEvent.setup();
+        const onAssessWithAi = jest.fn();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                onAssessWithAi={onAssessWithAi}
+                variants={[{id: 'v1', name: 'default', project_id: 'p'}, {id: 'v2', name: 'release', project_id: 'p'}]}
+                availablePackages={['pkg@1.0.0', 'other@2.0.0']}
+                variantPackageMap={{v1: ['pkg@1.0.0'], v2: ['pkg@1.0.0', 'other@2.0.0']}}
+                exactTargetSelection={true}
+            />
+        );
+
+        const button = screen.getByRole('button', { name: 'Assess with AI' });
+        expect(button).toBeDisabled();
+        await user.click(screen.getByRole('checkbox', {name: 'release / pkg@1.0.0'}));
+        expect(button).toBeEnabled();
+        await user.click(button);
+        expect(onAssessWithAi).toHaveBeenCalledWith([{variant_id: 'v2', package: 'pkg@1.0.0'}]);
+        expect(defaultProps.onAddAssessment).not.toHaveBeenCalled();
+    });
+
+    test('Assess with AI needs both a variant and a package in variant/package mode', async () => {
+        const user = userEvent.setup();
+        const onAssessWithAi = jest.fn();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                onAssessWithAi={onAssessWithAi}
+                variants={[{id: 'v1', name: 'default', project_id: 'p'}, {id: 'v2', name: 'release', project_id: 'p'}]}
+                availablePackages={['pkgA@1.0.0', 'pkgB@1.0.0']}
+                variantPackageMap={{v1: ['pkgA@1.0.0', 'pkgB@1.0.0'], v2: ['pkgA@1.0.0', 'pkgB@1.0.0']}}
+            />
+        );
+
+        const button = screen.getByRole('button', { name: 'Assess with AI' });
+        // checkbox order: v1, v2, pkgA, pkgB
+        const checkboxes = screen.getAllByRole('checkbox');
+        await user.click(checkboxes[0]);
+        expect(button).toBeDisabled();
+        await user.click(checkboxes[2]);
+        await user.click(checkboxes[3]);
+        expect(button).toBeEnabled();
+        await user.click(button);
+        expect(onAssessWithAi).toHaveBeenCalledWith([
+            {variant_id: 'v1', package: 'pkgA@1.0.0'},
+            {variant_id: 'v1', package: 'pkgB@1.0.0'},
+        ]);
+    });
+
     test('should clear fields when clearFields prop changes to true', async () => {
         const user = userEvent.setup();
         const { rerender } = render(<StatusEditor {...defaultProps} clearFields={false} />);

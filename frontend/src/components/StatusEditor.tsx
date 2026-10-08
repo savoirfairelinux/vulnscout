@@ -38,9 +38,11 @@ type Props = {
     findingsLoading?: boolean;
     findingsError?: string;
     exactTargetSelection?: boolean;
+    /** When provided, renders an "Assess with AI" button for the selected targets. */
+    onAssessWithAi?: (targets: AssessmentTargetPair[]) => void;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap, variantFindingsMap, findingsLoading = false, findingsError, exactTargetSelection = false}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap, variantFindingsMap, findingsLoading = false, findingsError, exactTargetSelection = false, onAssessWithAi}: Readonly<Props>) {
     const outdatedPackages = useMemo(() => {
         const packages = new Set<string>();
         for (const finding of Object.values(variantFindingsMap ?? {}).flat()) {
@@ -302,6 +304,10 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         });
     }
 
+    const aiTargets: AssessmentTargetPair[] = exactTargetMode
+        ? selectedTargets.filter(target => Boolean(target.variant_id))
+        : selectedVariantIds.flatMap(variantId => selectedPackages.map(pkg => ({variant_id: variantId, package: pkg})));
+
     const clearInputs = useCallback(() => {
         setStatus(defaultStatus);
         setJustification("none");
@@ -498,6 +504,13 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             type="button"
             className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
         >Add assessment</button>
+        {onAssessWithAi && <button
+            onClick={() => onAssessWithAi(aiTargets)}
+            type="button"
+            disabled={aiTargets.length === 0}
+            title={aiTargets.length === 0 ? "Select at least one variant and one package" : "Assess the selected targets with AI"}
+            className="mt-2 ml-2 rounded-lg border border-cyan-500 px-4 py-2 text-center font-medium text-cyan-200 hover:bg-cyan-900/40 focus:outline-none focus:ring-4 focus:ring-cyan-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+        >Assess with AI</button>}
 
         {progressBar !== undefined && <div className="p-4 pb-1 w-full">
              <progress max={1} value={progressBar} className="w-full h-2"></progress>
