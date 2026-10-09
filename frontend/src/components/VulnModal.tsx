@@ -146,7 +146,8 @@ type VariantScopedSnapshot = {
     const [assessmentChatMounted, setAssessmentChatMounted] = useState(false);
     const [assessmentThreadId, setAssessmentThreadId] = useState(() => crypto.randomUUID());
     const activeAssessmentThread = useRef<string | null>(null);
-    const [queuedAgentMessage, setQueuedAgentMessage] = useState<QueuedAgentMessage | undefined>(undefined);
+    // FIFO of AI actions waiting for the chat; the head is sent once the chat is idle.
+    const [agentMessageQueue, setAgentMessageQueue] = useState<QueuedAgentMessage[]>([]);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
@@ -197,7 +198,7 @@ type VariantScopedSnapshot = {
         activeAssessmentThread.current = null;
         setAssessmentChatMounted(false);
         setAssessmentChatOpen(false);
-        setQueuedAgentMessage(undefined);
+        setAgentMessageQueue([]);
         if (threadId) void fetch('/api/agent/conversation', {
             method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
         });
@@ -225,7 +226,7 @@ type VariantScopedSnapshot = {
         setAssessmentChatMounted(true);
         setAssessmentChatOpen(true);
         setIsEditing(true);
-        if (message) setQueuedAgentMessage({ id: crypto.randomUUID(), text: message });
+        if (message) setAgentMessageQueue(queue => [...queue, { id: crypto.randomUUID(), text: message }]);
     };
 
     const toggleAssessmentChat = () => {
@@ -2362,7 +2363,7 @@ type VariantScopedSnapshot = {
 
                     </div>
                     {assessmentChatMounted && <aside id="assessment-agent-panel" hidden={!assessmentChatOpen} role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
-                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queuedMessage={queuedAgentMessage} />
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queuedMessage={agentMessageQueue[0]} onQueuedMessageSent={id => setAgentMessageQueue(queue => queue.filter(item => item.id !== id))} />
                     </aside>}
         </ModalShell>
 

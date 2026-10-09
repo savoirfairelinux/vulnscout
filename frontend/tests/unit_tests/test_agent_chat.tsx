@@ -430,15 +430,19 @@ test('sends a queued message once when ready and again only for a new queued id'
     };
 
     const first = { id: 'q1', text: 'Assess the selected targets' };
-    const { rerender } = render(<AgentChat onClose={() => undefined} context={context} queuedMessage={first} />);
+    const accepted: string[] = [];
+    const onQueuedMessageSent = (id: string) => { accepted.push(id); };
+    const { rerender } = render(<AgentChat onClose={() => undefined} context={context} queuedMessage={first} onQueuedMessageSent={onQueuedMessageSent} />);
     await screen.findByText('Reply 1');
+    expect(accepted).toEqual(['q1']);
     rerender(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ ...first }} />);
     await act(async () => { await Promise.resolve(); });
     expect(sent).toEqual(['Assess the selected targets']);
 
-    rerender(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q2', text: 'Review assessment' }} />);
+    rerender(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q2', text: 'Review assessment' }} onQueuedMessageSent={onQueuedMessageSent} />);
     await screen.findByText('Reply 2');
     expect(sent).toEqual(['Assess the selected targets', 'Review assessment']);
+    expect(accepted).toEqual(['q1', 'q2']);
 });
 
 test('does not send a queued message while signed out', async () => {
@@ -449,7 +453,9 @@ test('does not send a queued message while signed out', async () => {
         return jsonResponse(signedOut);
     };
 
-    render(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q1', text: 'Assess' }} />);
+    const onQueuedMessageSent = jest.fn();
+    render(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q1', text: 'Assess' }} onQueuedMessageSent={onQueuedMessageSent} />);
     await screen.findByText('Step 1 of 3');
     expect(sent).toEqual([]);
+    expect(onQueuedMessageSent).not.toHaveBeenCalled();
 });
