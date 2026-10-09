@@ -271,7 +271,7 @@ IGNORE_PARSING_ERRORS=false
 VERBOSE_MODE=false
 USER_UID=$(id -u)
 USER_GID=$(id -g)
-VITE_API_URL=http://localhost:7275
+VITE_API_URL=
 REFRESH_REMOTE_DELAY=2w
 # GRYPE_MEMLIMIT — cap RAM used by the grype binary (Go soft memory limit).
 # Unset = auto (~80 % of the container/cgroup memory limit, recommended).
@@ -349,8 +349,14 @@ start_frontend_dev() {
         return
     fi
 
-    if [ ! -f "$frontend_dir/.env" ]; then
-        echo "VITE_API_URL=\"${VITE_API_URL:-http://localhost:7275}\"" > "$frontend_dir/.env"
+    local dev_api_url="${VITE_API_URL:-}"
+    # Old generated configs pointed the browser at localhost, which may resolve
+    # to IPv6 even though the container publishes only an IPv4 port.
+    [ "$dev_api_url" = "http://localhost:7275" ] && dev_api_url=""
+    if [ ! -f "$frontend_dir/.env" ] ||
+        [ "$(cat "$frontend_dir/.env")" = 'VITE_API_URL="http://localhost:7275"' ] ||
+        [ "$(cat "$frontend_dir/.env")" = 'VITE_API_URL=""' ]; then
+        printf 'VITE_API_URL="%s"\n' "$dev_api_url" > "$frontend_dir/.env"
     fi
 
     if [ ! -d "$frontend_dir/node_modules" ]; then

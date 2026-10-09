@@ -489,7 +489,7 @@ Example:
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |
 | `FLASK_RUN_PORT` | Port the web UI listens on | `7275` |
 | `FLASK_RUN_HOST` | Host address for the web UI | `0.0.0.0` |
-| `VITE_API_URL` | Backend API URL used by the dev frontend | `http://localhost:7275` |
+| `VITE_API_URL` | Optional backend API URL for the dev frontend (empty uses Vite's same-origin `/api` proxy) | empty |
 | `USER_UID` | UID used to write output files | current user |
 | `USER_GID` | GID used to write output files | current group |
 | `REFRESH_REMOTE_DELAY` | How often EPSS/NVD data is re-fetched (`never`, `always`, `48h`, `7d`, etc.) | `48h` |

@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -96,6 +97,16 @@ def _container_gateway():
     return None
 
 
+def _container_host_forward_ip(gateway):
+    """Pasta forwards local host requests as the container's own IPv4 address."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+            route.connect((gateway, 1))
+            return route.getsockname()[0]
+    except OSError:
+        return None
+
+
 def _conversation():
     key = request.cookies.get(COOKIE, "")
     thread_id = request.headers.get("X-Agent-Thread")
@@ -138,6 +149,9 @@ def _access_error():
     gateway = _container_gateway()
     if gateway:
         trusted.add(gateway)
+        host_forward_ip = _container_host_forward_ip(gateway)
+        if host_forward_ip:
+            trusted.add(host_forward_ip)
     if request.remote_addr not in trusted:
         return jsonify(error="Agent chat is available only on localhost."), 403
     if urlsplit(request.host_url).hostname not in ("127.0.0.1", "localhost", "::1"):

@@ -71,7 +71,7 @@ Or combined with a serve command that also loads input files:
   --add-cve-check /path/to/cve-check.json
 ```
 
-The Vite dev server reads `VITE_API_URL` from `frontend/.env` (created automatically from the config, default: `http://localhost:7275`) to proxy API requests to the backend container.
+Open the frontend dev server at `http://localhost:5173/`. By default, it sends `/api` requests through Vite's proxy to the backend container on IPv4 (`127.0.0.1:7275`), so the browser does not need direct access to the container port. The script generates `frontend/.env` with an empty `VITE_API_URL` for this same-origin setup; set a custom URL there or in the launcher config if the backend is elsewhere.
 
 If `node_modules` are not yet installed, the script will run `npm install` automatically.
 
