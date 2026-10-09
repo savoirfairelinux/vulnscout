@@ -208,7 +208,9 @@ setup_user() {
             useradd -s /bin/sh -oN -u "$USER_UID" -g "$USER_GID" -d /builder builder
         fi
         mkdir -p /builder
-        chown -Rf "$USER_UID:$USER_GID" /builder /scan /cache
+        # Source trees under /scan may be bind-mounted from the host in dev mode.
+        chown -f "$USER_UID:$USER_GID" /scan
+        chown -Rf "$USER_UID:$USER_GID" /builder /scan/inputs /scan/tmp /scan/outputs /cache
     fi
 }
 
