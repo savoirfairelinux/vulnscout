@@ -49,6 +49,20 @@ def test_agent_accepts_container_gateway(client):
     assert response.status_code == 200
 
 
+def test_agent_accepts_pasta_forwarded_host_but_rejects_remote(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_container_gateway", lambda: "192.0.2.1")
+    monkeypatch.setattr(agent, "_container_host_forward_ip", lambda gateway: "192.0.2.2")
+    local = {"REMOTE_ADDR": "192.0.2.2"}
+    assert client.get("/api/agent", environ_overrides=local).status_code == 200
+    assert client.get("/api/agent", environ_overrides={"REMOTE_ADDR": "192.0.2.3"}).status_code == 403
+    assert client.get("/api/agent", environ_overrides=local,
+                      headers={"Host": "example.org"}).status_code == 403
+    assert client.post("/api/agent/messages", environ_overrides=local,
+                       json={"message": "Hello"}, headers={"Origin": "https://example.org"}).status_code == 403
+
+
 def test_agent_rejects_non_local_host(client):
     response = client.get("/api/agent", headers={"Host": "example.org"})
     assert response.status_code == 403
