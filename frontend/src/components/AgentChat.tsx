@@ -93,7 +93,7 @@ function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; p
 
 export type QueuedAgentMessage = { id: string; text: string };
 
-function AgentChat({ onClose, context, active = true, threadId, queuedMessage }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string; queuedMessage?: QueuedAgentMessage }>) {
+function AgentChat({ onClose, context, active = true, threadId, queuedMessage, onQueuedMessageSent }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string; queuedMessage?: QueuedAgentMessage; onQueuedMessageSent?: (id: string) => void }>) {
     const request = useCallback(<T,>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void) => agentRequest<T>(path, {
         ...options,
         headers: { ...options?.headers, ...(threadId ? { 'X-Agent-Thread': threadId } : {}) },
@@ -429,6 +429,7 @@ function AgentChat({ onClose, context, active = true, threadId, queuedMessage }:
         if (!queuedMessage || sentQueuedMessageId.current === queuedMessage.id || !ready || busy || modelBusy) return;
         sentQueuedMessageId.current = queuedMessage.id;
         void send(undefined, queuedMessage.text);
+        onQueuedMessageSent?.(queuedMessage.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [queuedMessage, ready, busy, modelBusy]);
 

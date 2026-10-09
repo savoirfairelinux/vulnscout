@@ -10,7 +10,7 @@ import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import type { AssessmentTargetPair } from "../../src/handlers/assessments";
 import VulnModal from '../../src/components/VulnModal';
 
-type ChatProps = { threadId?: string; active?: boolean; queuedMessage?: { id: string; text: string } };
+type ChatProps = { threadId?: string; active?: boolean; queuedMessage?: { id: string; text: string }; onQueuedMessageSent?: (id: string) => void };
 const chatProps: ChatProps[] = [];
 let chatMounts = 0;
 
@@ -23,6 +23,7 @@ jest.mock('../../src/components/AgentChat', () => ({
         return <div data-testid="agent-chat">
             <span data-testid="queued-message">{props.queuedMessage?.text ?? ''}</span>
             <button type="button" onClick={props.onClose}>Close chat</button>
+            <button type="button" onClick={() => props.queuedMessage && props.onQueuedMessageSent?.(props.queuedMessage.id)}>Accept queued</button>
         </div>;
     },
 }));
@@ -158,10 +159,18 @@ describe('VulnModal AI actions', () => {
         expect(message).toContain('write_assessment_review');
         expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
 
-        // Queuing a second action reuses the open chat with a fresh message id.
-        const firstId = chatProps[chatProps.length - 1].queuedMessage?.id;
+        // Further actions queue behind the pending one instead of replacing it.
         await user.click(reviewButtons[0]);
-        expect(chatProps[chatProps.length - 1].queuedMessage?.id).not.toEqual(firstId);
+        await user.click(reviewButtons[0]);
+        const queuedIds = new Set<string>();
+        for (let index = 0; index < 3; index += 1) {
+            const head = chatProps[chatProps.length - 1].queuedMessage;
+            expect(head?.text).toContain('Review the user assessment assessment-1');
+            queuedIds.add(head!.id);
+            await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+        }
+        expect(queuedIds.size).toBe(3);
+        expect(chatProps[chatProps.length - 1].queuedMessage).toBeUndefined();
     });
 
     const deleteCalls = () => fetchMock.mock.calls.filter(([req, init]) =>
