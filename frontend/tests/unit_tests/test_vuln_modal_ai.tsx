@@ -28,14 +28,17 @@ jest.mock('../../src/components/AgentChat', () => ({
     },
 }));
 
+const defaultAiTargets: AssessmentTargetPair[] = [
+    { variant_id: 'v1', package: 'pkg@1.0.0' },
+    { variant_id: 'v2', package: 'pkg@1.0.0' },
+];
+let mockAiTargets: AssessmentTargetPair[] = defaultAiTargets;
+
 jest.mock('../../src/components/StatusEditor', () => ({
     __esModule: true,
     default: (props: { onAssessWithAi?: (targets: AssessmentTargetPair[]) => void }) => (
         <div data-testid="status-editor">
-            {props.onAssessWithAi && <button type="button" onClick={() => props.onAssessWithAi?.([
-                { variant_id: 'v1', package: 'pkg@1.0.0' },
-                { variant_id: 'v2', package: 'pkg@1.0.0' },
-            ])}>Assess with AI</button>}
+            {props.onAssessWithAi && <button type="button" onClick={() => props.onAssessWithAi?.(mockAiTargets)}>Assess with AI</button>}
         </div>
     ),
 }));
@@ -86,6 +89,7 @@ describe('VulnModal AI actions', () => {
     beforeEach(() => {
         chatProps.length = 0;
         chatMounts = 0;
+        mockAiTargets = defaultAiTargets;
         fetchMock.resetMocks();
         fetchMock.mockResponse(req => {
             if (req.url.endsWith(`/api/vulnerabilities/${vulnerability.id}/variants`)) {
@@ -142,6 +146,30 @@ describe('VulnModal AI actions', () => {
         expect(message).toContain(`Assess ${vulnerability.id} for exactly these targets`);
         expect(message).toContain('variant "default" (variant_id v1), package pkg@1.0.0');
         expect(message).toContain('write_assessment');
+    });
+
+    test('Assess with AI splits large selections into batches within the message limit', async () => {
+        const user = userEvent.setup();
+        mockAiTargets = Array.from({ length: 200 }, (_, index) => ({
+            variant_id: index % 2 ? 'v2' : 'v1',
+            package: `very-long-package-name-for-batching-${index}@1.0.0-r${index}`,
+        }));
+        renderModal({ isEditing: true });
+        await waitFor(() => expect(fetchMock.mock.calls.some(([req]) => String(req instanceof Request ? req.url : req).endsWith('/variants'))).toBe(true));
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+
+        const messages: string[] = [];
+        while (chatProps[chatProps.length - 1].queuedMessage) {
+            messages.push(chatProps[chatProps.length - 1].queuedMessage!.text);
+            await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+        }
+        expect(messages.length).toBeGreaterThan(1);
+        messages.forEach((message, index) => {
+            expect(message.length).toBeLessThanOrEqual(8000);
+            expect(message).toContain(`Assess ${vulnerability.id} (batch ${index + 1} of ${messages.length}) for exactly these targets`);
+        });
+        const packages = messages.flatMap(message => [...message.matchAll(/package (\S+)/g)].map(match => match[1]));
+        expect(packages).toEqual(mockAiTargets.map(target => target.package));
     });
 
     test('Review with AI is shown only for user assessments and queues a review', async () => {

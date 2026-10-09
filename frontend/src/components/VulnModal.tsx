@@ -32,7 +32,7 @@ import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
-import { AGENT_WRITE_EVENT, type AgentContext } from "../types/agent";
+import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext } from "../types/agent";
 
 type Props = {
     vuln: Vulnerability;
@@ -240,11 +240,22 @@ type VariantScopedSnapshot = {
             const variantLabel = variant ? `"${variant.name}" (variant_id ${target.variant_id})` : `variant_id ${target.variant_id}`;
             return `- variant ${variantLabel}, package ${target.package}`;
         });
-        openAssessmentChat(
-            `Assess ${vuln.id} for exactly these targets:\n${lines.join('\n')}\n` +
+        const prompt = (batchLines: string[], batch = '') =>
+            `Assess ${vuln.id}${batch} for exactly these targets:\n${batchLines.join('\n')}\n` +
             `Retrieve the vulnerability details and each variant's merged context with VulnScout MCP first, ` +
-            `then record the result with write_assessment for these targets only.`
-        );
+            `then record the result with write_assessment for these targets only.`;
+        // Split large selections into batches that fit the agent message limit,
+        // reserving room for the " (batch N of M)" label.
+        const budget = AGENT_MESSAGE_MAX_LENGTH - ' (batch 9999 of 9999)'.length;
+        const batches: string[][] = [];
+        for (const line of lines) {
+            const current = batches[batches.length - 1];
+            if (current && prompt([...current, line]).length <= budget) current.push(line);
+            else batches.push([line]);
+        }
+        batches.forEach((batchLines, index) => openAssessmentChat(
+            prompt(batchLines, batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '')
+        ));
     };
 
     const reviewWithAi = (assessmentId: string) => {
