@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { useLocation, useNavigate, Routes, Route } from "react-router-dom";
-import { ROUTES, tabForPath } from "../routes";
+import { ROUTES, settingsProjectPath, tabForPath } from "../routes";
 import type { RouteKey, TabKey } from "../routes";
 import NavigationBar from "../components/NavigationBar";
 import NotFound from "./NotFound";
@@ -22,6 +22,7 @@ import ScanHistory from "./ScanHistory";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
+import type { SettingsNavState } from './Settings';
 import AIContext from './AIContext';
 import AgentChat from '../components/AgentChat';
 import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
@@ -55,7 +56,6 @@ type ExplorerNavState = {
         value: string;
         vulnerabilityIds?: string[];
     };
-    settingsDestination?: { tab: 'projects'; projectId?: string };
 };
 
 function Explorer() {
@@ -512,11 +512,10 @@ function Explorer() {
     // Navigation intent for the current location, set by the page that
     // navigated here. Reading it during render (instead of resetting state in
     // an effect) guarantees the destination's first render already has the
-    // right filter/destination, so a plain nav-bar click can never make it
+    // right filter, so a plain nav-bar click can never make it
     // mount with leftovers from an earlier visit.
     const navState = (location.state ?? null) as ExplorerNavState | null;
     const vulnFilter = navState?.vulnFilter;
-    const settingsDestination = navState?.settingsDestination ?? null;
 
     // Accepts a plain string to match Metrics' existing setTab prop contract;
     // every caller passes one of our known tab keys.
@@ -581,15 +580,11 @@ function Explorer() {
                                 void loadSetupRequirement();
                                 return;
                             }
-                            const state: ExplorerNavState = {
-                                settingsDestination: {
-                                    tab: 'projects',
-                                    projectId: setupRequirement?.kind === 'variant'
-                                        ? setupRequirement.projectId
-                                        : undefined,
-                                },
-                            };
-                            navigate(ROUTES.settings, { state });
+                            if (setupRequirement?.kind === 'variant') {
+                                navigate(settingsProjectPath(setupRequirement.projectId));
+                            } else {
+                                navigate(ROUTES.settings, { state: { openNewProject: true } satisfies SettingsNavState });
+                            }
                         }}
                         className="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-400"
                     >
@@ -687,14 +682,14 @@ function Explorer() {
                 <Route path={ROUTES.exports} element={
                     <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} onAgentContextChange={setExportsAgentView} />
                 } />
-                <Route path={ROUTES.settings} element={
-                    <Settings onAgentContextChange={setSettingsAgentView} initialTab={settingsDestination?.tab} onDataChanged={(message) => {
+                <Route path={`${ROUTES.settings}/*`} element={
+                    <Settings onAgentContextChange={setSettingsAgentView} onDataChanged={(message) => {
                         if (message) setLoadingMessage(message);
                         Config.get().then(config => setDefaultConfig(config)).catch(() => {});
                         loadSetupRequirement();
                         setSelectorKey(k => k + 1);
                         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                    }} projectId={settingsDestination ? settingsDestination.projectId : currentProjectId} onLoadingMessage={(msg) => {
+                    }} projectId={currentProjectId} onLoadingMessage={(msg) => {
                         if (msg) {
                             setLoadingMessage(msg);
                             setIsLoadingData(true);
