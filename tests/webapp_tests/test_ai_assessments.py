@@ -281,12 +281,12 @@ def test_past_payload_timestamp_does_not_outdate_a_fresh_assessment(client, app)
     assert [a["context_outdated"] for a in _review_ai(client)] == [False]
 
 
-def test_ai_post_replaces_pending_on_same_variant(client, app):
+def test_ai_post_replaces_pending_on_same_target(client, app):
     first = _post_ai(client, packages=[PKG], status="affected")
     assert first.status_code == 200
     first_id = json.loads(first.data)["assessment"]["id"]
 
-    second = _post_ai(client, packages=[PKG2], status="not_affected",
+    second = _post_ai(client, packages=[PKG], status="not_affected",
                       justification="component_not_present")
     assert second.status_code == 200
     body = json.loads(second.data)
@@ -296,6 +296,36 @@ def test_ai_post_replaces_pending_on_same_variant(client, app):
 
     rows = _ai_rows(app)
     assert [r[0] for r in rows] == [body["assessment"]["id"]]
+
+
+def test_ai_post_keeps_pending_on_other_package_of_same_variant(client, app):
+    """Assessing another package of the variant must not discard the first
+    package's pending suggestion (separate Assess with AI requests)."""
+    first_id = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]["id"]
+
+    second = _post_ai(client, packages=[PKG2], status="not_affected",
+                      justification="component_not_present")
+    assert second.status_code == 200
+    body = json.loads(second.data)
+    assert "replaced" not in body
+
+    assert sorted(r[0] for r in _ai_rows(app)) == sorted([first_id, body["assessment"]["id"]])
+
+
+def test_ai_post_trims_only_the_overlapping_package(client, app):
+    first_id = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)["assessment"]["id"]
+
+    second = _post_ai(client, packages=[PKG2], status="not_affected",
+                      justification="component_not_present")
+    assert second.status_code == 200
+    body = json.loads(second.data)
+    assert body["replaced"] == [
+        {"id": first_id, "action": "trimmed", "variant_ids": [str(VARIANT_UUID)]}]
+
+    with app.app_context():
+        kept = DBAssessment.get_by_id(first_id)
+        assert kept is not None
+        assert [t.finding.package.string_id for t in kept.target_rows] == [PKG]
 
 
 def test_ai_post_without_pending_reports_nothing_replaced(client):
