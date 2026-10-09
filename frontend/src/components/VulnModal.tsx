@@ -262,18 +262,34 @@ type VariantScopedSnapshot = {
 
     const assessWithAi = (targets: AssessmentTargetPair[]) => {
         const variantName = (id?: string | null) => availableVariants.find(v => v.id === id)?.name;
-        const lines = targets.map(target => {
-            const name = variantName(target.variant_id);
-            const variantLabel = name ? `"${name}" (variant_id ${target.variant_id})` : `variant_id ${target.variant_id}`;
-            return `- variant ${variantLabel}, package ${target.package}`;
+        const variantLabel = (id?: string | null) => {
+            const name = variantName(id);
+            return name ? `"${name}" (variant_id ${id})` : `variant_id ${id}`;
+        };
+        // One line per variant: an AI write replaces every pending AI
+        // assessment on its variant, so a variant split across batches would
+        // keep only the last batch's result.
+        const groupMap = new Map<string, AssessmentTargetPair[]>();
+        targets.forEach(target => {
+            const id = target.variant_id ?? '';
+            groupMap.set(id, [...(groupMap.get(id) ?? []), target]);
         });
+        const groups = [...groupMap.values()];
+        const lines = groups.map(group =>
+            `- variant ${variantLabel(group[0].variant_id)}: ${group.map(target => target.package).join(', ')}`);
         const prompt = (batchLines: string[], batch = '') =>
-            `Assess ${vuln.id}${batch} for exactly these targets:\n${batchLines.join('\n')}\n` +
+            `Assess ${vuln.id}${batch} for exactly these targets (packages listed per variant):\n${batchLines.join('\n')}\n` +
             `Retrieve the vulnerability details and each variant's merged context with VulnScout MCP first, ` +
             `then record the result with write_assessment for these targets only.`;
-        // Split large selections into batches that fit the agent message limit,
-        // reserving room for the " (batch N of M)" label.
+        // Split large selections into batches of whole variants that fit the
+        // agent message limit, reserving room for the " (batch N of M)" label.
         const budget = AGENT_MESSAGE_MAX_LENGTH - ' (batch 9999 of 9999)'.length;
+        const oversized = groups.filter((_, index) => prompt([lines[index]]).length > budget);
+        if (oversized.length) {
+            const names = oversized.map(group => variantName(group[0].variant_id) ?? group[0].variant_id).join(', ');
+            showMessage(`Too many packages selected for variant ${names} to assess with AI in one request. Select fewer packages for that variant.`, 'error');
+            return;
+        }
         const batches: number[][] = [];
         lines.forEach((line, index) => {
             const current = batches[batches.length - 1];
@@ -282,7 +298,7 @@ type VariantScopedSnapshot = {
         });
         const key = assessmentKey(targets);
         openAssessmentChat(batches.map((indexes, index) => {
-            const batchTargets = indexes.map(i => targets[i]);
+            const batchTargets = indexes.flatMap(i => groups[i]);
             const unique = (values: string[]) => [...new Set(values)].join(', ');
             const batchLabel = batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '';
             return {

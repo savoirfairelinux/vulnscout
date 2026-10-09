@@ -154,12 +154,12 @@ describe('VulnModal AI actions', () => {
             expect(screen.getByTestId('queued-message')).toHaveTextContent('variant "release" (variant_id v2)');
         });
         const message = screen.getByTestId('queued-message').textContent ?? '';
-        expect(message).toContain(`Assess ${vulnerability.id} for exactly these targets`);
-        expect(message).toContain('variant "default" (variant_id v1), package pkg@1.0.0');
+        expect(message).toContain(`Assess ${vulnerability.id} for exactly these targets (packages listed per variant)`);
+        expect(message).toContain('variant "default" (variant_id v1): pkg@1.0.0');
         expect(message).toContain('write_assessment');
     });
 
-    test('Assess with AI splits large selections into batches within the message limit', async () => {
+    test('Assess with AI splits large selections into batches of whole variants within the message limit', async () => {
         const user = userEvent.setup();
         mockAiTargets = Array.from({ length: 200 }, (_, index) => ({
             variant_id: index % 2 ? 'v2' : 'v1',
@@ -179,8 +179,28 @@ describe('VulnModal AI actions', () => {
             expect(message.length).toBeLessThanOrEqual(8000);
             expect(message).toContain(`Assess ${vulnerability.id} (batch ${index + 1} of ${messages.length}) for exactly these targets`);
         });
-        const packages = messages.flatMap(message => [...message.matchAll(/package (\S+)/g)].map(match => match[1]));
-        expect(packages).toEqual(mockAiTargets.map(target => target.package));
+        // Each variant is listed in exactly one batch with all of its packages.
+        const variantLines = messages.flatMap(message => message.split('\n').filter(line => line.startsWith('- variant ')));
+        expect(variantLines).toHaveLength(2);
+        for (const variantId of ['v1', 'v2']) {
+            const line = variantLines.find(item => item.includes(`(variant_id ${variantId}):`)) ?? '';
+            expect(line.split(': ')[1].split(', ')).toEqual(
+                mockAiTargets.filter(target => target.variant_id === variantId).map(target => target.package));
+        }
+    });
+
+    test('Assess with AI refuses a variant whose packages exceed the message limit', async () => {
+        const user = userEvent.setup();
+        mockAiTargets = Array.from({ length: 200 }, (_, index) => ({
+            variant_id: 'v2',
+            package: `very-long-package-name-for-batching-${index}@1.0.0-r${index}`,
+        }));
+        renderModal({ isEditing: true });
+        await waitFor(() => expect(fetchMock.mock.calls.some(([req]) => String(req instanceof Request ? req.url : req).endsWith('/variants'))).toBe(true));
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+
+        expect(await screen.findByText(/Too many packages selected for variant release/)).toBeInTheDocument();
+        expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
     });
 
     test('Review with AI is shown only for user assessments and queues a review', async () => {
