@@ -2,6 +2,9 @@ export const AGENT_WRITE_EVENT = 'vulnscout:agent-write';
 // Mirrors the backend limit on /api/agent/messages (src/routes/agent.py).
 export const AGENT_MESSAGE_MAX_LENGTH = 8000;
 
+/** Where a queued AI action (Assess/Review with AI) currently stands. */
+export type AgentActionState = { status: 'running' } | { status: 'queued'; position: number };
+
 export type AgentViewContext = {
     visibleVulnerabilityIds?: string[];
     visiblePackageIds?: string[];

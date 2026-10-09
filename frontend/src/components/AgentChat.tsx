@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faCopy, faLocationDot, faPlug, faPlus, faRightFromBracket, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faClock, faCopy, faLocationDot, faPlug, faPlus, faRightFromBracket, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext } from '../types/agent';
@@ -91,9 +91,28 @@ function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; p
     </details>;
 }
 
-export type QueuedAgentMessage = { id: string; text: string };
+export type QueuedAgentMessage = {
+    id: string;
+    text: string;
+    /** Identical requests share a key so they are not queued twice. */
+    key: string;
+    kind: 'assess' | 'review';
+    title: string;
+    detail?: string;
+};
 
-function AgentChat({ onClose, context, active = true, threadId, queuedMessage, onQueuedMessageSent }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string; queuedMessage?: QueuedAgentMessage; onQueuedMessageSent?: (id: string) => void }>) {
+const queuedKindLabel: Record<QueuedAgentMessage['kind'], string> = { assess: 'Assess', review: 'Review' };
+
+type QueueProps = {
+    /** Pending AI actions, oldest first; the head is sent once the chat is idle. */
+    queue?: QueuedAgentMessage[];
+    onQueuedMessageSent?: (id: string) => void;
+    onQueuedMessageDone?: (id: string) => void;
+    onQueueRemove?: (id: string) => void;
+    onQueueClear?: () => void;
+};
+
+function AgentChat({ onClose, context, active = true, threadId, queue = [], onQueuedMessageSent, onQueuedMessageDone, onQueueRemove, onQueueClear }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string } & QueueProps>) {
     const request = useCallback(<T,>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void) => agentRequest<T>(path, {
         ...options,
         headers: { ...options?.headers, ...(threadId ? { 'X-Agent-Thread': threadId } : {}) },
@@ -127,6 +146,7 @@ function AgentChat({ onClose, context, active = true, threadId, queuedMessage, o
     const composer = useRef<HTMLTextAreaElement>(null);
     const followMessages = useRef(true);
     const sentQueuedMessageId = useRef<string | null>(null);
+    const nextQueued = queue[0];
     const ready = Boolean(state?.authenticated && state.configured && models.length && selectedModel && !showConnections);
     const pageLabel = pageLabels[context.page] ?? context.page;
     const scopeLabel = context.view?.openVulnerabilityId ?? context.view?.selectedVariantName ?? context.view?.selectedProjectName;
@@ -426,12 +446,13 @@ function AgentChat({ onClose, context, active = true, threadId, queuedMessage, o
     }
 
     useEffect(() => {
-        if (!queuedMessage || sentQueuedMessageId.current === queuedMessage.id || !ready || busy || modelBusy) return;
-        sentQueuedMessageId.current = queuedMessage.id;
-        void send(undefined, queuedMessage.text);
-        onQueuedMessageSent?.(queuedMessage.id);
+        if (!nextQueued || sentQueuedMessageId.current === nextQueued.id || !ready || busy || modelBusy) return;
+        const { id, text } = nextQueued;
+        sentQueuedMessageId.current = id;
+        onQueuedMessageSent?.(id);
+        void send(undefined, text).finally(() => onQueuedMessageDone?.(id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [queuedMessage, ready, busy, modelBusy]);
+    }, [nextQueued, ready, busy, modelBusy]);
 
     function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -624,6 +645,23 @@ function AgentChat({ onClose, context, active = true, threadId, queuedMessage, o
         </div>}
 
         {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model in the toolbar to start chatting.</p>}
+
+        {queue.length > 0 && <section aria-label="Queued AI actions" className="mx-4 mb-3 shrink-0 overflow-hidden rounded-lg border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900">
+            <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+                <span className="flex items-center gap-2 font-semibold text-neutral-700 dark:text-neutral-300"><FontAwesomeIcon icon={faClock} />Up next · {queue.length} queued</span>
+                {onQueueClear && <button type="button" onClick={onQueueClear} className="text-neutral-500 hover:text-cyan-700 dark:text-neutral-400 dark:hover:text-cyan-400">Clear all</button>}
+            </div>
+            <ol className="scrollbar-minimal max-h-40 overflow-y-auto">
+                {queue.map((item, index) => <li key={item.id} className="flex items-center gap-3 border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[11px] tabular-nums text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">{index + 1}</span>
+                    <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm" title={`${queuedKindLabel[item.kind]} ${item.title}`}><span className="font-semibold text-cyan-700 dark:text-cyan-300">{queuedKindLabel[item.kind]}</span> {item.title}</p>
+                        {item.detail && <p className="truncate text-xs text-neutral-500" title={item.detail}>{item.detail}</p>}
+                    </div>
+                    {onQueueRemove && <button type="button" aria-label={`Remove ${queuedKindLabel[item.kind].toLowerCase()} ${item.title} from queue`} title="Remove from queue" onClick={() => onQueueRemove(item.id)} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>}
+                </li>)}
+            </ol>
+        </section>}
 
         {state?.authenticated && state.configured && !showConnections && <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-200 px-4 pb-4 pt-3 dark:border-neutral-800">
             <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">

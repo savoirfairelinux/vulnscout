@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { ReadableStream, TextDecoderStream } from 'node:stream/web';
 import { TextEncoder } from 'node:util';
@@ -429,17 +429,20 @@ test('sends a queued message once when ready and again only for a new queued id'
         return jsonResponse(signedIn);
     };
 
-    const first = { id: 'q1', text: 'Assess the selected targets' };
+    const first = { id: 'q1', text: 'Assess the selected targets', key: 'assess:a', kind: 'assess' as const, title: '1 target' };
     const accepted: string[] = [];
+    const done: string[] = [];
     const onQueuedMessageSent = (id: string) => { accepted.push(id); };
-    const { rerender } = render(<AgentChat onClose={() => undefined} context={context} queuedMessage={first} onQueuedMessageSent={onQueuedMessageSent} />);
+    const onQueuedMessageDone = (id: string) => { done.push(id); };
+    const { rerender } = render(<AgentChat onClose={() => undefined} context={context} queue={[first]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
     await screen.findByText('Reply 1');
     expect(accepted).toEqual(['q1']);
-    rerender(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ ...first }} />);
+    await waitFor(() => expect(done).toEqual(['q1']));
+    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ ...first }]} />);
     await act(async () => { await Promise.resolve(); });
     expect(sent).toEqual(['Assess the selected targets']);
 
-    rerender(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q2', text: 'Review assessment' }} onQueuedMessageSent={onQueuedMessageSent} />);
+    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q2', text: 'Review assessment', key: 'review:x', kind: 'review', title: 'assessment x' }]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
     await screen.findByText('Reply 2');
     expect(sent).toEqual(['Assess the selected targets', 'Review assessment']);
     expect(accepted).toEqual(['q1', 'q2']);
@@ -454,8 +457,29 @@ test('does not send a queued message while signed out', async () => {
     };
 
     const onQueuedMessageSent = jest.fn();
-    render(<AgentChat onClose={() => undefined} context={context} queuedMessage={{ id: 'q1', text: 'Assess' }} onQueuedMessageSent={onQueuedMessageSent} />);
+    render(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '1 target' }]} onQueuedMessageSent={onQueuedMessageSent} />);
     await screen.findByText('Step 1 of 3');
     expect(sent).toEqual([]);
     expect(onQueuedMessageSent).not.toHaveBeenCalled();
+});
+
+test('lists queued actions with remove and clear controls', async () => {
+    global.fetch = async input => String(input).endsWith('/models') ? jsonResponse(models) : jsonResponse(signedOut);
+    const onQueueRemove = jest.fn();
+    const onQueueClear = jest.fn();
+    render(<AgentChat onClose={() => undefined} context={context} onQueueRemove={onQueueRemove} onQueueClear={onQueueClear} queue={[
+        { id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '2 targets', detail: 'default · pkg@1.0.0' },
+        { id: 'q2', text: 'Review', key: 'review:x', kind: 'review', title: 'assessment 1a2b3c4d' },
+    ]} />);
+
+    const queue = await screen.findByRole('region', { name: 'Queued AI actions' });
+    expect(queue).toHaveTextContent('Up next · 2 queued');
+    const items = within(queue).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('1Assess 2 targetsdefault · pkg@1.0.0');
+    expect(items[1]).toHaveTextContent('2Review assessment 1a2b3c4d');
+
+    fireEvent.click(within(queue).getByRole('button', { name: 'Remove review assessment 1a2b3c4d from queue' }));
+    expect(onQueueRemove).toHaveBeenCalledWith('q2');
+    fireEvent.click(within(queue).getByRole('button', { name: 'Clear all' }));
+    expect(onQueueClear).toHaveBeenCalled();
 });

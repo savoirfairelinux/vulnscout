@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faWandMagicSparkles, faClock, faCircleNotch } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
@@ -32,7 +32,7 @@ import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
-import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext } from "../types/agent";
+import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
 
 type Props = {
     vuln: Vulnerability;
@@ -148,6 +148,7 @@ type VariantScopedSnapshot = {
     const activeAssessmentThread = useRef<string | null>(null);
     // FIFO of AI actions waiting for the chat; the head is sent once the chat is idle.
     const [agentMessageQueue, setAgentMessageQueue] = useState<QueuedAgentMessage[]>([]);
+    const [runningAgentAction, setRunningAgentAction] = useState<QueuedAgentMessage | null>(null);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
@@ -199,6 +200,7 @@ type VariantScopedSnapshot = {
         setAssessmentChatMounted(false);
         setAssessmentChatOpen(false);
         setAgentMessageQueue([]);
+        setRunningAgentAction(null);
         if (threadId) void fetch('/api/agent/conversation', {
             method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
         });
@@ -217,7 +219,13 @@ type VariantScopedSnapshot = {
         discardAssessmentChat();
     }, [vuln.id]);
 
-    const openAssessmentChat = (message?: string) => {
+    const agentActionState = (key: string): AgentActionState | undefined => {
+        if (runningAgentAction?.key === key) return { status: 'running' };
+        const index = agentMessageQueue.findIndex(item => item.key === key);
+        return index >= 0 ? { status: 'queued', position: index + 1 } : undefined;
+    };
+
+    const openAssessmentChat = (actions: Omit<QueuedAgentMessage, 'id'>[] = []) => {
         if (!activeAssessmentThread.current) {
             const threadId = crypto.randomUUID();
             activeAssessmentThread.current = threadId;
@@ -226,7 +234,20 @@ type VariantScopedSnapshot = {
         setAssessmentChatMounted(true);
         setAssessmentChatOpen(true);
         setIsEditing(true);
-        if (message) setAgentMessageQueue(queue => [...queue, { id: crypto.randomUUID(), text: message }]);
+        // An identical request already queued or running is not queued again.
+        if (actions.length && !agentActionState(actions[0].key)) {
+            setAgentMessageQueue(queue => [...queue, ...actions.map(action => ({ ...action, id: crypto.randomUUID() }))]);
+        }
+    };
+
+    const onQueuedAgentMessageSent = (id: string) => {
+        const sent = agentMessageQueue.find(item => item.id === id);
+        if (sent) setRunningAgentAction(sent);
+        setAgentMessageQueue(queue => queue.filter(item => item.id !== id));
+    };
+
+    const onQueuedAgentMessageDone = (id: string) => {
+        setRunningAgentAction(running => running?.id === id ? null : running);
     };
 
     const toggleAssessmentChat = () => {
@@ -234,10 +255,16 @@ type VariantScopedSnapshot = {
         else openAssessmentChat();
     };
 
+    const assessmentKey = (targets: AssessmentTargetPair[]) =>
+        `assess:${targets.map(target => `${target.variant_id}|${target.package}`).sort().join(',')}`;
+
+    const assessWithAiState = (targets: AssessmentTargetPair[]) => agentActionState(assessmentKey(targets));
+
     const assessWithAi = (targets: AssessmentTargetPair[]) => {
+        const variantName = (id?: string | null) => availableVariants.find(v => v.id === id)?.name;
         const lines = targets.map(target => {
-            const variant = availableVariants.find(v => v.id === target.variant_id);
-            const variantLabel = variant ? `"${variant.name}" (variant_id ${target.variant_id})` : `variant_id ${target.variant_id}`;
+            const name = variantName(target.variant_id);
+            const variantLabel = name ? `"${name}" (variant_id ${target.variant_id})` : `variant_id ${target.variant_id}`;
             return `- variant ${variantLabel}, package ${target.package}`;
         });
         const prompt = (batchLines: string[], batch = '') =>
@@ -247,23 +274,37 @@ type VariantScopedSnapshot = {
         // Split large selections into batches that fit the agent message limit,
         // reserving room for the " (batch N of M)" label.
         const budget = AGENT_MESSAGE_MAX_LENGTH - ' (batch 9999 of 9999)'.length;
-        const batches: string[][] = [];
-        for (const line of lines) {
+        const batches: number[][] = [];
+        lines.forEach((line, index) => {
             const current = batches[batches.length - 1];
-            if (current && prompt([...current, line]).length <= budget) current.push(line);
-            else batches.push([line]);
-        }
-        batches.forEach((batchLines, index) => openAssessmentChat(
-            prompt(batchLines, batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '')
-        ));
+            if (current && prompt([...current.map(i => lines[i]), line]).length <= budget) current.push(index);
+            else batches.push([index]);
+        });
+        const key = assessmentKey(targets);
+        openAssessmentChat(batches.map((indexes, index) => {
+            const batchTargets = indexes.map(i => targets[i]);
+            const unique = (values: string[]) => [...new Set(values)].join(', ');
+            const batchLabel = batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '';
+            return {
+                key, kind: 'assess',
+                text: prompt(indexes.map(i => lines[i]), batchLabel),
+                title: `${batchTargets.length} target${batchTargets.length === 1 ? '' : 's'}${batches.length > 1 ? ` · batch ${index + 1} of ${batches.length}` : ''}`,
+                detail: `${unique(batchTargets.map(target => variantName(target.variant_id) ?? target.variant_id ?? ''))} · ${unique(batchTargets.map(target => target.package))}`,
+            };
+        }));
     };
 
-    const reviewWithAi = (assessmentId: string) => {
-        openAssessmentChat(
-            `Review the user assessment ${assessmentId} for ${vuln.id}. Retrieve it with get_custom_assessment, ` +
-            `independently re-derive the verdict for each of its targets using VulnScout MCP data, and record one ` +
-            `review per target with write_assessment_review. Do not modify the assessment itself.`
-        );
+    const reviewKey = (assessmentId: string) => `review:${assessmentId}`;
+
+    const reviewWithAi = (assessment: Assessment) => {
+        openAssessmentChat([{
+            key: reviewKey(assessment.id), kind: 'review',
+            text: `Review the user assessment ${assessment.id} for ${vuln.id}. Retrieve it with get_custom_assessment, ` +
+                `independently re-derive the verdict for each of its targets using VulnScout MCP data, and record one ` +
+                `review per target with write_assessment_review. Do not modify the assessment itself.`,
+            title: `assessment ${assessment.id.slice(0, 8)}`,
+            detail: [vuln.id, ...assessment.packages].join(' · '),
+        }]);
     };
 
     const assessmentAgentContext: AgentContext = {
@@ -2055,6 +2096,7 @@ type VariantScopedSnapshot = {
                                             findingsError={variantPackageMapError ?? undefined}
                                             exactTargetSelection={true}
                                             onAssessWithAi={readOnly ? undefined : assessWithAi}
+                                            aiAssessState={assessWithAiState}
                                         />
                                     </li>
                                 )}
@@ -2197,18 +2239,26 @@ type VariantScopedSnapshot = {
                                                         {originLabel(row.origin)}
                                                     </span>
                                                 )}
-                                                {!readOnly && row.origin === "custom" && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => reviewWithAi(row.id)}
-                                                        aria-label={`Review assessment ${row.id} with AI`}
-                                                        title="Review with AI"
-                                                        className="inline-flex items-center gap-1 rounded border border-cyan-500 px-2 py-0.5 text-xs font-medium text-cyan-200 hover:bg-cyan-900/40"
-                                                    >
-                                                        <FontAwesomeIcon icon={faWandMagicSparkles} className="h-3 w-3" />
-                                                        Review with AI
-                                                    </button>
-                                                )}
+                                                {!readOnly && row.origin === "custom" && (() => {
+                                                    const reviewState = agentActionState(reviewKey(row.id));
+                                                    const stateLabel = reviewState?.status === 'running' ? ' (running)'
+                                                        : reviewState ? ` (queued, position ${reviewState.position})` : '';
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => reviewWithAi(row)}
+                                                            disabled={Boolean(reviewState)}
+                                                            aria-label={`Review assessment ${row.id} with AI${stateLabel}`}
+                                                            title={reviewState?.status === 'running' ? "AI review in progress"
+                                                                : reviewState ? `AI review queued (#${reviewState.position} in the AI chat)` : "Review with AI"}
+                                                            className="inline-flex items-center gap-1 rounded border border-cyan-500 px-2 py-0.5 text-xs font-medium text-cyan-200 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:border-neutral-600 disabled:text-neutral-400 disabled:hover:bg-transparent"
+                                                        >
+                                                            {reviewState?.status === 'running' ? <><FontAwesomeIcon icon={faCircleNotch} spin className="h-3 w-3" />Running…</>
+                                                                : reviewState ? <><FontAwesomeIcon icon={faClock} className="h-3 w-3" />Queued · #{reviewState.position}</>
+                                                                : <><FontAwesomeIcon icon={faWandMagicSparkles} className="h-3 w-3" />Review with AI</>}
+                                                        </button>
+                                                    );
+                                                })()}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {targets.map(target => {
@@ -2374,7 +2424,7 @@ type VariantScopedSnapshot = {
 
                     </div>
                     {assessmentChatMounted && <aside id="assessment-agent-panel" hidden={!assessmentChatOpen} role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
-                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queuedMessage={agentMessageQueue[0]} onQueuedMessageSent={id => setAgentMessageQueue(queue => queue.filter(item => item.id !== id))} />
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queue={agentMessageQueue} onQueuedMessageSent={onQueuedAgentMessageSent} onQueuedMessageDone={onQueuedAgentMessageDone} onQueueRemove={id => setAgentMessageQueue(queue => queue.filter(item => item.id !== id))} onQueueClear={() => setAgentMessageQueue([])} />
                     </aside>}
         </ModalShell>
 

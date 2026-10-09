@@ -211,6 +211,35 @@ describe('StatusEditor', () => {
         expect(defaultProps.onAddAssessment).not.toHaveBeenCalled();
     });
 
+    test('Assess with AI shows when the selected targets are already queued or running', async () => {
+        const user = userEvent.setup();
+        const onAssessWithAi = jest.fn();
+        const props = {
+            ...defaultProps,
+            onAssessWithAi,
+            variants: [{id: 'v1', name: 'default', project_id: 'p'}],
+            availablePackages: ['pkg@1.0.0'],
+            variantPackageMap: {v1: ['pkg@1.0.0']},
+            exactTargetSelection: true,
+        };
+        const aiAssessState = jest.fn().mockReturnValue({status: 'queued', position: 2});
+        const { rerender } = render(<StatusEditor {...props} aiAssessState={aiAssessState} />);
+        const target = screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'});
+        if (!(target as HTMLInputElement).checked) await user.click(target);
+
+        const queued = screen.getByRole('button', { name: 'Assess with AI (queued, position 2)' });
+        expect(queued).toBeDisabled();
+        expect(queued).toHaveTextContent('Queued · #2');
+        expect(aiAssessState).toHaveBeenLastCalledWith([{variant_id: 'v1', package: 'pkg@1.0.0'}]);
+
+        rerender(<StatusEditor {...props} aiAssessState={() => ({status: 'running'})} />);
+        expect(screen.getByRole('button', { name: 'Assess with AI (running)' })).toHaveTextContent('Assessing…');
+
+        rerender(<StatusEditor {...props} aiAssessState={() => undefined} />);
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+        expect(onAssessWithAi).toHaveBeenCalledTimes(1);
+    });
+
     test('Assess with AI needs both a variant and a package in variant/package mode', async () => {
         const user = userEvent.setup();
         const onAssessWithAi = jest.fn();
