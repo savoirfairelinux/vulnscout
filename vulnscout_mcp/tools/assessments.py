@@ -193,8 +193,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         a target pair was never observed. Compare the "N target(s)" count in
         the result with the expected pair count to detect skipped pairs.
         When ai_generated is true (the default), the write replaces any
-        pending AI assessment on the given variants. A pending assessment that
-        also covers other variants keeps those and loses only the overlap.
+        pending AI assessment on the same (variant, package) targets. A pending
+        assessment that also covers other targets (other variants, or other
+        packages of the same variant) keeps those and loses only the overlap.
         Only AI assessments are replaced, never custom ones, and the swap is
         atomic: if the write fails, the old assessment is left intact. No
         pre-check with has_ai_assessment is needed.
