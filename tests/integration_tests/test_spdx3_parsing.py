@@ -1235,6 +1235,36 @@ def test_convert_to_package_with_cpe_and_purl(spdx3_parser):
     assert any("libfoo" in p for p in pkg.purl)
 
 
+def test_convert_to_package_with_spdx_external_package_url(spdx3_parser):
+    """Read packageUrl ExternalIdentifier entries emitted by the Zephyr SBOM."""
+    purl = "pkg:github/zephyrproject-rtos/acpica@8d24867bc9c9d81c81eeac59391cda59333affd4"
+    component = {
+        "type": "software_Package",
+        "spdxId": "zephyr:packages/acpica-deps",
+        "name": "acpica-deps",
+        "software_packageVersion": "8d24867bc9c9d81c81eeac59391cda59333affd4",
+        "software_primaryPurpose": "library",
+        "externalIdentifier": [
+            {
+                "type": "ExternalIdentifier",
+                "externalIdentifierType": "packageUrl",
+                "identifier": purl,
+            },
+            {
+                "type": "ExternalIdentifier",
+                "externalIdentifierType": "cpe23",
+                "identifier": "cpe:2.3:a:zephyrproject:acpica:*:*:*:*:*:*:*:*",
+            },
+        ],
+    }
+
+    pkg = spdx3_parser._convert_to_package(component)
+
+    assert pkg is not None
+    assert purl in pkg.purl
+    assert any(cpe.startswith("cpe:2.3:") for cpe in pkg.cpe)
+
+
 def test_merge_vulnerabilities_non_dict(spdx3_parser):
     """merge_vulnerabilities_into_controller with a non-dict returns early (lines 189-190)."""
     spdx3_parser.merge_vulnerabilities_into_controller("not-a-dict")
