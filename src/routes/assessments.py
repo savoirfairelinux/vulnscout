@@ -72,25 +72,28 @@ def _is_scanner_author(author: str | None) -> bool:
     return False
 
 
-def _replace_pending_ai(vuln_id: str, variant_ids: list[UUID]) -> list[dict[str, Any]]:
-    """Make room for a new AI assessment on *variant_ids* by removing the old one.
+def _replace_pending_ai(
+    vuln_id: str, targets: list[tuple[UUID, UUID]]
+) -> list[dict[str, Any]]:
+    """Make room for a new AI assessment on *targets* by removing the old one.
 
-    A new AI assessment replaces any pending AI assessment (``origin == "ai"``)
-    on the same (vulnerability, variant), whatever its packages. Only the
-    overlapping variants are taken away: a pending assessment that also covers
-    other variants keeps those targets (``trimmed``) and is deleted only once
-    no target remains (``deleted``). Approved (``custom``) and SBOM
-    assessments are never touched.
+    *targets* are the new assessment's ``(variant_id, finding_id)`` pairs. A
+    new AI assessment replaces a pending AI assessment (``origin == "ai"``)
+    only on the targets they share: the same variant **and** package. Its
+    other targets are kept (``trimmed``), so assessing other packages of the
+    same variant never discards an earlier suggestion; the old assessment is
+    deleted only once no target remains (``deleted``). Approved (``custom``)
+    and SBOM assessments are never touched.
 
     Does not commit; call it inside ``batch_session`` together with the create
     so a failed write leaves the old assessment intact.
     """
-    replacing = set(variant_ids)
+    replacing = set(targets)
     replaced: list[dict[str, Any]] = []
     for row in DBAssessment.get_by_vulnerability(vuln_id):
         if row.origin != "ai":
             continue
-        overlap = [t for t in row.target_rows if t.variant_id in replacing]
+        overlap = [t for t in row.target_rows if (t.variant_id, t.finding_id) in replacing]
         if not overlap:
             continue
         removed = sorted({str(t.variant_id) for t in overlap})
@@ -1487,10 +1490,10 @@ def init_app(app: Flask) -> None:
         try:
             with batch_session():
                 # A new AI assessment replaces the pending one on the same
-                # variant(s). Done in the same transaction as the create, so a
-                # failed create rolls the removal back.
+                # (variant, package) targets. Done in the same transaction as
+                # the create, so a failed create rolls the removal back.
                 if ai_generated:
-                    replaced = _replace_pending_ai(vuln_id, variant_ids)
+                    replaced = _replace_pending_ai(vuln_id, targets)
                 # Always create a new record — never merge with an existing
                 # one. from_vuln_assessment does a find-or-update which would
                 # overwrite previous user assessments on the same target set.

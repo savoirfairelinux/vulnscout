@@ -40,10 +40,11 @@ Pending AI assessment (origin = "ai")
 Human review in the web UI  ──▶  Approve (becomes official) / Reject (deleted)
 ```
 
-A vulnerability has at most one pending AI assessment per variant. Submitting a
-new AI assessment **replaces** the pending one on the same variant(s), without
-any confirmation. If the old pending assessment also covered other variants, it
-keeps those and only loses the overlapping ones. Approved assessments are never
+A vulnerability has at most one pending AI assessment per variant and package.
+Submitting a new AI assessment **replaces** the pending one on the same
+(variant, package) targets, without any confirmation. If the old pending
+assessment also covered other targets — other variants, or other packages of the
+same variant — it keeps those and only loses the overlapping ones. Approved assessments are never
 replaced.
 
 ---
@@ -279,9 +280,10 @@ assessment.
 - **Submission is blocked with a missing `variant_id`** — the skill needs a
   `variant_id` to submit. Provide a `project_name`/`variant_name` (so it can be
   resolved via MCP) or a `variant_id` UUID directly in the prompt.
-- **A pending AI assessment disappeared, or now covers fewer variants** —
+- **A pending AI assessment disappeared, or now covers fewer targets** —
   this is expected. A new AI assessment replaces the pending one on the same
-  variant(s); if the old one also covered other variants, it keeps those. Approve
+  (variant, package) targets; if the old one also covered other targets, it
+  keeps those. Approve
   an assessment first if you want to keep it, since approved assessments are
   never replaced.
 - **409 Conflict on submission** — you are running a VulnScout version from
