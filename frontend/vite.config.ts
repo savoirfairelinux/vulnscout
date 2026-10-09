@@ -9,6 +9,9 @@ export default defineConfig({
       '/api/agent': {
         target: process.env.VULNSCOUT_AGENT_API_URL || 'http://127.0.0.1:7275',
       },
+      '/api': {
+        target: 'http://127.0.0.1:7275',
+      },
     },
   },
   build: {

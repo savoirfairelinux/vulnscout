@@ -26,10 +26,10 @@ If an older database is already stamped at revision `z2c3d4e5f6a7` but lacks `as
 ```sh
 cd frontend
 npm ci
-VITE_API_URL=http://127.0.0.1:7275 npm run dev -- --host 127.0.0.1
+VITE_API_URL= npm run dev -- --host 127.0.0.1
 ```
 
-Open the Vite URL and select **Agent** in the navbar. The Vite dev proxy forwards only `/api/agent` to the local Flask server. In production builds the browser uses the same origin as Flask. If the backend is on another port, set `VULNSCOUT_AGENT_API_URL` for both the backend's MCP connection and the Vite dev proxy.
+Open the Vite URL and select **Agent** in the navbar. The Vite dev proxy forwards `/api` to the local Flask server, with a separate `/api/agent` target controlled by `VULNSCOUT_AGENT_API_URL`. In production builds the browser uses the same origin as Flask. If the backend is on another port, set `VITE_API_URL` for regular endpoints and `VULNSCOUT_AGENT_API_URL` for the agent proxy and backend MCP connection.
 
 `VULNSCOUT_MCP_SERVER_PATH` is an optional override for a custom stdio entrypoint. Remove old overrides pointing at a separate MCP checkout to use the bundled implementation. External MCP clients may still use the repository's `vulnscout_mcp/run_server.py` bootstrap launcher; the built-in agent does not need it.
 
