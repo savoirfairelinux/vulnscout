@@ -266,9 +266,8 @@ type VariantScopedSnapshot = {
             const name = variantName(id);
             return name ? `"${name}" (variant_id ${id})` : `variant_id ${id}`;
         };
-        // One line per variant: an AI write replaces every pending AI
-        // assessment on its variant, so a variant split across batches would
-        // keep only the last batch's result.
+        // One line per variant; a variant is kept whole within one batch so
+        // the agent assesses all of its selected packages together.
         const groupMap = new Map<string, AssessmentTargetPair[]>();
         targets.forEach(target => {
             const id = target.variant_id ?? '';

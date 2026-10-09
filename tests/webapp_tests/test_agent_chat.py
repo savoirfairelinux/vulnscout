@@ -137,6 +137,18 @@ def test_new_conversation_does_not_clear_authentication(client):
 
 
 def test_device_login_without_client_id(client, monkeypatch):
+    from src.routes import agent
+
+    calls = []
+
+    def github_form(url, fields):
+        calls.append((url, fields))
+        if url == agent.GITHUB_DEVICE_URL:
+            return {"device_code": "device-code", "user_code": "ABCD-1234",
+                    "verification_uri": "https://github.com/login/device", "interval": 5, "expires_in": 900}
+        return {"error": "authorization_pending"}
+
+    monkeypatch.setattr(agent, "_github_form", github_form)
     monkeypatch.delenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID", raising=False)
     assert client.get("/api/agent").get_json()["device_login"] is True
     assert client.post("/api/agent/auth/poll").status_code == 410
@@ -151,6 +163,11 @@ def test_device_login_without_client_id(client, monkeypatch):
     response = client.post("/api/agent/auth/poll")
     assert response.status_code == 200
     assert response.get_json()["status"] == "pending"
+    assert calls == [
+        (agent.GITHUB_DEVICE_URL, {"client_id": agent.GITHUB_COPILOT_CLIENT_ID, "scope": "read:user"}),
+        (agent.GITHUB_TOKEN_URL, {"client_id": agent.GITHUB_COPILOT_CLIENT_ID, "device_code": "device-code",
+                                  "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}),
+    ]
 
 
 def test_device_poll_interval_increases_when_github_omits_interval():
@@ -163,11 +180,16 @@ def test_device_poll_interval_increases_when_github_omits_interval():
 
 
 def test_device_login_reports_unknown_github_client(client, monkeypatch):
+    from src.routes import agent
+
+    calls = []
+    monkeypatch.setattr(agent, "_github_form", lambda url, fields: calls.append(fields) or {"error": "Not Found"})
     monkeypatch.setenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID", "Iv1.0000000000000000")
     assert client.get("/api/agent").get_json()["device_login"] is True
     response = client.post("/api/agent/auth")
     assert response.status_code == 503
     assert "device flow" in response.get_json()["error"]
+    assert calls == [{"client_id": "Iv1.0000000000000000", "scope": "read:user"}]
     assert client.get("/api/agent").get_json()["token_connected"] is False
 
 

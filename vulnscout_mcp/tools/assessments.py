@@ -72,6 +72,7 @@ def _has_ai_assessment_impl(
     client: VulnScoutClient,
     vuln_id: str,
     variant_id: str,
+    package: Optional[str] = None,
 ) -> str:
     """Core logic for has_ai_assessment — separated for testability."""
     try:
@@ -79,26 +80,33 @@ def _has_ai_assessment_impl(
     except VulnScoutError as e:
         return f"Error: {e}"
 
+    found = []
     for a in assessments:
         if a.get("origin") != "ai":
             continue
         covered = a.get("variant_ids") or [a.get("variant_id")]
-        if variant_id in covered:
-            scoped_packages = a.get("packages")
-            targets = a.get("targets") or []
-            if targets:
-                scoped_packages = [
-                    t.get("package")
-                    for t in targets
-                    if t.get("variant_id") == variant_id and t.get("package")
-                ]
-            return (
-                f"AI assessment found: id={a.get('id')}, "
-                f"status={a.get('status')}, "
-                f"packages={scoped_packages}, "
-                f"variant_ids={a.get('variant_ids')}"
-            )
-    return f"No AI assessment found for {vuln_id} with variant {variant_id}"
+        if variant_id not in covered:
+            continue
+        scoped_packages = a.get("packages") or []
+        targets = a.get("targets") or []
+        if targets:
+            scoped_packages = [
+                t.get("package")
+                for t in targets
+                if t.get("variant_id") == variant_id and t.get("package")
+            ]
+        if package and package not in scoped_packages:
+            continue
+        found.append(
+            f"AI assessment found: id={a.get('id')}, "
+            f"status={a.get('status')}, "
+            f"packages={scoped_packages}, "
+            f"variant_ids={a.get('variant_ids')}"
+        )
+    if found:
+        return "\n".join(found)
+    scope = f"variant {variant_id}" + (f" and package {package}" if package else "")
+    return f"No AI assessment found for {vuln_id} with {scope}"
 
 
 def _update_ai_assessment_impl(
@@ -193,8 +201,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         a target pair was never observed. Compare the "N target(s)" count in
         the result with the expected pair count to detect skipped pairs.
         When ai_generated is true (the default), the write replaces any
-        pending AI assessment on the given variants. A pending assessment that
-        also covers other variants keeps those and loses only the overlap.
+        pending AI assessment on the same (variant, package) targets. A pending
+        assessment that also covers other targets (other variants, or other
+        packages of the same variant) keeps those and loses only the overlap.
         Only AI assessments are replaced, never custom ones, and the swap is
         atomic: if the write fails, the old assessment is left intact. No
         pre-check with has_ai_assessment is needed.
@@ -297,20 +306,23 @@ def register_tools(server, client: VulnScoutClient) -> None:
             return f"Error: {e}"
 
     @server.tool()
-    def has_ai_assessment(vuln_id: str, variant_id: str) -> str:
-        """Look up the AI-generated assessment for a vulnerability on a given variant.
+    def has_ai_assessment(vuln_id: str, variant_id: str, package: Optional[str] = None) -> str:
+        """Look up the AI-generated assessments for a vulnerability on a given variant.
 
-        Queries all assessments for the CVE and returns details of the first
-        AI-generated assessment scoped to the specified variant, or a clear
-        "not found" message if none exists. This is informational only:
-        write_assessment replaces the pending AI assessment on its own, so
+        Queries all assessments for the CVE and returns one line per
+        AI-generated assessment that covers the specified variant (and
+        package, when given), or a clear "not found" message if none exists.
+        A variant can hold several pending AI assessments, one per package
+        set. This is informational only: write_assessment replaces pending AI
+        assessments on the same (variant, package) targets on its own, so
         there is no need to call this before writing.
 
         Args:
             vuln_id: CVE identifier, e.g. CVE-2024-1234
             variant_id: UUID of the variant to check.
+            package: Optional 'name@version' package to narrow the lookup to.
         """
-        return _has_ai_assessment_impl(client, vuln_id=vuln_id, variant_id=variant_id)
+        return _has_ai_assessment_impl(client, vuln_id=vuln_id, variant_id=variant_id, package=package)
 
     @server.tool()
     def update_ai_assessment(

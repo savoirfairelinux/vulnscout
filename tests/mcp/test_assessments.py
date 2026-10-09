@@ -350,6 +350,43 @@ class TestHasAiAssessment:
         assert "openssl@1.0.0" in result
         assert "zlib@1.3.0" not in result
 
+    def test_lists_every_ai_assessment_on_the_variant(self, client):
+        assessments = [
+            self._make_assessment("ai", self.VARIANT_ID, "uuid-a", "affected"),
+            self._make_assessment("ai", self.VARIANT_ID, "uuid-b", "not_affected"),
+        ]
+        assessments[0]["packages"] = ["openssl@1.0.0"]
+        assessments[1]["packages"] = ["zlib@1.3.0"]
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234/assessments").mock(
+                return_value=httpx.Response(200, json=assessments)
+            )
+            result = _has_ai_assessment_impl(client, vuln_id="CVE-2024-1234", variant_id=self.VARIANT_ID)
+        assert "uuid-a" in result
+        assert "uuid-b" in result
+
+    def test_package_filter_narrows_to_matching_assessment(self, client):
+        assessments = [
+            self._make_assessment("ai", self.VARIANT_ID, "uuid-a", "affected"),
+            self._make_assessment("ai", self.VARIANT_ID, "uuid-b", "not_affected"),
+        ]
+        assessments[0]["packages"] = ["openssl@1.0.0"]
+        assessments[1]["packages"] = ["zlib@1.3.0"]
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234/assessments").mock(
+                return_value=httpx.Response(200, json=assessments)
+            )
+            result = _has_ai_assessment_impl(
+                client, vuln_id="CVE-2024-1234", variant_id=self.VARIANT_ID, package="zlib@1.3.0",
+            )
+            missing = _has_ai_assessment_impl(
+                client, vuln_id="CVE-2024-1234", variant_id=self.VARIANT_ID, package="curl@8.0.0",
+            )
+        assert "uuid-b" in result
+        assert "uuid-a" not in result
+        assert "No AI assessment found" in missing
+        assert "curl@8.0.0" in missing
+
     def test_no_match_wrong_variant_id(self, client):
         assessments = [self._make_assessment("ai", "other-variant", "uuid-ai")]
         with respx.mock:
