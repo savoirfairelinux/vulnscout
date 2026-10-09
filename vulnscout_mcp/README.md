@@ -109,7 +109,7 @@ python vulnscout_mcp/server.py
 | `write_assessment`             | Create a VEX assessment for a CVE on one or more packages/variants  |
 | `get_assessment`                | Retrieve a single VEX assessment by ID                               |
 | `list_assessments_by_vuln`     | List all VEX assessments recorded for a CVE                          |
-| `has_ai_assessment`            | Check whether a CVE already has a pending AI assessment for a variant |
+| `has_ai_assessment`            | List pending AI assessments of a CVE on a variant (optionally one package) |
 | `update_ai_assessment`         | Modify the content of an existing AI-generated assessment            |
 | `get_vulnerability`            | Retrieve a single vulnerability, scoped to a variant                 |
 | `find_project_id`              | Resolve a project name to its UUID                                   |

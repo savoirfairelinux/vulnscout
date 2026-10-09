@@ -139,7 +139,7 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | `update_ai_assessment`     | Revise the content of an existing pending AI assessment (its targets cannot change) |
 | `get_assessment`           | Retrieve a single VEX assessment by ID                      |
 | `list_assessments_by_vuln` | List all VEX assessments recorded for a CVE                 |
-| `has_ai_assessment`        | Check whether a pending AI assessment exists for a variant (informational; a new write replaces it automatically) |
+| `has_ai_assessment`        | List pending AI assessments for a variant, optionally one package (informational; a new write replaces them automatically) |
 | `get_vulnerability`        | Retrieve a vulnerability with variant-scoped details        |
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
 | `list_variants`            | List every variant across all projects                      |
