@@ -10,9 +10,16 @@ import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import type { AssessmentTargetPair } from "../../src/handlers/assessments";
 import VulnModal from '../../src/components/VulnModal';
 
-type ChatProps = { threadId?: string; active?: boolean; queuedMessage?: { id: string; text: string }; onQueuedMessageSent?: (id: string) => void };
+type QueueItem = { id: string; text: string; key: string; kind: string; title: string; detail?: string };
+type ChatProps = {
+    threadId?: string; active?: boolean; queue?: QueueItem[];
+    onQueuedMessageSent?: (id: string) => void; onQueuedMessageDone?: (id: string) => void;
+    onQueueRemove?: (id: string) => void; onQueueClear?: () => void;
+};
 const chatProps: ChatProps[] = [];
 let chatMounts = 0;
+let lastSentId: string | undefined;
+const lastQueue = () => chatProps[chatProps.length - 1].queue ?? [];
 
 jest.mock('../../src/components/AgentChat', () => ({
     __esModule: true,
@@ -21,9 +28,11 @@ jest.mock('../../src/components/AgentChat', () => ({
         ReactLib.useEffect(() => { chatMounts += 1; }, []);
         chatProps.push(props);
         return <div data-testid="agent-chat">
-            <span data-testid="queued-message">{props.queuedMessage?.text ?? ''}</span>
+            <span data-testid="queued-message">{props.queue?.[0]?.text ?? ''}</span>
             <button type="button" onClick={props.onClose}>Close chat</button>
-            <button type="button" onClick={() => props.queuedMessage && props.onQueuedMessageSent?.(props.queuedMessage.id)}>Accept queued</button>
+            <button type="button" onClick={() => { const head = props.queue?.[0]; if (head) { lastSentId = head.id; props.onQueuedMessageSent?.(head.id); } }}>Accept queued</button>
+            <button type="button" onClick={() => lastSentId && props.onQueuedMessageDone?.(lastSentId)}>Finish running</button>
+            <button type="button" onClick={() => props.onQueueClear?.()}>Clear queue</button>
         </div>;
     },
 }));
@@ -36,9 +45,10 @@ let mockAiTargets: AssessmentTargetPair[] = defaultAiTargets;
 
 jest.mock('../../src/components/StatusEditor', () => ({
     __esModule: true,
-    default: (props: { onAssessWithAi?: (targets: AssessmentTargetPair[]) => void }) => (
+    default: (props: { onAssessWithAi?: (targets: AssessmentTargetPair[]) => void; aiAssessState?: (targets: AssessmentTargetPair[]) => unknown }) => (
         <div data-testid="status-editor">
             {props.onAssessWithAi && <button type="button" onClick={() => props.onAssessWithAi?.(mockAiTargets)}>Assess with AI</button>}
+            <span data-testid="assess-state">{JSON.stringify(props.aiAssessState?.(mockAiTargets) ?? null)}</span>
         </div>
     ),
 }));
@@ -89,6 +99,7 @@ describe('VulnModal AI actions', () => {
     beforeEach(() => {
         chatProps.length = 0;
         chatMounts = 0;
+        lastSentId = undefined;
         mockAiTargets = defaultAiTargets;
         fetchMock.resetMocks();
         fetchMock.mockResponse(req => {
@@ -159,8 +170,8 @@ describe('VulnModal AI actions', () => {
         await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
 
         const messages: string[] = [];
-        while (chatProps[chatProps.length - 1].queuedMessage) {
-            messages.push(chatProps[chatProps.length - 1].queuedMessage!.text);
+        while (lastQueue().length) {
+            messages.push(lastQueue()[0].text);
             await user.click(screen.getByRole('button', { name: 'Accept queued' }));
         }
         expect(messages.length).toBeGreaterThan(1);
@@ -187,18 +198,49 @@ describe('VulnModal AI actions', () => {
         expect(message).toContain('write_assessment_review');
         expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
 
-        // Further actions queue behind the pending one instead of replacing it.
-        await user.click(reviewButtons[0]);
-        await user.click(reviewButtons[0]);
-        const queuedIds = new Set<string>();
-        for (let index = 0; index < 3; index += 1) {
-            const head = chatProps[chatProps.length - 1].queuedMessage;
-            expect(head?.text).toContain('Review the user assessment assessment-1');
-            queuedIds.add(head!.id);
-            await user.click(screen.getByRole('button', { name: 'Accept queued' }));
-        }
-        expect(queuedIds.size).toBe(3);
-        expect(chatProps[chatProps.length - 1].queuedMessage).toBeUndefined();
+        // While queued the button shows its position and identical requests are ignored.
+        const queuedButton = screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (queued, position 1)' });
+        expect(queuedButton).toBeDisabled();
+        expect(queuedButton).toHaveTextContent('Queued · #1');
+        await user.click(queuedButton);
+        expect(lastQueue()).toHaveLength(1);
+
+        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+        const runningButton = screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (running)' });
+        expect(runningButton).toBeDisabled();
+        expect(runningButton).toHaveTextContent('Running…');
+        expect(lastQueue()).toHaveLength(0);
+
+        // Once finished the same review can be requested again.
+        await user.click(screen.getByRole('button', { name: 'Finish running' }));
+        const idleButton = screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' });
+        expect(idleButton).toBeEnabled();
+        await user.click(idleButton);
+        expect(lastQueue()).toHaveLength(1);
+    });
+
+    test('identical Assess with AI requests are queued once, distinct actions queue in order', async () => {
+        const user = userEvent.setup();
+        renderModal({ isEditing: true });
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+        expect(lastQueue()).toHaveLength(1);
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('{"status":"queued","position":1}');
+
+        await user.click(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' }));
+        expect(lastQueue().map(item => item.kind)).toEqual(['assess', 'review']);
+        expect(lastQueue()[0]).toMatchObject({ title: '2 targets', detail: expect.stringContaining('pkg@1.0.0') });
+        expect(lastQueue()[1]).toMatchObject({ title: 'assessment assessme', detail: `${vulnerability.id} · pkg@1.0.0` });
+
+        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('{"status":"running"}');
+        expect(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (queued, position 1)' })).toBeDisabled();
+
+        await user.click(screen.getByRole('button', { name: 'Clear queue' }));
+        expect(lastQueue()).toHaveLength(0);
+        expect(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' })).toBeEnabled();
+        await user.click(screen.getByRole('button', { name: 'Finish running' }));
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('null');
     });
 
     const deleteCalls = () => fetchMock.mock.calls.filter(([req, init]) =>
