@@ -43,6 +43,9 @@ Or start with inputs and the web UI in one step:
 ```
 
 Flask will run with `--debug` when `DEV_MODE=true` is set in the container, enabling auto-reload on Python file changes.
+The container only adjusts ownership of runtime directories, not the mounted
+`src/` or `vulnscout_mcp/` trees. If an earlier run changed their host
+ownership, restore it once before editing.
 
 #### Database changes
 
