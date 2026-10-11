@@ -357,6 +357,11 @@ for fmt in "${FORMATS[@]}"; do
         print_fail "${EXPORT_FILES[${fmt}]} (file not produced by export)"
         continue
     fi
+    if [[ "${fmt}" == "spdx2" ]] && ! jq -e \
+        'any(.packages[]?.externalRefs[]?; .referenceType == "purl")' "${file}" > /dev/null; then
+        print_fail "${EXPORT_FILES[${fmt}]} (expected a PURL reference for schema regression coverage)"
+        continue
+    fi
     validate_expect_pass "${file}"
 done
 

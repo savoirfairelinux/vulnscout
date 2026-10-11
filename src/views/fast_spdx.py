@@ -9,6 +9,7 @@ _SPDX2_DEPENDENCY_OF = frozenset({
     "DEPENDENCY_OF", "BUILD_DEPENDENCY_OF", "RUNTIME_DEPENDENCY_OF", "DEV_DEPENDENCY_OF",
     "OPTIONAL_DEPENDENCY_OF", "PROVIDED_DEPENDENCY_OF", "TEST_DEPENDENCY_OF",
 })
+SPDX2_SYNTHETIC_SOURCE_COMMENT = "VulnScout: synthetic Git source provenance (not an inventory component)."
 
 
 def spdx2_dependency_edge(source, kind, target) -> tuple[str, str] | None:
@@ -23,7 +24,7 @@ def spdx2_dependency_edge(source, kind, target) -> tuple[str, str] | None:
 
 
 def spdx2_provenance_only_sources(sbom: dict) -> set[str]:
-    """Exclude unversioned Git source nodes used only as another package's provenance."""
+    """Exclude only explicitly marked Git source nodes used exclusively as provenance."""
     packages = {
         ref: package
         for package in _get_field(sbom, ["packages", "Packages"]) or []
@@ -33,7 +34,8 @@ def spdx2_provenance_only_sources(sbom: dict) -> set[str]:
     }
     candidates = {
         ref for ref, package in packages.items()
-        if package.get("primaryPackagePurpose") == "SOURCE"
+        if package.get("comment") == SPDX2_SYNTHETIC_SOURCE_COMMENT
+        and package.get("primaryPackagePurpose") == "SOURCE"
         and not _get_field(package, ["version", "Version", "packageVersion", "PackageVersion", "versionInfo"])
         and isinstance(package.get("downloadLocation"), str)
         and git_revision_from_url(package["downloadLocation"]) is not None

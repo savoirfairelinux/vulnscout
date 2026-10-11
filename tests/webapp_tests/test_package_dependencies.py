@@ -794,6 +794,38 @@ def test_companion_identifier_evidence_is_document_local_not_last_writer_wins(ap
 
 
 @pytest.mark.parametrize('ignore_parsing_errors', ['false', 'true'])
+@pytest.mark.parametrize('source_comment', [None, 'VulnScout: synthetic Git source provenance'])
+def test_unmarked_git_source_with_only_generated_from_keeps_its_document_association(
+        app, tmp_path, monkeypatch, ignore_parsing_errors, source_comment):
+    from src.views.spdx import SPDX
+
+    monkeypatch.setenv('IGNORE_PARSING_ERRORS', ignore_parsing_errors)
+    exporter = SPDX(ControllersCache())
+    exporter.packagesCtrl.add(Package('app', '1.0'))
+    document = json.loads(exporter.output_as_json())
+    url = f'git+https://example.org/lib@{"a" * 40}'
+    document['packages'].append({
+        'SPDXID': 'SPDXRef-real-source', 'name': 'real-source', 'filesAnalyzed': False,
+        'primaryPackagePurpose': 'SOURCE', 'downloadLocation': url,
+        **({'comment': source_comment} if source_comment else {}),
+    })
+    document['relationships'].append({
+        'spdxElementId': document['packages'][0]['SPDXID'], 'relationshipType': 'GENERATED_FROM',
+        'relatedSpdxElement': 'SPDXRef-real-source',
+    })
+    variant_id, scan_id = _scan(app, tmp_path, 'real-source', document)
+    document_id = SBOMDocument.get_by_scan(scan_id)[0].id
+    source = Package.get_by_string_id('real-source@')
+    assert source is not None
+    assert SBOMPackage.get(document_id, source.id) is not None
+    rows = app.test_client().get(f'/api/packages?variant_id={variant_id}').json
+    assert {row['id'] for row in rows} == {'app@1.0', 'real-source@'}
+    assert all(row['source_urls'] == [url] for row in rows)
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    assert {row['id'] for row in graph['packages']} == {'app@1.0', 'real-source@'}
+
+
+@pytest.mark.parametrize('ignore_parsing_errors', ['false', 'true'])
 def test_scoped_spdx2_export_import_cycles_preserve_installed_package_set_and_provenance(
         app, tmp_path, monkeypatch, ignore_parsing_errors):
     from src.helpers.export_scope import compute_export_scope
