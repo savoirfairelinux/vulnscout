@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import userEvent from "@testing-library/user-event";
 
 import Settings from "../../src/pages/Settings";
 import Projects from "../../src/handlers/project";
@@ -347,6 +348,26 @@ describe("Settings scoped project and variant views", () => {
       [file],
       ["nvd", "epss", "ghsa", "euvd"],
     );
+  });
+
+  test("accepts JSON-LD companion SBOM files and uploads them together", async () => {
+    render(<Settings />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    await user.click(screen.getByRole("button", { name: "Release" }));
+    const files = ["build.jsonld", "modules-deps.jsonld"].map(name =>
+      new File(['{"@graph":[]}'], name, { type: "application/ld+json" }));
+    for (const file of files) {
+      const picker = await screen.findByLabelText("SBOM Files");
+      expect(picker).toHaveAttribute("accept", expect.stringContaining(".jsonld"));
+      await user.upload(picker, file);
+      expect(screen.getByText(file.name)).toBeInTheDocument();
+    }
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
+      project.id, variant.id, files, ["nvd", "epss", "ghsa", "euvd"],
+    ));
+    expect(await screen.findByText("Upload rejected")).toBeInTheDocument();
   });
 
   test("custom import refresh submits only selected sources", async () => {

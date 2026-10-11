@@ -6,7 +6,7 @@ import uuid
 from sqlalchemy import ForeignKey, ForeignKeyConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ..extensions import Base
+from ..extensions import Base, db, write_lock
 
 
 class PackageDependency(Base):
@@ -28,3 +28,19 @@ class PackageDependency(Base):
             ondelete="CASCADE",
         ),
     )
+
+    @staticmethod
+    def replace_for_documents(document_ids: set[uuid.UUID],
+                              rows: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]) -> None:
+        """Replace document graphs in one write transaction, without a stale read-before-insert."""
+        if not document_ids:
+            return
+        with write_lock():
+            db.session.execute(db.delete(PackageDependency).where(
+                PackageDependency.sbom_document_id.in_(document_ids),
+            ))
+            db.session.add_all(
+                PackageDependency(sbom_document_id=document_id, package_id=source, dependency_id=target)
+                for document_id, source, target in rows
+            )
+            db.session.commit()

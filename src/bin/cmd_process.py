@@ -28,6 +28,7 @@ import os
 from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
+from sqlalchemy.exc import SQLAlchemyError
 from ._common import DEFAULT_VARIANT_NAME, resolve_project, resolve_project_variant
 from ..controllers.projects import ProjectController
 from ..helpers.export_scope import compute_export_scope
@@ -196,6 +197,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
+        document_path = doc.path
         pkgCtrl.current_sbom_document = doc
         try:
             verbose(f"merger_ci: Reading {doc.path} (format={doc.format!r})")
@@ -246,16 +248,21 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             doc.dependencies_recorded = True
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
+        except SQLAlchemyError as e:
+            _db.session.rollback()
+            print(f"Error importing {document_path}: {e}")
+            raise
         except Exception as e:
             if not use_fastspdx:
-                print(f"Error parsing {doc.path}: {e}")
+                print(f"Error parsing {document_path}: {e}")
                 print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
-                raise e
+                raise
             else:
-                print(f"Ignored: Error parsing {doc.path}: {e}")
+                print(f"Ignored: Error parsing {document_path}: {e}")
         finally:
             pkgCtrl.current_sbom_document = None
     pkgCtrl.flush_spdx_dependencies()
+    pkgCtrl.flush_spdx_sources()
     _db.session.commit()
 
     return {

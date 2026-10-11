@@ -53,7 +53,8 @@ class FastSPDX3:
         self.uri_to_package: Dict[str, str] = {}
         self._document_refs: Dict[str, str] = {}
 
-    def find_spdx_version(self, spdx: Dict[str, Any]) -> Optional[str]:
+    @staticmethod
+    def find_spdx_version(spdx: Dict[str, Any]) -> Optional[str]:
         """
         Find the SPDX version from the document.
         """
@@ -65,7 +66,8 @@ class FastSPDX3:
 
         return None
 
-    def could_parse_spdx(self, spdx: Dict[str, Any]) -> bool:
+    @staticmethod
+    def could_parse_spdx(spdx: Dict[str, Any]) -> bool:
         """
         Check if this parser can handle the SPDX document (version 3.x).
 
@@ -75,7 +77,7 @@ class FastSPDX3:
         Returns:
             True if the document version starts with "3", False otherwise
         """
-        version = self.find_spdx_version(spdx)
+        version = FastSPDX3.find_spdx_version(spdx)
         return bool(version and version.startswith("3"))
 
     def merge_components_into_controller(self, components_dict: Dict[str, Any]):
@@ -95,13 +97,20 @@ class FastSPDX3:
             self.logger.warning("No @graph found in SPDX document")
             return
 
+        include_sources = any(
+            isinstance(item, dict) and item.get('type') == 'SoftwareAgent'
+            and item.get('name') == 'West SPDX Generator'
+            for item in graph
+        )
         for component in graph:
             if not isinstance(component, dict):
                 continue
             if component.get('type') != 'software_Package':
                 continue
             primary_purpose = component.get('software_primaryPurpose', '').lower()
-            if primary_purpose in {'source', 'development', 'documentation'}:
+            if primary_purpose in {'development', 'documentation'} or (
+                primary_purpose == 'source' and not include_sources
+            ):
                 continue
 
             package = self._convert_to_package(component)
@@ -115,6 +124,38 @@ class FastSPDX3:
                 self._document_refs[spdx_id] = package.string_id
 
             self.packagesCtrl.add(package)
+        self.merge_sources_into_controller(components_dict)
+
+    def merge_sources_into_controller(self, document: Dict[str, Any]) -> None:
+        """Follow Git source inputs through explicit build outputs, not runtime dependencies."""
+        graph = [item for item in document.get("@graph", []) if isinstance(item, dict)]
+        builds = {item['spdxId'] for item in graph
+                  if item.get('type') == 'build_Build' and isinstance(item.get('spdxId'), str)}
+        urls = {
+            item['spdxId']: item['software_downloadLocation']
+            for item in graph
+            if item.get('type') == 'software_Package' and item.get('software_primaryPurpose', '').lower() == 'source'
+            and isinstance(item.get('spdxId'), str) and isinstance(item.get('software_downloadLocation'), str)
+        }
+        derivations: set[tuple[str, str]] = set()
+        inputs: set[tuple[str, str]] = set()
+        for relation in graph:
+            source = relation.get('from')
+            targets = relation.get('to', [])
+            if isinstance(targets, str):
+                targets = [targets]
+            if not isinstance(source, str) or not isinstance(targets, list):
+                continue
+            for target in targets:
+                if not isinstance(target, str):
+                    continue
+                if relation.get('relationshipType') == 'hasInput':
+                    inputs.add((source, target))
+                elif relation.get('relationshipType') == 'hasOutput':
+                    derivations.add((target, source))
+        self.packagesCtrl.add_spdx3_sources(
+            self._document_refs, self._namespace_map(graph), urls, derivations, inputs, builds,
+        )
 
     def _convert_to_package(self, pkg_element: Dict[str, Any]) -> Optional[Package]:
         """
@@ -131,24 +172,32 @@ class FastSPDX3:
         name = extract_value(["name", "Name", "packageName", "PackageName"])
         version = extract_value(["versionInfo", "version", "software_packageVersion", "packageVersion"])
 
-        if not name or not version:
+        if not name:
+            self.logger.warning("Skipping SPDX package without a name: %s", pkg_element.get('spdxId'))
             return None
 
-        pkg = Package(name, version, [], [])
+        pkg = Package(name, version or "", [], [])
+        download = pkg_element.get('software_downloadLocation')
+        if isinstance(download, str):
+            pkg.add_source_url(download)
 
         cpes = self.extract_cpes(pkg_element)
         for cpe in cpes:
             pkg.add_cpe(cpe)
         pkg.generate_generic_cpe()
 
-        purl = self.extract_purl(pkg_element)
-        if purl:
+        for purl in self.extract_purls(pkg_element):
             pkg.add_purl(purl)
         pkg.generate_generic_purl()
 
         return pkg
 
     def extract_purl(self, element: Dict[str, Any]) -> Optional[str]:
+        """Return the first PURL for callers expecting a single identifier."""
+        purls = self.extract_purls(element)
+        return purls[0] if purls else None
+
+    def extract_purls(self, element: Dict[str, Any]) -> List[str]:
         """
         Extract Package URL (PURL) from SPDX element.
 
@@ -156,11 +205,11 @@ class FastSPDX3:
         some producers (including Zephyr's SBOM generator) use instead of the
         legacy top-level properties.
         """
-        if 'packageUrl' in element:
-            return element['packageUrl']
-
-        if 'software_packageUrl' in element:
-            return element['software_packageUrl']
+        purls = []
+        for field in ('packageUrl', 'software_packageUrl'):
+            value = element.get(field)
+            if isinstance(value, str) and value and value not in purls:
+                purls.append(value)
 
         external_identifiers = element.get('externalIdentifier')
         if isinstance(external_identifiers, list):
@@ -169,9 +218,9 @@ class FastSPDX3:
                     continue
                 if ext_id.get('externalIdentifierType') in {'packageUrl', 'purl'}:
                     identifier = ext_id.get('identifier')
-                    if isinstance(identifier, str) and identifier:
-                        return identifier
-        return None
+                    if isinstance(identifier, str) and identifier and identifier not in purls:
+                        purls.append(identifier)
+        return purls
 
     def extract_cpes(self, element: Dict[str, Any]) -> List[str]:
         """
@@ -187,9 +236,9 @@ class FastSPDX3:
             if not isinstance(ext_id, dict):
                 continue
             ext_id_type = ext_id.get('externalIdentifierType', '')
-            if ext_id_type == 'cpe23' or ext_id_type == 'cpe22':
+            if ext_id_type in {'cpe23', 'cpe22', 'cpe23Type', 'cpe22Type'}:
                 cpe_id = ext_id.get('identifier')
-                if cpe_id:
+                if isinstance(cpe_id, str) and cpe_id:
                     cpe_identifiers.append(cpe_id)
 
         return cpe_identifiers
@@ -602,11 +651,28 @@ class FastSPDX3:
                 continue
             for target in targets:
                 if isinstance(target, str):
-                    if relation == 'dependsOn':
+                    if relation in {'dependsOn', 'hasPrerequisite'}:
                         edges.add((source, target))
                     elif relation == 'dependencyOf':
                         edges.add((target, source))
-        self.packagesCtrl.add_dependencies(self._document_refs, edges)
+        self.packagesCtrl.add_spdx3_dependencies(self._document_refs, self._namespace_map(graph), edges)
+
+    def _namespace_map(self, graph: List[Dict[str, Any]]) -> Dict[str, str]:
+        namespaces: Dict[str, str] = {}
+        for element in graph:
+            if not isinstance(element, dict) or element.get('type') != 'SpdxDocument':
+                continue
+            namespace_map = element.get('namespaceMap', [])
+            if not isinstance(namespace_map, list):
+                self.logger.warning("Skipping invalid SPDX namespaceMap")
+                continue
+            for entry in namespace_map:
+                if (
+                    isinstance(entry, dict) and isinstance(entry.get('prefix'), str)
+                    and isinstance(entry.get('namespace'), str)
+                ):
+                    namespaces[entry['prefix']] = entry['namespace']
+        return namespaces
 
     def parse_from_dict(self, spdx: Dict[str, Any]):
         """

@@ -44,6 +44,22 @@ def populated_spdx3_exporter(spdx3_exporter):
     return spdx3_exporter
 
 
+def test_spdx3_export_roundtrips_source_urls_without_importing_source_nodes(spdx3_exporter):
+    from src.views.fast_spdx3 import FastSPDX3
+
+    urls = [f"git+https://example.org/source-{i}.git@{str(i) * 40}" for i in (1, 2)]
+    spdx3_exporter.packagesCtrl.add(Package("libc6", "2.41", source_urls=urls))
+    document = json.loads(spdx3_exporter.output_as_json())
+    assert sorted(item["software_downloadLocation"] for item in document["@graph"]
+                  if item.get("software_primaryPurpose") == "source") == urls
+    controllers = ControllersCache()
+    FastSPDX3(controllers).parse_from_dict(document)
+    assert len(controllers.packages) == 1
+    restored = controllers.packages.get("libc6@2.41")
+    assert sorted(restored.source_urls) == urls
+    assert restored.version_info["revision_conflict"]
+
+
 class TestSPDX3JSONExport:
     """Test SPDX3 JSON export functionality."""
 

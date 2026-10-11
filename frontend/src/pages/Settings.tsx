@@ -1530,7 +1530,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
               <input
                 key={importFiles.length}
                 type="file"
-                accept=".json,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
+                accept=".json,.jsonld,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
                 onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
                 disabled={importBusy}
                 aria-labelledby="sbom-files-label"
@@ -1540,7 +1540,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
                 }
               />
               <p className="text-xs text-zinc-400">
-                Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto) or tar archives
+                Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto), SPDX 3 JSON-LD
+                (<code>.jsonld</code>), or tar archives
                 (<code>.tar</code>, <code>.tar.gz</code>, <code>.tar.zst</code>) used for SPDX2.
               </p>
             </div>

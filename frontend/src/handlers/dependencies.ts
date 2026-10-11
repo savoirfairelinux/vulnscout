@@ -1,4 +1,6 @@
-export type DependencyPackage = { id: string; name: string; version: string };
+import type { PackageVersionMetadata } from '../helpers/packageVersions';
+
+export type DependencyPackage = PackageVersionMetadata & { id: string; name: string; version: string };
 export type DependencyEdge = { package_id: string; dependency_id: string };
 export type DependencyDocument = {
     id: string;

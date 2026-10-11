@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import { describe, test, expect, jest } from '@jest/globals';
@@ -155,6 +155,98 @@ describe('Packages Table', () => {
         expect(vuln_count_col).toBeTruthy();
         expect(source_col).toBeTruthy();
     })
+
+    test('shows the source revision as plain text with the full value on hover', async () => {
+        const revision = 'c43f34b93797e81fd0257c30004dcd0ae332ae51';
+        const purl = 'pkg:github/mbed-tls/mbedtls@v4.1.1';
+        const pkg: Package = {
+            ...packages[0], id: `mbedtls@${revision}`, name: 'mbedtls', version: revision,
+            release_version: '4.1.1', source_revision: revision,
+            version_evidence: [
+                { source: 'sbom', version: revision, identifier: revision },
+                { source: 'purl', version: 'v4.1.1', identifier: purl },
+            ],
+        };
+        const user = userEvent.setup();
+        const copy = jest.spyOn(navigator.clipboard, 'writeText');
+        const showVulns = jest.fn();
+        render(<TablePackages packages={[pkg]} onShowVulns={showVulns} />);
+        expect(screen.getByRole('columnheader', { name: 'Release version' })).toBeTruthy();
+        expect(screen.getByRole('columnheader', { name: 'Source revision' })).toBeTruthy();
+        const row = within(screen.getByRole('row', { name: /mbedtls/ }));
+        expect(row.getByRole('cell', { name: '4.1.1' }).querySelector('[title]')?.getAttribute('title')).toContain(purl);
+        const revisionText = row.getByText(revision.slice(0, 12));
+        expect(revisionText.tagName).toBe('SPAN');
+        expect(revisionText.title).toContain(revision);
+        expect(revisionText.title).toContain(purl);
+        expect(row.queryByRole('button', { name: /Copy source revision/ })).toBeNull();
+        await user.click(revisionText);
+        expect(copy).not.toHaveBeenCalled();
+        expect(screen.queryByText('Copied')).toBeNull();
+        await user.click(row.getByRole('button', { name: 'Show Vulnerabilities' }));
+        expect(showVulns).toHaveBeenCalledWith(pkg.id);
+        copy.mockRestore();
+    });
+
+    test('shows a dash for unknown releases and preserves conflicting metadata', () => {
+        const hashOnly = {...packages[0], name: 'hash-only', version: 'a'.repeat(40),
+            release_version: null, source_revision: 'a'.repeat(40)};
+        const conflicting: Package = {...packages[1], name: 'conflicting', release_version: null,
+            version_conflict: true, revision_conflict: true, version_evidence: [
+                {source: 'purl', version: '1.0', identifier: 'pkg:generic/lib@1.0'},
+                {source: 'purl', version: '2.0', identifier: 'pkg:generic/lib@2.0'},
+            ]};
+        render(<TablePackages packages={[hashOnly, conflicting]} />);
+        const hashRow = within(screen.getByRole('row', { name: /hash-only/ }));
+        expect(hashRow.getByRole('cell', { name: '—' })).toBeTruthy();
+        expect(hashRow.queryByText('Unknown')).toBeNull();
+        const conflictRow = within(screen.getByRole('row', { name: /conflicting/i }));
+        expect(conflictRow.getAllByRole('cell', { name: 'Conflicting metadata' })).toHaveLength(2);
+        expect(conflictRow.getAllByTitle(/pkg:generic\/lib@1.0/)).toHaveLength(2);
+        expect(conflictRow.queryByRole('button', { name: /Copy source revision/ })).toBeNull();
+    });
+
+    test('search matches the displayed release version and full source revision', async () => {
+        const user = userEvent.setup();
+        const revision = 'b'.repeat(40);
+        const url = `git+https://example.org/lib.git@${revision}`;
+        render(<TablePackages packages={[{...packages[0],
+            release_version: '4.1.1', source_revision: revision, purl: ['pkg:generic/aaabbbccc@v4.1.1'],
+            version_evidence: [{source: 'download', version: revision, identifier: url}]},
+            packages[1]]} />);
+        const input = screen.getByLabelText('Search');
+        await user.type(input, '4.1.1{Enter}');
+        await waitFor(() => expect(screen.queryByText('xxxyyyzzz')).toBeNull());
+        expect(screen.getByText('aaabbbccc')).toBeTruthy();
+        await user.clear(input);
+        await user.type(input, `-${revision}{Enter}`);
+        await waitFor(() => expect(screen.queryByText('aaabbbccc')).toBeNull());
+        expect(screen.getByText('xxxyyyzzz')).toBeTruthy();
+        await user.clear(input);
+        await user.type(input, `${url}{Enter}`);
+        await waitFor(() => expect(screen.queryByText('xxxyyyzzz')).toBeNull());
+        expect(screen.getByText('aaabbbccc')).toBeTruthy();
+        await user.clear(input);
+        await user.type(input, `${revision}{Enter}`);
+        await waitFor(() => expect(screen.queryByText('xxxyyyzzz')).toBeNull());
+        expect(screen.getByText('aaabbbccc')).toBeTruthy();
+    });
+
+    test('saved Version column becomes Release version and revision visibility is added only once', async () => {
+        const key = 'vulnscout.tables.packages.revision-columns.visibleColumns';
+        window.localStorage.setItem(key, JSON.stringify(['Name', 'Version']));
+        const view = render(<TablePackages preferenceScopeKey="revision-columns" packages={packages} />);
+        expect(await screen.findByRole('columnheader', { name: 'Release version' })).toBeTruthy();
+        expect(screen.getByRole('columnheader', { name: 'Source revision' })).toBeTruthy();
+        const user = userEvent.setup();
+        await user.click(screen.getByText('Columns'));
+        await user.click(screen.getByRole('checkbox', { name: 'Source revision' }));
+        expect(screen.queryByRole('columnheader', { name: 'Source revision' })).toBeNull();
+        view.unmount();
+        render(<TablePackages preferenceScopeKey="revision-columns" packages={packages} />);
+        expect(screen.getByRole('columnheader', { name: 'Release version' })).toBeTruthy();
+        expect(screen.queryByRole('columnheader', { name: 'Source revision' })).toBeNull();
+    });
 
     test('restores the applied search from local storage', async () => {
         window.localStorage.setItem('vulnscout.tables.packages.unscoped.search', JSON.stringify('xxxyyyzzz'));
@@ -519,10 +611,10 @@ describe('Packages Table', () => {
         expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
     })
 
-    test('dependency column is shown after Version and its whole cell opens a package modal', async () => {
+    test('dependency column follows version metadata and its whole cell opens a package modal', async () => {
         render(<TablePackages preferenceScopeKey="dependency-default" packages={packages} />);
         const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
-        expect(headers.slice(0, 4)).toEqual(['Name', 'Version', 'Dependency', 'Vulnerabilities']);
+        expect(headers.slice(0, 5)).toEqual(['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities']);
 
         await waitFor(() => expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length));
         const dependencyButton = screen.getByRole('button', { name: 'View dependency graph for aaabbbccc' });
@@ -599,7 +691,7 @@ describe('Packages Table', () => {
         view.unmount();
 
         render(<TablePackages preferenceScopeKey="saved-columns" packages={packages} />);
-        expect(screen.getByRole('columnheader', { name: 'Version' })).toBeTruthy();
+        expect(screen.getByRole('columnheader', { name: 'Release version' })).toBeTruthy();
         expect(screen.queryByRole('columnheader', { name: 'Dependency' })).toBeNull();
     });
 

@@ -854,6 +854,54 @@ class TestSBOMUpload:
         assert len(queued_import["calls"]) == 1
         assert queued_import["calls"][0]["refresh_sources"] == {"epss", "euvd"}
 
+    def test_upload_jsonld_companions_parses_packages_and_cross_document_dependencies(
+            self, app, client, monkeypatch, upload_temp_files):
+        from src.models import SBOMDocument
+
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        revision = "a" * 40
+        documents = [
+            ("build.jsonld", {"@graph": [
+                {"type": "CreationInfo", "specVersion": "3.0.1"},
+                {"type": "software_Package", "spdxId": "https://example.org/app",
+                 "name": "upload-app", "software_packageVersion": "1.0"},
+                {"type": "Relationship", "relationshipType": "hasPrerequisite",
+                 "from": "https://example.org/app", "to": ["https://example.org/lib"]},
+            ]}),
+            ("modules-deps.jsonld", {"@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld", "@graph": [
+                {"type": "CreationInfo", "specVersion": "3.0.1"},
+                {"type": "software_Package", "spdxId": "https://example.org/lib",
+                 "name": "upload-lib", "software_packageVersion": revision},
+            ]}),
+        ]
+
+        def run_inline(op_id, lane, runner, ctx):
+            runner(ctx)
+            ctx.flush()
+
+        monkeypatch.setattr("src.routes.settings.operation_queue.submit", run_inline)
+        data = MultiDict([
+            ("project_id", pid), ("variant_id", vid), ("refresh_sources", "none"),
+            *[("files", (io.BytesIO(json.dumps(document).encode()), name)) for name, document in documents],
+        ])
+        response = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert response.status_code == 202
+        body = response.get_json()
+        assert registry.get(body["op_id"])["progress"]["message"] == "SBOM imported successfully."
+        with app.app_context():
+            imported = SBOMDocument.get_by_scan(uuid.UUID(body["scan_id"]))
+            assert sorted(document.source_name for document in imported) == [name for name, _ in documents]
+            assert all(document.format == "spdx" and document.dependencies_recorded for document in imported)
+        packages = client.get(f"/api/packages?variant_id={vid}").get_json()
+        assert {package["id"] for package in packages} == {"upload-app@1.0", f"upload-lib@{revision}"}
+        assert next(package for package in packages if package["name"] == "upload-lib")["source_revision"] == revision
+        graphs = client.get(f"/api/package-dependencies?variant_id={vid}").get_json()["documents"]
+        assert [edge for document in graphs for edge in document["edges"]] == [
+            {"package_id": "upload-app@1.0", "dependency_id": f"upload-lib@{revision}"},
+        ]
+        assert upload_temp_files and all(not os.path.exists(path) for path in upload_temp_files)
+
     def test_upload_defaults_to_epss_refresh(self, queued_import, client):
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
@@ -1217,6 +1265,17 @@ class TestDetectFormat:
     def test_spdx3_context(self):
         from src.routes.settings import _detect_format
         assert _detect_format("doc.json", {"@context": "https://spdx.org/"}) == "spdx"
+
+    @pytest.mark.parametrize("type_field", ["type", "@type"])
+    @pytest.mark.parametrize("filename", ["build.jsonld", "sbom.json"])
+    def test_spdx3_graph_without_context(self, type_field, filename):
+        from src.routes.settings import _detect_format
+        data = {"@graph": [{type_field: "CreationInfo", "specVersion": "3.0.1"}]}
+        assert _detect_format(filename, data) == "spdx"
+
+    def test_jsonld_extension_alone_does_not_imply_spdx(self):
+        from src.routes.settings import _detect_format
+        assert _detect_format("unrelated.jsonld", {"@graph": []}) == "unknown"
 
     def test_fallback_returns_unknown(self):
         from src.routes.settings import _detect_format

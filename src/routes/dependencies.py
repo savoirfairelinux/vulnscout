@@ -11,6 +11,7 @@ from sqlalchemy.orm import load_only
 
 from ..extensions import db
 from ..helpers.active_scans import active_sbom_scan_ids_for_project, active_sbom_scan_ids_for_variant
+from ..helpers.package_versions import package_version_info
 from ..models import Package, PackageDependency, SBOMDocument, SBOMPackage, Scan, Variant
 from ._scan_helpers import parse_uuid_or_400
 
@@ -140,9 +141,9 @@ def init_app(app: Flask) -> None:
         ).all()
         ids = [document_id for document_id, *_ in documents]
         # Join through the scan index: a long document-id IN list makes SQLite scan every package.
-        rows: list[tuple[uuid.UUID, Package]] = [
-            (document_id, package) for document_id, package in db.session.execute(
-                db.select(SBOMPackage.sbom_document_id, Package)
+        rows: list[tuple[uuid.UUID, Package, SBOMPackage]] = [
+            (document_id, package, link) for document_id, package, link in db.session.execute(
+                db.select(SBOMPackage.sbom_document_id, Package, SBOMPackage)
                 .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                 .join(Package, Package.id == SBOMPackage.package_id)
                 .where(SBOMDocument.scan_id.in_(scan_ids))
@@ -150,10 +151,10 @@ def init_app(app: Flask) -> None:
             )
         ]
         if allowed_ids is not None:
-            rows = [(document_id, package) for document_id, package in rows if package.id in allowed_ids]
-        public_ids = {package.id: package.string_id for _, package in rows}
+            rows = [(document_id, package, urls) for document_id, package, urls in rows if package.id in allowed_ids]
+        public_ids = {package.id: package.string_id for _, package, _ in rows}
         members: dict[uuid.UUID, set[uuid.UUID]] = {document_id: set() for document_id in ids}
-        for document_id, package in rows:
+        for document_id, package, _ in rows:
             members[document_id].add(package.id)
         scan_of = {document_id: scan_id for document_id, scan_id, *_ in documents}
         scan_packages: dict[uuid.UUID, set[uuid.UUID]] = {}
@@ -170,9 +171,11 @@ def init_app(app: Flask) -> None:
                           'dependencies_recorded': recorded, 'packages': [], 'edges': []}
             for document_id, _, source_name, variant_id, variant_name, recorded in documents
         }
-        for document_id, package in rows:
+        for document_id, package, link in rows:
             result[document_id]['packages'].append({
                 'id': package.string_id, 'name': package.name, 'version': package.version,
+                **package_version_info(package.version, list(link.purl or []), list(link.cpe or []),
+                                       list(link.source_urls or [])),
             })
         for document_id, package_id, dependency_id in edges:
             if package_id in members[document_id] and dependency_id in scan_packages[scan_of[document_id]]:

@@ -172,6 +172,20 @@ command exits with an error listing the failed sources.
 
 Path to an SPDX 2 or SPDX 3 SBOM file. SPDX 3 JSON-LD files (`.jsonld`), including Zephyr-generated SBOMs, are supported. Also supports SPDX JSON, tag-value (`.spdx`), and archive formats (`.tar`, `.tar.gz`, `.tar.zst`).
 
+For Zephyr's West SPDX generator, import the companion documents together into the
+same project and variant:
+
+```bash
+./vulnscout --project zephyr_test --variant demo \
+  --add-spdx spdx/app.jsonld \
+  --add-spdx spdx/build.jsonld \
+  --add-spdx spdx/modules-deps.jsonld \
+  --add-spdx spdx/zephyr.jsonld
+```
+
+Release versions and Git revisions are displayed separately in the SBOM table;
+see [Interactive mode](interactive-mode.md#column-visibility).
+
 ---
 
 ### CycloneDX SBOM

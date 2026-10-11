@@ -68,6 +68,51 @@ def test_wrapper_lists_scan_selection():
 
 
 @pytest.mark.parametrize(
+    ("failed_step", "status", "expected_steps"),
+    [
+        ("db", 7, ["db"]),
+        ("merge", 8, ["db", "merge"]),
+        ("process", 9, ["db", "merge", "process"]),
+        ("process", 2, ["db", "merge", "process", "db", "report", "db", "export"]),
+    ],
+)
+def test_entrypoint_stops_after_scan_failure_and_retains_inputs(tmp_path, failed_step, status, expected_steps):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    flask = fake_bin / "flask"
+    flask.write_text(
+        '#!/bin/bash\n'
+        'printf "%s\\n" "$3" >> "$TEST_FLASK_LOG"\n'
+        'if [[ "$3" == "$TEST_FAILED_STEP" ]]; then exit "$TEST_FAILED_STATUS"; fi\n'
+    )
+    flask.chmod(0o755)
+    inputs = tmp_path / "inputs" / "spdx"
+    inputs.mkdir(parents=True)
+    sbom = inputs / "test.spdx.json"
+    sbom.write_text("{}")
+    log = tmp_path / "flask.log"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "VULNSCOUT_CONFIG": str(tmp_path / "absent.env"),
+        "VULNSCOUT_BASE_DIR": str(tmp_path),
+        "VULNSCOUT_INPUTS_DIR": str(inputs.parent),
+        "TEST_FLASK_LOG": str(log),
+        "TEST_FAILED_STEP": failed_step,
+        "TEST_FAILED_STATUS": str(status),
+    }
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--match-condition", "affected",
+         "--report", "summary.adoc", "--export-spdx"],
+        env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == status, result.stderr
+    assert log.read_text().splitlines() == expected_steps
+    assert sbom.exists() is (status != 2)
+    assert "Initialization Done" not in result.stdout
+
+
+@pytest.mark.parametrize(
     ("args", "scanner"),
     [
         (["--perform-scans", "nvd"], "NVD"),

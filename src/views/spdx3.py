@@ -161,6 +161,23 @@ class SPDX3:
         for pkg in self.packagesCtrl:
             pkg_element = self.generate_package_element(pkg)
             elements_to_add.append(pkg_element)
+            if pkg.source_urls:
+                build_ref = self._next_spdx_ref()
+                elements_to_add.append({
+                    "type": "build_Build", "spdxId": build_ref, "name": f"{pkg.name} source provenance",
+                    "creationInfo": self._creation_info_ref,
+                })
+                source_refs = []
+                for url in pkg.source_urls:
+                    source_ref = self._next_spdx_ref()
+                    source_refs.append(source_ref)
+                    elements_to_add.append({
+                        "type": "software_Package", "spdxId": source_ref, "name": f"{pkg.name}-source",
+                        "software_primaryPurpose": "source", "software_downloadLocation": url,
+                        "creationInfo": self._creation_info_ref,
+                    })
+                relationships_to_add.append(self.generate_relationship(build_ref, source_refs, "hasInput"))
+                relationships_to_add.append(self.generate_relationship(build_ref, [pkg_element["spdxId"]], "hasOutput"))
 
         for vuln_id, vuln in self.vulnerabilitiesCtrl.vulnerabilities.items():
             vuln_element = self.generate_vulnerability_element(vuln_id, vuln)
