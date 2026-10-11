@@ -4,11 +4,12 @@
 from ..models.package import Package
 from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
-from .fast_spdx import spdx2_dependency_edge, spdx2_provenance_only_sources
+from .fast_spdx import SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_provenance_only_sources
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
+from spdx_tools.spdx.jsonschema.document_converter import DocumentConverter
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
 from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_document_to_xml_stream
 from spdx_tools.spdx.model.package import (
@@ -49,6 +50,19 @@ _ACTOR_TYPE_LABELS = {
     ActorType.PERSON: "Person",
     ActorType.TOOL: "Tool",
 }
+
+
+class _SPDXDocumentConverter(DocumentConverter):
+    def convert(self, instance: Document, document: Document | None = None) -> dict:
+        result = super().convert(instance, document)
+        # spdx-tools emits enum names instead of SPDX's hyphenated JSON/XML values.
+        for package in result.get("packages", []):
+            if package.get("primaryPackagePurpose") == "OPERATING_SYSTEM":
+                package["primaryPackagePurpose"] = "OPERATING-SYSTEM"
+            for reference in package.get("externalRefs", []):
+                if reference.get("referenceCategory") in {"PACKAGE_MANAGER", "PERSISTENT_ID"}:
+                    reference["referenceCategory"] = reference["referenceCategory"].replace("_", "-")
+        return result
 
 
 class SPDX:
@@ -100,7 +114,8 @@ class SPDX:
                  "primaryPackagePurpose": (
                      package.primary_package_purpose.name if package.primary_package_purpose else None
                  ),
-                 "versionInfo": package.version, "downloadLocation": package.download_location}
+                 "versionInfo": package.version, "downloadLocation": package.download_location,
+                 "comment": package.comment}
                 for package in self.sbom.packages
             ],
             "relationships": [
@@ -220,6 +235,7 @@ class SPDX:
                         name=f"{pkg.name}-source", spdx_id=source_id,
                         primary_package_purpose=PackagePurpose.SOURCE,
                         download_location=url, files_analyzed=False,
+                        comment=SPDX2_SYNTHETIC_SOURCE_COMMENT,
                     ))
                     self.sbom.relationships.append(Relationship(
                         spdx_element_id=package.spdx_id, relationship_type=RelationshipType.GENERATED_FROM,
@@ -266,11 +282,10 @@ class SPDX:
         # CPE validation may fail because the SPDX spec expects special characters in package
         # names to be escaped, but our CPE strings may contain unescaped special characters
         if with_cpe:
-            writer(self.sbom, stream, validate=False)
+            writer(self.sbom, stream, validate=False, converter=_SPDXDocumentConverter())
         else:
-            writer(self.sbom, stream, validate=validate)
-        # Replace is here until patch are applied upstream: https://github.com/spdx/tools-python/pull/828
-        return stream.getvalue().replace("OPERATING_SYSTEM", "OPERATING-SYSTEM")
+            writer(self.sbom, stream, validate=validate, converter=_SPDXDocumentConverter())
+        return stream.getvalue()
 
     def output_as_json(self, validate=True, author=None, with_cpe=False) -> str:
         """Output the SBOM to JSON format."""
