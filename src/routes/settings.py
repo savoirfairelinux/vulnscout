@@ -75,6 +75,16 @@ def _retry_on_lock(fn: Callable[[], T], max_retries: int = 5, delay: float = 0.5
 
 def _detect_format(filename: str, data: dict) -> str:
     """Guess SBOM format from the filename and parsed JSON content."""
+    if not isinstance(data, dict):
+        return "unknown"
+    graph = data.get("@graph", [])
+    if not isinstance(graph, list) or any(not isinstance(item, dict) for item in graph):
+        return "unknown"
+    for item in graph:
+        if (item.get("type") == "CreationInfo" or item.get("@type") == "CreationInfo") and (
+            "specVersion" in item and not isinstance(item["specVersion"], str)
+        ):
+            return "unknown"
     lower = filename.lower()
     if lower.endswith(".spdx.json"):
         return "spdx"
@@ -1220,37 +1230,42 @@ def init_app(app: Flask) -> None:
                         "error": f"No .spdx.json or .jsonld files found inside archive '{filename}'.",
                     }), 400
                 validated_files.extend((path, name, "spdx") for path, name in members)
-                for member_path, member_name in members:
-                    if not member_name.lower().endswith(".jsonld"):
-                        continue
-                    try:
-                        with open(member_path, "r") as f:
-                            data = json.load(f)
-                    except (json.JSONDecodeError, UnicodeDecodeError):
+                archive_validated = False
+                try:
+                    for member_path, member_name in members:
+                        if not member_name.lower().endswith(".jsonld"):
+                            continue
+                        try:
+                            with open(member_path, "r") as f:
+                                data = json.load(f)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            return jsonify({"error": f"Could not parse '{member_name}' as JSON."}), 400
+                        if _detect_format(member_name, data) != "spdx":
+                            return jsonify({"error": f"Unrecognized SPDX format for '{member_name}'."}), 400
+                    archive_validated = True
+                finally:
+                    if not archive_validated:
                         _cleanup_validated()
-                        return jsonify({"error": f"Could not parse '{member_name}' as JSON."}), 400
-                    if not isinstance(data, dict) or _detect_format(member_name, data) != "spdx":
-                        _cleanup_validated()
-                        return jsonify({"error": f"Unrecognized SPDX format for '{member_name}'."}), 400
                 continue
 
             # Auto-detect format if not provided
             if not fmt:
+                file_validated = False
                 try:
                     with open(tmp_path, "r") as f:
                         data = json.load(f)
                     fmt = _detect_format(filename, data)
                     if fmt == "unknown":
-                        _cleanup_validated()
-                        os.unlink(tmp_path)
                         return jsonify({
                             "error": f"Unrecognized SBOM format for '{filename}'.",
                         }), 400
+                    file_validated = True
                 except (json.JSONDecodeError, UnicodeDecodeError):
-                    # Clean up all temp files saved so far
-                    _cleanup_validated()
-                    os.unlink(tmp_path)
                     return jsonify({"error": f"Could not parse '{filename}' as JSON."}), 400
+                finally:
+                    if not file_validated:
+                        _cleanup_validated()
+                        os.unlink(tmp_path)
 
             validated_files.append((tmp_path, filename, fmt))
 
