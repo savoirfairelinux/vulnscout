@@ -854,8 +854,9 @@ class TestSBOMUpload:
         assert len(queued_import["calls"]) == 1
         assert queued_import["calls"][0]["refresh_sources"] == {"epss", "euvd"}
 
+    @pytest.mark.parametrize("archive_suffix", [None, ".tar", ".tar.gz", ".tgz", ".tar.zst"])
     def test_upload_jsonld_companions_parses_packages_and_cross_document_dependencies(
-            self, app, client, monkeypatch, upload_temp_files):
+            self, app, client, monkeypatch, upload_temp_files, archive_suffix):
         from src.models import SBOMDocument
 
         pid = _get_project_id(client)
@@ -871,8 +872,10 @@ class TestSBOMUpload:
             ]}),
             ("modules-deps.jsonld", {"@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld", "@graph": [
                 {"type": "CreationInfo", "specVersion": "3.0.1"},
+                {"type": "SoftwareAgent", "name": "West SPDX Generator"},
                 {"type": "software_Package", "spdxId": "https://example.org/lib",
-                 "name": "upload-lib", "software_packageVersion": revision},
+                 "name": "upload-lib", "software_primaryPurpose": "source", "software_packageVersion": revision,
+                 "software_downloadLocation": f"git+https://example.org/lib@{revision}"},
             ]}),
         ]
 
@@ -881,9 +884,28 @@ class TestSBOMUpload:
             ctx.flush()
 
         monkeypatch.setattr("src.routes.settings.operation_queue.submit", run_inline)
+        files = [(io.BytesIO(json.dumps(document).encode()), name) for name, document in documents]
+        if archive_suffix:
+            archive = io.BytesIO()
+            mode = "w:gz" if archive_suffix in {".tar.gz", ".tgz"} else "w"
+            with tarfile.open(fileobj=archive, mode=mode) as tar:
+                for payload, name in files:
+                    info = tarfile.TarInfo(name=f"spdx/{name}")
+                    info.size = len(payload.getvalue())
+                    tar.addfile(info, payload)
+                info = tarfile.TarInfo(name="spdx/readme.txt")
+                info.size = len(b"not an SBOM")
+                tar.addfile(info, io.BytesIO(b"not an SBOM"))
+            files = [(io.BytesIO(archive.getvalue()), f"zephyr{archive_suffix}")]
+            if archive_suffix == ".tar.zst":
+                def decompress(cmd, check, **kwargs):
+                    assert cmd[0] == "unzstd" and check
+                    with open(cmd[-1], "rb") as src, open(cmd[cmd.index("-o") + 1], "wb") as dst:
+                        dst.write(src.read())
+                monkeypatch.setattr("src.routes.settings.subprocess.run", decompress)
         data = MultiDict([
             ("project_id", pid), ("variant_id", vid), ("refresh_sources", "none"),
-            *[("files", (io.BytesIO(json.dumps(document).encode()), name)) for name, document in documents],
+            *[("files", file) for file in files],
         ])
         response = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert response.status_code == 202
@@ -895,12 +917,51 @@ class TestSBOMUpload:
             assert all(document.format == "spdx" and document.dependencies_recorded for document in imported)
         packages = client.get(f"/api/packages?variant_id={vid}").get_json()
         assert {package["id"] for package in packages} == {"upload-app@1.0", f"upload-lib@{revision}"}
-        assert next(package for package in packages if package["name"] == "upload-lib")["source_revision"] == revision
+        library = next(package for package in packages if package["name"] == "upload-lib")
+        assert library["source_revision"] == revision
+        assert library["source_urls"] == [f"git+https://example.org/lib@{revision}"]
         graphs = client.get(f"/api/package-dependencies?variant_id={vid}").get_json()["documents"]
         assert [edge for document in graphs for edge in document["edges"]] == [
             {"package_id": "upload-app@1.0", "dependency_id": f"upload-lib@{revision}"},
         ]
         assert upload_temp_files and all(not os.path.exists(path) for path in upload_temp_files)
+
+    @pytest.mark.parametrize("payload,error", [
+        (b"not JSON", "Could not parse"),
+        (b"\xff", "Could not parse"),
+        (b"[]", "Unrecognized SPDX format"),
+        (json.dumps({"@graph": []}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"bomFormat": "CycloneDX", "components": []}).encode(), "Unrecognized SPDX format"),
+    ])
+    def test_upload_archive_rejects_invalid_jsonld_and_cleans_all_members(
+            self, app, client, queued_import, upload_temp_files, payload, error):
+        from src.models import Scan
+
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        with app.app_context():
+            scan_ids = {scan.id for scan in Scan.get_by_variant_id(uuid.UUID(vid))}
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            for name, content in [
+                ("valid.spdx.json", _make_spdx_json()), ("bad.jsonld", payload),
+                ("later.spdx.json", _make_spdx_json("later")),
+            ]:
+                info = tarfile.TarInfo(name=name)
+                info.size = len(content)
+                tar.addfile(info, io.BytesIO(content))
+        data = {
+            "project_id": pid, "variant_id": vid,
+            "files": (io.BytesIO(archive.getvalue()), "mixed.tar"),
+        }
+        response = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert response.status_code == 400
+        assert error in response.get_json()["error"]
+        assert "bad.jsonld" in response.get_json()["error"]
+        assert queued_import["calls"] == []
+        assert upload_temp_files and all(not os.path.exists(path) for path in upload_temp_files)
+        with app.app_context():
+            assert {scan.id for scan in Scan.get_by_variant_id(uuid.UUID(vid))} == scan_ids
 
     def test_upload_defaults_to_epss_refresh(self, queued_import, client):
         pid = _get_project_id(client)
@@ -1126,7 +1187,7 @@ class TestSBOMUpload:
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
-        assert "No .spdx.json files" in resp.get_json()["error"]
+        assert "No .spdx.json or .jsonld files" in resp.get_json()["error"]
         assert queued_import["calls"] == []
 
     @patch("src.routes.settings.subprocess.run")
@@ -1772,8 +1833,8 @@ class TestRetryOnLockExhaustion:
 
 class TestExtractSpdxArchive:
 
-    def test_skips_non_file_and_non_spdx_json_members(self, tmp_path):
-        """Directory entries and non-.spdx.json files are ignored; only .spdx.json extracted."""
+    def test_skips_non_file_and_non_spdx_members(self, tmp_path):
+        """Only regular SPDX JSON/JSON-LD files are extracted, preserving their suffixes."""
         from src.routes.settings import _extract_spdx_archive
 
         spdx_content = b'{"spdxVersion": "SPDX-2.3"}'
@@ -1792,13 +1853,27 @@ class TestExtractSpdxArchive:
             spdx_info = tarfile.TarInfo(name="result.spdx.json")
             spdx_info.size = len(spdx_content)
             tar.addfile(spdx_info, io.BytesIO(spdx_content))
+            jsonld_content = b'{"@graph": [{"type": "CreationInfo", "specVersion": "3.0.1"}]}'
+            for name in ("subdir/build.jsonld", "subdir/modules.JSONLD"):
+                info = tarfile.TarInfo(name=name)
+                info.size = len(jsonld_content)
+                tar.addfile(info, io.BytesIO(jsonld_content))
+            link = tarfile.TarInfo(name="symlink.jsonld")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "subdir/build.jsonld"
+            tar.addfile(link)
 
         results = _extract_spdx_archive(archive_path, "mixed.tar")
 
-        assert len(results) == 1
-        extracted_path, member_name = results[0]
-        assert member_name == "result.spdx.json"
-        os.unlink(extracted_path)
+        assert [name for _, name in results] == ["result.spdx.json", "build.jsonld", "modules.JSONLD"]
+        try:
+            for extracted_path, member_name in results:
+                assert extracted_path.endswith(".jsonld" if member_name.lower().endswith(".jsonld") else ".spdx.json")
+                with open(extracted_path, "rb") as extracted:
+                    assert extracted.read() == (spdx_content if member_name == "result.spdx.json" else jsonld_content)
+        finally:
+            for extracted_path, _ in results:
+                os.unlink(extracted_path)
 
 
 # ---------------------------------------------------------------------------

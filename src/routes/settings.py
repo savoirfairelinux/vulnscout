@@ -115,9 +115,7 @@ def _is_archive(filename: str) -> bool:
 
 def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, str]]:
     """Extract an SPDX archive (.tar / .tar.gz / .tar.zst) and return the
-    contained ``*.spdx.json`` files as a list of ``(tmp_path, member_name)``.
-
-    Used for SPDX2 inputs which are commonly shipped as tar archives.
+    contained ``*.spdx.json`` and ``*.jsonld`` files as ``(tmp_path, member_name)`` pairs.
     """
     lower = filename.lower()
     extract_dir = tempfile.mkdtemp(prefix="vulnscout_archive_")
@@ -138,12 +136,13 @@ def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, s
             for member in tar.getmembers():
                 if not member.isfile():
                     continue
-                if not member.name.lower().endswith(".spdx.json"):
+                if not member.name.lower().endswith((".spdx.json", ".jsonld")):
                     continue
                 src = cast(_io.BufferedReader, tar.extractfile(member))
                 base = os.path.basename(member.name)
-                fd, out_path = tempfile.mkstemp(suffix=".spdx.json", prefix="vulnscout_upload_")
-                with os.fdopen(fd, "wb") as dst:
+                suffix = ".jsonld" if base.lower().endswith(".jsonld") else ".spdx.json"
+                fd, out_path = tempfile.mkstemp(suffix=suffix, prefix="vulnscout_upload_")
+                with src, os.fdopen(fd, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 results.append((out_path, base))
             return results
@@ -1124,7 +1123,7 @@ def init_app(app: Flask) -> None:
         one logical import.
 
         Expects a multipart/form-data request with:
-        - files: one or more SBOM files (.json)  (field name ``files``)
+        - files: one or more SBOM files or SPDX archives (field name ``files``)
         - project_id: UUID of the target project
         - variant_id: UUID of the target variant
 
@@ -1204,8 +1203,7 @@ def init_app(app: Flask) -> None:
                 os.unlink(tmp_path)
                 raise
 
-            # Tar archives (commonly used for SPDX2) — extract the contained
-            # .spdx.json documents and register each one individually.
+            # Keep companion SPDX 2/3 documents together in the same scan.
             if _is_archive(filename):
                 try:
                     members = _extract_spdx_archive(tmp_path, filename)
@@ -1219,10 +1217,21 @@ def init_app(app: Flask) -> None:
                 if not members:
                     _cleanup_validated()
                     return jsonify({
-                        "error": f"No .spdx.json files found inside archive '{filename}'.",
+                        "error": f"No .spdx.json or .jsonld files found inside archive '{filename}'.",
                     }), 400
+                validated_files.extend((path, name, "spdx") for path, name in members)
                 for member_path, member_name in members:
-                    validated_files.append((member_path, member_name, "spdx"))
+                    if not member_name.lower().endswith(".jsonld"):
+                        continue
+                    try:
+                        with open(member_path, "r") as f:
+                            data = json.load(f)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        _cleanup_validated()
+                        return jsonify({"error": f"Could not parse '{member_name}' as JSON."}), 400
+                    if not isinstance(data, dict) or _detect_format(member_name, data) != "spdx":
+                        _cleanup_validated()
+                        return jsonify({"error": f"Unrecognized SPDX format for '{member_name}'."}), 400
                 continue
 
             # Auto-detect format if not provided
