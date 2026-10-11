@@ -1542,7 +1542,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
               <p className="text-xs text-zinc-400">
                 Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto), SPDX 3 JSON-LD
                 (<code>.jsonld</code>), or tar archives
-                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tar.zst</code>) used for SPDX2.
+                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.zst</code>)
+                containing SPDX 2 JSON or SPDX 3 JSON-LD companion documents.
               </p>
             </div>
 
@@ -1799,4 +1800,3 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
 }
 
 export default Settings;
-

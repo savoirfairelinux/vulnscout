@@ -115,6 +115,8 @@ The **Dependency** column of the SBOM table shows how many packages each package
 
 Settings' **Import SBOM** accepts Yocto and Zephyr SPDX 3 JSON-LD (`.json` or
 `.jsonld`). Import all companion documents together so dependencies resolve.
+SPDX archives (`.tar`, `.tar.gz`, `.tgz`, `.tar.zst`) containing `.spdx.json` or
+`.jsonld` files are also supported.
 
 Dependencies are read only from SBOM formats that describe them:
 
