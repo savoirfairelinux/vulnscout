@@ -123,7 +123,10 @@ def upload_temp_files(monkeypatch):
         return fd, path
 
     monkeypatch.setattr("src.routes.settings.tempfile.mkstemp", recording_mkstemp)
-    return created
+    yield created
+    for path in created:
+        if os.path.exists(path):
+            os.unlink(path)
 
 
 def _register_upload_operation(op_id="upload:direct-test", scope=None):
@@ -931,6 +934,15 @@ class TestSBOMUpload:
         (b"\xff", "Could not parse"),
         (b"[]", "Unrecognized SPDX format"),
         (json.dumps({"@graph": []}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"@graph": [None]}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"@graph": [123]}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"@graph": ["CreationInfo"]}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"@graph": None}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"@graph": {}}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"@graph": [{"type": "CreationInfo", "specVersion": 3}]}).encode(), "Unrecognized SPDX format"),
+        (json.dumps({"@context": "https://spdx.org/", "@graph": [
+            {"type": "CreationInfo", "specVersion": "3.0.1"}, None,
+        ]}).encode(), "Unrecognized SPDX format"),
         (json.dumps({"bomFormat": "CycloneDX", "components": []}).encode(), "Unrecognized SPDX format"),
     ])
     def test_upload_archive_rejects_invalid_jsonld_and_cleans_all_members(
@@ -957,6 +969,75 @@ class TestSBOMUpload:
         response = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert response.status_code == 400
         assert error in response.get_json()["error"]
+        assert "bad.jsonld" in response.get_json()["error"]
+        assert queued_import["calls"] == []
+        assert upload_temp_files and all(not os.path.exists(path) for path in upload_temp_files)
+        with app.app_context():
+            assert {scan.id for scan in Scan.get_by_variant_id(uuid.UUID(vid))} == scan_ids
+
+    @pytest.mark.parametrize("archived", [False, True])
+    @pytest.mark.parametrize("failure", [RuntimeError, OSError])
+    def test_upload_format_detection_exception_cleans_all_staged_files(
+            self, app, client, monkeypatch, queued_import, upload_temp_files, archived, failure):
+        from src.models import Scan
+
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        with app.app_context():
+            scan_ids = {scan.id for scan in Scan.get_by_variant_id(uuid.UUID(vid))}
+        content = json.dumps({"@graph": [{"type": "CreationInfo", "specVersion": "3.0.1"}]}).encode()
+        if archived:
+            archive = io.BytesIO()
+            with tarfile.open(fileobj=archive, mode="w") as tar:
+                for name in ("build.jsonld", "modules-deps.jsonld"):
+                    info = tarfile.TarInfo(name=name)
+                    info.size = len(content)
+                    tar.addfile(info, io.BytesIO(content))
+            upload = (io.BytesIO(archive.getvalue()), "companions.tar")
+        else:
+            upload = (io.BytesIO(content), "build.jsonld")
+        from src.routes.settings import _detect_format
+
+        def fail_detection(filename, data):
+            if filename.endswith(".jsonld"):
+                raise failure("unexpected detection failure")
+            return _detect_format(filename, data)
+
+        monkeypatch.setattr("src.routes.settings._detect_format", fail_detection)
+        data = MultiDict([
+            ("project_id", pid), ("variant_id", vid),
+            ("files", (io.BytesIO(_make_spdx_json()), "earlier.spdx.json")),
+            ("files", upload),
+        ])
+        with pytest.raises(failure, match="unexpected detection failure"):
+            client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert queued_import["calls"] == []
+        assert upload_temp_files and all(not os.path.exists(path) for path in upload_temp_files)
+        with app.app_context():
+            assert {scan.id for scan in Scan.get_by_variant_id(uuid.UUID(vid))} == scan_ids
+
+    @pytest.mark.parametrize("graph", [
+        [None], [123], ["CreationInfo"], None, {},
+        [{"type": "CreationInfo", "specVersion": 3}],
+        [{"type": "CreationInfo", "specVersion": "3.0.1"}, None],
+    ])
+    def test_upload_individual_jsonld_with_malformed_graph_returns_400(
+            self, app, client, queued_import, upload_temp_files, graph):
+        from src.models import Scan
+
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        with app.app_context():
+            scan_ids = {scan.id for scan in Scan.get_by_variant_id(uuid.UUID(vid))}
+        data = MultiDict([
+            ("project_id", pid), ("variant_id", vid),
+            ("files", (io.BytesIO(_make_spdx_json()), "earlier.spdx.json")),
+            ("files", (io.BytesIO(json.dumps({"@context": "https://spdx.org/", "@graph": graph}).encode()),
+                       "bad.jsonld")),
+        ])
+        response = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert response.status_code == 400
+        assert "Unrecognized SBOM format" in response.get_json()["error"]
         assert "bad.jsonld" in response.get_json()["error"]
         assert queued_import["calls"] == []
         assert upload_temp_files and all(not os.path.exists(path) for path in upload_temp_files)
@@ -1337,6 +1418,22 @@ class TestDetectFormat:
     def test_jsonld_extension_alone_does_not_imply_spdx(self):
         from src.routes.settings import _detect_format
         assert _detect_format("unrelated.jsonld", {"@graph": []}) == "unknown"
+
+    @pytest.mark.parametrize("filename", ["build.jsonld", "sbom.spdx.json", "sbom.json"])
+    @pytest.mark.parametrize("data", [
+        [],
+        {"@graph": [None]},
+        {"@graph": None},
+        {"@graph": [{"type": "CreationInfo", "specVersion": 3}]},
+        {"@graph": [{"@type": "CreationInfo", "specVersion": ["3.0.1"]}]},
+        {"@graph": [{"type": "CreationInfo", "specVersion": "3.0.1"}, "invalid"]},
+    ])
+    def test_malformed_graph_is_rejected_before_spdx_detection(self, filename, data, monkeypatch):
+        from src.routes.settings import _detect_format
+        detector = MagicMock(side_effect=AssertionError("Malformed graph reached SPDX detection"))
+        monkeypatch.setattr("src.routes.settings.FastSPDX3.could_parse_spdx", detector)
+        assert _detect_format(filename, data) == "unknown"
+        detector.assert_not_called()
 
     def test_fallback_returns_unknown(self):
         from src.routes.settings import _detect_format
