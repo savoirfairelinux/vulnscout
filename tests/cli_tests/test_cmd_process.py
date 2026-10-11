@@ -541,3 +541,51 @@ class TestCmdProcessCoverage:
                 read_inputs(ControllersCache(), scan_id=scan.id)
 
         mock_parse.assert_called_once_with(spdx3_data)
+
+    def test_list_matching_prints_one_id_per_line(self, app):
+        with patch(
+            "src.bin.cmd_process._evaluate_condition_in_scope",
+            return_value=["CVE-2026-0001", "CVE-2026-0002"],
+        ) as evaluate:
+            result = app.test_cli_runner().invoke(
+                args=["list-matching", "cvss >= 9.0", "--project", "ProcessProject"]
+            )
+
+        assert result.exit_code == 0, result.output
+        assert result.output == "CVE-2026-0001\nCVE-2026-0002\n"
+        assert evaluate.call_args.args[1] == "cvss >= 9.0"
+        assert evaluate.call_args.kwargs == {"report": False}
+
+    def test_list_matching_json_output(self, app):
+        with patch("src.bin.cmd_process._evaluate_condition_in_scope", return_value=["CVE-2026-0001"]):
+            result = app.test_cli_runner().invoke(args=["list-matching", "affected", "--json"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == ["CVE-2026-0001"]
+
+    def test_list_matching_no_match_exits_zero_with_empty_output(self, app):
+        result = app.test_cli_runner().invoke(args=["list-matching", "cvss >= 9.0"])
+
+        assert result.exit_code == 0, result.output
+        assert result.output == ""
+
+    def test_list_matching_rejects_invalid_condition(self, app):
+        result = app.test_cli_runner().invoke(args=["list-matching", "cvss >>> nine"])
+
+        assert result.exit_code == 1
+        assert "Invalid match condition" in result.output
+
+    def test_evaluate_condition_without_report_prints_nothing(self, app, capsys):
+        from src.bin.cmd_process import evaluate_condition
+        from src.controllers import ControllersCache
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            Vulnerability.get_or_create("CVE-2026-0001")
+            controllers = ControllersCache()
+            matched = evaluate_condition(
+                controllers.vulnerabilities, controllers.assessments, "pending", report=False,
+            )
+
+        assert matched == ["CVE-2026-0001"]
+        assert "triggered fail condition" not in capsys.readouterr().out

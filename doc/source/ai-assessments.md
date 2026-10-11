@@ -206,6 +206,82 @@ customizable. See `.github/skills/cve-assessment/objectives/README.md` and the
 
 ---
 
+### Batch assessments from the command line (`vulnscout cve-assessment`)
+
+For CI pipelines and scripts, `vulnscout cve-assessment` runs the `cve-assessment`
+skill in one headless GitHub Copilot CLI session per CVE, on the host.
+
+**Prerequisites**
+
+- Python 3.10+ with `httpx` for the runner. The repo `venv/` created for the MCP
+  server works and is used automatically; set `VULNSCOUT_PYTHON` to choose another
+  interpreter.
+- GitHub Copilot CLI installed and logged in (`copilot` on `PATH`).
+- The `cve-assessment` skill installed for Copilot: copy or symlink
+  `.github/skills/cve-assessment` into `~/.copilot/skills/` or under
+  `<--dir>/.github/skills/`. The command checks for it. `--dry-run` needs neither
+  Copilot nor the skill.
+- A `vulnscout` MCP server in your Copilot config (Step 1). The command checks it
+  with `copilot mcp list` and stops if it is missing or disabled.
+- The VulnScout API reachable (default `http://localhost:7275`, override with
+  `VULNSCOUT_BASE_URL`). The runner's pre-check reads `VULNSCOUT_BASE_URL` from its
+  own environment, while the Copilot MCP server writes using the `env.VULNSCOUT_BASE_URL`
+  in its own config; keep both pointing at the same VulnScout.
+- Each variant's `codebase_path` inside `--dir`: Copilot can only read files under it.
+
+**Select CVEs** with exactly one of:
+
+```bash
+# Explicit IDs
+./vulnscout cve-assessment --project myproj --cve CVE-2024-1234 --cve CVE-2024-5678 --dir ~/src/myproj
+
+# Match-condition filter (same grammar and scope as --match-condition)
+./vulnscout cve-assessment --project myproj --filter "cvss >= 9.0 and pending" --dir ~/src/myproj
+```
+
+Scope follows the `--match-condition` rules: `--project` alone covers all of its
+variants; `--variant` without `--project` uses the `default` project.
+
+- Variants where the CVE is not present are ignored. A CVE absent from every
+  in-scope variant is reported `failed` ("CVE not found in scope").
+- CVEs that already have a pending AI assessment (origin `ai`) on every in-scope
+  variant are skipped; when only some variants are covered, only the missing ones
+  are assessed. Once a reviewer approves an AI assessment it becomes a custom
+  assessment, so a later run suggests again unless you exclude it: include `new`
+  or `pending` in `--filter`, or leave the CVE out of `--cve`.
+- Use `--force` to re-assess anyway, and `--dry-run` to print the Copilot commands
+  without running them.
+
+**Options**
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--cve <id>` | — | CVE to assess; repeatable (exclusive with `--filter`) |
+| `--filter <expr>` | — | Match-condition expression selecting the CVEs (exclusive with `--cve`) |
+| `--project <name>` | `default` | Project to assess; without `--variant`, all its variants |
+| `--variant <name>` | all (or `default` without `--project`) | Restrict to one variant |
+| `--dir <path>` | required | Source checkout Copilot may read |
+| `--timeout <sec>` | `900` | Per-CVE time limit; the session is killed after it |
+| `--log-dir <path>` | `./cve-assessment-logs/<UTC time>/` | `<CVE>.jsonl` transcript, `<CVE>.stderr.log`, Copilot logs |
+| `--model <name>` | Copilot default | Model passed to `copilot --model` |
+| `--allow-tool <pattern>` | — | Extra Copilot permission, e.g. `'url(security-tracker.debian.org)'` |
+| `--json` | off | Also write `summary.json` in the log directory |
+
+**Permissions.** Sessions run with this allowlist only: the `vulnscout` MCP
+tools, shell commands `git`, `grep`, `find`, `ls`, `cat`, `head`, and
+`nvd.nist.gov`, `github.com`, `api.github.com`. Copilot's file-edit tools are
+denied, and so are the destructive git subcommands (`push`, `commit`, `checkout`,
+`switch`, `restore`, `reset`, `clean`, `stash`, `rm`, `add`, `merge`, `rebase`,
+`apply`, `config`, `remote`). The sandbox is not read-only, though: `find` can still
+modify files (`-delete`, `-exec`), so run against a clean checkout or a disposable
+CI workspace. Fetches to other domains are refused unless you add
+`--allow-tool 'url(<domain>)'`.
+
+**Exit codes.** `0` when every CVE was assessed or skipped (or the filter matched
+nothing); `1` on a usage or setup error, or when any CVE failed or timed out;
+`130` when interrupted. Results are pending AI assessments; review them as
+described in Step 3.
+
 ## Step 3 — Review AI assessments in the web interface
 
 Pending AI assessments must be reviewed by a human before they become official.

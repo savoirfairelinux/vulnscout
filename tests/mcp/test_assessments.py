@@ -5,7 +5,9 @@ import httpx
 
 # conftest.py adds repository root to sys.path
 from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
-from vulnscout_mcp.tools.assessments import _write_assessment_impl, _has_ai_assessment_impl, _update_ai_assessment_impl
+from vulnscout_mcp.tools.assessments import (
+    _write_assessment_impl, _has_ai_assessment_impl, _update_ai_assessment_impl, find_ai_assessment,
+)
 
 
 BASE_URL = "http://vulnscout.test"
@@ -305,6 +307,25 @@ class TestWriteAssessmentImpl:
             )
         assert "Error" in result
         assert "Could not connect" in result
+
+
+class TestFindAiAssessment:
+
+    def test_returns_ai_assessment_listed_in_variant_ids(self):
+        ai = {"id": "a1", "origin": "ai", "variant_ids": ["var-1", "var-2"], "variant_id": "var-2"}
+        assert find_ai_assessment([ai], "var-1") is ai
+
+    def test_falls_back_to_single_variant_id(self):
+        ai = {"id": "a1", "origin": "ai", "variant_ids": [], "variant_id": "var-1"}
+        assert find_ai_assessment([ai], "var-1") is ai
+
+    def test_ignores_non_ai_origin(self):
+        custom = {"id": "c1", "origin": "custom", "variant_ids": ["var-1"]}
+        assert find_ai_assessment([custom], "var-1") is None
+
+    def test_returns_none_when_variant_not_covered(self):
+        ai = {"id": "a1", "origin": "ai", "variant_ids": ["var-2"]}
+        assert find_ai_assessment([ai], "var-1") is None
 
 
 class TestHasAiAssessment:

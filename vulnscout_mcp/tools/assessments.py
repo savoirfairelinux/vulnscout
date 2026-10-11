@@ -68,6 +68,17 @@ def _write_assessment_impl(
         return f"Error: {e}"
 
 
+def find_ai_assessment(assessments: list, variant_id: str) -> Optional[dict]:
+    """Return the first AI-generated assessment covering *variant_id*, or None."""
+    for a in assessments:
+        if a.get("origin") != "ai":
+            continue
+        covered = a.get("variant_ids") or [a.get("variant_id")]
+        if variant_id in covered:
+            return a
+    return None
+
+
 def _has_ai_assessment_impl(
     client: VulnScoutClient,
     vuln_id: str,
@@ -79,26 +90,23 @@ def _has_ai_assessment_impl(
     except VulnScoutError as e:
         return f"Error: {e}"
 
-    for a in assessments:
-        if a.get("origin") != "ai":
-            continue
-        covered = a.get("variant_ids") or [a.get("variant_id")]
-        if variant_id in covered:
-            scoped_packages = a.get("packages")
-            targets = a.get("targets") or []
-            if targets:
-                scoped_packages = [
-                    t.get("package")
-                    for t in targets
-                    if t.get("variant_id") == variant_id and t.get("package")
-                ]
-            return (
-                f"AI assessment found: id={a.get('id')}, "
-                f"status={a.get('status')}, "
-                f"packages={scoped_packages}, "
-                f"variant_ids={a.get('variant_ids')}"
-            )
-    return f"No AI assessment found for {vuln_id} with variant {variant_id}"
+    a = find_ai_assessment(assessments, variant_id)
+    if a is None:
+        return f"No AI assessment found for {vuln_id} with variant {variant_id}"
+    scoped_packages = a.get("packages")
+    targets = a.get("targets") or []
+    if targets:
+        scoped_packages = [
+            t.get("package")
+            for t in targets
+            if t.get("variant_id") == variant_id and t.get("package")
+        ]
+    return (
+        f"AI assessment found: id={a.get('id')}, "
+        f"status={a.get('status')}, "
+        f"packages={scoped_packages}, "
+        f"variant_ids={a.get('variant_ids')}"
+    )
 
 
 def _update_ai_assessment_impl(
