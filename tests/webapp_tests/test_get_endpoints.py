@@ -158,6 +158,43 @@ def test_get_packages_dict(client):
     assert "grype.json" in data["cairo@1.16.0"]["sbom_documents"]
 
 
+@pytest.mark.parametrize("format", ["list", "dict"])
+@pytest.mark.parametrize("evidence", [None, []])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_get_packages_without_document_identifiers_does_not_fall_back_to_global_evidence(
+    app, client, format, evidence, scoped,
+):
+    from src.extensions import db
+    from src.models import Package, SBOMPackage
+
+    with app.app_context():
+        package = Package.get_by_string_id("cairo@1.16.0")
+        assert len(package.cpe) == 4
+        assert package.purl == ["pkg:generic/cairo@1.16.0"]
+        package.add_purl(f"pkg:generic/cairo@{'a' * 40}")
+        link = db.session.query(SBOMPackage).filter_by(package_id=package.id).one()
+        link.cpe = evidence
+        link.purl = evidence
+        link.source_urls = evidence
+        db.session.commit()
+
+    query = f"/api/packages?format={format}"
+    if scoped:
+        query += "&variant_id=22222222-2222-2222-2222-222222222222"
+    response = client.get(query)
+    assert response.status_code == 200
+    data = response.get_json()
+    result = data[0] if format == "list" else data["cairo@1.16.0"]
+    assert result["cpe"] == []
+    assert result["purl"] == []
+    assert result["source_urls"] == []
+    assert result["release_version"] == "1.16.0"
+    assert result["source_revision"] is None
+    assert result["version_evidence"] == [{"version": "1.16.0", "source": "sbom", "identifier": "1.16.0"}]
+    assert not result["version_conflict"]
+    assert not result["revision_conflict"]
+
+
 def test_get_vulnerabilities_list(client):
     response = client.get("/api/vulnerabilities?format=list")
     assert response.status_code == 200
