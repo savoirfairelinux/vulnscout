@@ -48,6 +48,8 @@ class ExportScope:
         DB UUIDs of every scan belonging to the in-scope variants.
     sbom_document_ids:
         DB UUIDs of every SBOM document belonging to the in-scope scans.
+    active_sbom_document_ids:
+        DB UUIDs of the active SBOM documents used for package source provenance.
     """
 
     package_ids: set[uuid.UUID] = field(default_factory=set)
@@ -55,6 +57,7 @@ class ExportScope:
     project_ids: set[uuid.UUID] = field(default_factory=set)
     scan_ids: set[uuid.UUID] = field(default_factory=set)
     sbom_document_ids: set[uuid.UUID] = field(default_factory=set)
+    active_sbom_document_ids: set[uuid.UUID] = field(default_factory=set)
 
 
 def _as_uuid(value: uuid.UUID | str) -> uuid.UUID:
@@ -85,6 +88,9 @@ def _scope_for_variants(
         project_ids=(project_ids or set()) | {variant.project_id for variant in variants},
         scan_ids=all_scan_ids,
         sbom_document_ids=document_ids,
+        active_sbom_document_ids={
+            document.id for scan_id in active_sbom_scan_ids for document in SBOMDocument.get_by_scan(scan_id)
+        },
     )
 
 

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.package import Package
+from ..helpers.package_versions import git_revision_from_url
 from ..controllers import ControllersCache, VulnerabilitiesController, PackagesController, AssessmentsController
 
 _SPDX2_DEPENDENCY_OF = frozenset({
@@ -19,6 +20,40 @@ def spdx2_dependency_edge(source, kind, target) -> tuple[str, str] | None:
     if kind in _SPDX2_DEPENDENCY_OF:
         return target, source
     return None
+
+
+def spdx2_provenance_only_sources(sbom: dict) -> set[str]:
+    """Exclude unversioned Git source nodes used only as another package's provenance."""
+    packages = {
+        ref: package
+        for package in _get_field(sbom, ["packages", "Packages"]) or []
+        if isinstance(package, dict)
+        for ref in [_get_field(package, ["SPDXID", "spdxId"])]
+        if isinstance(ref, str)
+    }
+    candidates = {
+        ref for ref, package in packages.items()
+        if package.get("primaryPackagePurpose") == "SOURCE"
+        and not _get_field(package, ["version", "Version", "packageVersion", "PackageVersion", "versionInfo"])
+        and isinstance(package.get("downloadLocation"), str)
+        and git_revision_from_url(package["downloadLocation"]) is not None
+    }
+    referenced: set[str] = set()
+    independent: set[str] = set()
+    for relation in _get_field(sbom, ["relationships", "Relationships"]) or []:
+        if not isinstance(relation, dict):
+            continue
+        source, target = relation.get("spdxElementId"), relation.get("relatedSpdxElement")
+        if isinstance(source, str) and source in candidates:
+            independent.add(source)
+        if not isinstance(target, str) or target not in candidates:
+            continue
+        if (relation.get("relationshipType") == "GENERATED_FROM"
+                and isinstance(source, str) and source in packages and source not in candidates):
+            referenced.add(target)
+        else:
+            independent.add(target)
+    return referenced - independent
 
 
 class FastSPDX ():
@@ -42,7 +77,10 @@ class FastSPDX ():
     def _merge_packages(self, sbom: dict):
         """Merge packages from SPDX SBOM."""
         self._document_refs = {}
+        provenance_sources = spdx2_provenance_only_sources(sbom)
         for pkg in _get_field(sbom, ["packages", "Packages"]) or []:
+            if _get_field(pkg, ["SPDXID", "spdxId"]) in provenance_sources:
+                continue
             parsed_package = self._parse_package(pkg)
             if parsed_package:
                 self.packagesCtrl.add(parsed_package)
@@ -58,6 +96,9 @@ class FastSPDX ():
         licences = _get_field(pkg, ["licenseDeclared", "LicenseDeclared"])
 
         package = Package(name, version or "", [], [], licences or "")
+        download = _get_field(pkg, ["downloadLocation"])
+        if isinstance(download, str):
+            package.add_source_url(download)
 
         for external_ref in _get_field(pkg, ["externalRefs"]) or []:
             ref_type = _get_field(external_ref, ["referenceType"])
@@ -80,6 +121,8 @@ class FastSPDX ():
         self._check_spdx_version(spdx)
         self._merge_packages(spdx)
         edges = set()
+        derivations = set()
+        inputs = set()
         for relation in _get_field(spdx, ["relationships", "Relationships"]) or []:
             if not isinstance(relation, dict):
                 continue
@@ -87,6 +130,12 @@ class FastSPDX ():
                                          relation.get("relatedSpdxElement"))
             if edge:
                 edges.add(edge)
+            source, target = relation.get("spdxElementId"), relation.get("relatedSpdxElement")
+            if isinstance(source, str) and isinstance(target, str):
+                if relation.get("relationshipType") == "GENERATED_FROM":
+                    derivations.add((source, target))
+                elif relation.get("relationshipType") == "BUILD_DEPENDENCY_OF":
+                    inputs.add((target, source))
         external_documents = {
             ref["externalDocumentId"]: ref["spdxDocument"]
             for ref in _get_field(spdx, ["externalDocumentRefs"]) or []
@@ -96,6 +145,17 @@ class FastSPDX ():
         namespace = _get_field(spdx, ["documentNamespace"])
         self.packagesCtrl.add_spdx_dependencies(namespace if isinstance(namespace, str) else None,
                                                 self._document_refs, external_documents, edges)
+        urls = {
+            ref: url
+            for package in _get_field(spdx, ["packages", "Packages"]) or []
+            for ref, url in [(_get_field(package, ["SPDXID", "spdxId"]),
+                              _get_field(package, ["downloadLocation"]))]
+            if isinstance(ref, str) and isinstance(url, str)
+        }
+        self.packagesCtrl.add_spdx_sources(
+            namespace if isinstance(namespace, str) else None,
+            self._document_refs, external_documents, urls, derivations, inputs,
+        )
 
 
 def _get_field(obj: dict, field: list[str]):

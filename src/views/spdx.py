@@ -4,7 +4,7 @@
 from ..models.package import Package
 from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
-from .fast_spdx import spdx2_dependency_edge
+from .fast_spdx import spdx2_dependency_edge, spdx2_provenance_only_sources
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
@@ -94,7 +94,24 @@ class SPDX:
         Merge components from SBOM into controller.
         """
         self._document_refs = {}
+        provenance_sources = spdx2_provenance_only_sources({
+            "packages": [
+                {"SPDXID": package.spdx_id,
+                 "primaryPackagePurpose": (
+                     package.primary_package_purpose.name if package.primary_package_purpose else None
+                 ),
+                 "versionInfo": package.version, "downloadLocation": package.download_location}
+                for package in self.sbom.packages
+            ],
+            "relationships": [
+                {"spdxElementId": relation.spdx_element_id, "relationshipType": relation.relationship_type.name,
+                 "relatedSpdxElement": relation.related_spdx_element_id}
+                for relation in self.sbom.relationships
+            ],
+        })
         for package in self.sbom.packages:
+            if package.spdx_id in provenance_sources:
+                continue
             supplier = ""
             try:
                 if package.supplier is not None and not isinstance(package.supplier, SpdxNoAssertion):
@@ -107,6 +124,8 @@ class SPDX:
                 verbose(f"[SPDX.merge_components] failed to read supplier for {package.name!r}")
 
             pkg = Package(package.name, package.version or "", [], [], "", supplier=supplier)
+            if isinstance(package.download_location, str):
+                pkg.add_source_url(package.download_location)
             license_declared = package.license_declared
             if license_declared is not None:
                 license_str = str(license_declared)
@@ -132,15 +151,28 @@ class SPDX:
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
         edges = set()
+        derivations = set()
+        inputs = set()
         for relation in self.sbom.relationships:
             edge = spdx2_dependency_edge(relation.spdx_element_id, relation.relationship_type.name,
                                          relation.related_spdx_element_id)
             if edge:
                 edges.add(edge)
+            source, target = relation.spdx_element_id, relation.related_spdx_element_id
+            if isinstance(target, str):
+                if relation.relationship_type == RelationshipType.GENERATED_FROM:
+                    derivations.add((source, target))
+                elif relation.relationship_type == RelationshipType.BUILD_DEPENDENCY_OF:
+                    inputs.add((target, source))
         creation_info = self.sbom.creation_info
         external_documents = {ref.document_ref_id: ref.document_uri for ref in creation_info.external_document_refs}
         self.packagesCtrl.add_spdx_dependencies(creation_info.document_namespace, self._document_refs,
                                                 external_documents, edges)
+        urls = {package.spdx_id: package.download_location for package in self.sbom.packages
+                if isinstance(package.download_location, str)}
+        self.packagesCtrl.add_spdx_sources(
+            creation_info.document_namespace, self._document_refs, external_documents, urls, derivations, inputs,
+        )
 
     def register_components(self, with_cpe=False):
         """
@@ -161,6 +193,10 @@ class SPDX:
                 )
                 if pkg.version:
                     package.version = pkg.version
+                for purl in pkg.purl or []:
+                    package.external_references.append(ExternalPackageRef(
+                        category=ExternalPackageRefCategory.PACKAGE_MANAGER, reference_type="purl", locator=purl,
+                    ))
                 for cpe in pkg.cpe:
                     cpe_type = cpe.split(":")[2]
                     if cpe_type == "o":
@@ -178,6 +214,17 @@ class SPDX:
                         )
 
                 self.sbom.packages = self.sbom.packages + [package]
+                for url in pkg.source_urls or []:
+                    source_id = f"SPDXRef-{uuid7(as_type='str')}"
+                    self.sbom.packages.append(SpdxPackage(
+                        name=f"{pkg.name}-source", spdx_id=source_id,
+                        primary_package_purpose=PackagePurpose.SOURCE,
+                        download_location=url, files_analyzed=False,
+                    ))
+                    self.sbom.relationships.append(Relationship(
+                        spdx_element_id=package.spdx_id, relationship_type=RelationshipType.GENERATED_FROM,
+                        related_spdx_element_id=source_id,
+                    ))
                 self.sbom.relationships = self.sbom.relationships + [
                     Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, newid)
                 ]

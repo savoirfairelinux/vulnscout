@@ -32,6 +32,7 @@ from ..models.project import Project
 from ..models.variant import Variant
 from ..helpers.verbose import verbose
 from ..bin.cmd_process import REFRESH_SOURCES, refresh_vulnerability_sources
+from ..views.fast_spdx3 import FastSPDX3
 from ._scan_helpers import parse_uuid_or_400, ErrorResponse
 
 if TYPE_CHECKING:
@@ -79,7 +80,8 @@ def _detect_format(filename: str, data: dict) -> str:
         return "spdx"
     if lower.endswith(".cdx.json"):
         return "cdx"
-    if "spdxVersion" in data or "spdxId" in data or "SPDXRef" in str(data.get("SPDXID", "")):
+    if ("spdxVersion" in data or "spdxId" in data or "SPDXRef" in str(data.get("SPDXID", ""))
+            or FastSPDX3.could_parse_spdx(data)):
         return "spdx"
     if data.get("bomFormat") == "CycloneDX":
         return "cdx"

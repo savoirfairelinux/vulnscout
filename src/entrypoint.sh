@@ -442,7 +442,7 @@ cmd_scan() {
             esac
         done
     fi
-    (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade)
+    (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade) || return $?
 
     local has_condition=false
     local _cmd_scan_exit=0
@@ -453,7 +453,7 @@ cmd_scan() {
             if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
                 set_status "1" "Merging inputs and processing vulnerabilities"
             fi
-            (cd "$BASE_DIR" && flask --app src.bin.webapp merge "${INIT_APP_ARGS[@]}")
+            (cd "$BASE_DIR" && flask --app src.bin.webapp merge "${INIT_APP_ARGS[@]}") || return $?
         fi
 
         # If a Grype scan was requested, export the current DB as SPDX (which
@@ -521,6 +521,7 @@ cmd_scan() {
         # With set -o pipefail the non-zero exit code from flask (e.g. 2 for a
         # triggered fail condition) is still propagated through the pipeline.
         local -a process_args=()
+        local _process_exit=0
         [[ "${REFRESH_VULNERABILITY_DATA:-false}" == "true" ]] && process_args+=(--refresh-vulnerability-data)
         if [[ -n "${MATCH_CONDITION:-}" ]]; then
             [[ "$PROJECT_SPECIFIED" == "true" ]] && process_args+=(--project "$PROJECT_NAME")
@@ -533,8 +534,9 @@ cmd_scan() {
                 else
                     echo "$_line"
                 fi
-            done || _cmd_scan_exit=$?
-        if [[ "$has_inputs" == "true" ]]; then
+            done || _process_exit=$?
+        [[ "$_process_exit" -ne 0 ]] && _cmd_scan_exit=$_process_exit
+        if [[ "$has_inputs" == "true" && ( "$_process_exit" -eq 0 || "$_process_exit" -eq 2 ) ]]; then
             # Clean up input files now that they are fully processed
             for _type in spdx cdx openvex yocto_cve_check yocto_vex grype osv; do
                 rm -f "${INPUTS_DIR:?}/$_type"/*
@@ -551,6 +553,9 @@ cmd_scan() {
         set_status "1" "No new input files to merge, skipping"
     fi
 
+    if [[ "$_cmd_scan_exit" -ne 0 ]]; then
+        return "$_cmd_scan_exit"
+    fi
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
         local _port="${FLASK_RUN_PORT:-7275}"
         local _host="${FLASK_RUN_HOST:-localhost}"
@@ -985,6 +990,9 @@ fi
 match_exit=0
 if [[ "$SCAN_REQUIRED" == "true" ]]; then
     cmd_scan || match_exit=$?
+fi
+if [[ "$match_exit" -ne 0 && "$match_exit" -ne 2 ]]; then
+    exit "$match_exit"
 fi
 
 # Step 2: Generate reports if requested (all in a single flask call to avoid re-evaluating condition)

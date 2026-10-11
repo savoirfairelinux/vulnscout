@@ -364,6 +364,27 @@ describe('Packages additional coverage', () => {
         fetchMock.resetMocks();
     });
 
+    test('asPackage retains server version metadata without changing raw identity', async () => {
+        const revision = 'a'.repeat(40);
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            name: 'mbedtls', version: revision, id: `mbedtls@${revision}`,
+            release_version: '4.1.1', source_revision: revision, version_conflict: false,
+            version_evidence: [
+                { source: 'purl', version: 'v4.1.1', identifier: 'pkg:github/Mbed-TLS/mbedtls@v4.1.1' },
+                null, { source: 'bad-source', version: '9.0', identifier: 'invalid' },
+            ],
+        }, {
+            name: 'hash-only', version: revision, release_version: null, source_revision: revision,
+        }]));
+        const packages = await Packages.list();
+        expect(packages[0]).toMatchObject({
+            id: `mbedtls@${revision}`, version: revision, release_version: '4.1.1', source_revision: revision,
+        });
+        expect(packages[0].version_evidence).toHaveLength(1);
+        expect(packages[1].release_version).toBeNull();
+        expect(packages[1].source_revision).toBe(revision);
+    });
+
     test('asPackage parses variants, sources, and sbom_documents arrays', async () => {
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
@@ -500,4 +521,3 @@ describe('Packages additional coverage', () => {
         expect(result[0].maxSeverity['Fixed'].label).toBe('high');
     });
 });
-

@@ -8,6 +8,7 @@ import '@xyflow/react/dist/style.css';
 import ModalShell from './ModalShell';
 import { listDependencies } from '../handlers/dependencies';
 import type { DependencyDocument, DependencyPackage } from '../handlers/dependencies';
+import { mergePackageVersionMetadata, packageVersionLabel, versionEvidenceTitle } from '../helpers/packageVersions';
 
 type Props = {
     variantId?: string;
@@ -117,8 +118,9 @@ function DependencyTree({ packageId, packages, links, onSelectPackage, ancestors
                 <FontAwesomeIcon icon={expanded ? faChevronDown : faChevronRight} />
             </button> : <span className="w-6 shrink-0" />}
             <button type="button" onClick={() => onSelectPackage(packageId)}
+                title={pkg ? versionEvidenceTitle(pkg) : packageId}
                 className="min-w-0 break-all text-left text-cyan-300 hover:underline">
-                {pkg ? `${pkg.name}@${pkg.version}` : packageId}
+                {pkg ? packageVersionLabel(pkg) : packageId}
             </button>
             {children.length > 0 && <span className="ml-auto tabular-nums text-neutral-400">{children.length}</span>}
         </div>
@@ -134,11 +136,7 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
     const [documentId, setDocumentId] = useState('all');
     const [diagramWidth, setDiagramWidth] = useState(0);
     const diagramRef = useRef<HTMLDivElement>(null);
-    const packages = useMemo(() => {
-        const packages = new Map<string, DependencyPackage>();
-        documents.forEach(doc => doc.packages.forEach(pkg => packages.set(pkg.id, pkg)));
-        return packages;
-    }, [documents]);
+    const packageIds = useMemo(() => new Set(documents.flatMap(doc => doc.packages.map(pkg => pkg.id))), [documents]);
     const variants = useMemo(() => {
         const names = new Map<string, string>();
         documents.forEach(doc => names.set(doc.variant_id, doc.variant_name));
@@ -158,27 +156,43 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
     const scoped = useMemo(() => documents.filter(doc => documentId === 'all' || doc.id === documentId),
         [documents, documentId]);
     const visible = useMemo(() => scoped.filter(doc => !hiddenVariants.has(doc.variant_id)), [scoped, hiddenVariants]);
+    const packages = useMemo(() => {
+        const primaryIds = new Set(visible.flatMap(doc => doc.packages.map(pkg => pkg.id)));
+        const visibleDocumentIds = new Set(visible.map(doc => doc.id));
+        const visibleVariantIds = new Set(visible.map(doc => doc.variant_id));
+        const packages = new Map<string, DependencyPackage>();
+        documents.forEach(doc => {
+            if (!visibleVariantIds.has(doc.variant_id)) return;
+            doc.packages.forEach(pkg => {
+                // Companion documents resolve missing endpoints, never override the selected source's metadata.
+                if (!visibleDocumentIds.has(doc.id) && primaryIds.has(pkg.id)) return;
+                const existing = packages.get(pkg.id);
+                packages.set(pkg.id, existing ? { ...existing, ...mergePackageVersionMetadata(existing, pkg) } : pkg);
+            });
+        });
+        return packages;
+    }, [documents, visible]);
     const { dependencyVariants, dependentVariants } = useMemo(() => {
         const dependencyVariants = new Map<string, Set<string>>();
         const dependentVariants = new Map<string, Set<string>>();
         scoped.forEach(doc => doc.edges.forEach(edge => {
-            if (!packages.has(edge.package_id) || !packages.has(edge.dependency_id)) return;
+            if (!packageIds.has(edge.package_id) || !packageIds.has(edge.dependency_id)) return;
             if (edge.package_id === packageId) addLink(dependencyVariants, edge.dependency_id, doc.variant_id);
             if (edge.dependency_id === packageId) addLink(dependentVariants, edge.package_id, doc.variant_id);
         }));
         return { dependencyVariants, dependentVariants };
-    }, [scoped, packages, packageId]);
+    }, [scoped, packageIds, packageId]);
     const { outgoing, incoming } = useMemo(() => {
         const outgoing = new Map<string, Set<string>>();
         const incoming = new Map<string, Set<string>>();
         visible.forEach(doc => doc.edges.forEach(edge => {
-            if (!packages.has(edge.package_id) || !packages.has(edge.dependency_id)) return;
+            if (!packageIds.has(edge.package_id) || !packageIds.has(edge.dependency_id)) return;
             addLink(outgoing, edge.package_id, edge.dependency_id);
             addLink(incoming, edge.dependency_id, edge.package_id);
         }));
         const sorted = (links: Map<string, Set<string>>) => new Map([...links].map(([id, targets]) => [id, [...targets].sort()]));
         return { outgoing: sorted(outgoing), incoming: sorted(incoming) };
-    }, [visible, packages]);
+    }, [visible, packageIds]);
     const dependencies = useMemo(() => outgoing.get(packageId) ?? [], [outgoing, packageId]);
     const dependents = useMemo(() => incoming.get(packageId) ?? [], [incoming, packageId]);
     // In counts the dependencies a package pulls in, Out the packages it flows out to.
@@ -213,11 +227,11 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
                 type: 'straight', markerEnd: { type: MarkerType.ArrowClosed } });
         });
         const nodes: Node[] = ids.map(id => {
-            const pkg = packages.get(id)!;
+            const pkg = packages.get(id);
             const position = positions.get(id)!;
             const linked = variants.filter(variant => !hiddenVariants.has(variant.id)
                 && (dependencyVariants.get(id)?.has(variant.id) || dependentVariants.get(id)?.has(variant.id)));
-            const label = `${pkg.name}@${pkg.version}`;
+            const label = pkg ? packageVersionLabel(pkg) : id;
             return { id,
                 data: { label: id === packageId ? label
                     : <span title={`Variants: ${linked.map(variant => variant.name).join(', ')}`}>{label}</span> },

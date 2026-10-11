@@ -19,10 +19,16 @@ import PopoverSurface from '../components/PopoverSurface';
 import type { AgentViewContext } from '../types/agent';
 import { listDependencyCounts } from '../handlers/dependencies';
 import type { DependencyCounts } from '../handlers/dependencies';
+import SourceRevision from '../components/SourceRevision';
+import { releaseVersion, versionEvidenceTitle } from '../helpers/packageVersions';
 
 const DependencyModal = lazy(() => import('../components/DependencyModal'));
 
-type PackageRow = Package & { dependencyCount?: { in: number; out: number }; dependenciesUnrecorded?: boolean };
+type PackageRow = Package & {
+    versionMetadataSearch: string;
+    dependencyCount?: { in: number; out: number };
+    dependenciesUnrecorded?: boolean;
+};
 
 type Props = {
     packages: Package[];
@@ -55,7 +61,7 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
     return vulnsA - vulnsB
 }
 
-const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
+const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl', 'versionMetadataSearch']
 const emptyVulnerabilities: Vulnerability[] = [];
 
 function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages,
@@ -155,12 +161,21 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
     const defaultVisibleColumns = useMemo(() => {
-        const cols = ['Name', 'Version', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
+        const cols = ['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
         if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
         return cols;
     }, [hasSupplierInfo]);
 
     const [visibleColumns, setVisibleColumns] = useLocalStorageState<string[]>(`${preferenceKey}.visibleColumns`, defaultVisibleColumns);
+    const [revisionColumnDefaulted, setRevisionColumnDefaulted] = useLocalStorageState(`${preferenceKey}.revisionColumnDefaulted`, false);
+    useEffect(() => {
+        if (revisionColumnDefaulted) return;
+        setRevisionColumnDefaulted(true);
+        setVisibleColumns(columns => {
+            const renamed = columns.map(column => column === 'Version' ? 'Release version' : column);
+            return renamed.includes('Source revision') ? renamed : [...renamed, 'Source revision'];
+        });
+    }, [revisionColumnDefaulted, setRevisionColumnDefaulted, setVisibleColumns]);
     const [dependencyColumnDefaulted, setDependencyColumnDefaulted] = useLocalStorageState(`${preferenceKey}.dependencyColumnDefaulted`, false);
     // Column choices saved before the Dependency column existed still get it once.
     useEffect(() => {
@@ -277,7 +292,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
 
     const columnDisplayNames = useMemo(() => ({
         'name': 'Name',
-        'version': 'Version',
+        'version': 'Release version',
+        'source_revision': 'Source revision',
         'dependencies': 'Dependency',
         'cpe': 'CPE',
         'purl': 'PURL',
@@ -305,11 +321,24 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
-            columnHelper.accessor('version', {
+            columnHelper.accessor(row => releaseVersion(row) ?? '', {
                 id: 'version',
-                header: () => <div className="flex items-center justify-center">Version</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
-                size: 80
+                header: () => <div className="flex items-center justify-center">Release version</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center"
+                    title={versionEvidenceTitle(info.row.original)}>
+                    {info.row.original.version_conflict
+                        ? <span className="text-amber-300">Conflicting metadata</span>
+                        : info.getValue() || <span className="text-neutral-500">—</span>}
+                </div>,
+                size: 140
+            }),
+            columnHelper.accessor(row => row.source_revision ?? '', {
+                id: 'source_revision',
+                header: () => <div className="flex items-center justify-center">Source revision</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">
+                    <SourceRevision key={info.row.original.id} {...info.row.original} />
+                </div>,
+                size: 180
             }),
             columnHelper.accessor(row => (row.dependencyCount?.in ?? 0) + (row.dependencyCount?.out ?? 0), {
                 id: 'dependencies',
@@ -569,13 +598,14 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
 
     // Counts live in the row data so an active sort re-runs when they arrive.
     const tableRows = useMemo<PackageRow[]>(() => {
-        if (!showDependencyColumn || !dependencyCounts) return filteredPackages;
-        const unrecorded = new Set(dependencyCounts.unrecorded);
+        const unrecorded = new Set(dependencyCounts?.unrecorded);
         return filteredPackages.map(pkg => {
-            if (pkg.outdated) return pkg;
+            const row = { ...pkg, versionMetadataSearch:
+                `${pkg.id} ${pkg.source_revision ?? ''} ${versionEvidenceTitle(pkg)}` };
+            if (!showDependencyColumn || !dependencyCounts || pkg.outdated) return row;
             const counts = dependencyCounts.counts[pkg.id];
-            if (!counts && unrecorded.has(pkg.id)) return { ...pkg, dependenciesUnrecorded: true };
-            return { ...pkg, dependencyCount: counts ?? { in: 0, out: 0 } };
+            if (!counts && unrecorded.has(pkg.id)) return { ...row, dependenciesUnrecorded: true };
+            return { ...row, dependencyCount: counts ?? { in: 0, out: 0 } };
         });
     }, [filteredPackages, showDependencyColumn, dependencyCounts]);
 
@@ -697,7 +727,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 label="Columns"
                 options={[
                     'Name',
-                    'Version',
+                    'Release version',
+                    'Source revision',
                     'Dependency',
                     'CPE',
                     'PURL',

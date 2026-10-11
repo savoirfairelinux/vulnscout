@@ -12,7 +12,7 @@ from ..models.observation import Observation
 from ..models.scan import Scan
 from ..models.variant import Variant
 from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
+from ..models.sbom_package import SBOMPackage, PackageEvidence
 from ..extensions import db
 from ..helpers.active_scans import (
     active_sbom_scan_ids_for_variant,
@@ -203,7 +203,19 @@ def init_app(app: Flask) -> None:
             pkgs = [] if outdated_only else Package.get_all()
             active_scan_ids = []
             scope_variant_ids = [variant.id for variant in Variant.get_all()]
-        result = [pkg.to_dict() for pkg in pkgs]
+        source_scan_ids = active_scan_ids
+        if not any((variant_id, project_id, variant_ids)):
+            source_scan_ids = [
+                scan_id for selected_variant in Variant.get_all()
+                for scan_id in active_sbom_scan_ids_for_variant(selected_variant.id)
+            ]
+        source_document_ids = set(db.session.execute(
+            db.select(SBOMDocument.id).where(SBOMDocument.scan_id.in_(source_scan_ids)),
+        ).scalars()) if source_scan_ids else set()
+        evidence = SBOMPackage.evidence_for_documents(source_document_ids)
+        result = [pkg.with_sbom_evidence(**evidence.get(
+            pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
+        )).to_dict() for pkg in pkgs]
 
         for p in result:
             p.setdefault("variants", [])
@@ -321,7 +333,7 @@ def init_app(app: Flask) -> None:
                     continue
                 outdated_key = (package.id, variant.id)
                 if outdated_key not in outdated_rows:
-                    item = package.to_dict()
+                    item = package.with_sbom_evidence().to_dict()
                     item.update({
                         "variants": [variant.name],
                         "variant_id": str(variant.id),

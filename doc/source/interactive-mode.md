@@ -63,7 +63,7 @@ The SBOM table lists every package present in the imported SBOMs within your cur
 
 ### Search
 
-The search bar accepts free-text queries that match against package name, version, CPE, and PURL identifiers. Typing at least two characters triggers a fuzzy search powered by Fuse.js. The search supports the same expression language as the vulnerability table:
+The search bar accepts free-text queries that match against package name, reported version, release version, full source revision, CPE, and PURL identifiers. Typing at least two characters triggers a fuzzy search powered by Fuse.js. The search supports the same expression language as the vulnerability table:
 
 - **`term`** — rows containing the term are shown.
 - **`term1 term2`** — AND semantics: both terms must match.
@@ -74,11 +74,19 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ### Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Version, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's incoming and outgoing dependency counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **In** + **Out** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's incoming and outgoing dependency counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **In** + **Out** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
 - **Remaining Pending Vulnerabilities** — the count of vulnerabilities still awaiting triage for this package.
+
+**Release version** shows the release identified from the SBOM, PURL, or CPE.
+**Source revision** shows the Git commit, shortened to 12 characters. Hover either
+value to inspect its source information and the full revision. Missing values
+are shown as **—**; contradictory values are flagged as **Conflicting metadata**.
+A release version and a commit hash describe separate fields, not a conflict.
+
+Reimport older SBOMs to populate source revisions from the original files.
 
 ### Filters
 
@@ -101,13 +109,16 @@ Each row has a **Show Vulnerabilities** button that navigates to the Vulnerabili
 
 ## Dependency Graph
 
-The **Dependency** column of the SBOM table shows how many packages each package depends on (**In**) and how many packages depend on it (**Out**). Click the cell to open the graph and expandable trees for both directions. The graph shows every direct dependency (left, flowing in) and dependent (right, flowing out) of the package in a single diagram; zoom and pan to explore large ones. The **Variants** list beside the graph gives each variant a color, its own **In** / **Out** counts, and a checkbox to show or hide its relationships (all variants are shown by default). Select an SBOM source to narrow the graph to one active document. Neighbouring packages in the graph use the colors of the variants where the relationship exists, split into stripes when it exists in several. Dependency graphs are loaded only when opened, and packages without relationships show zero counts. Outdated packages show **Not in active scan** because dependency data covers active scans only.
+The **Dependency** column of the SBOM table shows how many packages each package depends on (**In**) and how many packages depend on it (**Out**). Click the cell to open the graph and expandable trees for both directions. The graph shows every direct dependency (left, flowing in) and dependent (right, flowing out) of the package in a single diagram; zoom and pan to explore large ones. The **Variants** list beside the graph gives each variant a color, its own **In** / **Out** counts, and a checkbox to show or hide its relationships (all variants are shown by default). Select an SBOM source to narrow the graph and its version/revision labels to one active document. Neighbouring packages in the graph use the colors of the variants where the relationship exists, split into stripes when it exists in several. Dependency graphs are loaded only when opened, and packages without relationships show zero counts. Outdated packages show **Not in active scan** because dependency data covers active scans only.
 
 ### Supported SBOM Formats
 
+Settings' **Import SBOM** accepts Yocto and Zephyr SPDX 3 JSON-LD (`.json` or
+`.jsonld`). Import all companion documents together so dependencies resolve.
+
 Dependencies are read only from SBOM formats that describe them:
 
-- **SPDX 3.0** (JSON-LD, such as the Yocto SPDX 3 output) — `Relationship` and `LifecycleScopedRelationship` elements whose `relationshipType` is `dependsOn`.
+- **SPDX 3.0** (JSON-LD, including Yocto and Zephyr output) — `dependsOn`, `hasPrerequisite`, and reverse `dependencyOf` relationships.
 - **SPDX 2.2 and 2.3** (JSON) — `DEPENDS_ON` relationships and their reverse forms `DEPENDENCY_OF`, `BUILD_DEPENDENCY_OF`, `RUNTIME_DEPENDENCY_OF`, `DEV_DEPENDENCY_OF`, `OPTIONAL_DEPENDENCY_OF`, `PROVIDED_DEPENDENCY_OF`, and `TEST_DEPENDENCY_OF`. Cross-document references (`DocumentRef-<name>:SPDXRef-<id>`) are resolved through `externalDocumentRefs` against the other SPDX documents of the same scan, which covers Yocto SPDX 2.2 archives (`*.spdx.tar.zst`, one document per recipe and package).
 - **CycloneDX 1.4, 1.5, and 1.6** (JSON) — the `dependencies` array (`ref` → `dependsOn`).
 
