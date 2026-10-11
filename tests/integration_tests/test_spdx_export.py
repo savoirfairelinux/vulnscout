@@ -220,3 +220,38 @@ def test_export_normalizes_enum_values_without_modifying_package_text(spdx_parse
     assert xml.findtext("./packages/primaryPackagePurpose") == "OPERATING-SYSTEM"
     assert xml.findtext("./packages/externalRefs/referenceCategory") == "PACKAGE-MANAGER"
     assert xml.findtext("./packages/externalRefs/referenceLocator") == purl
+
+
+@pytest.mark.parametrize("format", ["json", "xml"])
+def test_document_converter_normalizes_persistent_ids_and_preserves_security_references(spdx_parser, format):
+    from io import StringIO
+    from spdx_tools.spdx.model.package import ExternalPackageRef, ExternalPackageRefCategory
+    from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_json
+    from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_xml
+    from src.views.spdx import _SPDXDocumentConverter
+
+    spdx_parser.packagesCtrl.add(Package("PERSISTENT_ID", "1.0"))
+    spdx_parser.output_as_json()
+    locator = f"swh:1:cnt:{'a' * 40}"
+    cpe = "cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*"
+    spdx_parser.sbom.packages[0].external_references = [
+        ExternalPackageRef(ExternalPackageRefCategory.PERSISTENT_ID, "swh", locator),
+        ExternalPackageRef(ExternalPackageRefCategory.SECURITY, "cpe23Type", cpe),
+    ]
+    stream = StringIO()
+    writer = write_json if format == "json" else write_xml
+    writer(spdx_parser.sbom, stream, validate=False, converter=_SPDXDocumentConverter())
+    if format == "json":
+        package = json.loads(stream.getvalue())["packages"][0]
+        assert package["name"] == "PERSISTENT_ID"
+        assert package["externalRefs"] == [
+            {"referenceCategory": "PERSISTENT-ID", "referenceType": "swh", "referenceLocator": locator},
+            {"referenceCategory": "SECURITY", "referenceType": "cpe23Type", "referenceLocator": cpe},
+        ]
+    else:
+        package = ElementTree.fromstring(stream.getvalue()).find("packages")
+        assert package.findtext("name") == "PERSISTENT_ID"
+        assert [(ref.findtext("referenceCategory"), ref.findtext("referenceType"), ref.findtext("referenceLocator"))
+                for ref in package.findall("externalRefs")] == [
+            ("PERSISTENT-ID", "swh", locator), ("SECURITY", "cpe23Type", cpe),
+        ]
