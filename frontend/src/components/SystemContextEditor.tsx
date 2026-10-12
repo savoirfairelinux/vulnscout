@@ -3,6 +3,7 @@ import {
     emptySystemComponent, emptySystemInteraction, nextSystemId,
 } from "../helpers/strideContext";
 import type { SystemComponent, SystemInteraction, ThreatModel } from "../helpers/strideContext";
+import type { ReactNode } from "react";
 
 type Props = {
     model: ThreatModel;
@@ -10,6 +11,10 @@ type Props = {
     idPrefix: string;
     disabled: boolean;
     onChange: (model: ThreatModel) => void;
+    scopeEditor?: (kind: "components" | "interactions", id: string, index: number) => ReactNode;
+    fieldEditor?: (key: (typeof THREAT_MODEL_FIELDS)[number]["key"]) => ReactNode;
+    allocateId?: (prefix: "C" | "I") => string;
+    canReference?: (id: string, targetId: string) => boolean;
 };
 
 const labelClass = "block text-sm text-zinc-300 mb-1";
@@ -17,7 +22,9 @@ const inputClass = "w-full rounded px-2 py-1.5 text-sm bg-slate-900/60 border bo
 const textareaClass = inputClass + " resize-y min-h-[80px]";
 const buttonClass = "rounded px-3 py-1.5 text-sm border border-slate-500 text-cyan-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed";
 
-export default function SystemContextEditor({ model, savedModel, idPrefix, disabled, onChange }: Readonly<Props>) {
+export default function SystemContextEditor({
+    model, savedModel, idPrefix, disabled, onChange, scopeEditor, fieldEditor, allocateId, canReference,
+}: Readonly<Props>) {
     const updateComponent = (index: number, changes: Partial<SystemComponent>) => onChange({
         ...model, components: model.components.map((component, row) => row === index ? { ...component, ...changes } : component),
     });
@@ -27,7 +34,7 @@ export default function SystemContextEditor({ model, savedModel, idPrefix, disab
     return (
         <fieldset disabled={disabled} className="space-y-4">
             <legend className="text-lg font-semibold text-white mb-3">System</legend>
-            {THREAT_MODEL_FIELDS.map(field => (
+            {THREAT_MODEL_FIELDS.map(field => fieldEditor ? <div key={field.key}>{fieldEditor(field.key)}</div> : (
                 <div key={field.key}>
                     <label className={labelClass} htmlFor={`${idPrefix}-${field.key}`}>{field.label}</label>
                     <p id={`${idPrefix}-${field.key}-help`} className="text-xs text-zinc-400 mb-1">{field.help}</p>
@@ -50,6 +57,7 @@ export default function SystemContextEditor({ model, savedModel, idPrefix, disab
                     return (
                         <fieldset key={component.id} className="rounded-lg border border-slate-600 p-3 space-y-3">
                             <legend className="text-sm font-semibold text-white px-1">Component {index + 1} ({component.id})</legend>
+                            {scopeEditor?.("components", component.id, index)}
                             {COMPONENT_FIELDS.map(field => (
                                 <div key={field.key}>
                                     <label className={labelClass} htmlFor={`${idPrefix}-${component.id}-${field.key}`}>{field.label}</label>
@@ -83,7 +91,7 @@ export default function SystemContextEditor({ model, savedModel, idPrefix, disab
                     );
                 })}
                 <button type="button" className={buttonClass} onClick={() => onChange({
-                    ...model, components: [...model.components, emptySystemComponent(nextSystemId(model, "C", savedModel))],
+                    ...model, components: [...model.components, emptySystemComponent(allocateId?.("C") ?? nextSystemId(model, "C", savedModel))],
                 })}>Add component</button>
             </section>
             <section aria-labelledby={`${idPrefix}-interactions-title`} className="space-y-3">
@@ -98,6 +106,7 @@ export default function SystemContextEditor({ model, savedModel, idPrefix, disab
                     return (
                         <fieldset key={interaction.id} className="rounded-lg border border-slate-600 p-3 space-y-3">
                             <legend className="text-sm font-semibold text-white px-1">Interaction {index + 1} ({interaction.id})</legend>
+                            {scopeEditor?.("interactions", interaction.id, index)}
                             {INTERACTION_FIELDS.map(field => {
                                 const endpoint = field.key === "sourceId" || field.key === "destinationId";
                                 const label = field.key === "sourceId" ? "Source component"
@@ -117,7 +126,8 @@ export default function SystemContextEditor({ model, savedModel, idPrefix, disab
                                                     <option value={interaction[field.key]} disabled>Unavailable component ({interaction[field.key]})</option>
                                                 )}
                                                 {model.components.map(component => (
-                                                    <option key={component.id} value={component.id} disabled={!component.name.trim()}>
+                                                    <option key={component.id} value={component.id}
+                                                        disabled={!component.name.trim() || canReference?.(interaction.id, component.id) === false}>
                                                         {component.id}: {component.name.trim() || "(name needed)"}
                                                     </option>
                                                 ))}
@@ -155,7 +165,7 @@ export default function SystemContextEditor({ model, savedModel, idPrefix, disab
                     );
                 })}
                 <button type="button" className={buttonClass} onClick={() => onChange({
-                    ...model, interactions: [...model.interactions, emptySystemInteraction(nextSystemId(model, "I", savedModel))],
+                    ...model, interactions: [...model.interactions, emptySystemInteraction(allocateId?.("I") ?? nextSystemId(model, "I", savedModel))],
                 })}>Add interaction</button>
             </section>
         </fieldset>

@@ -20,6 +20,16 @@ type Props = StrideContextText & {
     initialMode?: StrideEditorMode | null;
     onDraftChange?: (draft: StrideDraft) => void;
     onChange: (text: StrideContextText) => void;
+    controlledDraft?: StrideDraft;
+    onControlledDraftChange?: (draft: StrideDraft) => void;
+    scopeEditor?: (kind: "components" | "interactions" | "threats" | "risks", id: string, index: number) => ReactNode;
+    fieldEditor?: (key: "scope" | "actors" | "entry_points" | "trust_boundaries") => ReactNode;
+    notesEditor?: (section: "threat_model" | "risks") => ReactNode;
+    freeEditor?: (section: "threat_model" | "risks") => ReactNode;
+    allocateId?: (prefix: "C" | "I" | "T") => string;
+    canReference?: (id: string, targetId: string) => boolean;
+    summaryScope?: (kind: "threats" | "risks", index: number) => ReactNode;
+    summaryAvailable?: boolean;
 };
 
 const labelClass = "block text-sm text-zinc-300 mb-1";
@@ -29,9 +39,16 @@ const buttonClass = "rounded px-3 py-1.5 text-sm border border-slate-500 text-cy
 
 export default function StrideContextEditor({
     activeSection, tabIdPrefix, modeContainer, threatModel, risks, disabled, error, saveAction, savedContext, initialMode, onDraftChange, onChange,
+    controlledDraft, onControlledDraftChange, scopeEditor, fieldEditor, notesEditor, freeEditor, allocateId, canReference,
+    summaryScope, summaryAvailable,
 }: Readonly<Props>) {
     const id = useId();
-    const [draft, setDraft] = useState(() => loadStrideContext({ threatModel, risks }, initialMode));
+    const [localDraft, setLocalDraft] = useState(() => loadStrideContext({ threatModel, risks }, initialMode));
+    const draft = controlledDraft ?? localDraft;
+    const setDraft = (value: StrideDraft) => {
+        if (controlledDraft) onControlledDraftChange?.(value);
+        else setLocalDraft(value);
+    };
     useEffect(() => { onDraftChange?.(draft); }, [draft, onDraftChange]);
     const freeModeSnapshot = useRef<StrideContextText | null>(null);
     const errorId = `${id}-error`;
@@ -57,22 +74,24 @@ export default function StrideContextEditor({
     });
     const selectRiskThreat = (index: number, threatId: string) => updateRegister({
         ...draft.register,
-        risks: draft.register.risks.map((risk, row) => row === index ? {
-            threatId, likelihood: risk.likelihood, impact: risk.impact,
-            mitigation: risk.mitigation, decision: risk.decision,
-        } : risk),
+        risks: draft.register.risks.map((risk, row) => {
+            if (row !== index) return risk;
+            const { legacyThreat: _legacy, ...linked } = risk;
+            return { ...linked, threatId };
+        }),
     });
     const addLegacyThreat = (index: number, risk: StrideRisk) => {
         const legacy = risk.legacyThreat;
         if (!legacy) return;
-        const threatId = nextThreatId(draft.model, draft.register, savedContext);
+        const threatId = allocateId?.("T") ?? nextThreatId(draft.model, draft.register, savedContext);
         const model = { ...draft.model, threats: [...draft.model.threats, { id: threatId, ...legacy }] };
         const register = {
             ...draft.register,
-            risks: draft.register.risks.map((entry, row) => row === index ? {
-                threatId, likelihood: entry.likelihood, impact: entry.impact,
-                mitigation: entry.mitigation, decision: entry.decision,
-            } : entry),
+            risks: draft.register.risks.map((entry, row) => {
+                if (row !== index) return entry;
+                const { legacyThreat: _legacy, ...linked } = entry;
+                return { ...linked, threatId };
+            }),
         };
         setDraft({ ...draft, model, register });
         publish(model, register);
@@ -128,6 +147,7 @@ export default function StrideContextEditor({
                     </p>
                 ) : (
                     <SystemContextEditor model={draft.model} idPrefix={`${id}-system`} disabled={disabled}
+                        scopeEditor={scopeEditor} fieldEditor={fieldEditor} allocateId={allocateId} canReference={canReference}
                         savedModel={savedContext ? parseThreatModel(savedContext.threatModel) ?? undefined : undefined}
                         onChange={model => updateModel(model)} />
                 )}
@@ -138,8 +158,10 @@ export default function StrideContextEditor({
                 aria-labelledby={`${tabIdPrefix}-summary-tab`} tabIndex={0}
                 hidden={activeSection !== "summary"}
             >
-                {activeSection === "summary" && (disabled ? (
-                    <p className="text-sm text-zinc-400">Select a loaded variant to view its summary.</p>
+                {activeSection === "summary" && (!(summaryAvailable ?? !disabled) ? (
+                    <p className="text-sm text-zinc-400">
+                        Select a loaded {controlledDraft ? "project" : "variant"} to view its summary.
+                    </p>
                 ) : draft.mode === "free" ? (
                     <div className="space-y-4">
                         <h2 className="text-lg font-semibold text-white">Summary</h2>
@@ -160,7 +182,7 @@ export default function StrideContextEditor({
                             </p>
                         </section>
                     </div>
-                ) : <StrideSummary model={draft.model} register={draft.register} />)}
+                ) : <StrideSummary model={draft.model} register={draft.register} scopeLabel={summaryScope} />)}
             </div>
             {draft.mode === "free" ? (
                 <>
@@ -169,7 +191,7 @@ export default function StrideContextEditor({
                         aria-labelledby={`${tabIdPrefix}-threat_model-tab`} tabIndex={0}
                         hidden={activeSection !== "threat_model"}
                     >
-                        <p className="text-xs text-zinc-400 mb-1">
+                        {freeEditor ? freeEditor("threat_model") : <><p className="text-xs text-zinc-400 mb-1">
                             Use your own format. Switching to STRIDE keeps existing free text as additional notes.
                         </p>
                         <label className={labelClass} htmlFor={`${id}-threat-model`}>
@@ -182,6 +204,7 @@ export default function StrideContextEditor({
                             placeholder="Describe the threat criteria for CVEs..."
                             onChange={event => onChange({ threatModel: event.target.value, risks })}
                         />
+                        </>}
                         {activeSection === "threat_model" && saveAction}
                     </div>
                     <div
@@ -189,12 +212,13 @@ export default function StrideContextEditor({
                         aria-labelledby={`${tabIdPrefix}-risks-tab`} tabIndex={0}
                         hidden={activeSection !== "risks"}
                     >
-                        <label className={labelClass} htmlFor={`${id}-risks`}>Risks</label>
+                        {freeEditor ? freeEditor("risks") : <><label className={labelClass} htmlFor={`${id}-risks`}>Risks</label>
                         <textarea
                             id={`${id}-risks`} aria-label="Risks" className={textareaClass}
                             value={risks} disabled={disabled} placeholder="Describe known risks..."
                             onChange={event => onChange({ threatModel, risks: event.target.value })}
                         />
+                        </>}
                         {activeSection === "risks" && saveAction}
                     </div>
                 </>
@@ -220,6 +244,7 @@ export default function StrideContextEditor({
                                 return (
                                     <fieldset key={threat.id} className="rounded-lg border border-slate-600 p-3 space-y-3">
                                         <legend className="text-sm font-semibold text-white px-1">Threat {index + 1}</legend>
+                                        {scopeEditor?.("threats", threat.id, index)}
                                         <div>
                                             <label className={labelClass} htmlFor={`${id}-threat-${index}-category`}>STRIDE category</label>
                                             <select
@@ -256,7 +281,8 @@ export default function StrideContextEditor({
                                                 <optgroup label="Components">
                                                     {draft.model.components.map(component => (
                                                         <option key={component.id} value={component.id}
-                                                            disabled={!component.name.trim() || threat.targetIds?.includes(component.id)}>
+                                                            disabled={!component.name.trim() || threat.targetIds?.includes(component.id)
+                                                                || canReference?.(threat.id, component.id) === false}>
                                                             {systemElementLabel(draft.model, component.id)}
                                                         </option>
                                                     ))}
@@ -264,7 +290,8 @@ export default function StrideContextEditor({
                                                 <optgroup label="Interactions">
                                                     {draft.model.interactions.map(interaction => (
                                                         <option key={interaction.id} value={interaction.id}
-                                                            disabled={!interaction.name.trim() || threat.targetIds?.includes(interaction.id)}>
+                                                            disabled={!interaction.name.trim() || threat.targetIds?.includes(interaction.id)
+                                                                || canReference?.(threat.id, interaction.id) === false}>
                                                             {systemElementLabel(draft.model, interaction.id)}
                                                         </option>
                                                     ))}
@@ -322,10 +349,10 @@ export default function StrideContextEditor({
                             <button
                                 type="button" className={buttonClass}
                                 onClick={() => updateModel({
-                                    threats: [...draft.model.threats, emptyThreat(nextThreatId(draft.model, draft.register, savedContext))],
+                                    threats: [...draft.model.threats, emptyThreat(allocateId?.("T") ?? nextThreatId(draft.model, draft.register, savedContext))],
                                 })}
                             >Add threat</button>
-                            <div>
+                            {notesEditor ? notesEditor("threat_model") : <div>
                                 <label className={labelClass} htmlFor={`${id}-notes`}>Additional notes</label>
                                 <p id={`${id}-notes-help`} className="text-xs text-zinc-400 mb-1">
                                     Record assumptions, exclusions or existing notes that do not fit the threat entries.
@@ -336,7 +363,7 @@ export default function StrideContextEditor({
                                     placeholder="Physical debug access is disabled in production; verify this assumption."
                                     onChange={event => updateModel({ notes: event.target.value })}
                                 />
-                            </div>
+                            </div>}
                         </fieldset>
                         {activeSection === "threat_model" && saveAction}
                     </div>
@@ -357,6 +384,7 @@ export default function StrideContextEditor({
                                 return (
                                     <fieldset key={index} className="rounded-lg border border-slate-600 p-3 space-y-3">
                                         <legend className="text-sm font-semibold text-white px-1">Risk {index + 1}</legend>
+                                        {scopeEditor?.("risks", "", index)}
                                         <div>
                                             <label className={labelClass} htmlFor={`${id}-risk-${index}-threat`}>Threat</label>
                                             <select
@@ -464,14 +492,14 @@ export default function StrideContextEditor({
                                 type="button" className={buttonClass}
                                 onClick={() => updateRegister({ ...draft.register, risks: [...draft.register.risks, emptyRisk()] })}
                             >Add risk</button>
-                            <div>
+                            {notesEditor ? notesEditor("risks") : <div>
                                 <label className={labelClass} htmlFor={`${id}-risk-notes`}>Additional risk notes</label>
                                 <textarea
                                     id={`${id}-risk-notes`} className={textareaClass} value={draft.register.notes}
                                     placeholder="Existing notes, uncertainty or cross-cutting risks."
                                     onChange={event => updateRegister({ ...draft.register, notes: event.target.value })}
                                 />
-                            </div>
+                            </div>}
                         </fieldset>
                         {activeSection === "risks" && saveAction}
                     </div>

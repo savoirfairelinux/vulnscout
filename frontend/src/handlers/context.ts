@@ -1,4 +1,5 @@
 import type { RiskRegister, StrideEditorMode, StrideThreat, ThreatModel } from "../helpers/strideContext";
+import type { SharedContext, SharedContextResponse, SharedSection, SavePreview } from "../helpers/sharedContext";
 
 type ProjectContext = {
     project_id: string;
@@ -70,6 +71,15 @@ type ContextExport = {
     version: "2.0";
     exported_at: string;
     projects: ProjectEntry[];
+} | {
+    version: "3.0";
+    exported_at: string;
+    projects: {
+        project_name: string;
+        project_description: string | null;
+        variants: { variant_name: string }[];
+        context: unknown;
+    }[];
 };
 
 export type {
@@ -113,6 +123,47 @@ class Context {
             const data = await res.json();
             throw new Error(data.error || `Failed to delete reference (${res.status})`);
         }
+    }
+
+    static async getShared(projectId: string): Promise<SharedContextResponse> {
+        return this.sharedRequest(projectId, "GET");
+    }
+
+    static saveShared(
+        projectId: string, section: SharedSection, context: SharedContext, expectedRevision: number,
+        description: string | null, dryRun: true,
+    ): Promise<SavePreview>;
+    static saveShared(
+        projectId: string, section: SharedSection, context: SharedContext, expectedRevision: number,
+        description: string | null, dryRun?: false,
+    ): Promise<SharedContextResponse & SavePreview>;
+    static async saveShared(
+        projectId: string, section: SharedSection, context: SharedContext, expectedRevision: number,
+        description: string | null, dryRun = false,
+    ): Promise<SavePreview | (SharedContextResponse & SavePreview)> {
+        return this.sharedRequest(projectId, "PATCH", {
+            section, context, expected_revision: expectedRevision,
+            ...(section === "context" ? { description } : {}), dry_run: dryRun,
+        });
+    }
+
+    static async convertShared(projectId: string, context: SharedContext, mode: StrideEditorMode): Promise<SharedContext> {
+        const result = await this.sharedRequest<{ context: SharedContext }>(projectId, "POST", {
+            context, editor_mode: mode,
+        });
+        return result.context;
+    }
+
+    private static async sharedRequest<T>(projectId: string, method: string, body?: unknown): Promise<T> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context/shared`,
+            { mode: "cors", method, ...(body === undefined ? {} : {
+                headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+            }) },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Failed to ${method === "GET" ? "load" : "update"} shared context (${res.status})`);
+        return data as T;
     }
 
     static async get(projectId: string, variantId: string): Promise<MergedContext> {

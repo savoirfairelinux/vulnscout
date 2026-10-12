@@ -2,8 +2,12 @@ import {
     RISK_FIELDS, STRIDE_CATEGORIES, hasRiskContent, hasThreatDraft, systemElementLabel,
 } from "../helpers/strideContext";
 import type { RiskRegister, StrideRisk, ThreatModel } from "../helpers/strideContext";
+import type { ReactNode } from "react";
 
-type Props = { model: ThreatModel; register: RiskRegister };
+type Props = {
+    model: ThreatModel; register: RiskRegister;
+    scopeLabel?: (kind: "threats" | "risks", index: number) => ReactNode;
+};
 
 const cellClass = "border-t border-slate-700 px-3 py-2 align-top whitespace-pre-wrap break-words";
 const headerClass = "px-3 py-2 text-left font-semibold text-zinc-200";
@@ -52,7 +56,7 @@ function SystemTargets({ model, targetIds }: Readonly<{ model: ThreatModel; targ
     </ul>;
 }
 
-export default function StrideSummary({ model, register }: Readonly<Props>) {
+export default function StrideSummary({ model, register, scopeLabel }: Readonly<Props>) {
     const risks = register.risks.map((risk, index) => ({ risk, number: index + 1 }))
         .filter(entry => hasRiskContent(entry.risk));
     const threats = model.threats.filter(threat => hasThreatDraft(threat)
@@ -103,7 +107,8 @@ export default function StrideSummary({ model, register }: Readonly<Props>) {
                 <div role="region" aria-label="Threat and risk summary" tabIndex={0} className={regionClass}>
                     <table className={tableClass + " min-w-[1000px]"}>
                         <caption className="p-3 text-left font-semibold text-white">Threats and linked risk evaluations</caption>
-                        <thead><tr>{["Threat", "STRIDE category", "Affected system elements", "Risk", ...riskHeaders].map(label =>
+                        <thead><tr>{["Threat", ...(scopeLabel ? ["Threat variants"] : []), "STRIDE category", "Affected system elements",
+                            "Risk", ...(scopeLabel ? ["Risk variants"] : []), ...riskHeaders].map(label =>
                             <th key={label} scope="col" className={headerClass}>{label}</th>)}</tr></thead>
                         {threats.map(threat => {
                             const number = model.threats.findIndex(entry => entry.id === threat.id) + 1;
@@ -116,12 +121,14 @@ export default function StrideSummary({ model, register }: Readonly<Props>) {
                                             <p className="font-semibold text-white">Threat {number} ({threat.id})</p>
                                             {threat.description.trim() ? threat.description : "Description missing (draft)"}
                                         </th>
+                                        {scopeLabel && <td rowSpan={rows.length} className={cellClass}>{scopeLabel("threats", number - 1)}</td>}
                                         <td rowSpan={rows.length} className={cellClass}>{threat.category || "Uncategorized"}</td>
                                         <td rowSpan={rows.length} className={cellClass + " min-w-[220px]"}>
                                             <SystemTargets model={model} targetIds={threat.targetIds ?? []} />
                                         </td>
                                     </>}
                                     <td className={cellClass}>{entry ? `Risk ${entry.number}` : "No linked risk"}</td>
+                                    {scopeLabel && <td className={cellClass}>{entry ? scopeLabel("risks", entry.number - 1) : "Not evaluated"}</td>}
                                     <RiskSummaryCells risk={entry?.risk} />
                                 </tr>
                             ))}</tbody>;
@@ -133,10 +140,11 @@ export default function StrideSummary({ model, register }: Readonly<Props>) {
                 <div role="region" aria-label="Unlinked risk summary" tabIndex={0} className={regionClass}>
                     <table className={tableClass + " min-w-[900px]"}>
                         <caption className="p-3 text-left font-semibold text-white">Risks with unlinked or unavailable threats</caption>
-                        <thead><tr>{["Risk", "Threat reference", "Saved scenario", ...riskHeaders].map(label =>
+                        <thead><tr>{["Risk", ...(scopeLabel ? ["Variants"] : []), "Threat reference", "Saved scenario", ...riskHeaders].map(label =>
                             <th key={label} scope="col" className={headerClass}>{label}</th>)}</tr></thead>
                         <tbody>{unlinkedRisks.map(entry => <tr key={entry.number}>
                             <th scope="row" className={cellClass + " font-medium"}>Risk {entry.number}</th>
+                            {scopeLabel && <td className={cellClass}>{scopeLabel("risks", entry.number - 1)}</td>}
                             <td className={cellClass}>
                                 {entry.risk.threatId
                                     ? <span role="status" className="text-amber-300">Unavailable threat ({entry.risk.threatId})</span>
