@@ -20,6 +20,9 @@ The objective of the vulnerability classification is to not patch every CVE blin
 
 Threat modeling is a process by which potential threats, such as structural vulnerabilities or the absence of appropriate safeguards, can be identified and enumerated, and countermeasures prioritized.
 
+The **AI** tab offers a [guided STRIDE template and risk register](ai-assessments.md#fill-in-the-ai-context),
+with **Advanced free mode** for your own format.
+
 Threat model example: All the vulnerabilities which can be exploitable via the serial port and which lead to privilege escalation or arbitrary code execution.
 
 In this example, a vulnerability which only leads to a data leak of the product, exploitable from the serial port, would not be considered exploitable and would be classified as **Not affected** even if the vulnerability exists and is present on the device.

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useId } from "react";
 import type { ReactNode } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner, faRobot, faBook, faFileExport, faFileImport, faChevronDown } from "@fortawesome/free-solid-svg-icons";
@@ -13,6 +13,7 @@ import MessageBanner from "../components/MessageBanner";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import HelpPopover from "../components/HelpPopover";
+import StrideContextEditor from "../components/StrideContextEditor";
 import useDismissablePopover from "../hooks/useDismissablePopover";
 import { AGENT_WRITE_EVENT, type AgentViewContext } from "../types/agent";
 
@@ -46,6 +47,13 @@ type SaveSnapshot = {
     fields: VariantContextData;
 };
 
+const CONTEXT_TABS = [
+    { id: "context", label: "Context" },
+    { id: "threat_model", label: "Threat model" },
+    { id: "risks", label: "Risks" },
+] as const;
+type ContextTab = (typeof CONTEXT_TABS)[number]["id"];
+
 function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (context: AgentViewContext) => void }>) {
     const unmountedRef = useRef(false);
     useEffect(() => {
@@ -61,24 +69,35 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
     const [selectedVariantId, setSelectedVariantId] = useState<string>('');
+    const [activeTab, setActiveTab] = useState<ContextTab>("context");
+    const [editorModeContainer, setEditorModeContainer] = useState<HTMLDivElement | null>(null);
+    const tabIdPrefix = useId();
+    const tabRefs = useRef<Partial<Record<ContextTab, HTMLButtonElement | null>>>({});
+    const activateTab = (tab: ContextTab) => {
+        setActiveTab(tab);
+        tabRefs.current[tab]?.focus();
+    };
     useEffect(() => {
         onAgentContextChange?.({
+            section: activeTab,
             selectedProjectId,
             selectedProjectName: projects.find(project => project.id === selectedProjectId)?.name,
             selectedVariantId,
             selectedVariantName: variants.find(variant => variant.id === selectedVariantId)?.name,
         });
-    }, [selectedProjectId, selectedVariantId, projects, variants, onAgentContextChange]);
+    }, [activeTab, selectedProjectId, selectedVariantId, projects, variants, onAgentContextChange]);
 
     // Form fields
     const [description, setDescription] = useState<string>('');
     const [variantDescription, setVariantDescription] = useState<string>('');
-    const [codebasePath, setCodebasePath] = useState<string>('');
+    const [codebasePaths, setCodebasePaths] = useState<string[]>(['']);
     const [contextFiles, setContextFiles] = useState<{ variantId: string; files: ContextFile[] }>({ variantId: '', files: [] });
     const [environment, setEnvironment] = useState<string>('');
     const [threatModel, setThreatModel] = useState<string>('');
     const [risks, setRisks] = useState<string>('');
     const [otherInfo, setOtherInfo] = useState<string>('');
+    // Reset structured drafts on external context loads, not on local edits or saves.
+    const [contextEditorVersion, setContextEditorVersion] = useState(0);
 
     // UI state
     const [busy, setBusy] = useState(false);
@@ -144,12 +163,13 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
 
     const clearVariantFields = () => {
         setVariantDescription('');
-        setCodebasePath('');
+        setCodebasePaths(['']);
         setContextFiles({ variantId: '', files: [] });
         setEnvironment('');
         setThreatModel('');
         setRisks('');
         setOtherInfo('');
+        setContextEditorVersion(version => version + 1);
     };
 
     // Load variants when project changes
@@ -212,12 +232,13 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                     other_info: ctx.other_info ?? null,
                 };
                 setVariantDescription(ctx.variant_description ?? '');
-                setCodebasePath(ctx.codebase_path ?? '');
+                setCodebasePaths(ctx.codebase_path?.split(';') ?? ['']);
                 setContextFiles({ variantId: selectedVariantId, files: ctx.files ?? [] });
                 setEnvironment(ctx.environment ?? '');
                 setThreatModel(ctx.threat_model ?? '');
                 setRisks(ctx.risks ?? '');
                 setOtherInfo(ctx.other_info ?? '');
+                setContextEditorVersion(version => version + 1);
             }).catch((e: any) => {
                 if (!unmountedRef.current && loadId === variantLoadIdRef.current) {
                     setVariantContextLoadFailed(true);
@@ -242,12 +263,14 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
             errors.threatModel = "Threat Model is required.";
         }
         setValidationErrors(errors);
+        if (errors.description) activateTab("context");
+        else if (errors.threatModel) activateTab("threat_model");
         return Object.keys(errors).length === 0;
     };
 
     const currentVariantFields = (): VariantContextData => ({
         variant_description: variantDescription.trim() || null,
-        codebase_path: codebasePath.trim() || null,
+        codebase_path: codebasePaths.filter(path => path.trim()).join(';').trim() || null,
         environment: environment.trim() || null,
         threat_model: threatModel.trim() || null,
         risks: risks.trim() || null,
@@ -441,6 +464,8 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
         "rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed";
     const btnPrimary =
         "px-4 py-2 rounded-lg bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
+    const btnSecondary =
+        "rounded px-3 py-1.5 text-sm border border-slate-500 text-cyan-300 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed";
     const btnTransfer =
         "bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
     const cardHeader =
@@ -594,220 +619,269 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
             <div>
                 <div className={cardHeader}>
                     <FontAwesomeIcon icon={faRobot} className="text-cyan-400" />
-                    <h2 className="text-xl font-bold text-white">Context</h2>
+                    <h2 className="text-xl font-bold text-white">Assessment context</h2>
                 </div>
                 <div className={cardBody}>
 
-            {/* Project selector */}
-            <div>
-                <label className={labelClass} htmlFor="ai-project-select">Project</label>
-                <select
-                    id="ai-project-select"
-                    aria-label="Project"
-                    className={selectClass}
-                    value={selectedProjectId}
-                    onChange={e => setSelectedProjectId(e.target.value)}
-                >
-                    <option value="">— Select project —</option>
-                    {projects.map(p => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                </select>
-            </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        {/* Project selector */}
+                        <div>
+                            <label className={labelClass} htmlFor="ai-project-select">Project</label>
+                            <select
+                                id="ai-project-select"
+                                aria-label="Project"
+                                className={selectClass + " w-full"}
+                                value={selectedProjectId}
+                                onChange={e => setSelectedProjectId(e.target.value)}
+                            >
+                                <option value="">— Select project —</option>
+                                {projects.map(p => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                            </select>
+                            {projectSelected && projectContextLoadFailed && (
+                                <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
+                                    Could not load this project&apos;s context. Saving is disabled until it loads.
+                                    <button
+                                        type="button"
+                                        onClick={loadProjectContext}
+                                        className="underline hover:text-red-400"
+                                    >
+                                        Retry
+                                    </button>
+                                </p>
+                            )}
+                        </div>
 
-            {/* Project Description */}
-            <div>
-                <label className={labelClass} htmlFor="ai-project-description">
-                    Project Description <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                    id="ai-project-description"
-                    aria-label="Project Description"
-                    className={textareaClass}
-                    value={description}
-                    onChange={e => setDescription(e.target.value)}
-                    disabled={!projectSelected}
-                    placeholder={projectSelected ? "Describe your project..." : "Select a project first"}
-                />
-                {validationErrors.description && (
-                    <p className="text-red-500 text-xs mt-1">{validationErrors.description}</p>
-                )}
-                {projectSelected && projectContextLoadFailed && (
-                    <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
-                        Could not load this project&apos;s context. Saving is disabled until it loads.
-                        <button
-                            type="button"
-                            onClick={loadProjectContext}
-                            className="underline hover:text-red-400"
-                        >
-                            Retry
-                        </button>
-                    </p>
-                )}
-            </div>
+                        {/* Variant selector */}
+                        <div>
+                            <label className={labelClass} htmlFor="ai-variant-select">Variant</label>
+                            <select
+                                id="ai-variant-select"
+                                aria-label="Variant"
+                                className={selectClass + " w-full"}
+                                value={selectedVariantId}
+                                onChange={e => setSelectedVariantId(e.target.value)}
+                                disabled={!projectSelected || variants.length === 0}
+                            >
+                                <option value="">— Select variant —</option>
+                                {variants.map(v => (
+                                    <option key={v.id} value={v.id}>{v.name}</option>
+                                ))}
+                            </select>
+                            {variantSelected && variantContextLoadFailed && (
+                                <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
+                                    Could not load this variant&apos;s context. Saving is disabled until it loads.
+                                    <button
+                                        type="button"
+                                        onClick={loadVariantContext}
+                                        className="underline hover:text-red-400"
+                                    >
+                                        Retry
+                                    </button>
+                                </p>
+                            )}
+                        </div>
+                    </div>
 
-            {/* Variant selector */}
-            <div>
-                <label className={labelClass} htmlFor="ai-variant-select">Variant</label>
-                <select
-                    id="ai-variant-select"
-                    aria-label="Variant"
-                    className={selectClass}
-                    value={selectedVariantId}
-                    onChange={e => setSelectedVariantId(e.target.value)}
-                    disabled={!projectSelected || variants.length === 0}
-                >
-                    <option value="">— Select variant —</option>
-                    {variants.map(v => (
-                        <option key={v.id} value={v.id}>{v.name}</option>
-                    ))}
-                </select>
-                {variantSelected && variantContextLoadFailed && (
-                    <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
-                        Could not load this variant&apos;s context. Saving is disabled until it loads.
-                        <button
-                            type="button"
-                            onClick={loadVariantContext}
-                            className="underline hover:text-red-400"
-                        >
-                            Retry
-                        </button>
-                    </p>
-                )}
-            </div>
+                    <div role="tablist" aria-label="AI context sections" className="flex flex-wrap gap-1 border-b border-slate-600 p-1 pb-2">
+                        {CONTEXT_TABS.map((tab, index) => (
+                            <button
+                                key={tab.id}
+                                ref={element => { tabRefs.current[tab.id] = element; }}
+                                type="button"
+                                role="tab"
+                                id={`${tabIdPrefix}-${tab.id}-tab`}
+                                aria-controls={`${tabIdPrefix}-${tab.id}-panel`}
+                                aria-selected={activeTab === tab.id}
+                                tabIndex={activeTab === tab.id ? 0 : -1}
+                                className={`rounded-md px-4 py-2 text-sm font-semibold whitespace-nowrap transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-400 ${
+                                    activeTab === tab.id ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
+                                }`}
+                                onClick={() => activateTab(tab.id)}
+                                onKeyDown={event => {
+                                    let next: number;
+                                    if (event.key === "ArrowRight") next = (index + 1) % CONTEXT_TABS.length;
+                                    else if (event.key === "ArrowLeft") next = (index + CONTEXT_TABS.length - 1) % CONTEXT_TABS.length;
+                                    else if (event.key === "Home") next = 0;
+                                    else if (event.key === "End") next = CONTEXT_TABS.length - 1;
+                                    else return;
+                                    event.preventDefault();
+                                    activateTab(CONTEXT_TABS[next].id);
+                                }}
+                            >{tab.label}</button>
+                        ))}
+                    </div>
 
-            {/* Variant Description */}
-            <div>
-                <label className={labelClass} htmlFor="ai-variant-description">Variant Description</label>
-                <textarea
-                    id="ai-variant-description"
-                    aria-label="Variant Description"
-                    className={textareaClass}
-                    value={variantDescription}
-                    onChange={e => setVariantDescription(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Describe this variant..." : "Select a variant to enable"}
-                />
-            </div>
-
-            {/* Codebase Path */}
-            <div>
-                <label className={labelClass} htmlFor="ai-codebase-path">
-                    Codebase Path <span className="text-neutral-400 font-normal">(for external Copilot/MCP clients on your machine; separate multiple paths with a semicolon)</span>
-                </label>
-                <input
-                    id="ai-codebase-path"
-                    aria-label="Codebase Path"
-                    type="text"
-                    className={inputClass}
-                    value={codebasePath}
-                    onChange={e => setCodebasePath(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "e.g. /home/user/src/myproject;/home/user/src/otherproject" : "Select a variant to enable"}
-                />
-                <p className="text-xs text-zinc-400 mt-1">
-                    Paths do not mount host directories into the container. Use Codebase References below for the embedded Agent.
-                </p>
-            </div>
-
-            <CodebaseReferences
-                key={`${selectedProjectId}/${selectedVariantId}`}
-                variantId={selectedVariantId}
-                initialFiles={contextFiles.variantId === selectedVariantId ? contextFiles.files : []}
-                disabled={!variantSelected || contextFiles.variantId !== selectedVariantId || variantContextLoadFailed || busy || ioBusy}
-                notify={showBanner}
-            />
-
-            {/* Environment */}
-            <div>
-                <label className={labelClass} htmlFor="ai-environment">Environment</label>
-                <textarea
-                    id="ai-environment"
-                    aria-label="Environment"
-                    className={textareaClass}
-                    value={environment}
-                    onChange={e => setEnvironment(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "e.g. runtime environment details" : "Select a variant to enable"}
-                />
-            </div>
-
-            {/* Threat Model */}
-            <div>
-                <label className={labelClass} htmlFor="ai-threat-model">
-                    Threat Model <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                    id="ai-threat-model"
-                    aria-label="Threat Model"
-                    className={textareaClass}
-                    value={threatModel}
-                    onChange={e => setThreatModel(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Describe the threat criteria for CVEs..." : "Select a variant to enable"}
-                />
-                {validationErrors.threatModel && (
-                    <p className="text-red-500 text-xs mt-1">{validationErrors.threatModel}</p>
-                )}
-            </div>
-
-            {/* Risks */}
-            <div>
-                <label className={labelClass} htmlFor="ai-risks">Risks</label>
-                <textarea
-                    id="ai-risks"
-                    aria-label="Risks"
-                    className={textareaClass}
-                    value={risks}
-                    onChange={e => setRisks(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Describe known risks..." : "Select a variant to enable"}
-                />
-            </div>
-
-            {/* Other Information */}
-            <div>
-                <label className={labelClass} htmlFor="ai-other-info">Other Information</label>
-                <textarea
-                    id="ai-other-info"
-                    aria-label="Other Information"
-                    className={textareaClass}
-                    value={otherInfo}
-                    onChange={e => setOtherInfo(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Any additional context..." : "Select a variant to enable"}
-                />
-            </div>
-
-                <ConfirmationModal
-                    isOpen={confirmOutdate}
-                    title="Mark AI assessments as outdated?"
-                    message="Saving this context will mark all pending AI assessments as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
-                    confirmText="Save and mark outdated"
-                    cancelText="Cancel"
-                    showTitleIcon={true}
-                    onConfirm={() => {
-                        setConfirmOutdate(false);
-                        const snapshot = pendingSaveRef.current;
-                        pendingSaveRef.current = null;
-                        if (snapshot) void performSave(snapshot);
-                    }}
-                    onCancel={() => { pendingSaveRef.current = null; setConfirmOutdate(false); }}
-                />
-
-                {/* Save */}
-                <div>
-                    <button
-                        type="button"
-                        onClick={handleSave}
-                        disabled={!projectSelected || busy || variantContextLoading
-                            || (variantSelected && variantContextLoadFailed) || projectContextLoadFailed}
-                        className={btnPrimary + " flex items-center gap-2"}
+                    <div
+                        role="tabpanel"
+                        id={`${tabIdPrefix}-context-panel`}
+                        aria-labelledby={`${tabIdPrefix}-context-tab`}
+                        hidden={activeTab !== "context"}
+                        tabIndex={0}
+                        className="space-y-4"
                     >
-                        {busy && <FontAwesomeIcon icon={faSpinner} spin />}
-                        Save
-                    </button>
-                </div>
+                        {/* Project Description */}
+                        <div>
+                            <label className={labelClass} htmlFor="ai-project-description">
+                                Project Description <span className="text-red-500">*</span>
+                            </label>
+                            <textarea
+                                id="ai-project-description"
+                                aria-label="Project Description"
+                                className={textareaClass}
+                                value={description}
+                                onChange={e => setDescription(e.target.value)}
+                                disabled={!projectSelected}
+                                placeholder={projectSelected ? "Describe your project..." : "Select a project first"}
+                                aria-invalid={Boolean(validationErrors.description)}
+                                aria-describedby={validationErrors.description ? `${tabIdPrefix}-description-error` : undefined}
+                            />
+                            {validationErrors.description && (
+                                <p id={`${tabIdPrefix}-description-error`} role="alert" className="text-red-500 text-xs mt-1">
+                                    {validationErrors.description}
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Variant Description */}
+                        <div>
+                            <label className={labelClass} htmlFor="ai-variant-description">Variant Description</label>
+                            <textarea
+                                id="ai-variant-description"
+                                aria-label="Variant Description"
+                                className={textareaClass}
+                                value={variantDescription}
+                                onChange={e => setVariantDescription(e.target.value)}
+                                disabled={!variantSelected}
+                                placeholder={variantSelected ? "Describe this variant..." : "Select a variant to enable"}
+                            />
+                        </div>
+
+                        <fieldset disabled={!variantSelected}
+                            aria-describedby={`${tabIdPrefix}-codebase-help`}>
+                            <legend className={labelClass}>Codebase Paths</legend>
+                            <p id={`${tabIdPrefix}-codebase-help`} className="text-xs text-zinc-400 mb-1">
+                                Source code locations visible to external assessment tools. Paths do not mount host
+                                directories into the container; use Codebase References for the embedded Agent.
+                            </p>
+                            <div className="space-y-3">
+                                {codebasePaths.map((path, index) => (
+                                    <div key={index} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                                        <div className="min-w-0 flex-1">
+                                            <label className={labelClass} htmlFor={`${tabIdPrefix}-codebase-${index}`}>
+                                                Codebase Path {index + 1}
+                                            </label>
+                                            <input
+                                                id={`${tabIdPrefix}-codebase-${index}`}
+                                                type="text" className={inputClass} value={path}
+                                                onChange={event => {
+                                                    const value = event.target.value;
+                                                    setCodebasePaths(paths =>
+                                                        paths.map((path, row) => row === index ? value : path));
+                                                }}
+                                                placeholder={variantSelected ? "e.g. /home/user/src/myproject" : "Select a variant to enable"}
+                                            />
+                                        </div>
+                                        <button type="button" className={btnSecondary + " shrink-0 self-start sm:self-auto"}
+                                            aria-label={`Remove Codebase Path ${index + 1}`}
+                                            onClick={() => setCodebasePaths(paths => paths.filter((_, row) => row !== index))}
+                                        >Remove Codebase Path</button>
+                                    </div>
+                                ))}
+                                <button type="button" className={btnSecondary}
+                                    onClick={() => setCodebasePaths(paths => [...paths, ''])}
+                                >Add Codebase Path</button>
+                            </div>
+                        </fieldset>
+
+                        <CodebaseReferences
+                            key={`${selectedProjectId}/${selectedVariantId}`}
+                            variantId={selectedVariantId}
+                            initialFiles={contextFiles.variantId === selectedVariantId ? contextFiles.files : []}
+                            disabled={!variantSelected || contextFiles.variantId !== selectedVariantId || variantContextLoadFailed || busy || ioBusy}
+                            notify={showBanner}
+                        />
+
+                        {/* Environment */}
+                        <div>
+                            <label className={labelClass} htmlFor="ai-environment">Environment</label>
+                            <p id={`${tabIdPrefix}-environment-help`} className="text-xs text-zinc-400 mb-1">
+                                Describe the target platform, operating system and deployment conditions.
+                            </p>
+                            <textarea
+                                id="ai-environment"
+                                aria-label="Environment"
+                                aria-describedby={`${tabIdPrefix}-environment-help`}
+                                className={textareaClass}
+                                value={environment}
+                                onChange={e => setEnvironment(e.target.value)}
+                                disabled={!variantSelected}
+                                placeholder={variantSelected ? "e.g. runtime environment details" : "Select a variant to enable"}
+                            />
+                        </div>
+
+                        <div ref={setEditorModeContainer} />
+
+                        {/* Other Information */}
+                        <div>
+                            <label className={labelClass} htmlFor="ai-other-info">Other Information</label>
+                            <textarea
+                                id="ai-other-info"
+                                aria-label="Other Information"
+                                className={textareaClass}
+                                value={otherInfo}
+                                onChange={e => setOtherInfo(e.target.value)}
+                                disabled={!variantSelected}
+                                placeholder={variantSelected ? "Any additional context..." : "Select a variant to enable"}
+                            />
+                        </div>
+                    </div>
+
+                    <div hidden={activeTab === "context"}>
+                        <StrideContextEditor
+                            key={`${selectedVariantId}:${contextEditorVersion}`}
+                            activeSection={activeTab === "risks" ? "risks" : "threat_model"}
+                            tabIdPrefix={tabIdPrefix}
+                            modeContainer={editorModeContainer}
+                            threatModel={threatModel}
+                            risks={risks}
+                            disabled={!variantSelected}
+                            error={validationErrors.threatModel}
+                            onChange={text => { setThreatModel(text.threatModel); setRisks(text.risks); }}
+                        />
+                    </div>
+
+                    <ConfirmationModal
+                        isOpen={confirmOutdate}
+                        title="Mark AI assessments as outdated?"
+                        message="Saving this context will mark all pending AI assessments as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
+                        confirmText="Save and mark outdated"
+                        cancelText="Cancel"
+                        showTitleIcon={true}
+                        onConfirm={() => {
+                            setConfirmOutdate(false);
+                            const snapshot = pendingSaveRef.current;
+                            pendingSaveRef.current = null;
+                            if (snapshot) void performSave(snapshot);
+                        }}
+                        onCancel={() => { pendingSaveRef.current = null; setConfirmOutdate(false); }}
+                    />
+
+                    {/* Save */}
+                    <div className="flex items-center gap-3 border-t border-slate-700 pt-4">
+                        <button
+                            type="button"
+                            onClick={handleSave}
+                            disabled={!projectSelected || busy || variantContextLoading
+                                || (variantSelected && variantContextLoadFailed) || projectContextLoadFailed}
+                            className={btnPrimary + " flex items-center gap-2"}
+                        >
+                            {busy && <FontAwesomeIcon icon={faSpinner} spin />}
+                            Save
+                        </button>
+                        <p className="text-xs text-zinc-400">Saves all sections.</p>
+                    </div>
                 </div>
             </div>
         </div>

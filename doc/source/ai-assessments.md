@@ -49,6 +49,39 @@ replaced.
 
 ---
 
+## Fill in the AI context
+
+Select a project and variant in the **AI** tab. Use **Context** for descriptions,
+source paths and the operating environment, **Threat model** for system scope
+and threats, and **Risks** for their evaluation. Switching subtabs keeps unsaved
+edits; **Save** saves all sections.
+
+Use **Add Codebase Path** and **Remove Codebase Path** to list source directories
+individually. Paths are context hints, not filesystem access or automatic mounts.
+Container-based assessment tools need explicitly mounted directories and their
+container paths. The embedded Agent currently exposes only VulnScout MCP tools,
+not source-file read/search tools.
+
+Choose **Editor mode** in **Context**; it applies to both **Threat model** and
+**Risks**. The default is a guided **STRIDE template**: describe the system's assets, actors,
+entry points, data flows and trust boundaries, then record each threat's
+description and select its category: **Spoofing**,
+**Tampering**, **Repudiation**, **Information disclosure**, **Denial of service**
+and **Elevation of privilege**. The first threat and risk entries start empty;
+use **Add threat** for additional entries. The prompts are examples, not prefilled answers.
+Several threats can share a category. Leave unknowns blank; the **Additional notes**
+area can record assumptions or explain why a category does not apply.
+
+In the risk register, **select a threat from Threat model**, then record its
+qualitative likelihood and impact, mitigations and residual-risk decisions.
+A threat cannot be removed until its linked risks are reassigned or removed.
+**Advanced free mode** remains available for your own format. Existing free-text
+context opens in that mode;
+switching to STRIDE retains it as additional notes. Both modes save readable text
+and work with existing AI tools and context imports/exports.
+
+---
+
 ## Prerequisites
 
 For the **embedded Agent**, use its connector setup described in

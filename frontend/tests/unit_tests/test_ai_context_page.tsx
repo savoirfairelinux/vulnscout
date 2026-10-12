@@ -6,13 +6,29 @@ fetchMock.enableMocks();
 import React from 'react';
 
 import AIContext from '../../src/pages/AIContext';
-import { AGENT_WRITE_EVENT } from '../../src/types/agent';
+import { AGENT_WRITE_EVENT, type AgentViewContext } from '../../src/types/agent';
+import {
+    emptyRisk, emptyThreatModel, parseRiskRegister, parseThreatModel, serializeRiskRegister, serializeThreatModel,
+} from '../../src/helpers/strideContext';
+import type { StrideContextText } from '../../src/helpers/strideContext';
+import type { VariantContextData } from '../../src/handlers/context';
 
 beforeEach(() => fetchMock.resetMocks());
 
 function mockProjectsAndVariants() {
     // Projects list
     fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+}
+
+function selectContextTab(name: "Context" | "Threat model" | "Risks") {
+    fireEvent.click(screen.getByRole("tab", { name }));
+}
+
+function switchContextMode(value: "stride" | "free") {
+    const selectedTab = screen.getByRole("tab", { selected: true });
+    selectContextTab("Context");
+    fireEvent.change(screen.getByRole("combobox", { name: "Editor mode" }), { target: { value } });
+    fireEvent.click(selectedTab);
 }
 
 describe('AIContext page', () => {
@@ -58,6 +74,101 @@ describe('AIContext page', () => {
         expect(await screen.findByLabelText("Project")).toBeInTheDocument();
     });
 
+    test('defaults to Context and groups fields under accessible subtabs with shared actions', async () => {
+        mockProjectsAndVariants();
+        render(<AIContext />);
+        await screen.findByRole('option', { name: 'Project A' });
+        const tablist = screen.getByRole('tablist', { name: 'AI context sections' });
+        expect(tablist).toBeVisible();
+        expect(tablist).toHaveClass('flex-wrap', 'p-1');
+        expect(tablist).not.toHaveClass('overflow-x-auto');
+        expect(screen.queryByText('Describe the project, this variant and its operating environment.')).not.toBeInTheDocument();
+        for (const name of ['Context', 'Threat model', 'Risks'] as const) {
+            if (name !== 'Context') selectContextTab(name);
+            const tab = screen.getByRole('tab', { name });
+            const panel = screen.getByRole('tabpanel', { name });
+            expect(tab).toHaveAttribute('aria-selected', 'true');
+            expect(tab).toHaveAttribute('tabindex', '0');
+            expect(panel).toHaveAttribute('id', tab.getAttribute('aria-controls'));
+            expect(panel).toHaveAttribute('aria-labelledby', tab.id);
+            expect(screen.getAllByRole('tabpanel')).toHaveLength(1);
+            expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(3);
+            expect(screen.getAllByLabelText('Editor mode')).toHaveLength(1);
+            if (name === 'Context') {
+                expect(panel).toContainElement(screen.getByRole('combobox', { name: 'Editor mode' }));
+                expect(screen.getByLabelText('Editor mode')).toHaveAccessibleDescription('Applies to both Threat model and Risks.');
+                const mode = screen.getByLabelText('Editor mode');
+                const modeTitle = screen.getByText('Editor mode', { selector: 'label' });
+                const modeHelp = screen.getByText('Applies to both Threat model and Risks.');
+                expect(modeTitle).toHaveClass('mb-1');
+                expect(modeTitle.nextElementSibling).toBe(modeHelp);
+                expect(modeHelp).toHaveClass('mb-1');
+                expect(modeHelp.nextElementSibling).toBe(mode);
+                const environment = screen.getByLabelText('Environment');
+                expect(environment).toHaveAccessibleDescription('Describe the target platform, operating system and deployment conditions.');
+                const environmentTitle = screen.getByText('Environment', { selector: 'label' });
+                const environmentHelp = screen.getByText('Describe the target platform, operating system and deployment conditions.');
+                expect(environmentTitle).toHaveClass('mb-1');
+                expect(environmentTitle.nextElementSibling).toBe(environmentHelp);
+                expect(environmentHelp).toHaveClass('mb-1');
+                expect(environmentHelp.nextElementSibling).toBe(environment);
+                const codebaseGroup = screen.getByRole('group', { name: 'Codebase Paths' });
+                expect(codebaseGroup).toHaveAccessibleDescription('Source code locations visible to the assessment tool.');
+                expect(codebaseGroup).not.toHaveClass('space-y-3');
+                const codebaseTitle = screen.getByText('Codebase Paths', { selector: 'legend' });
+                const codebaseHelp = screen.getByText('Source code locations visible to the assessment tool.');
+                expect(codebaseTitle).toHaveClass('mb-1');
+                expect(codebaseTitle.nextElementSibling).toBe(codebaseHelp);
+                expect(codebaseHelp).toHaveClass('mb-1');
+                expect(screen.getByLabelText('Environment').compareDocumentPosition(mode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+                expect(mode.compareDocumentPosition(screen.getByLabelText('Other Information')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            } else {
+                expect(screen.getByLabelText('Editor mode')).not.toBeVisible();
+                expect(screen.queryByRole('combobox', { name: 'Editor mode' })).not.toBeInTheDocument();
+            }
+            for (const label of ['Project Description', 'Variant Description', 'Codebase Path 1', 'Environment', 'Other Information']) {
+                if (name === 'Context') expect(screen.getByLabelText(label)).toBeVisible();
+                else expect(screen.getByLabelText(label)).not.toBeVisible();
+            }
+            if (name === 'Threat model') expect(screen.getByRole('button', { name: 'Add threat' })).toBeVisible();
+            else expect(screen.queryByRole('button', { name: 'Add threat' })).not.toBeInTheDocument();
+            if (name === 'Risks') expect(screen.getByRole('button', { name: 'Add risk' })).toBeVisible();
+            else expect(screen.queryByRole('button', { name: 'Add risk' })).not.toBeInTheDocument();
+            expect(screen.getByLabelText('Project')).toBeVisible();
+            expect(screen.getByLabelText('Variant')).toBeVisible();
+            expect(screen.getByRole('button', { name: 'Import context' })).toBeVisible();
+            expect(screen.getByRole('button', { name: 'Export context' })).toBeVisible();
+            expect(screen.getByRole('button', { name: /^save$/i })).toBeVisible();
+        }
+    });
+
+    test('subtabs support wrapping arrow keys and Home/End with roving keyboard focus', async () => {
+        mockProjectsAndVariants();
+        render(<AIContext />);
+        await screen.findByRole('option', { name: 'Project A' });
+        screen.getByRole('tab', { name: 'Context' }).focus();
+        for (const [key, name] of [
+            ['ArrowRight', 'Threat model'], ['ArrowRight', 'Risks'], ['ArrowRight', 'Context'],
+            ['ArrowLeft', 'Risks'], ['ArrowLeft', 'Threat model'], ['Home', 'Context'], ['End', 'Risks'],
+        ]) {
+            fireEvent.keyDown(document.activeElement!, { key });
+            const selected = screen.getByRole('tab', { name });
+            expect(selected).toHaveFocus();
+            expect(selected).toHaveAttribute('aria-selected', 'true');
+            expect(selected).toHaveAttribute('tabindex', '0');
+            for (const tab of screen.getAllByRole('tab')) {
+                if (tab !== selected) {
+                    expect(tab).toHaveAttribute('aria-selected', 'false');
+                    expect(tab).toHaveAttribute('tabindex', '-1');
+                }
+            }
+            expect(screen.getByRole('tabpanel', { name })).toBeVisible();
+        }
+        fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+        expect(screen.getByRole('tab', { name: 'Risks' })).toHaveFocus();
+        expect(screen.getByRole('tabpanel', { name: 'Risks' })).toBeVisible();
+    });
+
     test('project description textarea is disabled when no project selected', async () => {
         mockProjectsAndVariants();
         render(<AIContext />);
@@ -100,9 +211,12 @@ describe('AIContext page', () => {
         fireEvent.change(projectSelect, { target: { value: 'p1' } });
 
         await waitFor(() => {
-            const threatModel = screen.getByLabelText(/threat model/i);
+            const threatModel = screen.getByLabelText("System scope and assets");
             expect(threatModel).toBeDisabled();
         });
+        expect(screen.getByLabelText("Codebase Path 1")).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Add Codebase Path" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Remove Codebase Path 1" })).toBeDisabled();
     });
 
     test('save button is disabled when no project selected', async () => {
@@ -205,11 +319,13 @@ describe('AIContext page', () => {
         await screen.findByRole('option', { name: 'Variant 1' });
         fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
 
-        // Wait for context to load (threat model enabled)
-        await waitFor(() => expect(screen.getByLabelText(/threat model/i)).not.toBeDisabled());
+        await waitFor(() => expect(screen.getByLabelText("Editor mode")).not.toBeDisabled());
+        selectContextTab("Threat model");
+        expect(screen.getByLabelText("Editor mode")).toHaveValue("stride");
+        switchContextMode("free");
 
         fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'Desc' } });
-        fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'High' } });
+        fireEvent.change(screen.getByRole("textbox", { name: "Threat Model" }), { target: { value: 'High' } });
 
         fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
@@ -220,6 +336,7 @@ describe('AIContext page', () => {
                 (c[1] as RequestInit)?.method === 'PUT'
             );
             expect(variantPut).toBeDefined();
+            expect(JSON.parse(String(variantPut![1]?.body))).toMatchObject({ threat_model: 'High', risks: null });
         });
     });
 
@@ -283,7 +400,7 @@ describe('AIContext page', () => {
 
         // Wait for threat model to be populated
         await waitFor(() => {
-            const tm = screen.getByLabelText(/threat model/i) as HTMLTextAreaElement;
+            const tm = screen.getByLabelText("Threat Model", { selector: "textarea" }) as HTMLTextAreaElement;
             expect(tm.value).toBe('TM');
         });
 
@@ -291,7 +408,7 @@ describe('AIContext page', () => {
         fireEvent.change(screen.getByLabelText("Project"), { target: { value: '' } });
 
         await waitFor(() => {
-            const tm = screen.getByLabelText(/threat model/i) as HTMLTextAreaElement;
+            const tm = screen.getByLabelText("System scope and assets") as HTMLTextAreaElement;
             expect(tm.value).toBe('');
         });
     });
@@ -321,7 +438,7 @@ describe('AIContext page', () => {
         await screen.findByRole('option', { name: 'Variant 1' });
         fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
         await waitFor(() => {
-            const tm = screen.getByLabelText(/threat model/i) as HTMLTextAreaElement;
+            const tm = screen.getByLabelText("Threat Model", { selector: "textarea" }) as HTMLTextAreaElement;
             expect(tm.value).toBe('TM1');
         });
 
@@ -332,7 +449,7 @@ describe('AIContext page', () => {
         fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v2' } });
 
         await waitFor(() => {
-            const tm = screen.getByLabelText(/threat model/i) as HTMLTextAreaElement;
+            const tm = screen.getByLabelText("Threat Model", { selector: "textarea" }) as HTMLTextAreaElement;
             expect(tm.value).toBe('TM2');
         });
         expect(
@@ -362,17 +479,18 @@ describe('AIContext page', () => {
         fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
         await screen.findByRole('option', { name: 'Variant 1' });
         fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-        await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('Agent v1'));
+        await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('Agent v1'));
         await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Agent v1'));
 
         stored = 'Agent v2';
         agentWrite('update_project_context');
         agentWrite('update_variant_context');
         await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Agent v2'));
-        await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('Agent v2'));
+        await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('Agent v2'));
 
         fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'Unsaved description' } });
-        fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'Unsaved threat model' } });
+        selectContextTab("Threat model");
+        fireEvent.change(screen.getByRole("textbox", { name: "Threat Model" }), { target: { value: 'Unsaved threat model' } });
         stored = 'Agent v3';
         const loaded = requests.length;
         agentWrite('update_project_context');
@@ -381,7 +499,7 @@ describe('AIContext page', () => {
         expect(await screen.findByText(/agent updated the variant context/i)).toBeInTheDocument();
         expect(requests).toHaveLength(loaded);
         expect(screen.getByLabelText("Project Description")).toHaveValue('Unsaved description');
-        expect(screen.getByLabelText(/threat model/i)).toHaveValue('Unsaved threat model');
+        expect(screen.getByRole("textbox", { name: "Threat Model" })).toHaveValue('Unsaved threat model');
     });
 
     function setupWithVariant() {
@@ -400,8 +518,27 @@ describe('AIContext page', () => {
         fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
         await screen.findByRole('option', { name: 'Variant 1' });
         fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-        await waitFor(() => expect(screen.getByLabelText(/threat model/i)).not.toBeDisabled());
+        await waitFor(() => expect(screen.getByLabelText("System scope and assets")).not.toBeDisabled());
     }
+
+    test('Save reveals and focuses the subtab containing the first missing required field', async () => {
+        setupWithVariant();
+        render(<AIContext />);
+        await selectProjectAndVariant();
+        selectContextTab('Risks');
+        fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+        expect(screen.getByRole('tab', { name: 'Context' })).toHaveFocus();
+        expect(screen.getByRole('tabpanel', { name: 'Context' })).toBeVisible();
+        expect(screen.getByRole('alert')).toHaveTextContent('Project Description is required.');
+        expect(screen.getByLabelText('Project Description')).toHaveAccessibleDescription('Project Description is required.');
+        fireEvent.change(screen.getByLabelText('Project Description'), { target: { value: 'Device firmware' } });
+        selectContextTab('Risks');
+        fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+        expect(screen.getByRole('tab', { name: 'Threat model' })).toHaveFocus();
+        expect(screen.getByRole('tabpanel', { name: 'Threat model' })).toBeVisible();
+        expect(screen.getByRole('alert')).toHaveTextContent('Threat Model is required.');
+        expect(fetchMock.mock.calls.some(call => (call[1] as RequestInit)?.method === 'PUT')).toBe(false);
+    });
 
     test('shows error banner when variant save fails', async () => {
         setupWithVariant();
@@ -413,7 +550,7 @@ describe('AIContext page', () => {
         await selectProjectAndVariant();
 
         fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'Desc' } });
-        fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'TM' } });
+        fireEvent.change(screen.getByLabelText("System scope and assets"), { target: { value: 'TM' } });
         fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
         await waitFor(() => {
@@ -443,15 +580,15 @@ describe('AIContext page', () => {
         });
 
         fireEvent.change(screen.getByLabelText("Variant Description"), { target: { value: 'New variant desc' } });
-        fireEvent.change(screen.getByLabelText("Codebase Path"), { target: { value: '/home/user/src/myproject' } });
+        fireEvent.change(screen.getByLabelText("Codebase Path 1"), { target: { value: '/home/user/src/myproject' } });
         fireEvent.change(screen.getByLabelText("Environment"), { target: { value: 'Linux runtime' } });
-        fireEvent.change(screen.getByLabelText("Risks"), { target: { value: 'Some risk' } });
+        fireEvent.change(screen.getByLabelText("Risk 1 mitigation"), { target: { value: 'Some mitigation' } });
         fireEvent.change(screen.getByLabelText("Other Information"), { target: { value: 'Extra info' } });
 
         expect(screen.getByLabelText("Variant Description")).toHaveValue('New variant desc');
-        expect(screen.getByLabelText("Codebase Path")).toHaveValue('/home/user/src/myproject');
+        expect(screen.getByLabelText("Codebase Path 1")).toHaveValue('/home/user/src/myproject');
         expect(screen.getByLabelText("Environment")).toHaveValue('Linux runtime');
-        expect(screen.getByLabelText("Risks")).toHaveValue('Some risk');
+        expect(screen.getByLabelText("Risk 1 mitigation")).toHaveValue('Some mitigation');
         expect(screen.getByLabelText("Other Information")).toHaveValue('Extra info');
     });
 
@@ -478,11 +615,11 @@ describe('AIContext page', () => {
         fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
 
         await waitFor(() => {
-            expect(screen.getByLabelText("Codebase Path")).toHaveValue('/existing/path');
+            expect(screen.getByLabelText("Codebase Path 1")).toHaveValue('/existing/path');
         });
 
         fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'desc' } });
-        fireEvent.change(screen.getByLabelText("Codebase Path"), { target: { value: '/updated/path' } });
+        fireEvent.change(screen.getByLabelText("Codebase Path 1"), { target: { value: '/updated/path' } });
         fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
         await waitFor(() => {
@@ -513,11 +650,12 @@ describe('AIContext page', () => {
             fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
             await screen.findByRole('option', { name: 'Variant 1' });
             fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM'));
+            await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('TM'));
             await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Desc'));
             fetchMock.mockResponseOnce(JSON.stringify(aiList));
             saveResponses.forEach(r => fetchMock.mockResponseOnce(JSON.stringify(r)));
-            fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'TM2' } });
+            selectContextTab("Threat model");
+            fireEvent.change(screen.getByRole("textbox", { name: "Threat Model" }), { target: { value: 'TM2' } });
             fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
         }
 
@@ -566,7 +704,7 @@ describe('AIContext page', () => {
             fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
             await screen.findByRole('option', { name: 'Variant 1' });
             fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue(' TM '));
+            await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue(' TM '));
 
             fetchMock.mockResponseOnce(JSON.stringify([aiRow]));
             fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -589,8 +727,12 @@ describe('AIContext page', () => {
             // Without a known baseline the page cannot tell whether a save would
             // change the context, so it must not save at all.
             const retry = await screen.findByRole('button', { name: /retry/i });
-            expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
-            fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'TM2' } });
+            for (const name of ['Context', 'Risks', 'Threat model'] as const) {
+                selectContextTab(name);
+                expect(retry).toBeVisible();
+                expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+            }
+            fireEvent.change(screen.getByLabelText("System scope and assets"), { target: { value: 'TM2' } });
             fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
             expect(putCalls()).toHaveLength(0);
 
@@ -599,7 +741,7 @@ describe('AIContext page', () => {
                 environment: null, threat_model: 'TM', risks: null, other_info: null, files: [],
             }));
             fireEvent.click(retry);
-            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM'));
+            await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('TM'));
             expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
         });
 
@@ -619,14 +761,15 @@ describe('AIContext page', () => {
             fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
             await screen.findByRole('option', { name: 'Variant 1' });
             fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM1'));
+            await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('TM1'));
 
             // The pending-AI check for v1 is still in flight when v2 is selected.
             let resolvePendingCheck: (value: any) => void = () => {};
             fetchMock.mockImplementationOnce(() => new Promise(resolve => {
                 resolvePendingCheck = resolve;
             }));
-            fireEvent.change(screen.getByLabelText(/threat model/i), { target: { value: 'TM2' } });
+            selectContextTab("Threat model");
+            fireEvent.change(screen.getByRole("textbox", { name: "Threat Model" }), { target: { value: 'TM2' } });
             fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
             fetchMock.mockResponseOnce(JSON.stringify({
@@ -634,7 +777,7 @@ describe('AIContext page', () => {
                 environment: null, threat_model: 'TM-V2', risks: null, other_info: null, files: [],
             }));
             fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v2' } });
-            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM-V2'));
+            await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('TM-V2'));
 
             await act(async () => {
                 resolvePendingCheck({ status: 200, body: JSON.stringify([aiRow]) });
@@ -660,7 +803,7 @@ describe('AIContext page', () => {
             fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
             await screen.findByRole('option', { name: 'Variant 1' });
             fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM1'));
+            await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('TM1'));
             expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
 
             fetchMock.mockImplementationOnce(() => new Promise(() => {}));
@@ -682,7 +825,7 @@ describe('AIContext page', () => {
             fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
             await screen.findByRole('option', { name: 'Variant 1' });
             fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-            await waitFor(() => expect(screen.getByLabelText(/threat model/i)).toHaveValue('TM'));
+            await waitFor(() => expect(screen.getByLabelText("Threat Model", { selector: "textarea" })).toHaveValue('TM'));
             await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue('Desc'));
             fetchMock.mockResponseOnce(JSON.stringify(aiList));
             saveResponses.forEach(r => fetchMock.mockResponseOnce(JSON.stringify(r)));
@@ -751,6 +894,595 @@ describe('AIContext page', () => {
 
         await waitFor(() => {
             expect(document.querySelector('[role="alert"]')).toBeInTheDocument();
+        });
+    });
+
+    describe('guided STRIDE context lifecycle', () => {
+        const structured: StrideContextText = {
+            threatModel: serializeThreatModel({
+                ...emptyThreatModel(), scope: 'Production firmware',
+                threats: [
+                    { id: 'T1', category: 'Spoofing', description: 'A device could be impersonated' },
+                    { id: 'T2', category: 'Spoofing', description: 'An administrator could be impersonated' },
+                ],
+            }),
+            risks: serializeRiskRegister({
+                risks: [{ ...emptyRisk(), threatId: 'T1', impact: 'High' }],
+                notes: 'Review key management',
+            }),
+        };
+
+        async function mountVariant(
+            initial: StrideContextText = { threatModel: '', risks: '' },
+            onAgentContextChange?: (context: AgentViewContext) => void,
+            initialPaths: string | null = null,
+        ) {
+            const stored = new Map<string, StrideContextText>([
+                ['v1', initial], ['v2', { threatModel: 'Legacy model for variant 2', risks: 'Legacy risks for variant 2' }],
+            ]);
+            const puts: VariantContextData[] = [];
+            const paths = new Map<string, string | null>([['v1', initialPaths], ['v2', null]]);
+            fetchMock.mockResponse(async request => {
+                const url = new URL(request.url);
+                if (url.pathname === '/api/projects') return JSON.stringify([{ id: 'p1', name: 'Project A' }]);
+                if (url.pathname === '/api/projects/p1/variants') return JSON.stringify([
+                    { id: 'v1', name: 'Variant 1', project_id: 'p1' },
+                    { id: 'v2', name: 'Variant 2', project_id: 'p1' },
+                ]);
+                if (url.pathname === '/api/projects/p1/context') return JSON.stringify({ description: 'Description' });
+                if (url.pathname === '/api/context') {
+                    const text = stored.get(url.searchParams.get('variant_id')!);
+                    return JSON.stringify({
+                        threat_model: text!.threatModel || null, risks: text!.risks || null,
+                        codebase_path: paths.get(url.searchParams.get('variant_id')!) ?? null,
+                    });
+                }
+                if (url.pathname === '/api/reviews/assessments') return JSON.stringify([]);
+                if (url.pathname === '/api/variants/v1/context' && request.method === 'PUT') {
+                    const payload: VariantContextData = await request.json();
+                    puts.push(payload);
+                    stored.set('v1', { threatModel: payload.threat_model ?? '', risks: payload.risks ?? '' });
+                    paths.set('v1', payload.codebase_path);
+                    return JSON.stringify(payload);
+                }
+                if (url.pathname === '/api/context/import') {
+                    return JSON.stringify({ imported: [{ project_name: 'Project A', variant_name: 'Variant 1' }], ignored: [], failed: [] });
+                }
+                throw new Error(`Unexpected context request: ${request.method} ${request.url}`);
+            });
+            render(<AIContext onAgentContextChange={onAgentContextChange} />);
+            await screen.findByRole('option', { name: 'Project A' });
+            fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
+            await screen.findByRole('option', { name: 'Variant 1' });
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText('Editor mode')).not.toBeDisabled());
+            selectContextTab("Threat model");
+            return { stored, puts, paths };
+        }
+
+        const agentWrite = () => act(() => {
+            window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'update_variant_context' } }));
+        });
+        const contextRequests = () => fetchMock.mock.calls.filter(call =>
+            String(call[0]).includes('/api/context?'));
+
+        test('default blank threats do not dirty saved context or prevent an agent refresh', async () => {
+            const saved = serializeThreatModel({ ...emptyThreatModel(), scope: 'Device firmware' });
+            const { stored, puts } = await mountVariant({ threatModel: saved, risks: '' });
+            expect(screen.getByLabelText('Threat 1 STRIDE category')).toHaveValue('');
+            expect(screen.getByLabelText('Threat 1 description')).toHaveValue('');
+            const refreshed = serializeThreatModel({ ...emptyThreatModel(), scope: 'Updated system scope' });
+            stored.set('v1', { threatModel: refreshed, risks: '' });
+            agentWrite();
+            await waitFor(() => expect(screen.getByLabelText('System scope and assets')).toHaveValue('Updated system scope'));
+            expect(screen.getByLabelText('Threat 1 description')).toHaveValue('');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0]).toMatchObject({ threat_model: refreshed, risks: null });
+            expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/api/reviews/assessments'))).toBe(false);
+        });
+
+        test('codebase paths load as separate rows and can be added, edited and removed without losing other paths', async () => {
+            const { puts } = await mountVariant(structured, undefined, '/src/app;/src/lib');
+            selectContextTab('Context');
+            expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/src/app');
+            expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/src/lib');
+            expect(screen.queryByText(/separate multiple paths with a semicolon/i)).not.toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: 'Add Codebase Path' }));
+            fireEvent.change(screen.getByLabelText('Codebase Path 3'), { target: { value: '/src/drivers' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Remove Codebase Path 2' }));
+            expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/src/drivers');
+            fireEvent.change(screen.getByLabelText('Codebase Path 1'), { target: { value: '/src/updated-app' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Add Codebase Path' }));
+            selectContextTab('Threat model');
+            selectContextTab('Risks');
+            selectContextTab('Context');
+            expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/src/updated-app');
+            expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/src/drivers');
+            expect(screen.getByLabelText('Codebase Path 3')).toHaveValue('');
+            selectContextTab('Risks');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0].codebase_path).toBe('/src/updated-app;/src/drivers');
+            selectContextTab('Context');
+            agentWrite();
+            await waitFor(() => expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/src/drivers'));
+            expect(screen.getAllByRole('textbox', { name: /^Codebase Path \d+$/ })).toHaveLength(2);
+        });
+
+        test('empty path drafts remain editable but do not change saved paths or trigger assessment outdating', async () => {
+            const original = '/src/app ; /src/lib';
+            const { puts } = await mountVariant(structured, undefined, original);
+            selectContextTab('Context');
+            expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/src/app ');
+            expect(screen.getByLabelText('Codebase Path 2')).toHaveValue(' /src/lib');
+            fireEvent.click(screen.getByRole('button', { name: 'Add Codebase Path' }));
+            fireEvent.change(screen.getByLabelText('Codebase Path 3'), { target: { value: ' ' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Add Codebase Path' }));
+            selectContextTab('Threat model');
+            selectContextTab('Context');
+            expect(screen.getByLabelText('Codebase Path 3')).toHaveValue(' ');
+            expect(screen.getByLabelText('Codebase Path 4')).toHaveValue('');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0].codebase_path).toBe(original);
+            expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/api/reviews/assessments'))).toBe(false);
+        });
+
+        test('all codebase paths can be removed and empty replacement rows save as null', async () => {
+            const { puts } = await mountVariant(structured, undefined, '/src/app;/src/lib');
+            selectContextTab('Context');
+            fireEvent.click(screen.getByRole('button', { name: 'Remove Codebase Path 1' }));
+            expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/src/lib');
+            fireEvent.click(screen.getByRole('button', { name: 'Remove Codebase Path 1' }));
+            expect(screen.queryByRole('textbox', { name: /^Codebase Path / })).not.toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0].codebase_path).toBeNull();
+            fireEvent.click(screen.getByRole('button', { name: 'Add Codebase Path' }));
+            fireEvent.change(screen.getByLabelText('Codebase Path 1'), { target: { value: ' ' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await waitFor(() => expect(puts).toHaveLength(2));
+            expect(puts[1].codebase_path).toBeNull();
+        });
+
+        test('agent path updates reload clean rows and preserve unsaved path edits', async () => {
+            const { paths } = await mountVariant(structured, undefined, '/src/app');
+            selectContextTab('Context');
+            paths.set('v1', '/agent/app;/agent/lib');
+            agentWrite();
+            await waitFor(() => expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/agent/lib'));
+            fireEvent.change(screen.getByLabelText('Codebase Path 2'), { target: { value: '/unsaved/lib' } });
+            paths.set('v1', '/newer/agent');
+            const requests = contextRequests().length;
+            agentWrite();
+            await screen.findByText(/agent updated the variant context/i);
+            expect(contextRequests()).toHaveLength(requests);
+            expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/agent/app');
+            expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/unsaved/lib');
+        });
+
+        test('variant and project switches reset path drafts without discarding the unsaved project description', async () => {
+            const { paths } = await mountVariant(structured, undefined, '/src/app;/src/lib');
+            paths.set('v2', '/variant-2/source');
+            selectContextTab('Context');
+            fireEvent.change(screen.getByLabelText('Project Description'), { target: { value: 'Unsaved description' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Add Codebase Path' }));
+            fireEvent.change(screen.getByLabelText('Codebase Path 3'), { target: { value: '/unsaved/source' } });
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v2' } });
+            await waitFor(() => expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/variant-2/source'));
+            expect(screen.queryByLabelText('Codebase Path 2')).not.toBeInTheDocument();
+            expect(screen.getByLabelText('Project Description')).toHaveValue('Unsaved description');
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/src/lib'));
+            expect(screen.queryByLabelText('Codebase Path 3')).not.toBeInTheDocument();
+            fireEvent.change(screen.getByLabelText('Project'), { target: { value: '' } });
+            expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('');
+            expect(screen.getByLabelText('Codebase Path 1')).toBeDisabled();
+            expect(screen.queryByLabelText('Codebase Path 2')).not.toBeInTheDocument();
+        });
+
+        test('imported semicolon-separated paths replace the rows without changing the import format', async () => {
+            const { paths } = await mountVariant(structured, undefined, '/existing/source');
+            paths.set('v1', '/imported/app;/imported/drivers');
+            const envelope = JSON.stringify({
+                version: '1.0', projects: [{
+                    project_name: 'Project A', project_description: 'Description',
+                    variants: [{
+                        variant_name: 'Variant 1', threat_model: structured.threatModel,
+                        codebase_path: '/imported/app;/imported/drivers',
+                    }],
+                }],
+            });
+            const file = new File([envelope], 'context.json', { type: 'application/json' });
+            Object.defineProperty(file, 'text', { value: () => Promise.resolve(envelope) });
+            fireEvent.change(screen.getByLabelText('Import context file'), { target: { files: [file] } });
+            await screen.findByText(/import complete/i);
+            selectContextTab('Context');
+            await waitFor(() => expect(screen.getByLabelText('Codebase Path 2')).toHaveValue('/imported/drivers'));
+            expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/imported/app');
+            const imported = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/context/import'));
+            expect(JSON.parse(String(imported![1]?.body)).projects[0].variants[0].codebase_path)
+                .toBe('/imported/app;/imported/drivers');
+        });
+
+        test('the single Editor mode choice in Context changes both Threat model and Risks', async () => {
+            await mountVariant(structured);
+            selectContextTab('Context');
+            const mode = screen.getByRole('combobox', { name: 'Editor mode' });
+            expect(mode).toHaveValue('stride');
+            expect(screen.getAllByLabelText('Editor mode')).toHaveLength(1);
+            fireEvent.change(mode, { target: { value: 'free' } });
+            expect(screen.getByRole('tab', { name: 'Context' })).toHaveAttribute('aria-selected', 'true');
+            selectContextTab('Threat model');
+            expect(screen.getByRole('textbox', { name: 'Threat Model' })).toHaveValue(structured.threatModel);
+            expect(screen.queryByRole('combobox', { name: 'Editor mode' })).not.toBeInTheDocument();
+            selectContextTab('Risks');
+            expect(screen.getByRole('textbox', { name: 'Risks' })).toHaveValue(structured.risks);
+            expect(screen.queryByRole('combobox', { name: 'Editor mode' })).not.toBeInTheDocument();
+            selectContextTab('Context');
+            expect(screen.getByRole('combobox', { name: 'Editor mode' })).toBe(mode);
+            fireEvent.change(mode, { target: { value: 'stride' } });
+            selectContextTab('Threat model');
+            expect(screen.getByLabelText('Threat 2 description')).toHaveValue('An administrator could be impersonated');
+            expect(screen.getByRole('textbox', { name: 'Additional notes' })).toBeVisible();
+            selectContextTab('Risks');
+            expect(screen.getByLabelText('Risk 1 threat')).toHaveValue('T1');
+            expect(screen.getByLabelText('Risk 1 impact')).toHaveValue('High');
+            expect(screen.getAllByLabelText('Editor mode')).toHaveLength(1);
+        });
+
+        test('Additional notes saves and reloads without a show/hide control', async () => {
+            const { puts } = await mountVariant(structured);
+            expect(screen.queryByRole('button', { name: /additional notes/i })).not.toBeInTheDocument();
+            fireEvent.change(screen.getByRole('textbox', { name: 'Additional notes' }), {
+                target: { value: 'Debug access is disabled in production.' },
+            });
+            selectContextTab('Risks');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(parseThreatModel(puts[0].threat_model!)?.notes).toBe('Debug access is disabled in production.');
+            selectContextTab('Threat model');
+            agentWrite();
+            await waitFor(() => expect(screen.getByRole('textbox', { name: 'Additional notes' }))
+                .toHaveValue('Debug access is disabled in production.'));
+            expect(screen.queryByRole('button', { name: /additional notes/i })).not.toBeInTheDocument();
+        });
+
+        test('refreshing variant mode leaves unsaved Context fields and their focus intact', async () => {
+            const { stored } = await mountVariant(structured);
+            selectContextTab('Context');
+            const description = screen.getByRole('textbox', { name: 'Project Description' });
+            fireEvent.change(description, { target: { value: 'Unsaved project description' } });
+            description.focus();
+            stored.set('v1', { threatModel: 'Free model from agent', risks: 'Free risks from agent' });
+            agentWrite();
+            await waitFor(() => expect(screen.getByRole('combobox', { name: 'Editor mode' })).toHaveValue('free'));
+            expect(screen.getByRole('textbox', { name: 'Project Description' })).toBe(description);
+            expect(description).toHaveValue('Unsaved project description');
+            expect(description).toHaveFocus();
+        });
+
+        test.each(['Context', 'Threat model', 'Risks'] as const)(
+            'subtab navigation preserves all drafts and Save from %s submits every section',
+            async saveTab => {
+                const { puts } = await mountVariant(structured);
+                selectContextTab('Context');
+                fireEvent.change(screen.getByLabelText('Project Description'), { target: { value: 'Unsaved project description' } });
+                fireEvent.change(screen.getByLabelText('Variant Description'), { target: { value: 'Production device' } });
+                fireEvent.change(screen.getByLabelText('Codebase Path 1'), { target: { value: '/workspace/firmware' } });
+                fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Zephyr RTOS' } });
+                fireEvent.change(screen.getByLabelText('Other Information'), { target: { value: 'Requires authenticated updates' } });
+                selectContextTab('Threat model');
+                fireEvent.change(screen.getByLabelText('System scope and assets'), { target: { value: 'Unsaved system scope' } });
+                fireEvent.change(screen.getByLabelText('Threat 2 description'), { target: { value: 'Updated administrator impersonation' } });
+                fireEvent.click(screen.getByRole('button', { name: 'Add threat' }));
+                fireEvent.change(screen.getByLabelText('Threat 3 STRIDE category'), { target: { value: 'Tampering' } });
+                fireEvent.change(screen.getByRole('textbox', { name: 'Additional notes' }), {
+                    target: { value: 'Physical debug access is disabled' },
+                });
+                selectContextTab('Risks');
+                fireEvent.change(screen.getByLabelText('Risk 1 threat'), { target: { value: 'T2' } });
+                fireEvent.change(screen.getByLabelText('Risk 1 likelihood'), { target: { value: 'Medium' } });
+                fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Require device authentication' } });
+                fireEvent.click(screen.getByRole('button', { name: 'Add risk' }));
+                const requests = fetchMock.mock.calls.length;
+                selectContextTab('Context');
+                expect(screen.getByLabelText('Project Description')).toHaveValue('Unsaved project description');
+                expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/workspace/firmware');
+                selectContextTab('Threat model');
+                expect(screen.getByLabelText('System scope and assets')).toHaveValue('Unsaved system scope');
+                expect(screen.getByLabelText('Threat 3 STRIDE category')).toHaveValue('Tampering');
+                expect(screen.getByLabelText('Threat 3 description')).toHaveValue('');
+                expect(screen.queryByRole('button', { name: /additional notes/i })).not.toBeInTheDocument();
+                expect(screen.getByRole('textbox', { name: 'Additional notes' })).toHaveValue('Physical debug access is disabled');
+                selectContextTab('Risks');
+                expect(screen.getByRole('note', { name: 'Risk 1 selected threat' })).toHaveTextContent('Updated administrator impersonation');
+                expect(screen.getByLabelText('Risk 1 threat')).toHaveValue('T2');
+                expect(screen.getByLabelText('Risk 1 likelihood')).toHaveValue('Medium');
+                expect(screen.getByLabelText('Risk 1 mitigation')).toHaveValue('Require device authentication');
+                expect(screen.getByRole('group', { name: 'Risk 2' })).toBeVisible();
+                expect(screen.getByLabelText('Risk 2 threat')).toHaveValue('');
+                expect(fetchMock.mock.calls).toHaveLength(requests);
+                selectContextTab(saveTab);
+                fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+                await screen.findByText(/context saved successfully/i);
+                expect(puts).toHaveLength(1);
+                expect(puts[0]).toMatchObject({
+                    variant_description: 'Production device', codebase_path: '/workspace/firmware',
+                    environment: 'Zephyr RTOS', other_info: 'Requires authenticated updates',
+                });
+                expect(parseThreatModel(puts[0].threat_model!)).toMatchObject({
+                    scope: 'Unsaved system scope',
+                    notes: 'Physical debug access is disabled',
+                    threats: [
+                        { id: 'T1', category: 'Spoofing', description: 'A device could be impersonated' },
+                        { id: 'T2', category: 'Spoofing', description: 'Updated administrator impersonation' },
+                        { id: 'T3', category: 'Tampering', description: '' },
+                    ],
+                });
+                expect(parseRiskRegister(puts[0].risks!)?.risks).toEqual([{
+                    ...emptyRisk(), threatId: 'T2', likelihood: 'Medium', impact: 'High',
+                    mitigation: 'Require device authentication',
+                }]);
+                const projectPut = fetchMock.mock.calls.find(call =>
+                    String(call[0]).endsWith('/api/projects/p1/context') && (call[1] as RequestInit)?.method === 'PUT');
+                expect(JSON.parse(String(projectPut![1]?.body))).toEqual({ description: 'Unsaved project description' });
+                expect(screen.getByRole('tab', { name: saveTab })).toHaveAttribute('aria-selected', 'true');
+            },
+        );
+
+        test('navigation alone does not reload context or trigger assessment outdating', async () => {
+            const { puts } = await mountVariant(structured);
+            const requests = fetchMock.mock.calls.length;
+            for (const name of ['Risks', 'Context', 'Threat model', 'Risks'] as const) selectContextTab(name);
+            expect(fetchMock.mock.calls).toHaveLength(requests);
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0]).toMatchObject({ threat_model: structured.threatModel, risks: structured.risks });
+            expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/api/reviews/assessments'))).toBe(false);
+        });
+
+        test('incomplete unsaved STRIDE drafts survive Context and Advanced free-mode navigation', async () => {
+            await mountVariant();
+            fireEvent.change(screen.getByLabelText('Threat 1 STRIDE category'), { target: { value: 'Spoofing' } });
+            fireEvent.change(screen.getByLabelText('Threat 1 description'), { target: { value: ' ' } });
+            selectContextTab('Risks');
+            fireEvent.click(screen.getByRole('button', { name: 'Add risk' }));
+            switchContextMode('free');
+            expect(screen.getByRole('textbox', { name: 'Risks' })).toHaveValue('');
+            selectContextTab('Context');
+            selectContextTab('Threat model');
+            expect(screen.getByRole('textbox', { name: 'Threat Model' })).toHaveValue('');
+            switchContextMode('stride');
+            expect(screen.getByLabelText('Threat 1 STRIDE category')).toHaveValue('Spoofing');
+            expect(screen.getByLabelText('Threat 1 description')).toHaveValue(' ');
+            selectContextTab('Risks');
+            expect(screen.getByRole('group', { name: 'Risk 2' })).toBeVisible();
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            expect(screen.getByRole('tab', { name: 'Threat model' })).toHaveFocus();
+            expect(screen.getByRole('alert')).toHaveTextContent('Threat Model is required.');
+            expect(screen.getByLabelText('Threat 1 description')).toHaveValue(' ');
+        });
+
+        test('active subtab is included in the agent view context without changing project or variant scope', async () => {
+            const changed = jest.fn();
+            await mountVariant(structured, changed);
+            for (const [name, section] of [
+                ['Threat model', 'threat_model'], ['Context', 'context'], ['Risks', 'risks'],
+            ] as const) {
+                selectContextTab(name);
+                expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({
+                    section, selectedProjectId: 'p1', selectedProjectName: 'Project A',
+                    selectedVariantId: 'v1', selectedVariantName: 'Variant 1',
+                }));
+            }
+        });
+
+        test('Advanced free mode and its unsaved fields survive all subtab switches', async () => {
+            const { puts } = await mountVariant({ threatModel: 'Existing free model', risks: 'Existing free risks' });
+            fireEvent.change(screen.getByRole('textbox', { name: 'Threat Model' }), { target: { value: 'Unsaved free model' } });
+            selectContextTab('Risks');
+            expect(screen.queryByRole('textbox', { name: 'Threat Model' })).not.toBeInTheDocument();
+            fireEvent.change(screen.getByRole('textbox', { name: 'Risks' }), { target: { value: 'Unsaved free risks' } });
+            selectContextTab('Context');
+            expect(screen.getByRole('combobox', { name: 'Editor mode' })).toBeVisible();
+            selectContextTab('Threat model');
+            expect(screen.getByLabelText('Editor mode')).toHaveValue('free');
+            expect(screen.getByRole('textbox', { name: 'Threat Model' })).toHaveValue('Unsaved free model');
+            expect(screen.queryByRole('textbox', { name: 'Risks' })).not.toBeInTheDocument();
+            selectContextTab('Risks');
+            expect(screen.getByRole('textbox', { name: 'Risks' })).toHaveValue('Unsaved free risks');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0]).toMatchObject({ threat_model: 'Unsaved free model', risks: 'Unsaved free risks' });
+        });
+
+        test('blank templates remain invalid even after adding empty risks or switching modes', async () => {
+            const { puts } = await mountVariant();
+            expect(screen.getByRole('group', { name: 'Threat 1' })).toBeVisible();
+            expect(screen.getByLabelText('Threat 1 STRIDE category')).toHaveValue('');
+            expect(screen.getByLabelText('Threat 1 description')).toHaveValue('');
+            selectContextTab("Risks");
+            expect(screen.getByRole('group', { name: 'Risk 1' })).toBeVisible();
+            expect(screen.getByLabelText('Risk 1 threat')).toHaveValue('');
+            fireEvent.click(screen.getByRole('button', { name: 'Add risk' }));
+            selectContextTab("Threat model");
+            fireEvent.change(screen.getByLabelText('Threat 1 STRIDE category'), { target: { value: 'Spoofing' } });
+            switchContextMode('free');
+            switchContextMode('stride');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            expect(await screen.findByText('Threat Model is required.')).toBeInTheDocument();
+            expect(puts).toHaveLength(0);
+            expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/api/reviews/assessments'))).toBe(false);
+        });
+
+        test('guided fields save as the existing readable text fields and restore after a reload', async () => {
+            const { puts } = await mountVariant();
+            fireEvent.change(screen.getByLabelText('System scope and assets'), { target: { value: 'Firmware and credentials' } });
+            fireEvent.change(screen.getByLabelText('Trust boundaries'), { target: { value: 'Internet -> device API' } });
+            fireEvent.change(screen.getByLabelText('Threat 1 STRIDE category'), { target: { value: 'Spoofing' } });
+            fireEvent.change(screen.getByLabelText('Threat 1 description'), { target: { value: 'Device impersonation' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Add threat' }));
+            fireEvent.change(screen.getByLabelText('Threat 2 STRIDE category'), { target: { value: 'Spoofing' } });
+            fireEvent.change(screen.getByLabelText('Threat 2 description'), { target: { value: 'Administrator impersonation' } });
+            selectContextTab("Risks");
+            fireEvent.change(screen.getByLabelText('Risk 1 threat'), { target: { value: 'T2' } });
+            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Require signed images' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts).toHaveLength(1);
+            expect(parseThreatModel(puts[0].threat_model!)).toMatchObject({
+                scope: 'Firmware and credentials', trust_boundaries: 'Internet -> device API',
+                threats: [
+                    { id: 'T1', category: 'Spoofing', description: 'Device impersonation' },
+                    { id: 'T2', category: 'Spoofing', description: 'Administrator impersonation' },
+                ],
+            });
+            expect(parseRiskRegister(puts[0].risks!)).toMatchObject({
+                risks: [{ threatId: 'T2', mitigation: 'Require signed images' }],
+            });
+            expect(puts[0].risks).not.toContain('STRIDE category');
+            expect(puts[0].risks).not.toContain('Threat scenario');
+            agentWrite();
+            await waitFor(() => expect(screen.getByLabelText('System scope and assets')).toHaveValue('Firmware and credentials'));
+            expect(screen.getByLabelText('Editor mode')).toHaveValue('stride');
+            expect(screen.getByLabelText('Risk 1 mitigation')).toHaveValue('Require signed images');
+            expect(screen.getByLabelText('Risk 1 threat')).toHaveValue('T2');
+            expect(screen.getByLabelText('Threat 1 STRIDE category')).toHaveValue('Spoofing');
+            expect(screen.getByLabelText('Threat 2 STRIDE category')).toHaveValue('Spoofing');
+            expect(screen.getByLabelText('Threat 1 description')).toHaveValue('Device impersonation');
+            expect(screen.getByLabelText('Threat 2 description')).toHaveValue('Administrator impersonation');
+            expect(screen.getByRole('note', { name: 'Risk 1 selected threat' })).toHaveTextContent('Administrator impersonation');
+        });
+
+        test('reassigning a risk and editing its threat persists a single association and updated threat details', async () => {
+            const { puts } = await mountVariant(structured);
+            selectContextTab("Risks");
+            fireEvent.change(screen.getByLabelText('Risk 1 threat'), { target: { value: 'T2' } });
+            selectContextTab("Threat model");
+            fireEvent.change(screen.getByLabelText('Threat 2 STRIDE category'), { target: { value: 'Tampering' } });
+            fireEvent.change(screen.getByLabelText('Threat 2 description'), { target: { value: 'Modified administrator credentials' } });
+            selectContextTab("Risks");
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(parseRiskRegister(puts[0].risks!)?.risks).toEqual([{ ...emptyRisk(), threatId: 'T2', impact: 'High' }]);
+            expect(parseThreatModel(puts[0].threat_model!)?.threats[1]).toEqual({
+                id: 'T2', category: 'Tampering', description: 'Modified administrator credentials',
+            });
+            agentWrite();
+            await waitFor(() => expect(screen.getByLabelText('Risk 1 threat')).toHaveValue('T2'));
+            expect(screen.getByRole('note', { name: 'Risk 1 selected threat' })).toHaveTextContent('Tampering');
+            expect(screen.getByRole('note', { name: 'Risk 1 selected threat' })).toHaveTextContent('Modified administrator credentials');
+        });
+
+        test('a populated model leaves unused risks null rather than saving risk placeholders', async () => {
+            const { puts } = await mountVariant();
+            fireEvent.change(screen.getByLabelText('Actors and access'), { target: { value: 'Remote attackers and administrators' } });
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0].risks).toBeNull();
+            expect(parseThreatModel(puts[0].threat_model!)?.actors).toBe('Remote attackers and administrators');
+        });
+
+        test('switching modes on a saved template does not trigger assessment outdating', async () => {
+            const { puts } = await mountVariant(structured);
+            expect(screen.getByLabelText('System scope and assets')).toHaveValue('Production firmware');
+            switchContextMode('free');
+            expect(screen.getByRole('textbox', { name: 'Threat Model' })).toHaveValue(structured.threatModel);
+            switchContextMode('stride');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0]).toMatchObject({ threat_model: structured.threatModel, risks: structured.risks });
+            expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/api/reviews/assessments'))).toBe(false);
+        });
+
+        test('STRIDE edits retain pending-assessment confirmation and its save snapshot', async () => {
+            const { puts } = await mountVariant(structured);
+            fireEvent.change(screen.getByLabelText('Threat 1 description'), { target: { value: 'A different device could be impersonated' } });
+            fetchMock.mockResponseOnce(JSON.stringify([{
+                id: 'a1', vuln_id: 'CVE-1', status: 'affected', timestamp: '2026-01-01T00:00:00Z',
+                origin: 'ai', packages: [], responses: [],
+            }]));
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            expect(await screen.findByText(/mark all pending AI assessments/i)).toBeInTheDocument();
+            expect(puts).toHaveLength(0);
+            const check = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/reviews/assessments'));
+            expect(String(check![0])).toContain('variant_id=v1');
+            fireEvent.click(screen.getByRole('button', { name: /save and mark outdated/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(parseThreatModel(puts[0].threat_model!)?.threats[0].description).toBe('A different device could be impersonated');
+            expect(parseThreatModel(puts[0].threat_model!)?.threats[1].description).toBe('An administrator could be impersonated');
+        });
+
+        test('variant switches reset editor drafts and mode without discarding unsaved project edits', async () => {
+            await mountVariant(structured);
+            fireEvent.change(screen.getByLabelText('Project Description'), { target: { value: 'Unsaved description' } });
+            fireEvent.change(screen.getByLabelText('System scope and assets'), { target: { value: 'Unsaved model' } });
+            selectContextTab("Risks");
+            fireEvent.click(screen.getByRole('button', { name: 'Add risk' }));
+            selectContextTab("Threat model");
+            fireEvent.click(screen.getByRole('button', { name: 'Add threat' }));
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v2' } });
+            await waitFor(() => expect(screen.getByRole('textbox', { name: 'Threat Model' })).toHaveValue('Legacy model for variant 2'));
+            expect(screen.getByLabelText('Editor mode')).toHaveValue('free');
+            selectContextTab("Risks");
+            expect(screen.getByRole('textbox', { name: 'Risks' })).toHaveValue('Legacy risks for variant 2');
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByLabelText('System scope and assets')).toHaveValue('Production firmware'));
+            expect(screen.queryByRole('group', { name: 'Risk 2' })).not.toBeInTheDocument();
+            selectContextTab("Threat model");
+            expect(screen.queryByRole('group', { name: 'Threat 3' })).not.toBeInTheDocument();
+            expect(screen.getByLabelText('Project Description')).toHaveValue('Unsaved description');
+        });
+
+        test('agent writes reload clean templates, transition to free text, and keep unsaved guided risk edits', async () => {
+            const { stored } = await mountVariant(structured);
+            stored.set('v1', { ...structured, threatModel: serializeThreatModel({
+                ...parseThreatModel(structured.threatModel)!, scope: 'Updated by agent',
+            }) });
+            agentWrite();
+            await waitFor(() => expect(screen.getByLabelText('System scope and assets')).toHaveValue('Updated by agent'));
+            selectContextTab("Risks");
+            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Unsaved mitigation' } });
+            stored.set('v1', { threatModel: 'Plain model from agent', risks: 'Plain risks from agent' });
+            const loaded = contextRequests().length;
+            agentWrite();
+            expect(await screen.findByText(/agent updated the variant context/i)).toBeInTheDocument();
+            expect(contextRequests()).toHaveLength(loaded);
+            expect(screen.getByLabelText('Risk 1 mitigation')).toHaveValue('Unsaved mitigation');
+            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: '' } });
+            agentWrite();
+            await waitFor(() => expect(screen.getByRole('textbox', { name: 'Risks' })).toHaveValue('Plain risks from agent'));
+            expect(screen.getByLabelText('Threat Model', { selector: 'textarea' })).toHaveValue('Plain model from agent');
+            expect(screen.getByLabelText('Editor mode')).toHaveValue('free');
+            expect(screen.getByRole('tab', { name: 'Risks' })).toHaveAttribute('aria-selected', 'true');
+        });
+
+        test('import reloads a structured model and risks into the guided editor on the same variant', async () => {
+            const { stored } = await mountVariant({ threatModel: 'Existing free model', risks: 'Existing free risks' });
+            selectContextTab("Risks");
+            stored.set('v1', structured);
+            const envelope = JSON.stringify({
+                version: '1.0', projects: [{
+                    project_name: 'Project A', project_description: 'Description',
+                    variants: [{ variant_name: 'Variant 1', threat_model: structured.threatModel, risks: structured.risks }],
+                }],
+            });
+            const file = new File([envelope], 'stride-context.json', { type: 'application/json' });
+            Object.defineProperty(file, 'text', { value: () => Promise.resolve(envelope) });
+            fireEvent.change(screen.getByLabelText('Import context file'), { target: { files: [file] } });
+            await screen.findByText(/import complete/i);
+            await waitFor(() => expect(screen.getByLabelText('System scope and assets')).toHaveValue('Production firmware'));
+            expect(screen.getByLabelText('Editor mode')).toHaveValue('stride');
+            expect(screen.getByLabelText('Risk 1 threat')).toBeVisible();
+            expect(screen.getByLabelText('Risk 1 threat')).toHaveValue('T1');
+            expect(screen.getByLabelText('Threat 1 description')).toHaveValue('A device could be impersonated');
+            expect(screen.getByLabelText('Threat 2 description')).toHaveValue('An administrator could be impersonated');
+            const imported = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/context/import'));
+            expect(JSON.parse(String(imported![1]?.body)).projects[0].variants[0]).toMatchObject({
+                threat_model: structured.threatModel, risks: structured.risks,
+            });
         });
     });
 
