@@ -224,7 +224,7 @@ def test_invalid_structured_variant_does_not_replace_its_context_or_block_valid_
 
 
 @pytest.mark.parametrize("payload", [
-    {"version": "3.0", "projects": []},
+    {"version": "4.0", "projects": []},
     {"version": None, "projects": []},
     {"version": "2.0", "projects": [], "unknown": "Don't discard"},
     {"version": "2.0", "projects": [], "exported_at": None},

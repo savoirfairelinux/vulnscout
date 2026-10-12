@@ -112,7 +112,7 @@ def _sections(title: str, sections: list[tuple[str, str]], marker: str = MARKER)
     return "\n\n".join([title, *blocks, marker])
 
 
-def serialize_model(system: dict, model: dict, register: dict) -> str:
+def serialize_model(system: dict, model: dict, register: dict, preserve_records: bool = False) -> str:
     has_content = any(system[key].strip() for key, _ in SYSTEM_FIELDS) or model["notes"].strip()
     has_content = has_content or any(threat["description"].strip() for threat in model["threats"])
     has_content = has_content or any(
@@ -120,7 +120,7 @@ def serialize_model(system: dict, model: dict, register: dict) -> str:
         for collection, fields in (("components", COMPONENT_FIELDS), ("interactions", INTERACTION_FIELDS))
         for row in system[collection] for key, _ in fields
     )
-    if not has_content:
+    if not has_content and not (preserve_records and model["threats"]):
         return ""
     targets = {target for threat in model["threats"] for target in threat["targetIds"]}
     endpoints = {row[key] for row in system["interactions"] for key in ("sourceId", "destinationId")}

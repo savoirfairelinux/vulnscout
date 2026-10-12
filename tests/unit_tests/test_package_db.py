@@ -257,6 +257,9 @@ def test_already_upgraded_pr_database_remains_compatible_with_consolidated_migra
         with Operations.context(MigrationContext.configure(connection)) as operations:
             with operations.batch_alter_table("variant_context") as batch_op:
                 batch_op.drop_column("editor_mode")
+            with operations.batch_alter_table("project_context") as batch_op:
+                batch_op.drop_column("shared_context")
+                batch_op.drop_column("context_revision")
     # Alembic's logging configuration must not disable other tests' loggers.
     monkeypatch.setattr("logging.config.fileConfig", lambda _filename: None)
     runner = app.test_cli_runner()

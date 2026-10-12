@@ -9,6 +9,7 @@ and import semantics stay in one place.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import uuid
 from datetime import datetime, timezone
 from typing import Any, NotRequired, Optional, TypedDict
@@ -19,15 +20,20 @@ from ..models.project_context import ProjectContext
 from ..models.variant import Variant
 from ..models.variant_context import VariantContext
 from .stride_context import export_fields, import_fields
+from .shared_context import COLLECTIONS, export_shared, import_shared, validate_document
 
 # Version of the export file format. Bump the major component only on a
 # breaking change to the entry shape.
 EXPORT_VERSION = "2.0"
+SHARED_EXPORT_VERSION = "3.0"
 
 
-class VariantEntry(TypedDict):
-    """One exported variant's context (nested under its project)."""
+class NamedVariant(TypedDict):
     variant_name: str
+
+
+class VariantEntry(NamedVariant):
+    """One exported variant's context (nested under its project)."""
     variant_description: Optional[str]
     codebase_paths: list[str]
     environment: Optional[str]
@@ -42,7 +48,8 @@ class ProjectEntry(TypedDict):
     """One exported project with its variants nested underneath."""
     project_name: str
     project_description: Optional[str]
-    variants: list[VariantEntry]
+    variants: list[VariantEntry] | list[NamedVariant]
+    context: NotRequired[dict]
 
 
 class ExportDocument(TypedDict):
@@ -73,11 +80,14 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
 def project_entry(project: Project, pc: Optional[ProjectContext],
                   variants: list[VariantEntry]) -> ProjectEntry:
     """Build one export entry for a project with its variants nested."""
-    return {
+    entry: ProjectEntry = {
         "project_name": project.name,
         "project_description": pc.description if pc else None,
         "variants": variants,
     }
+    if pc is not None and pc.shared_context is not None:
+        entry["context"] = export_shared(project.id, [variant["variant_name"] for variant in variants])
+    return entry
 
 
 def collect_entries(project_id: Optional[uuid.UUID] = None,
@@ -137,8 +147,21 @@ def collect_entries(project_id: Optional[uuid.UUID] = None,
 
 def build_export_document(projects: list[ProjectEntry]) -> ExportDocument:
     """Wrap *projects* in the versioned export envelope."""
+    shared = any("context" in project for project in projects)
+    if shared:
+        projects = deepcopy(projects)
+        for entry in projects:
+            if "context" not in entry:
+                project = Project.get_by_name(entry["project_name"])
+                assert project is not None
+                entry["context"] = export_shared(project.id, [variant["variant_name"] for variant in entry["variants"]])
+            # Shared files have one canonical context, not conflicting flattened copies.
+            recipients: list[NamedVariant] = [
+                {"variant_name": variant["variant_name"]} for variant in entry["variants"]
+            ]
+            entry["variants"] = recipients
     return {
-        "version": EXPORT_VERSION,
+        "version": SHARED_EXPORT_VERSION if shared else EXPORT_VERSION,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "projects": projects,
     }
@@ -153,7 +176,8 @@ def extract_entries(body) -> list:
     returned records are flattened so each carries ``project_name``,
     ``project_description`` and the variant fields, matching what
     :func:`import_entries` consumes. Version 1.0 and unversioned files are
-    legacy free-text imports; version 2.0 has explicit structured/free modes.
+    legacy free-text imports; version 2.0 has explicit structured/free modes,
+    and version 3.0 keeps canonical project entries with portable variant scopes.
 
     Raises
     ------
@@ -162,7 +186,7 @@ def extract_entries(body) -> list:
         ``projects`` list, or if a project's ``variants`` is not a list.
     """
     version = body.get("version", "1.0") if isinstance(body, dict) else "1.0"
-    if version not in ("1.0", EXPORT_VERSION):
+    if version not in ("1.0", EXPORT_VERSION, SHARED_EXPORT_VERSION):
         raise ValueError(f"Unsupported context version: {version!r}")
     if isinstance(body, list):
         projects: list = body
@@ -171,11 +195,11 @@ def extract_entries(body) -> list:
         if not isinstance(raw_projects, list):
             raise ValueError("Object body must contain a 'projects' array")
         projects = raw_projects
-        if version == EXPORT_VERSION and (
+        if version in (EXPORT_VERSION, SHARED_EXPORT_VERSION) and (
             body.keys() - {"version", "exported_at", "projects"}
             or ("exported_at" in body and not isinstance(body["exported_at"], str))
         ):
-            raise ValueError("Invalid version 2.0 context envelope")
+            raise ValueError("Invalid context envelope")
     else:
         raise ValueError("Body must be a JSON array of projects or an object with a 'projects' array")
 
@@ -187,14 +211,40 @@ def extract_entries(body) -> list:
             continue
         project_name = project.get("project_name")
         project_description = project.get("project_description")
-        if version == EXPORT_VERSION and (
-            project.keys() - {"project_name", "project_description", "variants"}
+        if version in (EXPORT_VERSION, SHARED_EXPORT_VERSION) and (
+            project.keys() - {"project_name", "project_description", "variants", *(
+                ("context",) if version == SHARED_EXPORT_VERSION else ()
+            )}
             or (project_description is not None and not isinstance(project_description, str))
         ):
-            raise ValueError("Invalid version 2.0 project fields")
+            raise ValueError("Invalid project fields")
         variants = project.get("variants")
         if not isinstance(variants, list):
             raise ValueError("Each project must contain a 'variants' array")
+        if version == SHARED_EXPORT_VERSION:
+            if (not isinstance(project_name, str) or not project_name
+                    or any(not isinstance(variant, dict) or set(variant) != {"variant_name"}
+                           or not isinstance(variant["variant_name"], str) or not variant["variant_name"]
+                           for variant in variants)):
+                raise ValueError("Shared projects require a name and variant_name-only variant records")
+            names = [variant["variant_name"] for variant in variants]
+            if len(set(names)) != len(names) or any((project_name, name) in identities for name in names):
+                raise ValueError("Duplicate shared context entry")
+            identities.update((project_name, name) for name in names)
+            document = deepcopy(project.get("context"))
+            if not isinstance(document, dict) or not isinstance(document.get("fields"), dict):
+                raise ValueError("Supply a shared context document")
+            for rows in [*document["fields"].values(), *(document.get(key) for key in COLLECTIONS)]:
+                if not isinstance(rows, list):
+                    raise ValueError("Shared records must be arrays")
+                for row in rows:
+                    if not isinstance(row, dict) or "variant_ids" in row or "variant_names" not in row:
+                        raise ValueError("Shared records require variant_names")
+                    row["variant_ids"] = row.pop("variant_names")
+            validate_document(document, set(names))
+            records.append({"project_name": project_name, "description": project_description,
+                            "_format_version": version, "_shared": project["context"], "variant_names": names})
+            continue
         for variant in variants:
             if not isinstance(variant, dict):
                 records.append(variant)
@@ -245,6 +295,27 @@ def import_entries(entries: list) -> dict:
             continue
 
         project_name = _txt(entry.get('project_name'))
+        if entry.get("_format_version") == SHARED_EXPORT_VERSION:
+            names = entry["variant_names"]
+            project = Project.get_by_name(project_name) if project_name else None
+            targets = {}
+            for name in names:
+                variant = Variant.get_by_name_and_project(name, project.id) if project else None
+                ident = {"project_name": project_name, "variant_name": name}
+                if variant is None:
+                    ignored.append({**ident, "reason": "Variant not found" if project else "Project not found"})
+                else:
+                    targets[name] = str(variant.id)
+            if targets:
+                assert project is not None
+                try:
+                    import_shared(project.id, entry["_shared"], targets, entry["description"])
+                except ValueError as exc:
+                    failed.extend({"project_name": project_name, "variant_name": name, "reason": str(exc)}
+                                  for name in targets)
+                else:
+                    imported.extend({"project_name": project_name, "variant_name": name} for name in targets)
+            continue
         variant_name = _txt(entry.get('variant_name'))
         ident = {"project_name": project_name, "variant_name": variant_name}
 
