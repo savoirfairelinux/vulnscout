@@ -1,12 +1,13 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
     STRIDE_CATEGORIES, emptyThreat, emptyRisk, loadStrideContext, nextThreatId,
-    serializeThreatModel, serializeRiskRegister, systemElementLabel,
+    parseThreatModel, serializeThreatModel, serializeRiskRegister, systemElementLabel,
 } from "../helpers/strideContext";
 import SystemContextEditor from "./SystemContextEditor";
 import StrideSummary from "./StrideSummary";
-import type { RiskRegister, StrideContextText, StrideRisk, StrideThreat, ThreatModel } from "../helpers/strideContext";
+import type { RiskRegister, StrideContextText, StrideDraft, StrideEditorMode, StrideRisk, StrideThreat, ThreatModel } from "../helpers/strideContext";
 
 type Props = StrideContextText & {
     activeSection: "system" | "threat_model" | "risks" | "summary";
@@ -14,6 +15,10 @@ type Props = StrideContextText & {
     modeContainer: HTMLElement | null;
     disabled: boolean;
     error?: string;
+    saveAction?: ReactNode;
+    savedContext?: StrideContextText;
+    initialMode?: StrideEditorMode | null;
+    onDraftChange?: (draft: StrideDraft) => void;
     onChange: (text: StrideContextText) => void;
 };
 
@@ -23,10 +28,11 @@ const textareaClass = inputClass + " resize-y min-h-[80px]";
 const buttonClass = "rounded px-3 py-1.5 text-sm border border-slate-500 text-cyan-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed";
 
 export default function StrideContextEditor({
-    activeSection, tabIdPrefix, modeContainer, threatModel, risks, disabled, error, onChange,
+    activeSection, tabIdPrefix, modeContainer, threatModel, risks, disabled, error, saveAction, savedContext, initialMode, onDraftChange, onChange,
 }: Readonly<Props>) {
     const id = useId();
-    const [draft, setDraft] = useState(() => loadStrideContext({ threatModel, risks }));
+    const [draft, setDraft] = useState(() => loadStrideContext({ threatModel, risks }, initialMode));
+    useEffect(() => { onDraftChange?.(draft); }, [draft, onDraftChange]);
     const freeModeSnapshot = useRef<StrideContextText | null>(null);
     const errorId = `${id}-error`;
     const publish = (model: ThreatModel, register: RiskRegister) => onChange({
@@ -59,7 +65,7 @@ export default function StrideContextEditor({
     const addLegacyThreat = (index: number, risk: StrideRisk) => {
         const legacy = risk.legacyThreat;
         if (!legacy) return;
-        const threatId = nextThreatId(draft.model, draft.register);
+        const threatId = nextThreatId(draft.model, draft.register, savedContext);
         const model = { ...draft.model, threats: [...draft.model.threats, { id: threatId, ...legacy }] };
         const register = {
             ...draft.register,
@@ -122,8 +128,10 @@ export default function StrideContextEditor({
                     </p>
                 ) : (
                     <SystemContextEditor model={draft.model} idPrefix={`${id}-system`} disabled={disabled}
+                        savedModel={savedContext ? parseThreatModel(savedContext.threatModel) ?? undefined : undefined}
                         onChange={model => updateModel(model)} />
                 )}
+                {draft.mode === "stride" && activeSection === "system" && saveAction}
             </div>
             <div
                 role="tabpanel" id={`${tabIdPrefix}-summary-panel`}
@@ -174,6 +182,7 @@ export default function StrideContextEditor({
                             placeholder="Describe the threat criteria for CVEs..."
                             onChange={event => onChange({ threatModel: event.target.value, risks })}
                         />
+                        {activeSection === "threat_model" && saveAction}
                     </div>
                     <div
                         role="tabpanel" id={`${tabIdPrefix}-risks-panel`}
@@ -186,6 +195,7 @@ export default function StrideContextEditor({
                             value={risks} disabled={disabled} placeholder="Describe known risks..."
                             onChange={event => onChange({ threatModel, risks: event.target.value })}
                         />
+                        {activeSection === "risks" && saveAction}
                     </div>
                 </>
             ) : (
@@ -312,7 +322,7 @@ export default function StrideContextEditor({
                             <button
                                 type="button" className={buttonClass}
                                 onClick={() => updateModel({
-                                    threats: [...draft.model.threats, emptyThreat(nextThreatId(draft.model, draft.register))],
+                                    threats: [...draft.model.threats, emptyThreat(nextThreatId(draft.model, draft.register, savedContext))],
                                 })}
                             >Add threat</button>
                             <div>
@@ -328,6 +338,7 @@ export default function StrideContextEditor({
                                 />
                             </div>
                         </fieldset>
+                        {activeSection === "threat_model" && saveAction}
                     </div>
                     <div
                         role="tabpanel" id={`${tabIdPrefix}-risks-panel`}
@@ -462,6 +473,7 @@ export default function StrideContextEditor({
                                 />
                             </div>
                         </fieldset>
+                        {activeSection === "risks" && saveAction}
                     </div>
                 </>
             )}

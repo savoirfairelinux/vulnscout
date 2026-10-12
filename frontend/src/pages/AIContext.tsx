@@ -14,6 +14,8 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import HelpPopover from "../components/HelpPopover";
 import StrideContextEditor from "../components/StrideContextEditor";
+import { hasThreatDraft, loadStrideContext, prepareStrideSectionSave } from "../helpers/strideContext";
+import type { StrideDraft, StrideEditorMode } from "../helpers/strideContext";
 import useDismissablePopover from "../hooks/useDismissablePopover";
 import { AGENT_WRITE_EVENT, type AgentViewContext } from "../types/agent";
 
@@ -40,11 +42,13 @@ async function fetchVariantList(projectId: string): Promise<Variant[]> {
 }
 
 type SaveSnapshot = {
+    section: Exclude<ContextTab, "summary">;
     loadId: number;
     projectId: string;
     variantId: string;
-    description: string | null;
-    fields: VariantContextData;
+    description?: string | null;
+    fields: Partial<VariantContextData>;
+    expected: Partial<VariantContextData>;
 };
 
 const CONTEXT_TABS = [
@@ -98,6 +102,8 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     const [threatModel, setThreatModel] = useState<string>('');
     const [risks, setRisks] = useState<string>('');
     const [otherInfo, setOtherInfo] = useState<string>('');
+    const [strideDraft, setStrideDraft] = useState<StrideDraft | null>(null);
+    const [editorMode, setEditorMode] = useState<StrideEditorMode | null>(null);
     // Reset structured drafts on external context loads, not on local edits or saves.
     const [contextEditorVersion, setContextEditorVersion] = useState(0);
 
@@ -110,6 +116,8 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     const [variantContextLoadFailed, setVariantContextLoadFailed] = useState(false);
     // Same reasoning as variantContextLoadFailed, for the project description.
     const [projectContextLoadFailed, setProjectContextLoadFailed] = useState(false);
+    const [projectContextLoading, setProjectContextLoading] = useState(false);
+    const projectLoadIdRef = useRef(0);
     const [confirmOutdate, setConfirmOutdate] = useState(false);
     // Variant fields as last loaded or saved, to detect whether a save changes anything.
     const savedVariantFieldsRef = useRef<VariantContextData | null>(null);
@@ -171,6 +179,8 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
         setThreatModel('');
         setRisks('');
         setOtherInfo('');
+        setStrideDraft(null);
+        setEditorMode(null);
         setContextEditorVersion(version => version + 1);
     };
 
@@ -191,18 +201,24 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     // The project description is project-bound, so it is loaded only when the project
     // changes. Reloading it on every variant change would discard unsaved edits.
     const loadProjectContext = useCallback(() => {
+        const loadId = ++projectLoadIdRef.current;
+        savedDescriptionRef.current = null;
+        setDescription('');
         setProjectContextLoadFailed(false);
+        setProjectContextLoading(Boolean(selectedProjectId));
         if (!selectedProjectId) return;
         Context.getProject(selectedProjectId)
             .then(ctx => {
-                if (unmountedRef.current) return;
+                if (unmountedRef.current || loadId !== projectLoadIdRef.current) return;
                 savedDescriptionRef.current = ctx.description ?? null;
                 setDescription(ctx.description ?? '');
             }).catch((e: any) => {
-                if (!unmountedRef.current) {
+                if (!unmountedRef.current && loadId === projectLoadIdRef.current) {
                     setProjectContextLoadFailed(true);
                     showBanner(e?.message || "Failed to load project context.", "error");
                 }
+            }).finally(() => {
+                if (!unmountedRef.current && loadId === projectLoadIdRef.current) setProjectContextLoading(false);
             });
     }, [selectedProjectId]);
 
@@ -215,6 +231,9 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     const loadVariantContext = useCallback(() => {
         const loadId = ++variantLoadIdRef.current;
         savedVariantFieldsRef.current = null;
+        pendingSaveRef.current = null;
+        setConfirmOutdate(false);
+        setValidationErrors({});
         clearVariantFields();
         setVariantContextLoadFailed(false);
         if (!selectedProjectId || !selectedVariantId) {
@@ -232,6 +251,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                     threat_model: ctx.threat_model ?? null,
                     risks: ctx.risks ?? null,
                     other_info: ctx.other_info ?? null,
+                    editor_mode: ctx.editor_mode ?? null,
                 };
                 setVariantDescription(ctx.variant_description ?? '');
                 setCodebasePaths(ctx.codebase_path?.split(';') ?? ['']);
@@ -240,6 +260,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                 setThreatModel(ctx.threat_model ?? '');
                 setRisks(ctx.risks ?? '');
                 setOtherInfo(ctx.other_info ?? '');
+                setEditorMode(ctx.editor_mode ?? null);
                 setContextEditorVersion(version => version + 1);
             }).catch((e: any) => {
                 if (!unmountedRef.current && loadId === variantLoadIdRef.current) {
@@ -256,12 +277,12 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
         loadVariantContext();
     }, [loadVariantContext]);
 
-    const validate = (): boolean => {
+    const validate = (section: Exclude<ContextTab, "summary">, fields: Partial<VariantContextData>): boolean => {
         const errors: Record<string, string> = {};
-        if (!description.trim()) {
+        if (section === "context" && !description.trim()) {
             errors.description = "Project Description is required.";
         }
-        if (selectedVariantId && !threatModel.trim()) {
+        if (section === "threat_model" && !fields.threat_model?.trim()) {
             errors.threatModel = "Threat Model is required.";
         }
         setValidationErrors(errors);
@@ -290,9 +311,14 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
             if (tool === 'update_variant_context') {
                 const saved = savedVariantFieldsRef.current;
                 const fields = currentVariantFields();
-                if (saved === null || (Object.keys(fields) as (keyof VariantContextData)[]).every(k => fields[k] === saved[k]))
+                const incompleteThreats = !threatModel.trim() && strideDraft?.model.threats.some(hasThreatDraft);
+                const modeChanged = saved && strideDraft?.mode !== loadStrideContext({
+                    threatModel: saved.threat_model ?? "", risks: saved.risks ?? "",
+                }, saved.editor_mode).mode;
+                if (!incompleteThreats && !modeChanged && (saved === null
+                    || (Object.keys(fields) as (keyof VariantContextData)[]).every(k => fields[k] === saved[k])))
                     loadVariantContext();
-                else showBanner("The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.", "error");
+                else showBanner("The agent updated the variant context. Your unsaved edits were kept. Section saves check for newer stored context; keep a copy of your drafts before reloading.", "error");
             }
         };
     });
@@ -307,80 +333,122 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     // variant in the project, so ask first when the save would actually change
     // either one.
     const handleSave = async () => {
-        if (!selectedProjectId || busy || variantContextLoading) return;
+        if (activeTab === "summary" || !selectedProjectId || busy || confirmOutdate || variantContextLoading) return;
         if (selectedVariantId && variantContextLoadFailed) return;
-        if (projectContextLoadFailed) return;
-        if (!validate()) return;
+        if (activeTab === "context" && (projectContextLoadFailed || projectContextLoading)) return;
+        if (activeTab !== "context" && (!selectedVariantId || !strideDraft)) return;
         const saved = savedVariantFieldsRef.current;
-        const fields = currentVariantFields();
-        const snapshot: SaveSnapshot = {
-            loadId: variantLoadIdRef.current,
-            projectId: selectedProjectId,
-            variantId: selectedVariantId,
-            description: description.trim() || null,
-            fields,
-        };
-        const variantChanged = !!selectedVariantId && saved !== null
-            && (Object.keys(fields) as (keyof VariantContextData)[]).some(k => fields[k] !== saved[k]);
-        const descriptionChanged = savedDescriptionRef.current !== null
-            && snapshot.description !== savedDescriptionRef.current;
-        if (descriptionChanged || variantChanged) {
-            let hasPendingAi = true;
-            try {
-                // A project-description change outdates every variant in the
-                // project, not just the one selected, so check project-wide.
-                hasPendingAi = descriptionChanged
-                    ? (await Assessments.listForReview(undefined, snapshot.projectId, 'ai')).length > 0
-                    : (await Assessments.listForReview(selectedVariantId, undefined, 'ai')).length > 0;
-            } catch {
-                // Could not check: warn anyway rather than silently outdating assessments.
+        const fields: Partial<VariantContextData> = {};
+        const expected: Partial<VariantContextData> = {};
+        if (activeTab === "context" && saved) {
+            const current = currentVariantFields();
+            for (const key of ["variant_description", "codebase_path", "environment", "other_info"] as const) {
+                if (current[key] !== saved[key]) {
+                    fields[key] = current[key];
+                    expected[key] = saved[key];
+                }
             }
-            // The selection may have moved on while the check was in flight; its
-            // answer says nothing about whatever is selected now.
-            if (unmountedRef.current || snapshot.loadId !== variantLoadIdRef.current) return;
-            if (hasPendingAi) {
-                pendingSaveRef.current = snapshot;
-                setConfirmOutdate(true);
+        } else if (activeTab !== "context" && saved && strideDraft) {
+            try {
+                const value = prepareStrideSectionSave(activeTab, strideDraft, { threatModel, risks }, {
+                    threatModel: saved.threat_model ?? "", risks: saved.risks ?? "",
+                });
+                const key = activeTab === "risks" ? "risks" : "threat_model";
+                fields[key] = value || null;
+                expected[key] = saved[key];
+                expected.editor_mode = saved.editor_mode ?? null;
+                if (strideDraft.mode === "stride") {
+                    expected.threat_model = saved.threat_model;
+                    expected.risks = saved.risks;
+                }
+            } catch (error) {
+                showBanner(error instanceof Error ? error.message : "Failed to prepare section for saving.", "error");
                 return;
             }
         }
-        await performSave(snapshot);
+        if (saved && strideDraft && strideDraft.mode !== loadStrideContext({
+            threatModel: saved.threat_model ?? "", risks: saved.risks ?? "",
+        }, saved.editor_mode).mode) {
+            fields.editor_mode = strideDraft.mode;
+            expected.editor_mode = saved.editor_mode ?? null;
+        }
+        if (!validate(activeTab, fields)) return;
+        const snapshot: SaveSnapshot = {
+            section: activeTab,
+            loadId: variantLoadIdRef.current,
+            projectId: selectedProjectId,
+            variantId: selectedVariantId,
+            description: activeTab === "context" ? description.trim() || null : undefined,
+            fields, expected,
+        };
+        const variantChanged = !!selectedVariantId && saved !== null
+            && (Object.keys(fields) as (keyof VariantContextData)[]).some(k => k !== "editor_mode" && fields[k] !== saved[k]);
+        const descriptionChanged = snapshot.description !== undefined && savedDescriptionRef.current !== null
+            && snapshot.description !== savedDescriptionRef.current;
+        setBusy(true);
+        try {
+            if (descriptionChanged || variantChanged) {
+                let hasPendingAi = true;
+                try {
+                    // A project-description change affects every variant in the project.
+                    hasPendingAi = descriptionChanged
+                        ? (await Assessments.listForReview(undefined, snapshot.projectId, 'ai')).length > 0
+                        : (await Assessments.listForReview(snapshot.variantId, undefined, 'ai')).length > 0;
+                } catch {
+                    // Could not check: warn anyway rather than silently outdating assessments.
+                }
+                if (unmountedRef.current || snapshot.loadId !== variantLoadIdRef.current) return;
+                if (hasPendingAi) {
+                    pendingSaveRef.current = snapshot;
+                    setConfirmOutdate(true);
+                    return;
+                }
+            }
+            await performSave(snapshot);
+        } finally {
+            if (!unmountedRef.current) setBusy(false);
+        }
     };
 
     const performSave = async (snapshot: SaveSnapshot) => {
+        if (unmountedRef.current || snapshot.loadId !== variantLoadIdRef.current) return;
         setBusy(true);
-        try {
-            await Context.saveProject(snapshot.projectId, snapshot.description);
-            if (snapshot.loadId === variantLoadIdRef.current) savedDescriptionRef.current = snapshot.description;
-        } catch (e: any) {
-            if (!unmountedRef.current) showBanner(e?.message || "Failed to save project context.", "error");
-            setBusy(false);
-            return;
+        if (snapshot.description !== undefined) {
+            try {
+                await Context.saveProject(snapshot.projectId, snapshot.description);
+                if (snapshot.loadId === variantLoadIdRef.current) savedDescriptionRef.current = snapshot.description;
+            } catch (e: any) {
+                if (!unmountedRef.current && snapshot.loadId === variantLoadIdRef.current)
+                    showBanner(e?.message || "Failed to save project context.", "error");
+                setBusy(false);
+                return;
+            }
         }
-        if (snapshot.variantId) {
+        if (snapshot.variantId && Object.keys(snapshot.fields).length > 0) {
             const fields = snapshot.fields;
             try {
-                await Context.saveVariant(snapshot.variantId, fields);
-                if (snapshot.loadId === variantLoadIdRef.current) savedVariantFieldsRef.current = fields;
+                await Context.patchVariant(snapshot.variantId, fields, snapshot.expected);
+                if (snapshot.loadId === variantLoadIdRef.current && savedVariantFieldsRef.current)
+                    savedVariantFieldsRef.current = { ...savedVariantFieldsRef.current, ...fields };
             } catch (e: any) {
-                if (!unmountedRef.current)
+                if (!unmountedRef.current && snapshot.loadId === variantLoadIdRef.current)
                     showBanner(
-                        `Project context saved, but variant context failed: ${e?.message ?? "unknown error"}`,
+                        `${snapshot.description !== undefined ? "Project context saved, but variant context failed" : "Section save failed"}: ${e?.message ?? "unknown error"}`,
                         "error"
                     );
                 setBusy(false);
                 return;
             }
         }
-        if (!unmountedRef.current) {
+        if (!unmountedRef.current && snapshot.loadId === variantLoadIdRef.current) {
             showBanner(
                 <>
-                    Context saved successfully.
+                    {CONTEXT_TABS.find(tab => tab.id === snapshot.section)?.label} saved successfully.
                 </>,
                 "success"
             );
-            setBusy(false);
         }
+        if (!unmountedRef.current) setBusy(false);
     };
 
     const handleFileDownload = (document_: ContextExport, filename: string) => {
@@ -474,6 +542,19 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
         "bg-gradient-to-r from-slate-700 to-slate-800 px-4 py-2.5 flex items-center gap-2 rounded-t-lg border-b border-slate-600/60";
     const cardBody =
         "bg-slate-800/60 p-4 rounded-b-lg ring-1 ring-slate-700/70 shadow-lg shadow-black/20 space-y-4";
+    const saveAction = activeTab !== "summary" && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-slate-700 mt-4 pt-4">
+            <button type="button" onClick={handleSave}
+                disabled={!projectSelected || busy || confirmOutdate || variantContextLoading
+                    || (Boolean(selectedVariantId) && variantContextLoadFailed)
+                    || (activeTab === "context" ? projectContextLoadFailed || projectContextLoading : !variantSelected)}
+                className={btnPrimary + " flex items-center gap-2"}>
+                {busy && <FontAwesomeIcon icon={faSpinner} spin />}
+                Save {CONTEXT_TABS.find(tab => tab.id === activeTab)?.label}
+            </button>
+            <p className="text-xs text-zinc-400">Saves only this section. Other drafts remain unsaved.</p>
+        </div>
+    );
 
     return (
         <div className="w-full space-y-6">
@@ -586,9 +667,11 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                     <HelpPopover ariaLabel="Import help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[320px] p-3">
                         Importing overwrites the existing context for each matching
                         project/variant. Variants whose project or variant does not exist
-                        are ignored; variants missing mandatory fields (description, threat
-                        model) fail. Accepts an exported file, whose projects each nest
-                        their variants. Uploaded codebase references are not included
+                        are ignored. Version 2.0 stores structured STRIDE system elements,
+                        threats and linked risks, or explicit Advanced free text.
+                        Legacy files open in Advanced free mode and require a project
+                        description and threat model. Exports include saved context only,
+                        not unsaved drafts. Uploaded codebase references are not included
                         in context JSON transfers.
                     </HelpPopover>
                 </div>
@@ -643,7 +726,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                             </select>
                             {projectSelected && projectContextLoadFailed && (
                                 <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
-                                    Could not load this project&apos;s context. Saving is disabled until it loads.
+                                    Could not load this project&apos;s context. Saving Context is disabled until it loads.
                                     <button
                                         type="button"
                                         onClick={loadProjectContext}
@@ -734,7 +817,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                                 className={textareaClass}
                                 value={description}
                                 onChange={e => setDescription(e.target.value)}
-                                disabled={!projectSelected}
+                                disabled={!projectSelected || projectContextLoading}
                                 placeholder={projectSelected ? "Describe your project..." : "Select a project first"}
                                 aria-invalid={Boolean(validationErrors.description)}
                                 aria-describedby={validationErrors.description ? `${tabIdPrefix}-description-error` : undefined}
@@ -838,6 +921,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                                 placeholder={variantSelected ? "Any additional context..." : "Select a variant to enable"}
                             />
                         </div>
+                        {activeTab === "context" && saveAction}
                     </div>
 
                     <div hidden={activeTab === "context"}>
@@ -848,8 +932,15 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                             modeContainer={editorModeContainer}
                             threatModel={threatModel}
                             risks={risks}
+                            initialMode={editorMode}
                             disabled={!variantSelected}
                             error={validationErrors.threatModel}
+                            saveAction={saveAction}
+                            onDraftChange={setStrideDraft}
+                            savedContext={{
+                                threatModel: savedVariantFieldsRef.current?.threat_model ?? "",
+                                risks: savedVariantFieldsRef.current?.risks ?? "",
+                            }}
                             onChange={text => { setThreatModel(text.threatModel); setRisks(text.risks); }}
                         />
                     </div>
@@ -870,20 +961,6 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                         onCancel={() => { pendingSaveRef.current = null; setConfirmOutdate(false); }}
                     />
 
-                    {/* Save */}
-                    <div className="flex items-center gap-3 border-t border-slate-700 pt-4">
-                        <button
-                            type="button"
-                            onClick={handleSave}
-                            disabled={!projectSelected || busy || variantContextLoading
-                                || (variantSelected && variantContextLoadFailed) || projectContextLoadFailed}
-                            className={btnPrimary + " flex items-center gap-2"}
-                        >
-                            {busy && <FontAwesomeIcon icon={faSpinner} spin />}
-                            Save
-                        </button>
-                        <p className="text-xs text-zinc-400">Saves all sections.</p>
-                    </div>
                 </div>
             </div>
         </div>

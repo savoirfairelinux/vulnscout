@@ -57,7 +57,13 @@ source paths and the operating environment, **System** for architecture,
 provides a read-only STRIDE category overview and threat/risk tables, including
 unsaved edits, incomplete entries and unavailable references. Counts do not
 indicate completed review or safety. In Advanced free mode, Summary shows the
-current text instead. Switching subtabs keeps unsaved edits; **Save** saves all sections.
+current text instead. Switching subtabs keeps unsaved edits. Each editable subtab
+has its own **Save** button; other sections' drafts remain unsaved.
+Save new system elements before threats that reference them, and new threats
+before their risks. When removing references, save the risks or threats first.
+System and threats share a text field, but their saves preserve the other
+section's saved content. In Advanced free mode, **Save Threat model** saves the
+combined system/threat text; **Save Risks** saves only the risk text.
 
 Use **Add Codebase Path** and **Remove Codebase Path** to list source directories
 individually. Paths are context hints, not filesystem access or automatic mounts.
@@ -92,6 +98,32 @@ context opens in that mode;
 switching to STRIDE retains it as additional notes. In free mode, system details
 remain in the Threat Model text. Both modes save readable text
 and work with existing AI tools and context imports/exports.
+
+### Import and export
+
+Exports contain **saved context only**, grouped by project and variant, using
+JSON format **2.0**. Each variant has `editor_mode` (`stride` or `free`),
+`codebase_paths` as an array, and its description, environment and other notes.
+In STRIDE mode, `system` contains scope, actors, entry points, trust boundaries,
+components and directed interactions. `threat_model` contains threats with stable
+IDs, categories, descriptions, system `targetIds` and additional notes; `risks`
+contains threat-linked risk entries and additional notes. Summary is derived,
+not exported. Blank ratings and unavailable references remain explicit.
+
+Advanced free-mode exports retain the original `threat_model` and `risks` text
+instead of structured objects. **Legacy 1.0 and unversioned files still import,
+always into Advanced free mode**, including files whose text happens to use a
+STRIDE template. That choice survives reloads. Switching to STRIDE remains
+explicit; save Context to persist an editor-mode change without saving other
+drafts. Mode-only changes do not outdate AI assessments.
+
+Version 2.0 supports partially completed contexts, including empty sections.
+Malformed structured records, invalid IDs/categories/ratings and unknown format
+versions are reported rather than silently discarded. Omit completely blank
+editor-placeholder rows. Imports replace context for matching existing variants;
+unknown projects/variants are ignored. Legacy imports retain their required
+project-description and threat-model fields. The HTTP API and context CLI
+commands use the same format.
 
 ---
 

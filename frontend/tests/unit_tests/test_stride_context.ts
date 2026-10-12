@@ -1,9 +1,23 @@
 import {
     THREAT_MODEL_FIELDS, STRIDE_CATEGORIES, emptyThreat, emptyRisk, emptyThreatModel, loadStrideContext,
     nextThreatId, parseRiskRegister, parseThreatModel, serializeRiskRegister, serializeThreatModel,
-    emptySystemComponent, emptySystemInteraction, nextSystemId, systemElementLabel,
+    emptySystemComponent, emptySystemInteraction, nextSystemId, systemElementLabel, prepareStrideSectionSave,
 } from "../../src/helpers/strideContext";
 import type { RiskRegister, StrideRisk, ThreatModel } from "../../src/helpers/strideContext";
+import fixture from "../../../tests/fixtures/stride_context_v2.json";
+
+test("shared interchange fixture matches the frontend Markdown codec", () => {
+    const model = { ...fixture.variant.system, ...fixture.variant.threat_model } as ThreatModel;
+    const register = fixture.variant.risks as RiskRegister;
+    expect(serializeThreatModel(model, register.risks.map(risk => risk.threatId))).toBe(fixture.text.threatModel);
+    expect(serializeRiskRegister(register)).toBe(fixture.text.risks);
+    expect(parseThreatModel(fixture.text.threatModel)).toEqual(model);
+    expect(parseRiskRegister(fixture.text.risks)).toEqual(register);
+    expect(loadStrideContext(fixture.text, "free").mode).toBe("free");
+    expect(loadStrideContext({ threatModel: "Opaque model", risks: "Opaque risks" }, "stride")).toMatchObject({
+        mode: "stride", model: { notes: "Opaque model" }, register: { notes: "Opaque risks" },
+    });
+});
 
 describe("STRIDE context text", () => {
     const model: ThreatModel = {
@@ -31,6 +45,108 @@ describe("STRIDE context text", () => {
         }],
         threats: [{ ...model.threats[0], targetIds: ["C2", "I1"] }],
     };
+
+    describe("section saves", () => {
+        const saved = { threatModel: serializeThreatModel(systemModel), risks: serializeRiskRegister(register) };
+
+        test("System saves keep persisted threats and notes, not their local edits", () => {
+            const draft = loadStrideContext(saved);
+            draft.model.components[0].name = "Renamed server";
+            draft.model.threats[0].description = "Unsaved threat";
+            draft.model.notes = "Unsaved notes";
+            draft.register.risks[0].mitigation = "Unsaved mitigation";
+            expect(parseThreatModel(prepareStrideSectionSave("system", draft, saved, saved))).toEqual({
+                ...systemModel, components: [{ ...systemModel.components[0], name: "Renamed server" }, systemModel.components[1]],
+            });
+        });
+
+        test("Threat model saves keep persisted architecture, not local System edits", () => {
+            const draft = loadStrideContext(saved);
+            draft.model.scope = "Unsaved scope";
+            draft.model.components[0].name = "Unsaved rename";
+            draft.model.threats[0].description = "Updated threat";
+            draft.model.notes = "Updated notes";
+            expect(parseThreatModel(prepareStrideSectionSave("threat_model", draft, saved, saved))).toEqual({
+                ...systemModel, threats: [{ ...systemModel.threats[0], description: "Updated threat" }], notes: "Updated notes",
+            });
+        });
+
+        test("Risk saves require new threats to be saved first, without publishing them", () => {
+            const draft = loadStrideContext(saved);
+            draft.model.threats.push({ id: "T2", category: "Tampering", description: "New threat" });
+            draft.register.risks[0].threatId = "T2";
+            expect(() => prepareStrideSectionSave("risks", draft, saved, saved)).toThrow("Save Threat model before Risks");
+            const withThreat = { ...saved, threatModel: serializeThreatModel(draft.model) };
+            expect(parseRiskRegister(prepareStrideSectionSave("risks", draft, saved, withThreat))?.risks[0].threatId).toBe("T2");
+        });
+
+        test("saved identifiers remain reserved while removals in other tabs are only drafts", () => {
+            const blank = emptyThreatModel();
+            expect(nextThreatId(blank, { risks: [], notes: "" }, saved)).toBe("T2");
+            expect(nextSystemId(blank, "C", systemModel)).toBe("C3");
+            expect(nextSystemId(blank, "I", systemModel)).toBe("I2");
+            expect(nextThreatId(blank, { risks: [], notes: "" }, { threatModel: "Free", risks: "Free" })).toBe("T1");
+            expect(nextThreatId(blank, { risks: [], notes: "" }, {
+                threatModel: "", risks: serializeRiskRegister({ risks: [{ ...emptyRisk(), threatId: "T1" }], notes: "" }),
+            })).toBe("T2");
+        });
+
+        test("clearing the last system content cannot silently erase a referenced incomplete threat", () => {
+            const baseline = {
+                threatModel: serializeThreatModel({
+                    ...emptyThreatModel(), scope: "Device", threats: [{ id: "T1", category: "Spoofing", description: "" }],
+                }),
+                risks: serializeRiskRegister(register),
+            };
+            const draft = loadStrideContext(baseline);
+            draft.model.scope = "";
+            expect(() => prepareStrideSectionSave("system", draft, baseline, baseline)).toThrow("Save Risks first");
+        });
+
+        test("Threat saves require newly referenced System elements to be saved first", () => {
+            const draft = loadStrideContext(saved);
+            draft.model.components.push({ ...emptySystemComponent("C3"), name: "New component" });
+            draft.model.threats[0].targetIds = ["C3"];
+            expect(() => prepareStrideSectionSave("threat_model", draft, saved, saved)).toThrow("Save System before Threat model");
+        });
+
+        test("saved references prevent deletions until the referencing section is saved", () => {
+            const draft = loadStrideContext(saved);
+            draft.model.threats[0].targetIds = [];
+            draft.model.components = [draft.model.components[0]];
+            draft.model.interactions = [];
+            expect(() => prepareStrideSectionSave("system", draft, saved, saved)).toThrow("Save Threat model before System");
+            const unlinked = { ...saved, threatModel: prepareStrideSectionSave("threat_model", draft, saved, saved) };
+            expect(() => prepareStrideSectionSave("system", draft, saved, unlinked)).not.toThrow();
+            draft.model.threats = [];
+            draft.register.risks = [];
+            expect(() => prepareStrideSectionSave("threat_model", draft, saved, saved)).toThrow("Save Risks before Threat model");
+            expect(() => prepareStrideSectionSave("threat_model", draft, saved, { ...saved, risks: "" })).not.toThrow();
+        });
+
+        test("previously missing references remain editable without inventing their targets", () => {
+            const missing = {
+                threatModel: serializeThreatModel({ ...systemModel, threats: [{ ...systemModel.threats[0], targetIds: ["C9"] }] }),
+                risks: serializeRiskRegister({ risks: [{ ...emptyRisk(), threatId: "T9", impact: "High" }], notes: "" }),
+            };
+            const draft = loadStrideContext(missing);
+            expect(() => prepareStrideSectionSave("system", draft, missing, missing)).not.toThrow();
+            expect(() => prepareStrideSectionSave("threat_model", draft, missing, missing)).not.toThrow();
+            expect(prepareStrideSectionSave("risks", draft, missing, missing)).toBe(missing.risks);
+        });
+
+        test("free mode saves text independently and System conversion is explicit", () => {
+            const free = { threatModel: "Custom model", risks: "Custom risks" };
+            const draft = loadStrideContext(free);
+            const changed = { threatModel: "New model", risks: "New risks" };
+            expect(prepareStrideSectionSave("threat_model", draft, changed, free)).toBe("New model");
+            expect(prepareStrideSectionSave("risks", draft, changed, free)).toBe("New risks");
+            expect(() => prepareStrideSectionSave("system", draft, changed, free)).toThrow("Advanced free mode");
+            draft.mode = "stride";
+            expect(() => prepareStrideSectionSave("system", draft, changed, free)).toThrow("Save Threat model first");
+            expect(parseThreatModel(prepareStrideSectionSave("threat_model", draft, changed, free))?.notes).toBe("Custom model");
+        });
+    });
 
     test("system components, directed interactions and multiple threat targets round trip as readable text", () => {
         const text = serializeThreatModel(systemModel);

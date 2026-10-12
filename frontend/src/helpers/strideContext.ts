@@ -60,6 +60,9 @@ export type StrideRisk = {
 };
 export type RiskRegister = { risks: StrideRisk[]; notes: string };
 export type StrideContextText = { threatModel: string; risks: string };
+export type StrideDraft = ReturnType<typeof loadStrideContext>;
+export type StrideEditorMode = "stride" | "free";
+export type StrideSection = "system" | "threat_model" | "risks";
 
 export const RISK_FIELDS = [
     { key: "threatId", label: "Threat ID" },
@@ -115,8 +118,12 @@ export function hasRiskContent(risk: StrideRisk): boolean {
         || Boolean(risk.legacyThreat?.category || risk.legacyThreat?.description.trim());
 }
 
-export function nextThreatId(model: ThreatModel, register: RiskRegister): string {
-    return nextId("T", [...model.threats.map(threat => threat.id), ...register.risks.map(risk => risk.threatId)]);
+export function nextThreatId(model: ThreatModel, register: RiskRegister, saved?: StrideContextText): string {
+    return nextId("T", [
+        ...model.threats.map(threat => threat.id), ...register.risks.map(risk => risk.threatId),
+        ...(saved ? parseThreatModel(saved.threatModel)?.threats.map(threat => threat.id) ?? [] : []),
+        ...(saved ? parseRiskRegister(saved.risks)?.risks.map(risk => risk.threatId) ?? [] : []),
+    ]);
 }
 
 function nextId(prefix: string, ids: readonly string[]): string {
@@ -126,12 +133,12 @@ function nextId(prefix: string, ids: readonly string[]): string {
     return `${prefix}${number}`;
 }
 
-export function nextSystemId(model: ThreatModel, prefix: "C" | "I"): string {
-    return nextId(prefix, [
-        ...model.components.map(component => component.id), ...model.interactions.map(interaction => interaction.id),
-        ...model.interactions.flatMap(interaction => [interaction.sourceId, interaction.destinationId]),
-        ...model.threats.flatMap(threat => threat.targetIds ?? []),
-    ]);
+export function nextSystemId(model: ThreatModel, prefix: "C" | "I", savedModel?: ThreatModel): string {
+    return nextId(prefix, [model, ...(savedModel ? [savedModel] : [])].flatMap(entry => [
+        ...entry.components.map(component => component.id), ...entry.interactions.map(interaction => interaction.id),
+        ...entry.interactions.flatMap(interaction => [interaction.sourceId, interaction.destinationId]),
+        ...entry.threats.flatMap(threat => threat.targetIds ?? []),
+    ]));
 }
 
 export function systemElementLabel(model: ThreatModel, targetId: string): string | null {
@@ -349,7 +356,7 @@ export function parseRiskRegister(text: string): RiskRegister | null {
     return serializeRiskRegister(register) === text.trim() ? register : null;
 }
 
-export function loadStrideContext(text: StrideContextText) {
+export function loadStrideContext(text: StrideContextText, mode?: StrideEditorMode | null) {
     const model = parseThreatModel(text.threatModel);
     const register = parseRiskRegister(text.risks);
     const risks = register?.risks.map(risk => {
@@ -365,10 +372,61 @@ export function loadStrideContext(text: StrideContextText) {
     const loadedModel = model ?? { ...emptyThreatModel(), notes: text.threatModel };
     const loadedRegister = register && risks ? { ...register, risks } : { risks: [emptyRisk()], notes: text.risks };
     return {
-        mode: model && register ? "stride" as const : "free" as const,
+        mode: mode ?? (model && register ? "stride" as const : "free" as const),
         model: loadedModel.threats.length ? loadedModel : {
             ...loadedModel, threats: [emptyThreat(nextThreatId(loadedModel, loadedRegister))],
         },
         register: loadedRegister,
     };
+}
+
+export function prepareStrideSectionSave(
+    section: StrideSection, draft: StrideDraft, text: StrideContextText, saved: StrideContextText,
+): string {
+    const previousModel = parseThreatModel(saved.threatModel);
+    const previousRegister = loadStrideContext(saved).register;
+    if (draft.mode === "free") {
+        if (section === "system") throw new Error("In Advanced free mode, save system details from Threat model.");
+        return (section === "risks" ? text.risks : text.threatModel).trim();
+    }
+    if (section === "risks") {
+        for (const risk of draft.register.risks) {
+            if (risk.threatId && !previousModel?.threats.some(threat => threat.id === risk.threatId)
+                && !previousRegister.risks.some(savedRisk => savedRisk.threatId === risk.threatId)) {
+                throw new Error(`Save Threat model before Risks: threat ${risk.threatId} has not been saved.`);
+            }
+        }
+        return serializeRiskRegister(draft.register);
+    }
+    if (section === "system" && !previousModel) {
+        throw new Error("Save Threat model first to convert the saved free text to the STRIDE template.");
+    }
+    const baseline = previousModel ?? emptyThreatModel();
+    const model: ThreatModel = section === "system" ? {
+        ...draft.model, threats: baseline.threats, notes: baseline.notes,
+    } : {
+        ...baseline, threats: draft.model.threats, notes: draft.model.notes,
+    };
+    const previousTargets = new Set(baseline.threats.flatMap(threat => threat.targetIds ?? []));
+    for (const threat of model.threats) {
+        for (const targetId of threat.targetIds ?? []) {
+            if (!systemElementLabel(model, targetId)
+                && (section === "system" ? systemElementLabel(baseline, targetId) : !previousTargets.has(targetId))) {
+                throw new Error(section === "system"
+                    ? `Save Threat model before System: saved threats still reference ${targetId}.`
+                    : `Save System before Threat model: element ${targetId} has not been saved.`);
+            }
+        }
+    }
+    for (const risk of previousRegister.risks) {
+        if (baseline.threats.some(threat => threat.id === risk.threatId)
+            && !model.threats.some(threat => threat.id === risk.threatId)) {
+            throw new Error(`Save Risks before Threat model: saved risks still reference ${risk.threatId}.`);
+        }
+    }
+    const value = serializeThreatModel(model, previousRegister.risks.map(risk => risk.threatId));
+    if (!value && previousRegister.risks.some(risk => baseline.threats.some(threat => threat.id === risk.threatId))) {
+        throw new Error("Save Risks first: clearing this section would remove a threat referenced by saved risks.");
+    }
+    return value;
 }

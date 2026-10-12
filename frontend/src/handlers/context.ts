@@ -1,3 +1,5 @@
+import type { RiskRegister, StrideEditorMode, StrideThreat, ThreatModel } from "../helpers/strideContext";
+
 type ProjectContext = {
     project_id: string;
     description: string | null;
@@ -10,6 +12,7 @@ type VariantContextData = {
     threat_model: string | null;
     risks: string | null;
     other_info: string | null;
+    editor_mode?: StrideEditorMode | null;
 };
 
 type VariantContext = VariantContextData & {
@@ -29,12 +32,19 @@ type MergedContext = ProjectContext & VariantContext;
 type VariantEntry = {
     variant_name: string;
     variant_description: string | null;
-    codebase_path: string | null;
+    codebase_paths: string[];
     environment: string | null;
+    other_info: string | null;
+} & ({
+    editor_mode: "stride";
+    system: Omit<ThreatModel, "threats" | "notes">;
+    threat_model: { threats: (StrideThreat & { targetIds: string[] })[]; notes: string };
+    risks: RiskRegister;
+} | {
+    editor_mode: "free";
     threat_model: string | null;
     risks: string | null;
-    other_info: string | null;
-};
+});
 
 /** One project with its variants nested underneath. */
 type ProjectEntry = {
@@ -57,7 +67,7 @@ type ImportResult = {
 
 /** Versioned export envelope produced by the backend. */
 type ContextExport = {
-    version: string;
+    version: "2.0";
     exported_at: string;
     projects: ProjectEntry[];
 };
@@ -150,6 +160,22 @@ class Context {
         );
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Failed to save variant context (${res.status})`);
+        return data as VariantContext;
+    }
+
+    static async patchVariant(
+        variantId: string, fields: Partial<VariantContextData>, expected: Partial<VariantContextData>,
+    ): Promise<VariantContext> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context`,
+            {
+                mode: 'cors', method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...fields, expected }),
+            },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Failed to save section (${res.status})`);
         return data as VariantContext;
     }
 

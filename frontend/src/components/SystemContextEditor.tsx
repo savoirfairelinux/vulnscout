@@ -6,6 +6,7 @@ import type { SystemComponent, SystemInteraction, ThreatModel } from "../helpers
 
 type Props = {
     model: ThreatModel;
+    savedModel?: ThreatModel;
     idPrefix: string;
     disabled: boolean;
     onChange: (model: ThreatModel) => void;
@@ -16,7 +17,7 @@ const inputClass = "w-full rounded px-2 py-1.5 text-sm bg-slate-900/60 border bo
 const textareaClass = inputClass + " resize-y min-h-[80px]";
 const buttonClass = "rounded px-3 py-1.5 text-sm border border-slate-500 text-cyan-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed";
 
-export default function SystemContextEditor({ model, idPrefix, disabled, onChange }: Readonly<Props>) {
+export default function SystemContextEditor({ model, savedModel, idPrefix, disabled, onChange }: Readonly<Props>) {
     const updateComponent = (index: number, changes: Partial<SystemComponent>) => onChange({
         ...model, components: model.components.map((component, row) => row === index ? { ...component, ...changes } : component),
     });
@@ -82,7 +83,7 @@ export default function SystemContextEditor({ model, idPrefix, disabled, onChang
                     );
                 })}
                 <button type="button" className={buttonClass} onClick={() => onChange({
-                    ...model, components: [...model.components, emptySystemComponent(nextSystemId(model, "C"))],
+                    ...model, components: [...model.components, emptySystemComponent(nextSystemId(model, "C", savedModel))],
                 })}>Add component</button>
             </section>
             <section aria-labelledby={`${idPrefix}-interactions-title`} className="space-y-3">
@@ -154,7 +155,7 @@ export default function SystemContextEditor({ model, idPrefix, disabled, onChang
                     );
                 })}
                 <button type="button" className={buttonClass} onClick={() => onChange({
-                    ...model, interactions: [...model.interactions, emptySystemInteraction(nextSystemId(model, "I"))],
+                    ...model, interactions: [...model.interactions, emptySystemInteraction(nextSystemId(model, "I", savedModel))],
                 })}>Add interaction</button>
             </section>
         </fieldset>
