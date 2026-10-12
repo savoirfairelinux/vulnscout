@@ -49,8 +49,10 @@ type SaveSnapshot = {
 
 const CONTEXT_TABS = [
     { id: "context", label: "Context" },
+    { id: "system", label: "System" },
     { id: "threat_model", label: "Threat model" },
     { id: "risks", label: "Risks" },
+    { id: "summary", label: "Summary" },
 ] as const;
 type ContextTab = (typeof CONTEXT_TABS)[number]["id"];
 
@@ -841,7 +843,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                     <div hidden={activeTab === "context"}>
                         <StrideContextEditor
                             key={`${selectedVariantId}:${contextEditorVersion}`}
-                            activeSection={activeTab === "risks" ? "risks" : "threat_model"}
+                            activeSection={activeTab === "context" ? "threat_model" : activeTab}
                             tabIdPrefix={tabIdPrefix}
                             modeContainer={editorModeContainer}
                             threatModel={threatModel}

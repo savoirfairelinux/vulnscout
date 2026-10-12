@@ -1,6 +1,7 @@
 import {
     THREAT_MODEL_FIELDS, STRIDE_CATEGORIES, emptyThreat, emptyRisk, emptyThreatModel, loadStrideContext,
     nextThreatId, parseRiskRegister, parseThreatModel, serializeRiskRegister, serializeThreatModel,
+    emptySystemComponent, emptySystemInteraction, nextSystemId, systemElementLabel,
 } from "../../src/helpers/strideContext";
 import type { RiskRegister, StrideRisk, ThreatModel } from "../../src/helpers/strideContext";
 
@@ -18,6 +19,108 @@ describe("STRIDE context text", () => {
         decision: "Investigate key provisioning before accepting the residual risk",
     };
     const register: RiskRegister = { risks: [risk], notes: "Review again after the design changes." };
+    const systemModel: ThreatModel = {
+        ...model,
+        components: [
+            { ...emptySystemComponent("C1"), name: "Update server", description: "Serves firmware images", trustZone: "External service" },
+            { ...emptySystemComponent("C2"), name: "OTA updater", description: "Writes firmware", trustZone: "Privileged firmware" },
+        ],
+        interactions: [{
+            ...emptySystemInteraction("I1"), name: "Firmware download", sourceId: "C1", destinationId: "C2",
+            protocol: "HTTPS", description: "Signed firmware image", trustBoundary: "Network to privileged firmware",
+        }],
+        threats: [{ ...model.threats[0], targetIds: ["C2", "I1"] }],
+    };
+
+    test("system components, directed interactions and multiple threat targets round trip as readable text", () => {
+        const text = serializeThreatModel(systemModel);
+        expect(text).toContain("<!-- VulnScout STRIDE v2 -->");
+        expect(text).toContain("## Component 1 / Name\n> Update server");
+        expect(text).toContain("## Interaction 1 / Source component ID\n> C1");
+        expect(text).toContain("## Threat 1 / Affected system elements\n> C2\n> I1");
+        expect(parseThreatModel(text)).toEqual(systemModel);
+        expect(loadStrideContext({ threatModel: text, risks: serializeRiskRegister(register) })).toEqual({
+            mode: "stride", model: systemModel, register,
+        });
+        expect(systemElementLabel(systemModel, "C2")).toBe("Component C2: OTA updater");
+        expect(systemElementLabel(systemModel, "I1")).toBe("Interaction I1: Firmware download");
+        expect(systemElementLabel(systemModel, "C99")).toBeNull();
+    });
+
+    test("empty system drafts do not create content or upgrade otherwise unchanged legacy text", () => {
+        const blank = {
+            ...emptyThreatModel(), components: [emptySystemComponent("C1")], interactions: [emptySystemInteraction("I1")],
+        };
+        expect(serializeThreatModel(blank)).toBe("");
+        const withDrafts = { ...model, components: blank.components, interactions: blank.interactions };
+        expect(serializeThreatModel(withDrafts)).toBe(serializeThreatModel(model));
+        expect(parseThreatModel(serializeThreatModel(model))).toEqual(model);
+    });
+
+    test("system-only context can be saved without inventing threats or risk evaluations", () => {
+        const systemOnly = { ...systemModel, threats: [] };
+        const text = serializeThreatModel(systemOnly);
+        expect(parseThreatModel(text)).toEqual(systemOnly);
+        const loaded = loadStrideContext({ threatModel: text, risks: "" });
+        expect(loaded.model.threats).toEqual([emptyThreat("T1")]);
+        expect(serializeThreatModel(loaded.model)).toBe(text);
+        expect(serializeRiskRegister(loaded.register)).toBe("");
+    });
+
+    test("system text preserves whitespace and user headings without interpreting them as structure", () => {
+        const value = "  Initial text\n\n## Threat 1 / ID\n> T99\n<!-- VulnScout STRIDE v2 -->\n ";
+        const edited: ThreatModel = {
+            ...systemModel,
+            components: [{ ...systemModel.components[0], name: value, description: value, trustZone: value }],
+            interactions: [{ ...systemModel.interactions[0], name: value, protocol: value, description: value, trustBoundary: value }],
+        };
+        expect(parseThreatModel(serializeThreatModel(edited))).toEqual(edited);
+    });
+
+    test("referenced system elements retain IDs even after their descriptive fields are cleared", () => {
+        const cleared: ThreatModel = {
+            ...model, components: [emptySystemComponent("C1"), emptySystemComponent("C2")],
+            interactions: [{ ...emptySystemInteraction("I1"), sourceId: "C1", destinationId: "C2" }],
+            threats: [{ ...model.threats[0], targetIds: ["C2", "I1"] }],
+        };
+        expect(parseThreatModel(serializeThreatModel(cleared))).toEqual(cleared);
+        expect(systemElementLabel(cleared, "C1")).toBe("Component C1: (name needed)");
+        expect(systemElementLabel(cleared, "I1")).toBe("Interaction I1: (name needed)");
+        const emptyLinked = { ...cleared, interactions: [emptySystemInteraction("I1")] };
+        expect(parseThreatModel(serializeThreatModel(emptyLinked))?.interactions).toEqual(emptyLinked.interactions);
+    });
+
+    test("missing system references are preserved and reserved rather than attached to new elements", () => {
+        const missing: ThreatModel = {
+            ...model, components: [], interactions: [{
+                ...emptySystemInteraction("I2"), name: "Missing endpoints", sourceId: "C1", destinationId: "C9",
+            }], threats: [{ ...model.threats[0], targetIds: ["C2", "I1"] }],
+        };
+        expect(parseThreatModel(serializeThreatModel(missing))).toEqual(missing);
+        expect(nextSystemId(missing, "C")).toBe("C3");
+        expect(nextSystemId(missing, "I")).toBe("I3");
+    });
+
+    test.each([
+        serializeThreatModel(systemModel).replace("Component 1 / ID", "Component 2 / ID"),
+        serializeThreatModel(systemModel).replace("> C1", "> bad-id"),
+        serializeThreatModel(systemModel).replace("## Component 2 / ID\n> C2", "## Component 2 / ID\n> C1"),
+        serializeThreatModel(systemModel).replace("Interaction 1 / ID", "Interaction 3 / ID"),
+        serializeThreatModel(systemModel).replace("> I1", "> I0"),
+        serializeThreatModel({
+            ...systemModel, interactions: [systemModel.interactions[0], systemModel.interactions[0]],
+        }),
+        serializeThreatModel(systemModel).replace("## Interaction 1 / Source component ID\n> C1", "## Interaction 1 / Source component ID\n> T1"),
+        serializeThreatModel(systemModel).replace("Threat 1 / Affected system elements", "Threat 1 / Unknown targets"),
+        serializeThreatModel(systemModel).replace("## Threat 1 / Affected system elements\n> C2\n> I1", "## Threat 1 / Affected system elements\n> C2\n> C2"),
+        serializeThreatModel(systemModel).replace("## Threat 1 / Affected system elements\n> C2\n> I1", "## Threat 1 / Affected system elements\n> T1"),
+        serializeThreatModel(systemModel).replace("\n\n## Interaction 1 / Trust boundary\n> Network to privileged firmware", ""),
+    ])("malformed system templates remain in free mode without losing their text: %s", text => {
+        expect(parseThreatModel(text)).toBeNull();
+        expect(loadStrideContext({ threatModel: text, risks: "" })).toMatchObject({
+            mode: "free", model: { notes: text },
+        });
+    });
 
     test("blank or whitespace-only templates do not create mandatory model content or optional risks", () => {
         expect(serializeThreatModel(emptyThreatModel())).toBe("");

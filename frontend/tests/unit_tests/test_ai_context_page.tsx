@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import "@testing-library/jest-dom";
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
@@ -20,7 +20,7 @@ function mockProjectsAndVariants() {
     fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
 }
 
-function selectContextTab(name: "Context" | "Threat model" | "Risks") {
+function selectContextTab(name: "Context" | "System" | "Threat model" | "Risks" | "Summary") {
     fireEvent.click(screen.getByRole("tab", { name }));
 }
 
@@ -83,7 +83,7 @@ describe('AIContext page', () => {
         expect(tablist).toHaveClass('flex-wrap', 'p-1');
         expect(tablist).not.toHaveClass('overflow-x-auto');
         expect(screen.queryByText('Describe the project, this variant and its operating environment.')).not.toBeInTheDocument();
-        for (const name of ['Context', 'Threat model', 'Risks'] as const) {
+        for (const name of ['Context', 'System', 'Threat model', 'Risks', 'Summary'] as const) {
             if (name !== 'Context') selectContextTab(name);
             const tab = screen.getByRole('tab', { name });
             const panel = screen.getByRole('tabpanel', { name });
@@ -92,14 +92,14 @@ describe('AIContext page', () => {
             expect(panel).toHaveAttribute('id', tab.getAttribute('aria-controls'));
             expect(panel).toHaveAttribute('aria-labelledby', tab.id);
             expect(screen.getAllByRole('tabpanel')).toHaveLength(1);
-            expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(3);
+            expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(5);
             expect(screen.getAllByLabelText('Editor mode')).toHaveLength(1);
             if (name === 'Context') {
                 expect(panel).toContainElement(screen.getByRole('combobox', { name: 'Editor mode' }));
-                expect(screen.getByLabelText('Editor mode')).toHaveAccessibleDescription('Applies to both Threat model and Risks.');
+                expect(screen.getByLabelText('Editor mode')).toHaveAccessibleDescription('Applies to System, Threat model and Risks.');
                 const mode = screen.getByLabelText('Editor mode');
                 const modeTitle = screen.getByText('Editor mode', { selector: 'label' });
-                const modeHelp = screen.getByText('Applies to both Threat model and Risks.');
+                const modeHelp = screen.getByText('Applies to System, Threat model and Risks.');
                 expect(modeTitle).toHaveClass('mb-1');
                 expect(modeTitle.nextElementSibling).toBe(modeHelp);
                 expect(modeHelp).toHaveClass('mb-1');
@@ -126,6 +126,10 @@ describe('AIContext page', () => {
                 expect(screen.getByLabelText('Editor mode')).not.toBeVisible();
                 expect(screen.queryByRole('combobox', { name: 'Editor mode' })).not.toBeInTheDocument();
             }
+            for (const label of ['System scope and assets', 'Actors and access', 'Entry points and data flows', 'Trust boundaries']) {
+                if (name === 'System') expect(screen.getByLabelText(label)).toBeVisible();
+                else expect(screen.getByLabelText(label)).not.toBeVisible();
+            }
             for (const label of ['Project Description', 'Variant Description', 'Codebase Path 1', 'Environment', 'Other Information']) {
                 if (name === 'Context') expect(screen.getByLabelText(label)).toBeVisible();
                 else expect(screen.getByLabelText(label)).not.toBeVisible();
@@ -148,8 +152,8 @@ describe('AIContext page', () => {
         await screen.findByRole('option', { name: 'Project A' });
         screen.getByRole('tab', { name: 'Context' }).focus();
         for (const [key, name] of [
-            ['ArrowRight', 'Threat model'], ['ArrowRight', 'Risks'], ['ArrowRight', 'Context'],
-            ['ArrowLeft', 'Risks'], ['ArrowLeft', 'Threat model'], ['Home', 'Context'], ['End', 'Risks'],
+            ['ArrowRight', 'System'], ['ArrowRight', 'Threat model'], ['ArrowRight', 'Risks'], ['ArrowRight', 'Summary'], ['ArrowRight', 'Context'],
+            ['ArrowLeft', 'Summary'], ['ArrowLeft', 'Risks'], ['ArrowLeft', 'Threat model'], ['ArrowLeft', 'System'], ['Home', 'Context'], ['End', 'Summary'],
         ]) {
             fireEvent.keyDown(document.activeElement!, { key });
             const selected = screen.getByRole('tab', { name });
@@ -165,8 +169,8 @@ describe('AIContext page', () => {
             expect(screen.getByRole('tabpanel', { name })).toBeVisible();
         }
         fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
-        expect(screen.getByRole('tab', { name: 'Risks' })).toHaveFocus();
-        expect(screen.getByRole('tabpanel', { name: 'Risks' })).toBeVisible();
+        expect(screen.getByRole('tab', { name: 'Summary' })).toHaveFocus();
+        expect(screen.getByRole('tabpanel', { name: 'Summary' })).toBeVisible();
     });
 
     test('project description textarea is disabled when no project selected', async () => {
@@ -966,6 +970,106 @@ describe('AIContext page', () => {
         const contextRequests = () => fetchMock.mock.calls.filter(call =>
             String(call[0]).includes('/api/context?'));
 
+        test('Summary reflects unsaved threat and risk edits and saves the same canonical context', async () => {
+            const { puts } = await mountVariant(structured);
+            fireEvent.change(screen.getByLabelText('Threat 1 description'), { target: { value: 'Updated device impersonation' } });
+            selectContextTab('Risks');
+            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Validate device credentials' } });
+            const requests = fetchMock.mock.calls.length;
+            selectContextTab('Summary');
+            const panel = screen.getByRole('tabpanel', { name: 'Summary' });
+            expect(within(panel).getByRole('table', { name: 'Threats and linked risk evaluations' }))
+                .toHaveTextContent('Updated device impersonation');
+            expect(panel).toHaveTextContent('Validate device credentials');
+            expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
+            expect(within(panel).queryByRole('combobox')).not.toBeInTheDocument();
+            expect(fetchMock.mock.calls).toHaveLength(requests);
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(parseThreatModel(puts[0].threat_model!)?.threats[0].description).toBe('Updated device impersonation');
+            expect(parseRiskRegister(puts[0].risks!)?.risks[0].mitigation).toBe('Validate device credentials');
+        });
+
+        test('viewing Summary does not dirty saved data and clean agent refreshes update its rows', async () => {
+            const { stored, puts } = await mountVariant(structured);
+            selectContextTab('Summary');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts[0]).toMatchObject({ threat_model: structured.threatModel, risks: structured.risks });
+            expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/api/reviews/assessments'))).toBe(false);
+            const model = parseThreatModel(structured.threatModel)!;
+            stored.set('v1', {
+                ...structured, threatModel: serializeThreatModel({
+                    ...model, threats: model.threats.map(threat => ({ ...threat, description: `Agent updated ${threat.description}` })),
+                }),
+            });
+            agentWrite();
+            await waitFor(() => expect(screen.getByRole('table', { name: 'Threats and linked risk evaluations' }))
+                .toHaveTextContent('Agent updated A device could be impersonated'));
+            expect(screen.getByRole('tab', { name: 'Summary' })).toHaveAttribute('aria-selected', 'true');
+            selectContextTab('Context');
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v2' } });
+            await waitFor(() => expect(screen.getByLabelText('Editor mode')).toHaveValue('free'));
+            selectContextTab('Summary');
+            expect(screen.getByRole('tabpanel', { name: 'Summary' })).toHaveTextContent('Legacy model for variant 2');
+            expect(screen.getByRole('tabpanel', { name: 'Summary' })).toHaveTextContent('Legacy risks for variant 2');
+            expect(screen.queryByRole('table')).not.toBeInTheDocument();
+        });
+
+        test('System architecture and threat targets save, refresh and remain scoped to their variant', async () => {
+            const { puts } = await mountVariant();
+            selectContextTab('System');
+            for (const [number, name] of [[1, 'Update service'], [2, 'OTA updater']] as const) {
+                fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+                fireEvent.change(screen.getByLabelText(`Component ${number} name`), { target: { value: name } });
+            }
+            fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+            fireEvent.change(screen.getByLabelText('Interaction 1 name'), { target: { value: 'Firmware download' } });
+            fireEvent.change(screen.getByLabelText('Interaction 1 source component'), { target: { value: 'C1' } });
+            fireEvent.change(screen.getByLabelText('Interaction 1 destination component'), { target: { value: 'C2' } });
+            fireEvent.change(screen.getByLabelText('Interaction 1 interface / protocol'), { target: { value: 'HTTPS' } });
+            selectContextTab('Threat model');
+            fireEvent.change(screen.getByLabelText('Threat 1 STRIDE category'), { target: { value: 'Tampering' } });
+            fireEvent.change(screen.getByLabelText('Threat 1 description'), { target: { value: 'Unauthorized firmware replacement' } });
+            fireEvent.change(screen.getByLabelText('Threat 1 affected system element'), { target: { value: 'C2' } });
+            fireEvent.change(screen.getByLabelText('Threat 1 affected system element'), { target: { value: 'I1' } });
+            selectContextTab('Risks');
+            fireEvent.change(screen.getByLabelText('Risk 1 threat'), { target: { value: 'T1' } });
+            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Verify firmware signatures' } });
+            selectContextTab('System');
+            fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+            await screen.findByText(/context saved successfully/i);
+            expect(puts).toHaveLength(1);
+            const saved = puts[0].threat_model!;
+            expect(saved).toContain('<!-- VulnScout STRIDE v2 -->');
+            expect(parseThreatModel(saved)).toMatchObject({
+                components: [{ id: 'C1', name: 'Update service' }, { id: 'C2', name: 'OTA updater' }],
+                interactions: [{ id: 'I1', name: 'Firmware download', sourceId: 'C1', destinationId: 'C2', protocol: 'HTTPS' }],
+                threats: [{ id: 'T1', targetIds: ['C2', 'I1'] }],
+            });
+            agentWrite();
+            await waitFor(() => expect(screen.getByLabelText('Component 2 name')).toHaveValue('OTA updater'));
+            fireEvent.change(screen.getByLabelText('Component 2 name'), { target: { value: 'Privileged update agent' } });
+            agentWrite();
+            await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/your unsaved edits were kept/i));
+            expect(screen.getByLabelText('Component 2 name')).toHaveValue('Privileged update agent');
+            selectContextTab('Threat model');
+            expect(screen.getByRole('list', { name: 'Threat 1 affected system elements' })).toHaveTextContent('Privileged update agent');
+            selectContextTab('System');
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v2' } });
+            await waitFor(() => expect(screen.getByLabelText('Editor mode')).toHaveValue('free'));
+            expect(screen.getByRole('tabpanel', { name: 'System' })).toHaveTextContent('In Advanced free mode');
+            expect(screen.queryByRole('textbox', { name: 'Component 1 name' })).not.toBeInTheDocument();
+            fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v1' } });
+            await waitFor(() => expect(screen.getByRole('textbox', { name: 'Component 2 name' })).toHaveValue('OTA updater'));
+            expect(screen.getByLabelText('Interaction 1 source component')).toHaveValue('C1');
+            selectContextTab('Threat model');
+            expect(screen.getByRole('list', { name: 'Threat 1 affected system elements' })).toHaveTextContent('Interaction I1: Firmware download');
+            selectContextTab('Risks');
+            expect(screen.getByRole('list', { name: 'Risk 1 affected system elements' })).toHaveTextContent('Component C2: OTA updater');
+            expect(screen.getByLabelText('Risk 1 mitigation')).toHaveValue('Verify firmware signatures');
+        });
+
         test('default blank threats do not dirty saved context or prevent an agent refresh', async () => {
             const saved = serializeThreatModel({ ...emptyThreatModel(), scope: 'Device firmware' });
             const { stored, puts } = await mountVariant({ threatModel: saved, risks: '' });
@@ -1163,7 +1267,7 @@ describe('AIContext page', () => {
             expect(description).toHaveFocus();
         });
 
-        test.each(['Context', 'Threat model', 'Risks'] as const)(
+        test.each(['Context', 'System', 'Threat model', 'Risks', 'Summary'] as const)(
             'subtab navigation preserves all drafts and Save from %s submits every section',
             async saveTab => {
                 const { puts } = await mountVariant(structured);
@@ -1173,8 +1277,9 @@ describe('AIContext page', () => {
                 fireEvent.change(screen.getByLabelText('Codebase Path 1'), { target: { value: '/workspace/firmware' } });
                 fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Zephyr RTOS' } });
                 fireEvent.change(screen.getByLabelText('Other Information'), { target: { value: 'Requires authenticated updates' } });
-                selectContextTab('Threat model');
+                selectContextTab('System');
                 fireEvent.change(screen.getByLabelText('System scope and assets'), { target: { value: 'Unsaved system scope' } });
+                selectContextTab('Threat model');
                 fireEvent.change(screen.getByLabelText('Threat 2 description'), { target: { value: 'Updated administrator impersonation' } });
                 fireEvent.click(screen.getByRole('button', { name: 'Add threat' }));
                 fireEvent.change(screen.getByLabelText('Threat 3 STRIDE category'), { target: { value: 'Tampering' } });
@@ -1190,8 +1295,9 @@ describe('AIContext page', () => {
                 selectContextTab('Context');
                 expect(screen.getByLabelText('Project Description')).toHaveValue('Unsaved project description');
                 expect(screen.getByLabelText('Codebase Path 1')).toHaveValue('/workspace/firmware');
-                selectContextTab('Threat model');
+                selectContextTab('System');
                 expect(screen.getByLabelText('System scope and assets')).toHaveValue('Unsaved system scope');
+                selectContextTab('Threat model');
                 expect(screen.getByLabelText('Threat 3 STRIDE category')).toHaveValue('Tampering');
                 expect(screen.getByLabelText('Threat 3 description')).toHaveValue('');
                 expect(screen.queryByRole('button', { name: /additional notes/i })).not.toBeInTheDocument();
@@ -1269,7 +1375,7 @@ describe('AIContext page', () => {
             const changed = jest.fn();
             await mountVariant(structured, changed);
             for (const [name, section] of [
-                ['Threat model', 'threat_model'], ['Context', 'context'], ['Risks', 'risks'],
+                ['System', 'system'], ['Threat model', 'threat_model'], ['Context', 'context'], ['Risks', 'risks'], ['Summary', 'summary'],
             ] as const) {
                 selectContextTab(name);
                 expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -1319,8 +1425,10 @@ describe('AIContext page', () => {
 
         test('guided fields save as the existing readable text fields and restore after a reload', async () => {
             const { puts } = await mountVariant();
+            selectContextTab("System");
             fireEvent.change(screen.getByLabelText('System scope and assets'), { target: { value: 'Firmware and credentials' } });
             fireEvent.change(screen.getByLabelText('Trust boundaries'), { target: { value: 'Internet -> device API' } });
+            selectContextTab("Threat model");
             fireEvent.change(screen.getByLabelText('Threat 1 STRIDE category'), { target: { value: 'Spoofing' } });
             fireEvent.change(screen.getByLabelText('Threat 1 description'), { target: { value: 'Device impersonation' } });
             fireEvent.click(screen.getByRole('button', { name: 'Add threat' }));
@@ -1378,6 +1486,7 @@ describe('AIContext page', () => {
 
         test('a populated model leaves unused risks null rather than saving risk placeholders', async () => {
             const { puts } = await mountVariant();
+            selectContextTab("System");
             fireEvent.change(screen.getByLabelText('Actors and access'), { target: { value: 'Remote attackers and administrators' } });
             fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
             await screen.findByText(/context saved successfully/i);

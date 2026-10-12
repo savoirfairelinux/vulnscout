@@ -1,13 +1,15 @@
 import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-    STRIDE_CATEGORIES, THREAT_MODEL_FIELDS, emptyThreat, emptyRisk, loadStrideContext, nextThreatId,
-    serializeThreatModel, serializeRiskRegister,
+    STRIDE_CATEGORIES, emptyThreat, emptyRisk, loadStrideContext, nextThreatId,
+    serializeThreatModel, serializeRiskRegister, systemElementLabel,
 } from "../helpers/strideContext";
+import SystemContextEditor from "./SystemContextEditor";
+import StrideSummary from "./StrideSummary";
 import type { RiskRegister, StrideContextText, StrideRisk, StrideThreat, ThreatModel } from "../helpers/strideContext";
 
 type Props = StrideContextText & {
-    activeSection: "threat_model" | "risks";
+    activeSection: "system" | "threat_model" | "risks" | "summary";
     tabIdPrefix: string;
     modeContainer: HTMLElement | null;
     disabled: boolean;
@@ -77,7 +79,7 @@ export default function StrideContextEditor({
                 <div>
                     <label className={labelClass} htmlFor={`${id}-mode`}>Editor mode</label>
                     <p id={`${id}-mode-help`} className="text-xs text-zinc-400 mb-1">
-                        Applies to both Threat model and Risks.
+                        Applies to System, Threat model and Risks.
                     </p>
                     <select
                         id={`${id}-mode`}
@@ -108,16 +110,60 @@ export default function StrideContextEditor({
                 </div>, modeContainer,
             )}
 
+            <div
+                role="tabpanel" id={`${tabIdPrefix}-system-panel`}
+                aria-labelledby={`${tabIdPrefix}-system-tab`} tabIndex={0}
+                hidden={activeSection !== "system"}
+            >
+                {draft.mode === "free" ? (
+                    <p className="text-sm text-zinc-400">
+                        In Advanced free mode, describe the system and its interactions in Threat model.
+                        Choose the STRIDE template in Context to edit named components and interactions here.
+                    </p>
+                ) : (
+                    <SystemContextEditor model={draft.model} idPrefix={`${id}-system`} disabled={disabled}
+                        onChange={model => updateModel(model)} />
+                )}
+            </div>
+            <div
+                role="tabpanel" id={`${tabIdPrefix}-summary-panel`}
+                aria-labelledby={`${tabIdPrefix}-summary-tab`} tabIndex={0}
+                hidden={activeSection !== "summary"}
+            >
+                {activeSection === "summary" && (disabled ? (
+                    <p className="text-sm text-zinc-400">Select a loaded variant to view its summary.</p>
+                ) : draft.mode === "free" ? (
+                    <div className="space-y-4">
+                        <h2 className="text-lg font-semibold text-white">Summary</h2>
+                        <p className="text-sm text-zinc-400">
+                            Advanced free mode has no structured STRIDE summary. Current text is shown below;
+                            choose the STRIDE template in Context for the category and risk tables.
+                        </p>
+                        <section>
+                            <h3 className="font-semibold text-white">Threat Model</h3>
+                            <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words">
+                                {threatModel.trim() ? threatModel : "No threat model text recorded."}
+                            </p>
+                        </section>
+                        <section>
+                            <h3 className="font-semibold text-white">Risks</h3>
+                            <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words">
+                                {risks.trim() ? risks : "No risk text recorded."}
+                            </p>
+                        </section>
+                    </div>
+                ) : <StrideSummary model={draft.model} register={draft.register} />)}
+            </div>
             {draft.mode === "free" ? (
                 <>
-                    <p className="text-xs text-zinc-400">
-                        Use your own format. Switching to STRIDE keeps existing free text as additional notes.
-                    </p>
                     <div
                         role="tabpanel" id={`${tabIdPrefix}-threat_model-panel`}
                         aria-labelledby={`${tabIdPrefix}-threat_model-tab`} tabIndex={0}
                         hidden={activeSection !== "threat_model"}
                     >
+                        <p className="text-xs text-zinc-400 mb-1">
+                            Use your own format. Switching to STRIDE keeps existing free text as additional notes.
+                        </p>
                         <label className={labelClass} htmlFor={`${id}-threat-model`}>
                             Threat Model <span className="text-red-500">*</span>
                         </label>
@@ -153,19 +199,6 @@ export default function StrideContextEditor({
                             <legend className="text-lg font-semibold text-white mb-3">
                                 Threat Model <span className="text-red-500">*</span>
                             </legend>
-                            {THREAT_MODEL_FIELDS.map(field => (
-                                <div key={field.key}>
-                                    <label className={labelClass} htmlFor={`${id}-${field.key}`}>{field.label}</label>
-                                    <p id={`${id}-${field.key}-help`} className="text-xs text-zinc-400 mb-1">{field.help}</p>
-                                    <textarea
-                                        id={`${id}-${field.key}`} className={textareaClass}
-                                        value={draft.model[field.key]}
-                                        aria-describedby={`${id}-${field.key}-help`} aria-invalid={Boolean(error)}
-                                        placeholder={field.placeholder}
-                                        onChange={event => updateModel({ [field.key]: event.target.value })}
-                                    />
-                                </div>
-                            ))}
                             <p className="text-xs text-zinc-400">
                                 Add one entry per threat. Several threats can share the same STRIDE category.
                                 Consider all six categories; an empty list does not mean no threats exist.
@@ -191,6 +224,61 @@ export default function StrideContextEditor({
                                                 {STRIDE_CATEGORIES.map(item =>
                                                     <option key={item.key} value={item.name}>{item.letter} - {item.name}</option>)}
                                             </select>
+                                        </div>
+                                        <div>
+                                            <label className={labelClass} htmlFor={`${id}-threat-${index}-target`}>
+                                                Affected system elements
+                                            </label>
+                                            <p id={`${id}-threat-${index}-target-help`} className="text-xs text-zinc-400 mb-1">
+                                                Optionally select components or interactions from System. A threat can affect several elements.
+                                            </p>
+                                            <select
+                                                id={`${id}-threat-${index}-target`} className={inputClass} value=""
+                                                aria-label={`Threat ${index + 1} affected system element`}
+                                                aria-describedby={`${id}-threat-${index}-target-help`}
+                                                onChange={event => {
+                                                    const targetId = event.target.value;
+                                                    if (targetId && !threat.targetIds?.includes(targetId))
+                                                        updateThreat(index, { targetIds: [...(threat.targetIds ?? []), targetId] });
+                                                }}
+                                            >
+                                                <option value="">Add an affected component or interaction</option>
+                                                <optgroup label="Components">
+                                                    {draft.model.components.map(component => (
+                                                        <option key={component.id} value={component.id}
+                                                            disabled={!component.name.trim() || threat.targetIds?.includes(component.id)}>
+                                                            {systemElementLabel(draft.model, component.id)}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                                <optgroup label="Interactions">
+                                                    {draft.model.interactions.map(interaction => (
+                                                        <option key={interaction.id} value={interaction.id}
+                                                            disabled={!interaction.name.trim() || threat.targetIds?.includes(interaction.id)}>
+                                                            {systemElementLabel(draft.model, interaction.id)}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            </select>
+                                            {(threat.targetIds ?? []).length > 0 && (
+                                                <ul aria-label={`Threat ${index + 1} affected system elements`} className="space-y-2 mt-2">
+                                                    {threat.targetIds?.map(targetId => {
+                                                        const label = systemElementLabel(draft.model, targetId);
+                                                        return <li key={targetId} className="text-sm text-zinc-300 break-words">
+                                                            {label ?? `Unavailable system element (${targetId})`}
+                                                            {!label && <p role="status" className="text-xs text-amber-300">
+                                                                The linked system element {targetId} is missing. Remove this reference or select another element.
+                                                            </p>}
+                                                            <button type="button" className={buttonClass + " ml-2"}
+                                                                aria-label={`Remove ${targetId} from threat ${index + 1}`}
+                                                                onClick={() => updateThreat(index, {
+                                                                    targetIds: threat.targetIds?.filter(value => value !== targetId),
+                                                                })}
+                                                            >Remove reference</button>
+                                                        </li>;
+                                                    })}
+                                                </ul>
+                                            )}
                                         </div>
                                         <div>
                                             <label className={labelClass} htmlFor={`${id}-threat-${index}-description`}>Description</label>
@@ -281,6 +369,14 @@ export default function StrideContextEditor({
                                             <div role="note" aria-label={`Risk ${index + 1} selected threat`} className="text-sm text-zinc-300 whitespace-pre-wrap break-words">
                                                 <p className="font-semibold">{selectedThreat.category || "Uncategorized"}</p>
                                                 <p>{selectedThreat.description || "Complete this threat's description in Threat model."}</p>
+                                                {(selectedThreat.targetIds ?? []).length > 0 && (
+                                                    <ul aria-label={`Risk ${index + 1} affected system elements`}>
+                                                        {selectedThreat.targetIds?.map(targetId => (
+                                                            <li key={targetId}>{systemElementLabel(draft.model, targetId)
+                                                                ?? `Unavailable system element (${targetId})`}</li>
+                                                        ))}
+                                                    </ul>
+                                                )}
                                             </div>
                                         )}
                                         {risk.threatId && !selectedThreat && (

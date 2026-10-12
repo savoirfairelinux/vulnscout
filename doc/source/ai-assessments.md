@@ -52,9 +52,12 @@ replaced.
 ## Fill in the AI context
 
 Select a project and variant in the **AI** tab. Use **Context** for descriptions,
-source paths and the operating environment, **Threat model** for system scope
-and threats, and **Risks** for their evaluation. Switching subtabs keeps unsaved
-edits; **Save** saves all sections.
+source paths and the operating environment, **System** for architecture,
+**Threat model** for threats, and **Risks** for their evaluation. **Summary**
+provides a read-only STRIDE category overview and threat/risk tables, including
+unsaved edits, incomplete entries and unavailable references. Counts do not
+indicate completed review or safety. In Advanced free mode, Summary shows the
+current text instead. Switching subtabs keeps unsaved edits; **Save** saves all sections.
 
 Use **Add Codebase Path** and **Remove Codebase Path** to list source directories
 individually. Paths are context hints, not filesystem access or automatic mounts.
@@ -62,22 +65,32 @@ Container-based assessment tools need explicitly mounted directories and their
 container paths. The embedded Agent currently exposes only VulnScout MCP tools,
 not source-file read/search tools.
 
-Choose **Editor mode** in **Context**; it applies to both **Threat model** and
-**Risks**. The default is a guided **STRIDE template**: describe the system's assets, actors,
-entry points, data flows and trust boundaries, then record each threat's
+Choose **Editor mode** in **Context**; it applies to **System**, **Threat model**
+and **Risks**. The default is a guided **STRIDE template**.
+In **System**, describe assets, actors, entry points and trust boundaries.
+Use **Add component** for security-relevant device parts, services, stores and
+external actors. Use **Add interaction** for named, directed flows between
+components, including their interface, exchanged data and crossed trust boundary.
+This is a user-declared system model, not an inferred SBOM dependency graph.
+
+In **Threat model**, record each threat's
 description and select its category: **Spoofing**,
 **Tampering**, **Repudiation**, **Information disclosure**, **Denial of service**
 and **Elevation of privilege**. The first threat and risk entries start empty;
 use **Add threat** for additional entries. The prompts are examples, not prefilled answers.
 Several threats can share a category. Leave unknowns blank; the **Additional notes**
 area can record assumptions or explain why a category does not apply.
+Optionally select one or more **Affected system elements** from System.
+Renaming an element updates its references; remove or reassign references before
+deleting components or interactions. Existing threats need not acquire a target.
 
 In the risk register, **select a threat from Threat model**, then record its
 qualitative likelihood and impact, mitigations and residual-risk decisions.
 A threat cannot be removed until its linked risks are reassigned or removed.
 **Advanced free mode** remains available for your own format. Existing free-text
 context opens in that mode;
-switching to STRIDE retains it as additional notes. Both modes save readable text
+switching to STRIDE retains it as additional notes. In free mode, system details
+remain in the Threat Model text. Both modes save readable text
 and work with existing AI tools and context imports/exports.
 
 ---
