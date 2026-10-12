@@ -11,28 +11,31 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, TypedDict
+from typing import Any, NotRequired, Optional, TypedDict
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..models.project import Project
 from ..models.project_context import ProjectContext
 from ..models.variant import Variant
 from ..models.variant_context import VariantContext
+from .stride_context import export_fields, import_fields
 
 # Version of the export file format. Bump the major component only on a
 # breaking change to the entry shape.
-EXPORT_VERSION = "1.0"
+EXPORT_VERSION = "2.0"
 
 
 class VariantEntry(TypedDict):
     """One exported variant's context (nested under its project)."""
     variant_name: str
     variant_description: Optional[str]
-    codebase_path: Optional[str]
+    codebase_paths: list[str]
     environment: Optional[str]
-    threat_model: Optional[str]
-    risks: Optional[str]
+    editor_mode: str
+    threat_model: Any
+    risks: Any
     other_info: Optional[str]
+    system: NotRequired[dict]
 
 
 class ProjectEntry(TypedDict):
@@ -51,15 +54,20 @@ class ExportDocument(TypedDict):
 
 def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntry:
     """Build one export entry for a variant."""
-    return {
+    fields = export_fields(vc.threat_model if vc else None, vc.risks if vc else None, vc.editor_mode if vc else None)
+    entry: VariantEntry = {
         "variant_name": variant.name,
         "variant_description": vc.variant_description if vc else None,
-        "codebase_path": vc.codebase_path if vc else None,
+        "codebase_paths": vc.codebase_path.split(";") if vc and vc.codebase_path is not None else [],
         "environment": vc.environment if vc else None,
-        "threat_model": vc.threat_model if vc else None,
-        "risks": vc.risks if vc else None,
         "other_info": vc.other_info if vc else None,
+        "editor_mode": fields["editor_mode"],
+        "threat_model": fields["threat_model"],
+        "risks": fields["risks"],
     }
+    if "system" in fields:
+        entry["system"] = fields["system"]
+    return entry
 
 
 def project_entry(project: Project, pc: Optional[ProjectContext],
@@ -144,8 +152,8 @@ def extract_entries(body) -> list:
     ``project_name`` / ``project_description`` and a ``variants`` list. The
     returned records are flattened so each carries ``project_name``,
     ``project_description`` and the variant fields, matching what
-    :func:`import_entries` consumes. The ``version`` / ``exported_at`` fields
-    are ignored (lenient).
+    :func:`import_entries` consumes. Version 1.0 and unversioned files are
+    legacy free-text imports; version 2.0 has explicit structured/free modes.
 
     Raises
     ------
@@ -153,6 +161,9 @@ def extract_entries(body) -> list:
         If *body* is neither a list of projects nor a dict containing a
         ``projects`` list, or if a project's ``variants`` is not a list.
     """
+    version = body.get("version", "1.0") if isinstance(body, dict) else "1.0"
+    if version not in ("1.0", EXPORT_VERSION):
+        raise ValueError(f"Unsupported context version: {version!r}")
     if isinstance(body, list):
         projects: list = body
     elif isinstance(body, dict):
@@ -160,16 +171,27 @@ def extract_entries(body) -> list:
         if not isinstance(raw_projects, list):
             raise ValueError("Object body must contain a 'projects' array")
         projects = raw_projects
+        if version == EXPORT_VERSION and (
+            body.keys() - {"version", "exported_at", "projects"}
+            or ("exported_at" in body and not isinstance(body["exported_at"], str))
+        ):
+            raise ValueError("Invalid version 2.0 context envelope")
     else:
         raise ValueError("Body must be a JSON array of projects or an object with a 'projects' array")
 
     records: list = []
+    identities: set[tuple[str, str]] = set()
     for project in projects:
         if not isinstance(project, dict):
             records.append(project)
             continue
         project_name = project.get("project_name")
         project_description = project.get("project_description")
+        if version == EXPORT_VERSION and (
+            project.keys() - {"project_name", "project_description", "variants"}
+            or (project_description is not None and not isinstance(project_description, str))
+        ):
+            raise ValueError("Invalid version 2.0 project fields")
         variants = project.get("variants")
         if not isinstance(variants, list):
             raise ValueError("Each project must contain a 'variants' array")
@@ -177,10 +199,18 @@ def extract_entries(body) -> list:
             if not isinstance(variant, dict):
                 records.append(variant)
                 continue
+            name = variant.get("variant_name")
+            if version == EXPORT_VERSION and isinstance(project_name, str) and isinstance(name, str):
+                identity = (project_name, name)
+                if identity in identities:
+                    raise ValueError(f"Duplicate context entry: {project_name} / {name}")
+                identities.add(identity)
             records.append({
+                **variant,
                 "project_name": project_name,
                 "description": project_description,
-                **variant,
+                "_format_version": version,
+                "_variant": variant,
             })
     return records
 
@@ -232,28 +262,30 @@ def import_entries(entries: list) -> dict:
             continue
 
         description = _txt(entry.get('description'))
-        threat_model = _txt(entry.get('threat_model'))
-        missing = []
-        if not (description and description.strip()):
-            missing.append('description')
-        if not (threat_model and threat_model.strip()):
-            missing.append('threat_model')
-        if missing:
-            failed.append({
-                **ident,
-                "reason": f"Missing mandatory field(s): {', '.join(missing)}",
-            })
-            continue
+        if entry.get("_format_version") == EXPORT_VERSION:
+            try:
+                values = import_fields(entry["_variant"])
+            except ValueError as exc:
+                failed.append({**ident, "reason": str(exc)})
+                continue
+        else:
+            values = {key: _txt(entry.get(key)) for key in (
+                "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+            )}
+            values["editor_mode"] = "free"
+            missing = []
+            if not (description and description.strip()):
+                missing.append('description')
+            if not (values["threat_model"] and values["threat_model"].strip()):
+                missing.append('threat_model')
+            if missing:
+                failed.append({**ident, "reason": f"Missing mandatory field(s): {', '.join(missing)}"})
+                continue
 
         ProjectContextController.upsert(project.id, description=description, commit=False)
         VariantContextController.upsert(
             variant.id,
-            variant_description=_txt(entry.get('variant_description')),
-            codebase_path=_txt(entry.get('codebase_path')),
-            environment=_txt(entry.get('environment')),
-            threat_model=threat_model,
-            risks=_txt(entry.get('risks')),
-            other_info=_txt(entry.get('other_info')),
+            **values,
             commit=False,
         )
         imported.append(ident)

@@ -5,6 +5,7 @@
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -82,7 +83,7 @@ class TestExportContextCLI:
         assert result.exit_code == 0, result.output
         assert out.exists()
         doc = json.loads(out.read_text())
-        assert doc["version"] == "1.0"
+        assert doc["version"] == "2.0"
         assert isinstance(doc["exported_at"], str) and doc["exported_at"]
         keys = {(e["project_name"], e["variant_name"]) for e in self._flat(doc)}
         assert keys == {
@@ -131,6 +132,47 @@ class TestExportContextCLI:
 
 
 class TestImportContextCLI:
+
+    def test_structured_import_matches_http_and_roundtrips_through_cli(self, app, tmp_path):
+        fixture = json.loads((Path(__file__).parents[1] / "fixtures/stride_context_v2.json").read_text())
+        payload = {"version": "2.0", "projects": [{
+            "project_name": "ProjectA", "project_description": "Structured project", "variants": [fixture["variant"]],
+        }]}
+        path = self._write(tmp_path, payload)
+        result = app.test_cli_runner().invoke(args=["import-context", path])
+        assert result.exit_code == 0, result.output
+        output = tmp_path / "export.json"
+        result = app.test_cli_runner().invoke(args=[
+            "export-context", "--output", str(output), "--project", "ProjectA", "--variant", "VariantA1",
+        ])
+        assert result.exit_code == 0, result.output
+        exported = json.loads(output.read_text())
+        assert exported["projects"] == payload["projects"]
+        http_export = app.test_client().get(
+            f"/api/context/export?variant_ids={app._test_ids['variant_a1_id']}"
+        ).json
+        assert http_export["projects"] == exported["projects"]
+        result = app.test_cli_runner().invoke(args=["import-context", str(output)])
+        assert result.exit_code == 0, result.output
+
+    def test_legacy_cli_import_persists_free_mode_with_verbatim_text(self, app, tmp_path):
+        from src.models.variant_context import VariantContext
+        from src.helpers.stride_context import export_fields, import_fields
+        import uuid
+        fields = export_fields(None, None, "stride")
+        fields["system"]["scope"] = "System scope"
+        values = import_fields({"variant_name": "VariantA1", **fields})
+        original = "  " + values["threat_model"] + "\n "
+        path = self._write(tmp_path, [{
+            "project_name": "ProjectA", "project_description": "Description",
+            "variants": [{"variant_name": "VariantA1", "threat_model": original}],
+        }])
+        result = app.test_cli_runner().invoke(args=["import-context", path])
+        assert result.exit_code == 0, result.output
+        with app.app_context():
+            context = VariantContext.get_by_variant(uuid.UUID(app._test_ids["variant_a1_id"]))
+            assert context.editor_mode == "free"
+            assert context.threat_model == original
 
     def _write(self, tmp_path, payload):
         path = tmp_path / "import.json"

@@ -74,6 +74,7 @@ class VariantContextController:
         risks: Optional[str] = None,
         other_info: Optional[str] = None,
         commit: bool = True,
+        editor_mode: Optional[str] = None,
     ) -> VariantContext:
         vid = ensure_uuid(variant_id)
         VariantContextController._get_variant(vid)
@@ -86,6 +87,7 @@ class VariantContextController:
             risks=risks,
             other_info=other_info,
             commit=commit,
+            editor_mode=editor_mode,
         )
 
     @staticmethod

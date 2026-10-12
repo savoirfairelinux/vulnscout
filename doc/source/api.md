@@ -212,10 +212,15 @@ The `PUT` request accepts a JSON object with a `description` field.
 
 ```
 PUT /api/variants/<variant_id>/context
+PATCH /api/variants/<variant_id>/context
 ```
 
-Accepts a JSON object containing any of `variant_description`, `codebase_path`, `environment`, `threat_model`, `risks`,
-and `other_info`.
+`PUT` replaces `variant_description`, `codebase_path`, `environment`, `threat_model`, `risks`, and `other_info`;
+omitted text fields become null. Optional `editor_mode` (`stride` or `free`) persists the UI preference;
+omitting it preserves the existing preference. Mode-only changes do not outdate assessments.
+
+`PATCH` updates only supplied fields and can include an `expected` object for optimistic conflict checks.
+A mismatched expected value returns HTTP 409 without replacing saved content.
 
 ### Import or Export Context
 
@@ -225,7 +230,9 @@ POST /api/context/import
 ```
 
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
-export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
+export all context. Exports use format 2.0 with structured STRIDE system, threat and risk objects,
+or explicit free-text mode. Import also accepts legacy 1.0/unversioned files as Advanced free text
+and applies all valid entries atomically. See [AI context import/export](ai-assessments.md#import-and-export).
 
 ### Manage Codebase References
 

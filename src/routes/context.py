@@ -4,6 +4,7 @@
 import os
 import uuid
 import logging
+from datetime import datetime, timezone
 
 from flask import jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
@@ -79,6 +80,7 @@ def init_app(app):
             "threat_model": vc.threat_model if vc else None,
             "risks": vc.risks if vc else None,
             "other_info": vc.other_info if vc else None,
+            "editor_mode": vc.editor_mode if vc else None,
             "files": [f.to_dict() for f in vc.files] if vc else [],
         })
 
@@ -143,6 +145,8 @@ def init_app(app):
             return err
         assert variant_uuid is not None
         body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict) or body.get('editor_mode') not in (None, 'stride', 'free'):
+            return jsonify({"error": "editor_mode must be stride or free."}), 400
         try:
             vc = VariantContextController.upsert(
                 variant_uuid,
@@ -152,7 +156,68 @@ def init_app(app):
                 threat_model=body.get('threat_model'),
                 risks=body.get('risks'),
                 other_info=body.get('other_info'),
+                editor_mode=body.get('editor_mode'),
             )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        return jsonify(VariantContextController.serialize(vc))
+
+    @app.route('/api/variants/<variant_id>/context', methods=['PATCH'])
+    def patch_variant_context(variant_id):
+        """Update only supplied variant context fields.
+
+        OpenAPI:
+        body JsonObject required Changed fields and optional expected field values.
+        response 200 JsonObject Updated variant context.
+        response 400 Error Invalid identifier, fields or expected values.
+        response 404 Error Variant not found.
+        response 409 Error Context changed since it was loaded.
+        """
+        variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
+        if err:
+            return err
+        assert variant_uuid is not None
+        body = request.get_json(silent=True)
+        fields = (
+            'variant_description', 'codebase_path', 'environment',
+            'threat_model', 'risks', 'other_info',
+            'editor_mode',
+        )
+        if not isinstance(body, dict) or not body or any(key not in (*fields, 'expected') for key in body):
+            return jsonify({"error": "Supply variant context fields to update."}), 400
+        expected = body.get('expected', {})
+        if (
+            not any(key in body for key in fields)
+            or any(body[key] is not None and not isinstance(body[key], str) for key in fields if key in body)
+            or not isinstance(expected, dict)
+            or any(key not in fields or (value is not None and not isinstance(value, str))
+                   for key, value in expected.items())
+        ):
+            return jsonify({"error": "Context fields and expected values must be text or null."}), 400
+        if body.get('editor_mode') not in (None, 'stride', 'free') or expected.get('editor_mode') not in (
+            None, 'stride', 'free',
+        ):
+            return jsonify({"error": "editor_mode must be stride, free or null."}), 400
+        try:
+            vc = VariantContextController.get_or_create(variant_uuid)
+            if any(getattr(vc, key) != value for key, value in expected.items()):
+                return jsonify({"error": (
+                    "The saved context changed since it was loaded. Keep a copy of your "
+                    "drafts and reload the page before saving this section."
+                )}), 409
+            values = {key: body[key] for key in fields if key in body}
+            if any(key != 'editor_mode' and getattr(vc, key) != value for key, value in values.items()):
+                values['updated_at'] = datetime.now(timezone.utc)
+            statement = db.update(VariantContext).where(
+                VariantContext.variant_id == variant_uuid,
+                *(getattr(VariantContext, key) == value for key, value in expected.items()),
+            ).values(**values).returning(VariantContext.id)
+            if db.session.execute(statement).scalar_one_or_none() is None:
+                db.session.rollback()
+                return jsonify({"error": (
+                    "Context changed during the save. Keep your drafts and reload before saving."
+                )}), 409
+            db.session.commit()
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))

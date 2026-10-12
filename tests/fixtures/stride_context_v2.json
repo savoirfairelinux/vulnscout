@@ -1,0 +1,48 @@
+{
+  "variant": {
+    "variant_name": "VariantA1",
+    "editor_mode": "stride",
+    "variant_description": "Production device",
+    "codebase_paths": ["/workspace/firmware", "/workspace/drivers"],
+    "environment": "Zephyr / Cortex-M",
+    "other_info": null,
+    "system": {
+      "scope": "Device firmware\n\n## An asset heading\n  Keep whitespace  ",
+      "actors": "Administrators and remote devices",
+      "entry_points": "HTTPS and UART",
+      "trust_boundaries": "Public network -> authenticated device",
+      "components": [
+        {"id": "C2", "name": "Device", "description": "Firmware and credentials", "trustZone": "Trusted"},
+        {"id": "C5", "name": "Update service", "description": "Distributes images", "trustZone": "External"}
+      ],
+      "interactions": [
+        {
+          "id": "I3", "name": "Firmware update", "sourceId": "C5", "destinationId": "C2",
+          "protocol": "HTTPS", "description": "Signed firmware images", "trustBoundary": "External -> device"
+        }
+      ]
+    },
+    "threat_model": {
+      "threats": [
+        {"id": "T4", "category": "Tampering", "description": "Replace an update image", "targetIds": ["C2", "I3"]},
+        {"id": "T8", "category": "", "description": "Investigate an unavailable interface", "targetIds": ["I99"]}
+      ],
+      "notes": "Review bootloader enforcement\n\n<!-- A user marker -->"
+    },
+    "risks": {
+      "risks": [
+        {"threatId": "T4", "likelihood": "Medium", "impact": "High", "mitigation": "Verify signatures", "decision": "Review remaining exposure"},
+        {"threatId": "T99", "likelihood": "", "impact": "", "mitigation": "Investigate missing threat", "decision": ""},
+        {
+          "threatId": "", "likelihood": "Low", "impact": "", "mitigation": "", "decision": "",
+          "legacyThreat": {"category": "Spoofing", "description": "Ambiguous older scenario"}
+        }
+      ],
+      "notes": "Unknown ratings remain blank\n\n  Preserve indentation  "
+    }
+  },
+  "text": {
+    "threatModel": "# STRIDE threat model\n\n## System scope and assets\n> Device firmware\n>\n> ## An asset heading\n>   Keep whitespace  \n\n## Actors and access\n> Administrators and remote devices\n\n## Entry points and data flows\n> HTTPS and UART\n\n## Trust boundaries\n> Public network -> authenticated device\n\n## Component 1 / ID\n> C2\n\n## Component 1 / Name\n> Device\n\n## Component 1 / Description / role\n> Firmware and credentials\n\n## Component 1 / Trust zone\n> Trusted\n\n## Component 2 / ID\n> C5\n\n## Component 2 / Name\n> Update service\n\n## Component 2 / Description / role\n> Distributes images\n\n## Component 2 / Trust zone\n> External\n\n## Interaction 1 / ID\n> I3\n\n## Interaction 1 / Name\n> Firmware update\n\n## Interaction 1 / Source component ID\n> C5\n\n## Interaction 1 / Destination component ID\n> C2\n\n## Interaction 1 / Interface / protocol\n> HTTPS\n\n## Interaction 1 / Data / commands\n> Signed firmware images\n\n## Interaction 1 / Trust boundary\n> External -> device\n\n## Threat 1 / ID\n> T4\n\n## Threat 1 / STRIDE category\n> Tampering\n\n## Threat 1 / Description\n> Replace an update image\n\n## Threat 1 / Affected system elements\n> C2\n> I3\n\n## Threat 2 / ID\n> T8\n\n## Threat 2 / STRIDE category\n>\n\n## Threat 2 / Description\n> Investigate an unavailable interface\n\n## Threat 2 / Affected system elements\n> I99\n\n## Additional threat model notes\n> Review bootloader enforcement\n>\n> <!-- A user marker -->\n\n<!-- VulnScout STRIDE v2 -->",
+    "risks": "# STRIDE risk register\n\n## Risk 1 / Threat ID\n> T4\n\n## Risk 1 / Likelihood\n> Medium\n\n## Risk 1 / Impact\n> High\n\n## Risk 1 / Mitigation\n> Verify signatures\n\n## Risk 1 / Residual risk / decision\n> Review remaining exposure\n\n## Risk 2 / Threat ID\n> T99\n\n## Risk 2 / Likelihood\n>\n\n## Risk 2 / Impact\n>\n\n## Risk 2 / Mitigation\n> Investigate missing threat\n\n## Risk 2 / Residual risk / decision\n>\n\n## Risk 3 / STRIDE category\n> Spoofing\n\n## Risk 3 / Threat scenario\n> Ambiguous older scenario\n\n## Risk 3 / Likelihood\n> Low\n\n## Risk 3 / Impact\n>\n\n## Risk 3 / Mitigation\n>\n\n## Risk 3 / Residual risk / decision\n>\n\n## Additional risk notes\n> Unknown ratings remain blank\n>\n>   Preserve indentation  \n\n<!-- VulnScout STRIDE v1 -->"
+  }
+}

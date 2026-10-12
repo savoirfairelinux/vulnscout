@@ -111,7 +111,9 @@ class VariantContext(Base):
     threat_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     risks: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Bumped only when a field's value actually changes; AI assessments older
+    # NULL keeps automatic format detection; imported legacy files explicitly use free mode.
+    editor_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bumped only when assessment content changes, not for editor preferences; assessments older
     # than this were written against a previous context.  NULL = never modified.
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -130,6 +132,7 @@ class VariantContext(Base):
             "threat_model": self.threat_model,
             "risks": self.risks,
             "other_info": self.other_info,
+            "editor_mode": self.editor_mode,
             "updated_at": ensure_utc_iso(self.updated_at) if self.updated_at else None,
             "files": [f.to_dict() for f in self.files],
         }
@@ -154,7 +157,10 @@ class VariantContext(Base):
         risks: str | None = None,
         other_info: str | None = None,
         commit: bool = True,
+        editor_mode: str | None = None,
     ) -> "VariantContext":
+        if editor_mode not in (None, "stride", "free"):
+            raise ValueError("editor_mode must be stride or free")
         existing = VariantContext.get_by_variant(variant_id)
         if existing is not None:
             new_values = {
@@ -172,6 +178,8 @@ class VariantContext(Base):
                     changed = True
             if changed:
                 existing.updated_at = datetime.now(timezone.utc)
+            if editor_mode is not None:
+                existing.editor_mode = editor_mode
             if commit:
                 db.session.commit()
             return existing
@@ -187,6 +195,7 @@ class VariantContext(Base):
             threat_model=threat_model,
             risks=risks,
             other_info=other_info,
+            editor_mode=editor_mode,
             updated_at=datetime.now(timezone.utc) if has_content else None,
         )
         db.session.add(vc)

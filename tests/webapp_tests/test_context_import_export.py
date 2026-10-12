@@ -8,8 +8,10 @@
 import os
 import json
 import pytest
+from pathlib import Path
 
 from src.bin.webapp import create_app
+from src.helpers.context_io import extract_entries
 
 
 def _setup_db(app):
@@ -128,6 +130,128 @@ def _nest(flat_entries):
     return [by_project[p] for p in order]
 
 
+@pytest.fixture()
+def stride_fixture():
+    return json.loads((Path(__file__).parents[1] / "fixtures/stride_context_v2.json").read_text())
+
+
+def _v2(variant, description="Imported project"):
+    return {"version": "2.0", "projects": [{
+        "project_name": "ProjectA", "project_description": description, "variants": [variant],
+    }]}
+
+
+def test_guided_import_export_roundtrip_and_merged_editor_mode(client_and_data, stride_fixture):
+    client, data = client_and_data
+    payload = _v2(stride_fixture["variant"])
+    response = client.post("/api/context/import", json=payload)
+    assert response.status_code == 200
+    assert response.json["failed"] == []
+    assert len(response.json["imported"]) == 1
+    merged = client.get(
+        f"/api/context?project_id={data['project_a_id']}&variant_id={data['variant_a1_id']}"
+    ).json
+    assert merged["editor_mode"] == "stride"
+    assert merged["threat_model"] == stride_fixture["text"]["threatModel"]
+    assert merged["risks"] == stride_fixture["text"]["risks"]
+    assert merged["codebase_path"] == "/workspace/firmware;/workspace/drivers"
+    exported = client.get(f"/api/context/export?variant_ids={data['variant_a1_id']}").json
+    assert exported["projects"] == payload["projects"]
+    assert client.post("/api/context/import", json=exported).json["failed"] == []
+    assert client.get(f"/api/context/export?variant_ids={data['variant_a1_id']}").json["projects"] == payload["projects"]
+
+
+@pytest.mark.parametrize("envelope", [True, False])
+def test_legacy_import_forces_free_mode_even_for_recognizable_stride_text(
+    client_and_data, stride_fixture, envelope,
+):
+    client, data = client_and_data
+    text = stride_fixture["text"]
+    threat_text, risk_text = "  " + text["threatModel"] + "\n\n ", "\n" + text["risks"] + "  "
+    projects = _nest([{
+        "project_name": "ProjectA", "variant_name": "VariantA1", "description": "Legacy description",
+        "threat_model": threat_text, "risks": risk_text, "editor_mode": "stride",
+    }])
+    payload = {"version": "1.0", "projects": projects} if envelope else projects
+    assert client.post("/api/context/import", json=payload).json["failed"] == []
+    merged = client.get(
+        f"/api/context?project_id={data['project_a_id']}&variant_id={data['variant_a1_id']}"
+    ).json
+    assert merged["editor_mode"] == "free"
+    assert merged["threat_model"] == threat_text
+    assert merged["risks"] == risk_text
+    exported = client.get(f"/api/context/export?variant_ids={data['variant_a1_id']}").json
+    variant = exported["projects"][0]["variants"][0]
+    assert variant["editor_mode"] == "free"
+    assert "system" not in variant
+    assert variant["threat_model"] == threat_text
+    assert variant["risks"] == risk_text
+    assert client.post("/api/context/import", json=exported).json["failed"] == []
+    assert client.get(f"/api/context/export?variant_ids={data['variant_a1_id']}").json["projects"] == exported["projects"]
+
+
+def test_empty_and_partial_v2_contexts_can_roundtrip(client_and_data):
+    client, _ = client_and_data
+    response = client.get("/api/context/export")
+    payload = response.json
+    for project in payload["projects"]:
+        project["project_description"] = None
+        for variant in project["variants"]:
+            variant.update(editor_mode="free", threat_model=None, risks=None)
+    result = client.post("/api/context/import", json=payload).json
+    assert len(result["imported"]) == 3
+    assert result["failed"] == []
+    assert client.get("/api/context/export").json["projects"] == payload["projects"]
+
+
+def test_invalid_structured_variant_does_not_replace_its_context_or_block_valid_entries(
+    client_and_data, stride_fixture,
+):
+    client, _ = client_and_data
+    payload = _v2(stride_fixture["variant"])
+    payload["projects"].append({
+        "project_name": "ProjectB", "project_description": "Must not be written",
+        "variants": [{**stride_fixture["variant"], "variant_name": "VariantB1", "system": {}}],
+    })
+    result = client.post("/api/context/import", json=payload).json
+    assert len(result["imported"]) == 1
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["variant_name"] == "VariantB1"
+    exported = _export_variants(client)
+    unchanged = next(entry for entry in exported if entry["variant_name"] == "VariantB1")
+    assert unchanged["description"] == "ProjectB description"
+    assert unchanged["threat_model"] == "B1 threat model"
+
+
+@pytest.mark.parametrize("payload", [
+    {"version": "3.0", "projects": []},
+    {"version": None, "projects": []},
+    {"version": "2.0", "projects": [], "unknown": "Don't discard"},
+    {"version": "2.0", "projects": [], "exported_at": None},
+    {"version": "2.0", "projects": [{"project_name": "ProjectA", "project_description": 4, "variants": []}]},
+    {"version": "2.0", "projects": [{"project_name": "ProjectA", "unknown": "Don't discard", "variants": []}]},
+    {"version": "2.0", "projects": [{"project_name": "ProjectA", "variants": [
+        {"variant_name": "VariantA1"}, {"variant_name": "VariantA1"},
+    ]}]},
+])
+def test_unknown_versions_and_malformed_envelopes_are_rejected_before_writes(client_and_data, payload):
+    client, _ = client_and_data
+    before = client.get("/api/context/export").json["projects"]
+    response = client.post("/api/context/import", json=payload)
+    assert response.status_code == 400
+    assert "error" in response.json
+    assert client.get("/api/context/export").json["projects"] == before
+
+
+def test_project_identity_cannot_be_overridden_by_variant_fields():
+    entry = extract_entries([{
+        "project_name": "ProjectA", "project_description": "Real description",
+        "variants": [{"variant_name": "VariantA1", "project_name": "Other", "description": "Forged"}],
+    }])[0]
+    assert entry["project_name"] == "ProjectA"
+    assert entry["description"] == "Real description"
+
+
 # ===========================================================================
 # Export
 # ===========================================================================
@@ -138,7 +262,7 @@ class TestExportContext:
         client, _ = client_and_data
         body = json.loads(client.get("/api/context/export").data)
         assert isinstance(body, dict)
-        assert body["version"] == "1.0"
+        assert body["version"] == "2.0"
         assert isinstance(body["exported_at"], str) and body["exported_at"]
         assert isinstance(body["projects"], list)
 
@@ -175,7 +299,8 @@ class TestExportContext:
         entry = next(e for e in entries if e["variant_name"] == "VariantA1")
         assert entry["description"] == "ProjectA description"
         assert entry["variant_description"] == "A1 variant desc"
-        assert entry["codebase_path"] == "/src/a1"
+        assert entry["codebase_paths"] == ["/src/a1"]
+        assert entry["editor_mode"] == "free"
         assert entry["environment"] == "prod"
         assert entry["threat_model"] == "A1 threat model"
         assert entry["risks"] == "A1 risks"
@@ -316,7 +441,7 @@ class TestImportContext:
         assert entry["threat_model"] == "new threat model"
         assert entry["risks"] == "new risks"
         # Field omitted from the import is cleared (full overwrite).
-        assert entry["codebase_path"] is None
+        assert entry["codebase_paths"] == []
 
     def test_import_unknown_project_ignored(self, client_and_data):
         client, _ = client_and_data
