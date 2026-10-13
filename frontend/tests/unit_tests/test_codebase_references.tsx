@@ -87,6 +87,21 @@ test("oversized files are rejected explicitly before uploading", async () => {
     expect(fetchMock).not.toHaveBeenCalled();
 });
 
+test.each([
+    "<html><body>Request Entity Too Large</body></html>",
+    JSON.stringify({ error: "Request too large" }),
+])("HTTP 413 is reported clearly without assuming a JSON response", async response => {
+    fetchMock.mockResponseOnce(response, { status: 413 });
+    show();
+    fireEvent.change(screen.getByLabelText("Upload codebase references"), {
+        target: { files: [new File(["source"], "main.c")] },
+    });
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("HTTP 413"), "error"));
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("10 MB"), "error");
+    expect(screen.getByText("No codebase references uploaded.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Upload codebase references")).not.toBeDisabled();
+});
+
 test("disabled drop zone does not submit requests", () => {
     show(true);
     expect(screen.getByLabelText("Upload codebase references")).toBeDisabled();

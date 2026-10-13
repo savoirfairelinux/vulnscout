@@ -7,6 +7,7 @@ import logging
 
 from flask import jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
@@ -23,6 +24,7 @@ from ..models.variant_context import VariantContext, ContextFile
 from ..routes._scan_helpers import parse_uuid_or_400
 
 logger = logging.getLogger(__name__)
+MAX_REFERENCE_REQUEST_BYTES = MAX_FILE_BYTES + 64 * 1024
 
 
 def _get_cache_dir() -> str:
@@ -249,6 +251,7 @@ def init_app(app):
         response 201 JsonObject Uploaded context-file metadata.
         response 400 Error Invalid identifier, missing file, or oversized file.
         response 404 Error Variant not found.
+        response 413 Error Multipart upload request exceeds its size limit.
         response 500 Error File could not be stored.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
@@ -260,7 +263,11 @@ def init_app(app):
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
 
-        file = request.files.get('file')
+        request.max_content_length = MAX_REFERENCE_REQUEST_BYTES
+        try:
+            file = request.files.get('file')
+        except RequestEntityTooLarge:
+            return jsonify(error="Codebase reference upload exceeds the 10 MB limit plus multipart overhead."), 413
         if file is None:
             return jsonify({"error": "No file provided"}), 400
 

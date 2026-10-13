@@ -84,6 +84,11 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files`,
             { mode: 'cors', method: 'POST', body }
         );
+        if (res.status === 413) {
+            throw new Error(
+                "Upload rejected as too large (HTTP 413). Maximum file size is 10 MB; server or proxy request limits may also apply."
+            );
+        }
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Failed to upload reference (${res.status})`);
         return data as ContextFile;

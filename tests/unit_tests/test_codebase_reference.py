@@ -29,6 +29,29 @@ def tar_source(entries, mode="w"):
     return stream
 
 
+def malformed_name_source(archive_type):
+    if archive_type == "zip":
+        content = bytearray(zip_source([("a.c", b"source")]).getvalue())
+        central = content.index(b"PK\x01\x02")
+        for flags, name in ((6, 30), (central + 8, central + 46)):
+            content[flags:flags + 2] = (int.from_bytes(content[flags:flags + 2], "little") | 0x800).to_bytes(
+                2, "little",
+            )
+            content[name] = 0xff
+    else:
+        content = bytearray(tar_source([("a.c", b"source")]).getvalue())
+        content[0] = 0xff
+        content[148:156] = b"        "
+        content[148:156] = f"{sum(content[:512]):06o}\0 ".encode("ascii")
+    return BytesIO(content)
+
+
+@pytest.mark.parametrize("archive_type", ["zip", "tar"])
+def test_malformed_archive_names_raise_validation_errors(archive_type):
+    with pytest.raises(ValueError):
+        validate_reference(malformed_name_source(archive_type), f"source.{archive_type}")
+
+
 @pytest.mark.parametrize("name,stream", [
     ("source.zip", lambda: zip_source([("repo/a.py", b"first\nneedle\nlast\n")])),
     ("source.tar", lambda: tar_source([("repo/a.py", b"first\nneedle\nlast\n")])),
