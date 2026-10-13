@@ -111,15 +111,22 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   // Per-project request counter so an older Variants.list response never overwrites a newer one.
   const variantRequestSeqRef = useRef<Record<string, number>>({});
 
+  // Monotonic counter so an older Projects.list response never overwrites a newer one.
+  const projectListSeqRef = useRef(0);
+
   const loadProjects = useCallback(() => {
+    const seq = ++projectListSeqRef.current;
     // A failed reload keeps the previous list; only a never-loaded list is an error.
     Projects.list()
       .then((list) => {
+        if (seq !== projectListSeqRef.current) return;
         setProjects(list);
         setProjectsLoaded(true);
         setProjectsLoadFailed(false);
       })
-      .catch(() => setProjectsLoadFailed(true));
+      .catch(() => {
+        if (seq === projectListSeqRef.current) setProjectsLoadFailed(true);
+      });
   }, []);
 
   const [configBusy, setConfigBusy] = useState(false);
@@ -487,11 +494,16 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   const createProject = async (name: string) => {
     const submitKey = locationKeyRef.current;
     const created = await Projects.create(name);
+    const seq = ++projectListSeqRef.current;
     try {
       const list = await Projects.list();
-      setProjects(list);
-      setProjectsLoaded(true);
-      setProjectsLoadFailed(false);
+      if (seq === projectListSeqRef.current) {
+        setProjects(list);
+        setProjectsLoaded(true);
+        setProjectsLoadFailed(false);
+      } else {
+        setProjects((current) => current.some((p) => p.id === created.id) ? current : [...current, created]);
+      }
     } catch {
       setProjects((current) => current.some((p) => p.id === created.id) ? current : [...current, created]);
     }
