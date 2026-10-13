@@ -73,23 +73,30 @@ def _retry_on_lock(fn: Callable[[], T], max_retries: int = 5, delay: float = 0.5
     raise RuntimeError("retry loop exhausted without returning")
 
 
-def _detect_format(filename: str, data: dict) -> str:
-    """Guess SBOM format from the filename and parsed JSON content."""
-    if not isinstance(data, dict):
-        return "unknown"
+def _has_valid_spdx_graph(data: dict) -> bool:
+    """Validate JSON-LD graph shape and SPDX version types."""
     graph = data.get("@graph", [])
     if not isinstance(graph, list) or any(not isinstance(item, dict) for item in graph):
-        return "unknown"
+        return False
     for item in graph:
         if (item.get("type") == "CreationInfo" or item.get("@type") == "CreationInfo") and (
             "specVersion" in item and not isinstance(item["specVersion"], str)
         ):
-            return "unknown"
+            return False
+    return True
+
+
+def _detect_format(filename: str, data: dict) -> str:
+    """Guess SBOM format, validating JSON-LD before SPDX detection."""
+    if not isinstance(data, dict):
+        return "unknown"
     lower = filename.lower()
     if lower.endswith(".spdx.json"):
-        return "spdx"
+        return "spdx" if _has_valid_spdx_graph(data) else "unknown"
     if lower.endswith(".cdx.json"):
         return "cdx"
+    if not _has_valid_spdx_graph(data):
+        return "unknown"
     if ("spdxVersion" in data or "spdxId" in data or "SPDXRef" in str(data.get("SPDXID", ""))
             or FastSPDX3.could_parse_spdx(data)):
         return "spdx"
