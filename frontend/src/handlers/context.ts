@@ -14,6 +14,13 @@ type VariantContextData = {
 
 type VariantContext = VariantContextData & {
     variant_id: string;
+    files?: ContextFile[];
+};
+
+type ContextFile = {
+    id: string;
+    original_name: string;
+    description: string | null;
 };
 
 type MergedContext = ProjectContext & VariantContext;
@@ -65,9 +72,34 @@ export type {
     ImportResultItem,
     ImportResult,
     ContextExport,
+    ContextFile,
 };
 
 class Context {
+    static async uploadFile(variantId: string, file: File, description: string): Promise<ContextFile> {
+        const body = new FormData();
+        body.append('file', file);
+        if (description.trim()) body.append('description', description.trim());
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files`,
+            { mode: 'cors', method: 'POST', body }
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Failed to upload reference (${res.status})`);
+        return data as ContextFile;
+    }
+
+    static async deleteFile(variantId: string, fileId: string): Promise<void> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files/${encodeURIComponent(fileId)}`,
+            { mode: 'cors', method: 'DELETE' }
+        );
+        if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || `Failed to delete reference (${res.status})`);
+        }
+    }
+
     static async get(projectId: string, variantId: string): Promise<MergedContext> {
         const url = `${import.meta.env.VITE_API_URL}/api/context?project_id=${encodeURIComponent(projectId)}&variant_id=${encodeURIComponent(variantId)}`;
         const res = await fetch(url, { mode: 'cors' });
