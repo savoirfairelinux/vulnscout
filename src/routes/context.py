@@ -6,9 +6,11 @@ import uuid
 import logging
 
 from flask import jsonify, request
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
+from ..helpers.codebase_reference import CodebaseReference, MAX_FILE_BYTES, validate_reference
 from ..helpers.context_io import (
     build_export_document,
     collect_entries,
@@ -21,8 +23,6 @@ from ..models.variant_context import VariantContext, ContextFile
 from ..routes._scan_helpers import parse_uuid_or_400
 
 logger = logging.getLogger(__name__)
-
-MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
 def _get_cache_dir() -> str:
@@ -237,19 +237,9 @@ def init_app(app):
 
         return jsonify(result)
 
-    # ------------------------------------------------------------------
-    # Supplemental context files (currently hidden from the UI)
-    # ------------------------------------------------------------------
-    # NOTE: The AI-context page no longer exposes a UI for uploading or
-    # deleting supplemental files, so these endpoints (and the ContextFile
-    # model / context_files table) are unused by the frontend today. They are
-    # intentionally kept for potential future reuse rather than removed, to
-    # avoid a destructive schema migration. If this feature is confirmed dead,
-    # remove these routes, the ContextFile model, and add a migration dropping
-    # the context_files table.
     @app.route('/api/variants/<variant_id>/context/files', methods=['POST'])
     def post_context_file(variant_id):
-        """Upload a supplemental context file for a variant.
+        """Upload a codebase reference file or ZIP/TAR archive for a variant.
 
         Files are limited to 10 MB. The multipart payload accepts a required
         ``file`` field and an optional ``description`` field.
@@ -285,36 +275,123 @@ def init_app(app):
             max_mb = MAX_FILE_BYTES // (1024 * 1024)
             return jsonify({"error": f"File exceeds maximum size of {max_mb} MB"}), 400
 
-        vc = VariantContext.get_by_variant(variant_uuid)
-        if vc is None:
-            vc = VariantContext.upsert(variant_uuid)
-
         description = request.form.get('description')
         if description is not None:
             description = description.strip() or None
 
         file_id = uuid.uuid4()
         original_name = os.path.basename(filename.replace('\\', '/'))
+        try:
+            validate_reference(file.stream, original_name)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        vc = VariantContext.get_by_variant(variant_uuid)
+        if vc is None:
+            vc = VariantContext.upsert(variant_uuid)
 
         dest_dir = os.path.join(_get_cache_dir(), "context-files", str(vc.id))
+        file_path = os.path.join(dest_dir, str(file_id))
         try:
             os.makedirs(dest_dir, exist_ok=True)
-            file_path = os.path.join(dest_dir, str(file_id))
             file.save(file_path)
-        except OSError as exc:
-            logger.error("Failed to save uploaded file: %s", exc)
+            cf = ContextFile(
+                variant_context_id=vc.id, original_name=original_name, file_path=file_path,
+                description=description, id=file_id,
+            )
+            db.session.add(cf)
+            VariantContext.touch(variant_uuid, commit=False)
+            db.session.commit()
+        except (OSError, SQLAlchemyError):
+            db.session.rollback()
+            logger.exception("Failed to store uploaded codebase reference")
+            try:
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            except OSError:
+                logger.exception("Failed to clean up uploaded codebase reference")
             return jsonify({"error": "Failed to store file on server"}), 500
 
-        cf = ContextFile.create(
-            vc.id, original_name=original_name, file_path=file_path,
-            description=description, id=file_id
-        )
-        VariantContext.touch(variant_uuid)
         return jsonify(cf.to_dict()), 201
+
+    @app.route('/api/variants/<variant_id>/context/files/<file_id>/source', methods=['GET'])
+    def get_codebase_source(variant_id, file_id):
+        """List, read or search a variant's uploaded codebase reference.
+
+        OpenAPI:
+        query operation string optional list (default), read, or search.
+        query path string optional Exact member path for read.
+        query pattern string optional File-path glob for list or search (default *).
+        query offset integer optional List offset (default 0).
+        query limit integer optional List page size, 1-200 (default 200).
+        query start_line integer optional First line for read (default 1).
+        query max_lines integer optional Read line count, 1-200 (default 200).
+        query query string optional Literal case-sensitive search text, required for search.
+        query max_results integer optional Search limit, 1-100 (default 100).
+        response 200 JsonObject Source files, line-numbered content, or search matches.
+        response 400 Error Invalid parameters or unreadable reference.
+        response 404 Error Variant, reference, or source member not found.
+        response 500 Error Stored reference is unavailable.
+        """
+        variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
+        if err:
+            return err
+        assert variant_uuid is not None
+        file_uuid, err = parse_uuid_or_400(file_id, 'file_id')
+        if err:
+            return err
+        assert file_uuid is not None
+        if Variant.get_by_id(variant_uuid) is None:
+            return jsonify(error="Variant not found"), 404
+        vc = VariantContext.get_by_variant(variant_uuid)
+        cf = ContextFile.get_by_id_and_variant_context(file_uuid, vc.id) if vc else None
+        if cf is None:
+            return jsonify(error="File not found"), 404
+
+        def integer(name, default, minimum, maximum):
+            try:
+                value = int(request.args.get(name, default))
+            except ValueError as exc:
+                raise ValueError(f"Invalid {name}.") from exc
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be between {minimum} and {maximum}.")
+            return value
+
+        try:
+            operation = request.args.get("operation", "list")
+            pattern = request.args.get("pattern", "*")
+            if len(pattern) > 512:
+                raise ValueError("File pattern must be at most 512 characters.")
+            with open(cf.file_path, "rb") as stream, CodebaseReference(stream, cf.original_name) as reference:
+                if operation == "list":
+                    result = reference.list_files(
+                        pattern, integer("offset", 0, 0, 5000), integer("limit", 200, 1, 200),
+                    )
+                elif operation == "read":
+                    result = reference.read_lines(
+                        request.args.get("path", ""),
+                        integer("start_line", 1, 1, 10 * 1024 * 1024),
+                        integer("max_lines", 200, 1, 200),
+                    )
+                elif operation == "search":
+                    query = request.args.get("query", "")
+                    if not query or len(query) > 200:
+                        raise ValueError("Search query must contain 1-200 characters.")
+                    result = reference.search(query, pattern, integer("max_results", 100, 1, 100))
+                else:
+                    raise ValueError("Operation must be list, read, or search.")
+        except LookupError as exc:
+            return jsonify(error=str(exc)), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except OSError:
+            logger.exception("Could not read stored codebase reference %s", file_id)
+            return jsonify(error="Stored codebase reference is unavailable."), 500
+        return jsonify({"file_id": file_id, "original_name": cf.original_name, **result})
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>', methods=['DELETE'])
     def delete_context_file(variant_id, file_id):
-        """Delete a supplemental context file.
+        """Delete an uploaded codebase reference.
 
         OpenAPI:
         response 204 string Context file deleted.
@@ -343,10 +420,9 @@ def init_app(app):
             return jsonify({"error": "File not found"}), 404
 
         file_path = cf.file_path
-        from ..extensions import db
         db.session.delete(cf)
+        VariantContext.touch(variant_uuid, commit=False)
         db.session.commit()
-        VariantContext.touch(variant_uuid)
 
         try:
             if os.path.isfile(file_path):
