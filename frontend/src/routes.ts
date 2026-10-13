@@ -44,8 +44,11 @@ export const SETTINGS_PATHS = {
     customExport: `${ROUTES.settings}/custom-export`,
 } as const;
 
+// Projects live under their own prefix so a project named like a section ("transfer") stays reachable.
+const SETTINGS_PROJECTS_PATH = `${ROUTES.settings}/projects`;
+
 export function settingsProjectPath(projectId: string): string {
-    return `${ROUTES.settings}/${encodeURIComponent(projectId)}`;
+    return `${SETTINGS_PROJECTS_PATH}/${encodeURIComponent(projectId)}`;
 }
 
 export function settingsVariantPath(projectId: string, variantId: string): string {
@@ -77,10 +80,9 @@ export function parseSettingsPath(pathname: string): SettingsRoute {
     if (segments.length === 1) {
         if (segments[0] === 'transfer') return { kind: 'transfer' };
         if (segments[0] === 'custom-export') return { kind: 'custom-export' };
-        return { kind: 'project', projectId: segments[0] };
-    }
-    if (segments.length === 2) {
-        return { kind: 'variant', projectId: segments[0], variantId: segments[1] };
+    } else if (segments[0] === 'projects') {
+        if (segments.length === 2) return { kind: 'project', projectId: segments[1] };
+        if (segments.length === 3) return { kind: 'variant', projectId: segments[1], variantId: segments[2] };
     }
     return { kind: 'unknown' };
 }

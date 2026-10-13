@@ -53,7 +53,7 @@ describe('NavigationBar', () => {
         expect(screen.getByRole('link', { name: /VulnScout/ })).not.toHaveAttribute('aria-current');
     });
 
-    test.each(['/settings/project-1', '/settings/project-1/variant-1'])('keeps the settings link current on %s', (path) => {
+    test.each(['/settings/projects/Apollo', '/settings/projects/Apollo/Release'])('keeps the settings link current on %s', (path) => {
         renderAt(path);
 
         expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
