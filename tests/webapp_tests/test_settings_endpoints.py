@@ -1356,6 +1356,21 @@ class TestDetectFormat:
         from src.routes.settings import _detect_format
         assert _detect_format("bom.cdx.json", {}) == "cdx"
 
+    @pytest.mark.parametrize("graph", [
+        None, [None], [{"type": "CreationInfo", "specVersion": 3}],
+    ])
+    def test_cdx_filename_skips_spdx_graph_validation(self, graph, monkeypatch):
+        from src.routes.settings import _detect_format
+        validator = MagicMock(side_effect=AssertionError("CycloneDX reached SPDX validation"))
+        monkeypatch.setattr("src.routes.settings._has_valid_spdx_graph", validator)
+        assert _detect_format("bom.cdx.json", {"bomFormat": "CycloneDX", "@graph": graph}) == "cdx"
+        validator.assert_not_called()
+
+    @pytest.mark.parametrize("filename", ["sbom.spdx.json", "bom.cdx.json"])
+    def test_filename_does_not_bypass_top_level_type_validation(self, filename):
+        from src.routes.settings import _detect_format
+        assert _detect_format(filename, []) == "unknown"
+
     def test_spdx_content_spdxversion(self):
         from src.routes.settings import _detect_format
         assert _detect_format("sbom.json", {"spdxVersion": "SPDX-2.3"}) == "spdx"
