@@ -7,7 +7,8 @@ import type { Variant } from "../handlers/variant";
 import Variants from "../handlers/variant";
 import Context from "../handlers/context";
 import Assessments from "../handlers/assessments";
-import type { VariantContextData, ContextExport, ImportResult } from "../handlers/context";
+import type { VariantContextData, ContextExport, ImportResult, ContextFile } from "../handlers/context";
+import CodebaseReferences from "../components/CodebaseReferences";
 import MessageBanner from "../components/MessageBanner";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
@@ -73,6 +74,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     const [description, setDescription] = useState<string>('');
     const [variantDescription, setVariantDescription] = useState<string>('');
     const [codebasePath, setCodebasePath] = useState<string>('');
+    const [contextFiles, setContextFiles] = useState<{ variantId: string; files: ContextFile[] }>({ variantId: '', files: [] });
     const [environment, setEnvironment] = useState<string>('');
     const [threatModel, setThreatModel] = useState<string>('');
     const [risks, setRisks] = useState<string>('');
@@ -143,6 +145,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     const clearVariantFields = () => {
         setVariantDescription('');
         setCodebasePath('');
+        setContextFiles({ variantId: '', files: [] });
         setEnvironment('');
         setThreatModel('');
         setRisks('');
@@ -210,6 +213,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                 };
                 setVariantDescription(ctx.variant_description ?? '');
                 setCodebasePath(ctx.codebase_path ?? '');
+                setContextFiles({ variantId: selectedVariantId, files: ctx.files ?? [] });
                 setEnvironment(ctx.environment ?? '');
                 setThreatModel(ctx.threat_model ?? '');
                 setRisks(ctx.risks ?? '');
@@ -557,7 +561,8 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                         project/variant. Variants whose project or variant does not exist
                         are ignored; variants missing mandatory fields (description, threat
                         model) fail. Accepts an exported file, whose projects each nest
-                        their variants.
+                        their variants. Uploaded codebase references are not included
+                        in context JSON transfers.
                     </HelpPopover>
                 </div>
             </div>
@@ -688,7 +693,7 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
             {/* Codebase Path */}
             <div>
                 <label className={labelClass} htmlFor="ai-codebase-path">
-                    Codebase Path <span className="text-neutral-400 font-normal">(source code location(s) on the local machine; separate multiple paths with a semicolon)</span>
+                    Codebase Path <span className="text-neutral-400 font-normal">(for external Copilot/MCP clients on your machine; separate multiple paths with a semicolon)</span>
                 </label>
                 <input
                     id="ai-codebase-path"
@@ -700,7 +705,18 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                     disabled={!variantSelected}
                     placeholder={variantSelected ? "e.g. /home/user/src/myproject;/home/user/src/otherproject" : "Select a variant to enable"}
                 />
+                <p className="text-xs text-zinc-400 mt-1">
+                    Paths do not mount host directories into the container. Use Codebase References below for the embedded Agent.
+                </p>
             </div>
+
+            <CodebaseReferences
+                key={`${selectedProjectId}/${selectedVariantId}`}
+                variantId={selectedVariantId}
+                initialFiles={contextFiles.variantId === selectedVariantId ? contextFiles.files : []}
+                disabled={!variantSelected || contextFiles.variantId !== selectedVariantId || variantContextLoadFailed || busy || ioBusy}
+                notify={showBanner}
+            />
 
             {/* Environment */}
             <div>

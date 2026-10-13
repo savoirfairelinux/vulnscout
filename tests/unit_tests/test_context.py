@@ -467,6 +467,60 @@ class TestPutVariantContext:
 
 class TestPostContextFile:
 
+    @pytest.mark.parametrize("size", [5 * 1024 * 1024 + 64 * 1024 + 1, 10 * 1024 * 1024])
+    def test_upload_accepts_files_up_to_advertised_limit(self, app, client, variant, tmp_path, size):
+        from io import BytesIO
+        original_limit = app.config["MAX_CONTENT_LENGTH"]
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            response = client.post(
+                f"/api/variants/{variant.id}/context/files",
+                data={"file": (BytesIO(b"x" * size), "main.c")},
+            )
+        assert response.status_code == 201
+        assert app.config["MAX_CONTENT_LENGTH"] == original_limit
+        assert next(tmp_path.rglob(response.get_json()["id"])).stat().st_size == size
+
+    def test_upload_rejects_file_above_advertised_limit(self, client, variant, tmp_path):
+        from io import BytesIO
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            response = client.post(
+                f"/api/variants/{variant.id}/context/files",
+                data={"file": (BytesIO(b"x" * (10 * 1024 * 1024 + 1)), "main.c")},
+            )
+        assert response.status_code == 400
+        assert "maximum size of 10 MB" in response.get_json()["error"]
+        assert not list(tmp_path.iterdir())
+
+    def test_upload_request_cap_does_not_raise_report_asset_cap(self, app, client, variant):
+        from src.models.variant_context import VariantContext
+        response = client.post(
+            f"/api/variants/{variant.id}/context/files",
+            data=b"x" * (10 * 1024 * 1024 + 64 * 1024 + 1),
+            content_type="multipart/form-data; boundary=test",
+        )
+        assert response.status_code == 413
+        assert "Codebase reference" in response.get_json()["error"]
+        assert VariantContext.get_by_variant(variant.id) is None
+        response = client.post(
+            "/api/documents/assets", data=b"x" * (app.config["MAX_CONTENT_LENGTH"] + 1),
+            content_type="multipart/form-data; boundary=test",
+        )
+        assert response.status_code == 413
+
+    @pytest.mark.parametrize("archive_type", ["zip", "tar"])
+    def test_malformed_archive_names_return_400(self, client, variant, tmp_path, archive_type):
+        from .test_codebase_reference import malformed_name_source
+        from src.models.variant_context import VariantContext
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            response = client.post(
+                f"/api/variants/{variant.id}/context/files",
+                data={"file": (malformed_name_source(archive_type), f"source.{archive_type}")},
+            )
+        assert response.status_code == 400
+        assert response.get_json()["error"]
+        assert VariantContext.get_by_variant(variant.id) is None
+        assert not list(tmp_path.iterdir())
+
     def test_upload_file(self, client, variant, tmp_path):
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             from io import BytesIO
@@ -595,3 +649,102 @@ class TestDeleteContextFile:
         assert resp.status_code == 204
         post_delete_updated_at = VariantContext.get_by_variant(variant.id).updated_at
         assert post_delete_updated_at > post_upload_updated_at
+
+
+class TestCodebaseSource:
+    def _upload(self, client, variant, tmp_path):
+        from io import BytesIO
+        import zipfile
+        stream = BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("repo/main.c", "first\nunsafe_call();\nlast\n")
+            archive.writestr("repo/data.bin", b"\x00data")
+        stream.seek(0)
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            response = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (stream, "source.zip")},
+            )
+        assert response.status_code == 201
+        return response.get_json()["id"]
+
+    def test_upload_list_search_read_delete(self, client, variant, project, tmp_path):
+        file_id = self._upload(client, variant, tmp_path)
+        context = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert context["files"] == [{"id": file_id, "original_name": "source.zip", "description": None}]
+        base = f"/api/variants/{variant.id}/context/files/{file_id}/source"
+        listing = client.get(base, query_string={"limit": 1}).get_json()
+        assert listing["total"] == 2
+        assert listing["next_offset"] == 1
+        assert "file_path" not in str(listing)
+        result = client.get(base, query_string={"operation": "search", "query": "unsafe_call"}).get_json()
+        assert result["matches"] == [{"path": "repo/main.c", "line": 2, "text": "unsafe_call();"}]
+        assert result["skipped_binary_files"] == 1
+        read = client.get(base, query_string={
+            "operation": "read", "path": "repo/main.c", "start_line": 2, "max_lines": 1,
+        }).get_json()
+        assert read["content"] == "unsafe_call();\n"
+        assert read["next_line"] == 3
+        assert client.delete(base.removesuffix("/source")).status_code == 204
+        assert client.get(base).status_code == 404
+        assert not list(tmp_path.rglob(file_id))
+
+    @pytest.mark.parametrize("parameters", [
+        {"limit": 201}, {"limit": "oops"}, {"offset": -1}, {"operation": "execute"},
+        {"operation": "read", "path": "repo/main.c", "start_line": 0},
+        {"operation": "search"}, {"operation": "search", "query": "x" * 201},
+        {"operation": "read", "path": "repo/data.bin"}, {"pattern": "x" * 513},
+    ])
+    def test_invalid_parameters(self, client, variant, tmp_path, parameters):
+        file_id = self._upload(client, variant, tmp_path)
+        response = client.get(
+            f"/api/variants/{variant.id}/context/files/{file_id}/source", query_string=parameters,
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]
+
+    def test_reference_is_variant_scoped(self, client, variant, project, tmp_path):
+        file_id = self._upload(client, variant, tmp_path)
+        other = Variant.create("other", project.id)
+        assert client.get(f"/api/variants/{other.id}/context/files/{file_id}/source").status_code == 404
+        assert client.get(
+            f"/api/variants/{variant.id}/context/files/{file_id}/source",
+            query_string={"operation": "read", "path": "../../etc/passwd"},
+        ).status_code == 404
+        assert client.get(f"/api/variants/invalid/context/files/{file_id}/source").status_code == 400
+        assert client.get(f"/api/variants/{variant.id}/context/files/invalid/source").status_code == 400
+        assert client.get(f"/api/variants/{uuid.uuid4()}/context/files/{file_id}/source").status_code == 404
+
+    def test_invalid_upload_leaves_no_reference(self, client, variant, tmp_path):
+        from io import BytesIO
+        from src.models.variant_context import VariantContext
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            response = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"bad"), "bad.zip")},
+            )
+        assert response.status_code == 400
+        assert VariantContext.get_by_variant(variant.id) is None
+        assert not list(tmp_path.iterdir())
+
+    def test_missing_storage_is_explicit(self, client, variant, tmp_path):
+        file_id = self._upload(client, variant, tmp_path)
+        next(tmp_path.rglob(file_id)).unlink()
+        response = client.get(f"/api/variants/{variant.id}/context/files/{file_id}/source")
+        assert response.status_code == 500
+        assert "unavailable" in response.get_json()["error"]
+
+    def test_failed_commit_removes_upload_and_preserves_context(self, client, variant, tmp_path):
+        from io import BytesIO
+        from sqlalchemy.exc import SQLAlchemyError
+        from src.models.variant_context import VariantContext
+        context = VariantContext.upsert(variant.id, threat_model="existing")
+        updated_at = context.updated_at
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch.object(_db.session, "commit", side_effect=SQLAlchemyError("failed")):
+            response = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"source"), "main.c")},
+            )
+        assert response.status_code == 500
+        assert context.threat_model == "existing"
+        assert context.updated_at == updated_at
+        assert context.files == []
+        assert not [path for path in tmp_path.rglob("*") if path.is_file()]

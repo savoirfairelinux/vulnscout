@@ -17,6 +17,41 @@ function mockProjectsAndVariants() {
 
 describe('AIContext page', () => {
 
+    test('dropped references preserve unsaved fields and reload for the selected variant', async () => {
+        const reference = { id: 'f1', original_name: 'source.zip', description: null };
+        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'Saved project' }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            project_id: 'p1', variant_id: 'v1', threat_model: 'Saved threat', files: [],
+        }));
+        render(<AIContext />);
+        await screen.findByRole('option', { name: 'Project A' });
+        fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
+        await screen.findByRole('option', { name: 'Variant 1' });
+        fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v1' } });
+        await waitFor(() => expect(screen.getByLabelText('Upload codebase references')).not.toBeDisabled());
+        fireEvent.change(screen.getByLabelText('Threat Model'), { target: { value: 'Unsaved threat' } });
+        fireEvent.change(screen.getByLabelText('Codebase Path'), { target: { value: '/external/source' } });
+        fetchMock.mockResponseOnce('[]');
+        fetchMock.mockResponseOnce(JSON.stringify(reference), { status: 201 });
+        fireEvent.drop(screen.getByRole('region', { name: 'Drop codebase files' }), {
+            dataTransfer: { files: [new File(['source'], 'source.zip')] },
+        });
+        await screen.findByRole('button', { name: 'Delete reference source.zip' });
+        expect(screen.getByLabelText('Threat Model')).toHaveValue('Unsaved threat');
+        expect(screen.getByLabelText('Codebase Path')).toHaveValue('/external/source');
+        expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+        fireEvent.change(screen.getByLabelText('Variant'), { target: { value: '' } });
+        expect(screen.queryByRole('button', { name: 'Delete reference source.zip' })).not.toBeInTheDocument();
+        fetchMock.mockResponseOnce(JSON.stringify({
+            project_id: 'p1', variant_id: 'v1', threat_model: 'Saved threat', files: [reference],
+        }));
+        fireEvent.change(screen.getByLabelText('Variant'), { target: { value: 'v1' } });
+        await screen.findByRole('button', { name: 'Delete reference source.zip' });
+        expect(screen.getByLabelText('Threat Model')).toHaveValue('Saved threat');
+    });
+
     test('renders project and variant dropdowns', async () => {
         mockProjectsAndVariants();
         render(<AIContext />);

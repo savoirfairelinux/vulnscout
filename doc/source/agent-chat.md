@@ -51,6 +51,17 @@ Remove any old `VULNSCOUT_MCP_SERVER_PATH` setting from `config.env`. Developmen
 
 ## Connect and chat
 
+The **AI** tab's **Codebase References** drop zone accepts source files and
+ZIP/TAR/TAR.GZ/TGZ archives for the selected variant. The embedded Agent inspects
+them using scoped `list_codebase_files`, `search_codebase` and
+`read_codebase_file` MCP tools, without extraction, execution or arbitrary
+filesystem access. **Codebase Path** is only a hint for external clients; it
+does not mount host code into the container. See
+[Codebase references](ai-assessments.md) for
+upload limits, persistence and privacy considerations. The embedded Agent's
+system instructions cover reference inspection; it does not enable external
+skill discovery or filesystem tools.
+
 The panel detects an existing Copilot CLI or GitHub CLI sign-in on the backend host. Otherwise, setup starts with **Select a connector**. Choose **GitHub Copilot**, **OpenAI**, **Microsoft Foundry**, **Anthropic**, or **Local model**, then select **Next**. Use **Back** to change connectors. For GitHub Copilot, select **Sign in with GitHub**, open the GitHub link, enter the short code shown in the panel, and approve access. Step 3 checks the connection and shows a confirmation before **Start using**. The browser never receives the resulting access token. After a container restart, sign in again. When already connected, use the plug button to reopen connector setup.
 
 Device sign-in defaults to the public GitHub Copilot (VS Code) OAuth client ID, following the Virtual Engineer Copilot connector. This is a GitHub-owned application, not a VulnScout-owned registration; its availability and policies are outside VulnScout's control. GitHub's approval screen identifies that application. An operator can override the client ID using an OAuth App with device flow enabled (in `config.env` for the container):
