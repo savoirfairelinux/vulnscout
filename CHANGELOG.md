@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+- AI context: add variant-scoped drag-and-drop codebase references for source files and ZIP/TAR/TAR.GZ/TGZ archives, with safe read-only browsing through MCP for embedded and external agents. Update assessment skills to use uploaded evidence alongside external Codebase Paths.
+
 ---
 
 ## [0.22.0] - 2026-09-21

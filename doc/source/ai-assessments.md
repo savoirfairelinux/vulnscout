@@ -50,6 +50,10 @@ replaced.
 
 ## Prerequisites
 
+For the **embedded Agent**, use its connector setup described in
+[Agent chat](agent-chat.md); the normal container includes the SDK and MCP server.
+The external-client prerequisites below apply to Copilot CLI/VS Code workflows.
+
 - A running VulnScout instance, reachable over HTTP (see
   [Getting Started](getting-started.md)). By default the API is served at
   `http://localhost:7275`.
@@ -143,11 +147,52 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
 | `list_variants`            | List every variant across all projects                      |
 | `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, environment, threat model, risks, other info) |
+| `list_codebase_files` / `read_codebase_file` / `search_codebase` | Browse, read and search uploaded codebase references for a variant, including inside the container |
 | `get_project_context` / `update_project_context` | Read / replace a project's description |
 | `update_variant_context`   | Replace a variant's context fields (description, environment, threat model, risks, other info) — full replacement, not a partial update |
 | `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |
 | `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
 | `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
+
+## Codebase references in the AI tab
+
+Select a project and variant in **AI**, then drag source files or archives onto
+**Codebase References**, or use the file picker. Multiple uploads are supported.
+An optional description can identify the component/version and whether the
+upload is a complete source tree or only selected files. References are saved
+**immediately**, independently of **Save context**; unsaved text fields are kept.
+Uploads and deletion mark older pending AI assessments for that variant outdated.
+The UI asks before uploading when pending assessments exist and always confirms deletion.
+
+Supported archives are **ZIP, TAR, TAR.GZ and TGZ**. Each upload is limited to
+**10 MB**, each member to **10 MB**, expanded archives to **100 MB**, and archives
+to **5,000 entries**. Unsafe paths, duplicate file paths, encrypted ZIP files,
+links, sparse files and special entries are rejected. Archives are read without
+extraction or execution. Only UTF-8 text can be read as source; binary files
+may be stored/listed but cannot provide text evidence. Other archive formats
+are not unpacked.
+
+**Codebase Path** remains available for an external Copilot/MCP client running
+on the machine that owns the source. Separate multiple local paths with a
+semicolon. A path entered here does **not** mount a directory into the container,
+and the embedded Agent has no shell or arbitrary filesystem access.
+Both embedded and external agents can inspect uploaded references through
+`get_merged_context` (which supplies reference IDs), then `list_codebase_files`,
+`search_codebase` and `read_codebase_file`. The assessment and assessment-review
+skills use each variant's own uploads as additional evidence and cite IDs,
+archive member paths and line numbers.
+
+References are stored under `VULNSCOUT_CACHE_DIR/context-files` using opaque IDs
+and persist with the cache volume. Delete removes the reference; deleting its
+variant/project also cleans up the associated storage. Text context JSON
+import/export does **not** include source files; importing text leaves existing
+uploads intact. Upload references separately when moving to another instance.
+
+Only upload code you are authorized to share with the selected AI provider,
+and remove credentials, secrets and unrelated private files first. Uploaded
+content is untrusted evidence, not agent instructions. Partial uploads,
+unreadable files, conflicting versions or truncated searches must be reported
+as evidence gaps, not used to claim a component is absent.
 
 ---
 

@@ -195,7 +195,8 @@ DELETE /api/variants/<variant_id>
 GET /api/context?project_id=<project_id>&variant_id=<variant_id>
 ```
 
-Returns the merged project and variant context, including supplemental file metadata. Both UUID parameters are required,
+Returns the merged project and variant context, including uploaded codebase reference metadata
+(`files`: `id`, `original_name`, `description`; no server filesystem paths). Both UUID parameters are required,
 and the variant must belong to the selected project.
 
 ### Get or Update Project Context
@@ -226,15 +227,39 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-### Manage Supplemental Context Files
+### Manage Codebase References
 
 ```
 POST /api/variants/<variant_id>/context/files
 DELETE /api/variants/<variant_id>/context/files/<file_id>
 ```
 
-Upload uses `multipart/form-data` with a required `file`, an optional `description`, and a 10 MB size limit. These
-endpoints are retained for API compatibility but are not currently exposed by the frontend.
+Upload uses `multipart/form-data` with a required `file`, an optional `description`, and a 10 MB size limit.
+The AI tab exposes drag-and-drop and a file picker. Files belong to one variant and are saved immediately.
+ZIP, TAR and TAR.GZ/TGZ archives are validated before storage, limited to 5,000 entries and 100 MB expanded;
+each member is limited to 10 MB. Unsafe paths, duplicate file paths, encrypted ZIP members, links,
+sparse files and special entries are rejected. Archives are never extracted or executed.
+Upload/delete updates the variant context timestamp, marking older pending AI assessments outdated.
+Context JSON import/export includes text fields only, not uploaded references; text imports leave existing uploads intact.
+
+### Browse Uploaded Source
+
+```
+GET /api/variants/<variant_id>/context/files/<file_id>/source
+```
+
+The file must belong to that variant. `operation` selects `list` (default), `read` or `search`.
+
+| Operation | Parameters | Result |
+|-----------|------------|--------|
+| `list` | `pattern` (case-sensitive path glob, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
+| `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
+| `search` | `query` (1-200 characters, literal case-sensitive text), `pattern` (glob, default `*`), `max_results` (1-100, default 100) | `matches` with `path`/`line`/`text` (500-character snippets), `truncated`, `searched_files`, `skipped_binary_files` |
+
+Every response includes `file_id` and `original_name`. Follow pagination for complete evidence and narrow
+truncated searches. Binary/non-UTF-8 files return 400 for reads and are counted as skipped in searches.
+Missing references/members return 404; unavailable stored files return 500 with an explicit error.
+Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
 ---
 
@@ -1206,4 +1231,3 @@ Upload one or more SBOM files for asynchronous processing.
 ```
 
 Follow the returned `op_id` in `GET /api/events/stream` (or `GET /api/operations`) for progress, completion, and errors. There is no separate upload-status endpoint.
-
