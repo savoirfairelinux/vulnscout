@@ -68,7 +68,7 @@ COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
-ARG VULNSCOUT_VERSION=v0.22
+ARG VULNSCOUT_VERSION=v0.23
 ENV VULNSCOUT_VERSION=${VULNSCOUT_VERSION}
 
 LABEL org.opencontainers.image.title="VulnScout"
