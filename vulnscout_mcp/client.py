@@ -1,4 +1,5 @@
 from typing import Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -128,6 +129,23 @@ class VulnScoutClient:
             try:
                 error_msg = response.json().get("error", response.text)
             except Exception:
+                error_msg = response.text
+            raise VulnScoutError(error_msg)
+        return response.json()
+
+    def get_codebase_source(self, variant_id: str, file_id: str, params: dict) -> dict:
+        """Browse a stored reference through HTTP, never the MCP host filesystem."""
+        url = (f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/files/"
+               f"{quote(file_id, safe='')}/source")
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.get(url, params=params)
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if not response.is_success:
+            try:
+                error_msg = response.json().get("error", response.text)
+            except ValueError:
                 error_msg = response.text
             raise VulnScoutError(error_msg)
         return response.json()
@@ -410,6 +428,10 @@ class ScopedVulnScoutClient(VulnScoutClient):
         self._project(project_id)
         self._variant(variant_id)
         return super().get_merged_context(project_id, variant_id)
+
+    def get_codebase_source(self, variant_id: str, file_id: str, params: dict) -> dict:
+        self._variant(variant_id)
+        return super().get_codebase_source(variant_id, file_id, params)
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         self._project(project_id)

@@ -32,6 +32,53 @@ def test_agent_enabled_by_default(client):
     assert response.status_code == 200
 
 
+def test_sdk_exposes_only_scoped_reference_tools(monkeypatch):
+    import asyncio
+    from src.routes import agent
+
+    captured = {}
+
+    class Session:
+        session_id = "test-source-session"
+
+        def on(self, callback):
+            pass
+
+        async def send_and_wait(self, message):
+            return SimpleNamespace(data=SimpleNamespace(content="Source inspected"))
+
+        async def disconnect(self):
+            pass
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def list_models(self):
+            return [SimpleNamespace(id="model", policy=None)]
+
+        async def create_session(self, **options):
+            captured.update(options)
+            return Session()
+
+    monkeypatch.setattr(agent, "_sdk_client", lambda token: Client())
+    scope = json.dumps({"project_ids": ["p1"], "variant_ids": ["v1"]})
+    response, _ = asyncio.run(agent._reply(
+        agent.Conversation(), "Inspect uploaded source", agent._mcp_path(), "model", scope,
+    ))
+    assert response == "Source inspected"
+    source_tools = {"list_codebase_files", "read_codebase_file", "search_codebase"}
+    assert source_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
+    assert {f"mcp:vulnscout-{name}" for name in source_tools} <= set(captured["available_tools"])
+    assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
+    assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
+    assert captured["enable_skills"] is False
+    assert "untrusted evidence" in captured["system_message"]["content"]
+
+
 def test_agent_rejects_remote_requests(client):
     response = client.get("/api/agent", environ_overrides={"REMOTE_ADDR": "192.0.2.1"})
     assert response.status_code == 403
@@ -441,7 +488,8 @@ def test_ai_context_scope_uses_its_own_selection(client):
         assert json.loads(_scope_for_context(context)) == {"project_ids": [], "variant_ids": []}
 
 
-def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
+def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypatch, tmp_path):
+    from io import BytesIO
     from werkzeug.serving import make_server
 
     from src.extensions import db
@@ -457,6 +505,9 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
     from src.models.variant import Variant
     from src.models.vulnerability import Vulnerability
     from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutError
+    from vulnscout_mcp.tools.context import _codebase_source_impl
+
+    monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
 
     with client.application.app_context():
         project_a = Project.create("Project A")
@@ -500,6 +551,17 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
         chosen_id, other_id, foreign_variant_id = str(variant_a.id), str(variant_other.id), str(variant_b.id)
         project_id = str(project_a.id)
 
+    uploaded = client.post(f"/api/variants/{chosen_id}/context/files", data={
+        "file": (BytesIO(b"first\nunsafe_call();\n"), "main.c"),
+    })
+    assert uploaded.status_code == 201
+    file_id = uploaded.get_json()["id"]
+    other_upload = client.post(f"/api/variants/{other_id}/context/files", data={
+        "file": (BytesIO(b"foreign code"), "other.c"),
+    })
+    assert other_upload.status_code == 201
+    other_file_id = other_upload.get_json()["id"]
+
     server = make_server("127.0.0.1", 0, client.application, threaded=True)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -507,6 +569,24 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client):
         agent_client = ScopedVulnScoutClient(f"http://127.0.0.1:{server.server_port}", scope)
         assert [project["id"] for project in agent_client.list_projects()] == [project_id]
         assert [variant["id"] for variant in agent_client.list_variants()] == [chosen_id]
+        context = agent_client.get_merged_context(project_id, chosen_id)
+        assert context["files"][0]["id"] == file_id
+        listing = json.loads(_codebase_source_impl(
+            agent_client, chosen_id, file_id, {"operation": "list"},
+        ))
+        assert listing["files"] == [{"path": "main.c", "size": 21}]
+        source = agent_client.get_codebase_source(
+            chosen_id, file_id, {"operation": "read", "path": "main.c", "start_line": 2},
+        )
+        assert source["content"] == "unsafe_call();\n"
+        matches = agent_client.get_codebase_source(
+            chosen_id, file_id, {"operation": "search", "query": "unsafe_call"},
+        )
+        assert matches["matches"] == [{"path": "main.c", "line": 2, "text": "unsafe_call();"}]
+        with pytest.raises(VulnScoutError, match="outside"):
+            agent_client.get_codebase_source(other_id, other_file_id, {"operation": "list"})
+        with pytest.raises(VulnScoutError, match="File not found"):
+            agent_client.get_codebase_source(chosen_id, other_file_id, {"operation": "list"})
         assessments = agent_client.list_assessments_by_vuln("CVE-2024-1234")
         assert [assessment["id"] for assessment in assessments] == [shared_id]
         assert assessments[0]["variant_ids"] == [chosen_id]
