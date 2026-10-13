@@ -8,10 +8,13 @@
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
 from ..extensions import db, migrate, setup_write_serialization
+from ..controllers.operation_queue import queue as operation_queue
+from ..controllers.event_bus import operation_events
 from ..routes import init_app
 from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
+from ..routes.events import STREAM_PATH
 from .. import models  # noqa: F401
-from .merger_ci import init_app as init_merger_cli, post_treatment
+from .merger_ci import init_app as init_merger_cli
 import sys
 import os
 import threading
@@ -26,29 +29,6 @@ DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
 MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
 MAX_SCAN_IMPORT_REQUEST_BYTES = 100 * 1024 * 1024
 DEFAULT_BACKGROUND_TASK_DELAY = 120.0
-
-
-def _launch_enrichment(app):
-    """Spawn background thread for EPSS enrichment.
-
-    Runs in its own thread so it doesn't block Flask request handlers
-    (WAL journal mode allows concurrent reads).
-    """
-    def _enrich_epss():
-        with app.app_context():
-            # Disable autoflush: without this, every SELECT triggers a flush
-            # which acquires the write-lock and holds it across the slow HTTP
-            # calls until the next explicit commit().  With autoflush=False
-            # the lock is only held during commit() itself (milliseconds).
-            db.session.autoflush = False
-            try:
-                from ..controllers import ControllersCache
-                controllers = ControllersCache()
-                post_treatment(controllers)
-            except Exception as e:
-                print(f"[enrichment/epss] {e}", flush=True)
-
-    threading.Thread(target=_enrich_epss, name="enrichment-epss", daemon=True).start()
 
 
 def _warm_scan_list_cache(app):
@@ -108,15 +88,10 @@ def _refresh_sqlite_stats(app):
 
 
 def _schedule_background_tasks(app):
-    """Start post-scan work after the initial Explorer data request burst.
+    """Warm scan history after the initial Explorer data request burst.
 
-    Starting both jobs from the status-poll response makes them compete with
-    the immediately following packages, vulnerabilities, and assessments
-    requests.  The delay keeps that work asynchronous in practice, not merely
-    in implementation.  It must also cover large Explorer responses, which
-    can take well over 30 seconds on production-sized databases, while
-    retaining automatic enrichment and cache warming when no browser is
-    connected.
+    The delay keeps cache warming from competing with the immediately
+    following packages, vulnerabilities, and assessments requests.
     """
     try:
         delay = float(app.config.get("BACKGROUND_TASK_DELAY", DEFAULT_BACKGROUND_TASK_DELAY))
@@ -124,7 +99,6 @@ def _schedule_background_tasks(app):
         delay = DEFAULT_BACKGROUND_TASK_DELAY
 
     def _start():
-        _launch_enrichment(app)
         _warm_scan_list_cache(app)
 
     timer = threading.Timer(max(0.0, delay), _start)
@@ -278,19 +252,27 @@ def create_app():
 
     @app.middleware("/api")
     def fail_scan_not_finished(*args, **kw):
-        if request.path in {"/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui"}:
+        # The event stream is exempt like /api/scan/status: the UI opens it
+        # during boot import to render operation progress live.
+        if request.path in {
+            "/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui",
+            STREAM_PATH,
+        }:
             return None
         if not is_scan_finished():
             return {"error": "Scan not finished"}, 503
 
     init_app(app)
+    operation_queue.init_app(app)
     init_merger_cli(app)
     return app
 
 
 def stop_handler(signal, frame):
     print("Stopping Flask server")
+    operation_events.close_all()
     sys.exit(0)
 
 
 signal.signal(signal.SIGINT, stop_handler)
+signal.signal(signal.SIGTERM, stop_handler)

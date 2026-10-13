@@ -127,6 +127,11 @@ class Assessment(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     responses: Mapped[list[str] | None] = mapped_column(JSON)
 
     target_rows: Mapped[list["AssessmentTarget"]] = relationship(  # noqa: F821
@@ -632,6 +637,11 @@ class Assessment(Base):
             targets: The ``(variant_id, finding_id)`` pairs this assessment
                 applies to. ``targets`` is the only way to say what an
                 assessment applies to; at least one pair is required.
+            timestamp: The assessment's displayed date. May be caller-supplied,
+                so imports can keep historical dates. ``created_at`` is
+                deliberately left to the column default instead: it dates the
+                write itself, and AI staleness compares it against context edit
+                times, which a supplied timestamp could skew either way.
             commit: If True (default), commit immediately. Set False for bulk operations.
 
         Raises:
@@ -642,6 +652,7 @@ class Assessment(Base):
         if not resolved_targets:
             raise GroupInvariantError("An assessment must have at least one target")
         validate_targets(resolved_targets)
+        effective_timestamp = timestamp or datetime.now(timezone.utc)
         assessment = Assessment(
             status=status,
             source=source,
@@ -652,9 +663,8 @@ class Assessment(Base):
             impact_statement=impact_statement,
             workaround=workaround,
             responses=responses or [],
+            timestamp=effective_timestamp,
         )
-        if timestamp is not None:
-            assessment.timestamp = timestamp
         if assessment_id is not None:
             assessment.id = assessment_id
         assessment._init_transient()  # ensure transient attrs initialised on new objects

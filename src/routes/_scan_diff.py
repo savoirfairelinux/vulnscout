@@ -910,6 +910,8 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # assessment JOIN queries keyed on the contributing scan-id set.
     _grs_cache: Dict = {}
     _assess_cache: Dict = {}
+    # scan_id -> (tool scans before it, SBOM and tool scans at it)
+    tool_contexts: Dict[uuid.UUID, Tuple[Dict[str, Scan], Optional[Scan], Dict[str, Scan]]] = {}
     result = []
     for entry in scan_data:
         scan = entry["scan"]
@@ -982,6 +984,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
                 sbom_after, tools_after, _cache=_assess_cache,
                 _obs_prefetch=_assess_prefetch, _pkg_prefetch=packages_map)
             base["newly_detected_assessments"] = len(after_assess - before_assess)
+            tool_contexts[scan.id] = (tools_before, sbom_after, tools_after)
 
             # Branch result = SBOM ∪ THIS tool scan only (one source)
             branch_fids, branch_vids, branch_pkg_ids = _global_result_id_sets(
@@ -1121,4 +1124,83 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
                     doc_formats.add(doc.format)
             base["formats"] = sorted(doc_formats)
         result.append(base)
+    _attach_run_summaries(
+        result, scans, tool_contexts, _obs_prefetch, _assess_prefetch,
+        packages_map, _grs_cache, _assess_cache,
+    )
     return result
+
+
+def _attach_run_summaries(
+    result: List[dict],
+    scans: list[Scan],
+    tool_contexts: Dict[uuid.UUID, Tuple[Dict[str, Scan], Optional[Scan], Dict[str, Scan]]],
+    observation_rows: Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID, str]]],
+    assessment_rows: Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID]]],
+    packages_map: Dict[uuid.UUID, set[uuid.UUID]],
+    grs_cache: Dict,
+    assess_cache: Dict,
+) -> None:
+    """Set ``run`` on every tool scan sharing its run with another scan of its variant.
+
+    Every figure uses the SBOM active at the run's last step, like the latest
+    scan result: totals only count findings on that SBOM's packages, and
+    "newly detected" compares the tool scans after the run with those before
+    it on that same SBOM, so an SBOM import landing between two steps is not
+    credited to the scanners. A vulnerability reported by several scanners
+    is counted once.
+    """
+    groups: Dict[Tuple[str, uuid.UUID], List[Scan]] = {}
+    for scan in scans:
+        if scan.run_id and scan.id in tool_contexts:
+            groups.setdefault((scan.run_id, scan.variant_id), []).append(scan)
+
+    summaries: Dict[str, dict] = {}
+    for (run_id, _variant_id), members in groups.items():
+        if len(members) < 2:
+            continue
+        tools_before = tool_contexts[members[0].id][0]
+        _, sbom, tools_after = tool_contexts[members[-1].id]
+        sbom_pkg_ids = packages_map.get(sbom.id, set()) if sbom else set()
+
+        before_f, before_v, _ = _global_result_id_sets(
+            sbom, tools_before, filter_tool_by_sbom_pkgs=True, _cache=grs_cache,
+            _obs_prefetch=observation_rows, _pkg_prefetch=packages_map)
+        after_f, after_v, _ = _global_result_id_sets(
+            sbom, tools_after, filter_tool_by_sbom_pkgs=True, _cache=grs_cache,
+            _obs_prefetch=observation_rows, _pkg_prefetch=packages_map)
+        before_a = _global_assessment_ids_for(
+            sbom, tools_before, _cache=assess_cache,
+            _obs_prefetch=assessment_rows, _pkg_prefetch=packages_map)
+        after_a = _global_assessment_ids_for(
+            sbom, tools_after, _cache=assess_cache,
+            _obs_prefetch=assessment_rows, _pkg_prefetch=packages_map)
+
+        run_findings = {
+            (fid, vid)
+            for member in members
+            for fid, pkg_id, vid in observation_rows.get(member.id, ())
+            if pkg_id in sbom_pkg_ids
+        }
+        run_assessments = {
+            aid
+            for member in members
+            for aid, pkg_id in assessment_rows.get(member.id, ())
+            if pkg_id in sbom_pkg_ids
+        }
+        summary = {
+            "id": run_id,
+            "scan_ids": [str(member.id) for member in members],
+            "sources": [member.scan_source for member in members],
+            "vuln_count": len({vid for _, vid in run_findings}),
+            "finding_count": len({fid for fid, _ in run_findings}),
+            "assessment_count": len(run_assessments),
+            "newly_detected_vulns": len(after_v - before_v),
+            "newly_detected_findings": len(after_f - before_f),
+            "newly_detected_assessments": len(after_a - before_a),
+        }
+        for member in members:
+            summaries[str(member.id)] = summary
+
+    for entry in result:
+        entry["run"] = summaries.get(entry["id"])

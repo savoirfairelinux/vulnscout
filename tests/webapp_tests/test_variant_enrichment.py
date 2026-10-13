@@ -154,6 +154,35 @@ def _build_variant_enrichment_db(app):
         }
 
 
+def test_deferred_refresh_uses_each_variants_current_sbom(app):
+    from src.controllers.refresh_jobs import _scoped_vulnerability_ids
+    from src.models.package import Package
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.scan import Scan
+
+    ids = _build_variant_enrichment_db(app)
+    with app.app_context():
+        variants = [ids["variant_alpha_id"], ids["variant_beta_id"]]
+        assert _scoped_vulnerability_ids(variants) == {ids["vuln_a_id"], ids["vuln_b_id"]}
+
+        alpha_document = _db.session.execute(
+            _db.select(SBOMDocument).where(SBOMDocument.scan_id == uuid.UUID(ids["scan_s1_id"]))
+        ).scalar_one()
+        libpng = Package.find_or_create("libpng", "1.6.37")
+        SBOMPackage.get(alpha_document.id, libpng.id).delete()
+        beta_document = _db.session.execute(
+            _db.select(SBOMDocument).where(SBOMDocument.scan_id == uuid.UUID(ids["scan_s3_id"]))
+        ).scalar_one()
+        SBOMPackage.create(beta_document.id, libpng.id)
+        assert _scoped_vulnerability_ids(variants) == {ids["vuln_a_id"]}
+
+        replacement = Scan.create("empty replacement", uuid.UUID(ids["variant_alpha_id"]))
+        SBOMDocument.create("/alpha/empty.json", "grype", replacement.id)
+        assert _scoped_vulnerability_ids(variants) == {ids["vuln_a_id"]}
+        assert _scoped_vulnerability_ids([ids["variant_alpha_id"]]) == set()
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

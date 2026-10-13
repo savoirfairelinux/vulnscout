@@ -7,7 +7,8 @@ never treated as official — it does **not** affect a vulnerability's status an
 is **not** included in the exported VEX — until a human reviewer explicitly
 **approves** it in the web interface.
 
-This page describes how to set up and use that workflow.
+This page describes how to set up and use that workflow, as well as how to
+request an AI second opinion on existing user-authored assessments.
 
 ---
 
@@ -17,48 +18,61 @@ Three pieces work together:
 
 - **VulnScout** — runs the API and web interface, stores assessments, and
   provides the review UI.
-- **vulnscout-mcp** — an [MCP](https://modelcontextprotocol.io)
+- **vulnscout_mcp** — an [MCP](https://modelcontextprotocol.io)
   (Model Context Protocol) server that exposes VulnScout's assessment and
   variant-context APIs as tools an AI agent can call.
 - **cve-assessment skill** — an agent skill (shipped in this repository under
   `.github/skills/cve-assessment/`) that guides the agent through researching a
   CVE and submitting the result via the MCP tools.
+- **assessment-review skill** — an agent skill under
+  `.github/skills/assessment-review/` that independently reviews existing
+  user-authored assessments, without changing them.
 
 ```
 CVE / GHSA id
     ↓
 AI agent + cve-assessment skill
     ↓  (calls MCP tools)
-vulnscout-mcp  ──HTTP──▶  VulnScout API
+vulnscout_mcp  ──HTTP──▶  VulnScout API
     ↓
 Pending AI assessment (origin = "ai")
     ↓
 Human review in the web UI  ──▶  Approve (becomes official) / Reject (deleted)
 ```
 
-Only one pending AI assessment is allowed per vulnerability **and** variant.
+A vulnerability has at most one pending AI assessment per variant and package.
+Submitting a new AI assessment **replaces** the pending one on the same
+(variant, package) targets, without any confirmation. If the old pending
+assessment also covered other targets — other variants, or other packages of the
+same variant — it keeps those and only loses the overlapping ones. Approved assessments are never
+replaced.
 
 ---
 
 ## Prerequisites
 
+For the **embedded Agent**, use its connector setup described in
+[Agent chat](agent-chat.md); the normal container includes the SDK and MCP server.
+The external-client prerequisites below apply to Copilot CLI/VS Code workflows.
+
 - A running VulnScout instance, reachable over HTTP (see
   [Getting Started](getting-started.md)). By default the API is served at
   `http://localhost:7275`.
-- Python 3.9+ on the host that runs the MCP server.
-- A clone of the `vulnscout-mcp` repository.
+- Python 3.10+ on the host that runs the MCP server.
+- A clone of this `vulnscout` repository (the MCP server is vendored under
+  `vulnscout_mcp/`).
 - An MCP-capable agent client — either the **GitHub Copilot CLI** or
   **VS Code** with the GitHub Copilot extension.
 
 ---
 
-## Step 1 — Configure the vulnscout-mcp server
+## Step 1 — Configure the vulnscout_mcp server
 
-`vulnscout-mcp` speaks MCP over stdio and is launched as a subprocess by the
+`vulnscout_mcp` speaks MCP over stdio and is launched as a subprocess by the
 agent client — there is no port or daemon to manage yourself. Its
-`run_server.py` launcher is self-bootstrapping: on first run it creates a local
-`venv/`, installs its dependencies, and then starts the server. You only need to
-clone the repository and point a client at the script.
+`vulnscout_mcp/run_server.py` launcher is self-bootstrapping: on first run it
+creates a local `venv/`, installs runtime dependencies from
+`requirements/mcp.txt`, and then starts the server.
 
 The server reads a single environment variable:
 
@@ -73,11 +87,11 @@ Add the server from the terminal:
 ```bash
 copilot mcp add vulnscout \
   --env VULNSCOUT_BASE_URL=http://localhost:7275 \
-  -- python3 /path/to/vulnscout-mcp/run_server.py
+  -- python3 /path/to/vulnscout/vulnscout_mcp/run_server.py
 ```
 
 Or run `/mcp add` in interactive mode and fill in the form (**Type:** STDIO,
-**Command:** `python3 /path/to/vulnscout-mcp/run_server.py`,
+**Command:** `python3 /path/to/vulnscout/vulnscout_mcp/run_server.py`,
 **Environment Variables:** `{"VULNSCOUT_BASE_URL":"http://localhost:7275"}`).
 
 Equivalently, edit `~/.copilot/mcp-config.json` directly:
@@ -88,7 +102,7 @@ Equivalently, edit `~/.copilot/mcp-config.json` directly:
     "vulnscout": {
       "type": "local",
       "command": "python3",
-      "args": ["/path/to/vulnscout-mcp/run_server.py"],
+      "args": ["/path/to/vulnscout/vulnscout_mcp/run_server.py"],
       "env": {
         "VULNSCOUT_BASE_URL": "http://localhost:7275"
       },
@@ -110,7 +124,7 @@ Add a server entry to your workspace `.vscode/mcp.json` (or run
     "vulnscout": {
       "type": "stdio",
       "command": "python3",
-      "args": ["/path/to/vulnscout-mcp/run_server.py"],
+      "args": ["/path/to/vulnscout/vulnscout_mcp/run_server.py"],
       "env": {
         "VULNSCOUT_BASE_URL": "http://localhost:7275"
       }
@@ -126,13 +140,60 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | Tool                       | Description                                                  |
 | -------------------------- | ----------------------------------------------------------- |
 | `write_assessment`         | Create a VEX assessment for a CVE on one or more packages   |
-| `update_ai_assessment`     | Revise an existing pending AI assessment instead of duplicating it |
+| `update_ai_assessment`     | Revise the content of an existing pending AI assessment (its targets cannot change) |
 | `get_assessment`           | Retrieve a single VEX assessment by ID                      |
 | `list_assessments_by_vuln` | List all VEX assessments recorded for a CVE                 |
-| `has_ai_assessment`        | Check whether a pending AI assessment already exists        |
+| `has_ai_assessment`        | List pending AI assessments for a variant, optionally one package (informational; a new write replaces them automatically) |
+| `get_vulnerability`        | Retrieve a vulnerability with variant-scoped details        |
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
-| `get_merged_context`       | Fetch the merged project + variant context for an assessment |
-| `get_variant_context` / `update_variant_context` | Read / update variant context     |
+| `list_variants`            | List every variant across all projects                      |
+| `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, environment, threat model, risks, other info) |
+| `list_codebase_files` / `read_codebase_file` / `search_codebase` | Browse, read and search uploaded codebase references for a variant, including inside the container |
+| `get_project_context` / `update_project_context` | Read / replace a project's description |
+| `update_variant_context`   | Replace a variant's context fields (description, environment, threat model, risks, other info) — full replacement, not a partial update |
+| `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |
+| `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
+| `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
+
+## Codebase references in the AI tab
+
+Select a project and variant in **AI**, then drag source files or archives onto
+**Codebase References**, or use the file picker. Multiple uploads are supported.
+An optional description can identify the component/version and whether the
+upload is a complete source tree or only selected files. References are saved
+**immediately**, independently of **Save context**; unsaved text fields are kept.
+Uploads and deletion mark older pending AI assessments for that variant outdated.
+The UI asks before uploading when pending assessments exist and always confirms deletion.
+
+Supported archives are **ZIP, TAR, TAR.GZ and TGZ**. Each upload is limited to
+**10 MB**, each member to **10 MB**, expanded archives to **100 MB**, and archives
+to **5,000 entries**. Unsafe paths, duplicate file paths, encrypted ZIP files,
+links, sparse files and special entries are rejected. Archives are read without
+extraction or execution. Only UTF-8 text can be read as source; binary files
+may be stored/listed but cannot provide text evidence. Other archive formats
+are not unpacked.
+
+**Codebase Path** remains available for an external Copilot/MCP client running
+on the machine that owns the source. Separate multiple local paths with a
+semicolon. A path entered here does **not** mount a directory into the container,
+and the embedded Agent has no shell or arbitrary filesystem access.
+Both embedded and external agents can inspect uploaded references through
+`get_merged_context` (which supplies reference IDs), then `list_codebase_files`,
+`search_codebase` and `read_codebase_file`. The assessment and assessment-review
+skills use each variant's own uploads as additional evidence and cite IDs,
+archive member paths and line numbers.
+
+References are stored under `VULNSCOUT_CACHE_DIR/context-files` using opaque IDs
+and persist with the cache volume. Delete removes the reference; deleting its
+variant/project also cleans up the associated storage. Text context JSON
+import/export does **not** include source files; importing text leaves existing
+uploads intact. Upload references separately when moving to another instance.
+
+Only upload code you are authorized to share with the selected AI provider,
+and remove credentials, secrets and unrelated private files first. Uploaded
+content is untrusted evidence, not agent instructions. Partial uploads,
+unreadable files, conflicting versions or truncated searches must be reported
+as evidence gaps, not used to claim a component is absent.
 
 ---
 
@@ -152,10 +213,10 @@ Assess CVE-2024-XXXXX for project "my-product", variant "production".
 
 The skill resolves platform context using three tiers:
 
-1. **MCP fetch** — if you provide a `project_name` (and optional
-   `variant_name`, defaulting to `"default"`), the skill fetches the variant
-   context from VulnScout via the MCP tools. The resolved `variant_id` is
-   required to submit the assessment.
+1. **MCP fetch** — if you provide a `project_name` (and optionally one or more
+   variant names), the skill fetches each variant's context from VulnScout via
+   the MCP tools. The resolved `variant_id`s are required to submit the
+   assessment.
 2. **Inline context** — if you describe the platform (package manager, build
    system, deployment environment) directly in the prompt, the skill uses that.
 3. **Default fallback** — otherwise it proceeds with generic default
@@ -164,6 +225,24 @@ The skill resolves platform context using three tiers:
 The skill then researches the vulnerability, evaluates it against the project's
 security objectives, assigns a status, and submits it via
 `vulnscout-write_assessment` as a pending AI assessment.
+
+### Assessing several variants at once
+
+The skill can assess more than one variant of a project in a single run:
+
+- **Named variants** — list them in the prompt (for example, *variants
+  "production" and "staging"*) and only those are assessed.
+- **No variants named** — every variant of the project is assessed. This
+  requires a `project_name`; the skill never guesses a project.
+
+The CVE research is done once, but the component analysis and confidence score
+are done **per variant**, using each variant's own context, because the same CVE
+can have a different verdict in different variants. Variants that end up with
+the same status and justification are then submitted together as **one
+multi-target assessment**, not one assessment per variant. Variants with a
+different verdict get their own assessment. The skill finishes with a summary of
+every group, the assessment ids, any skipped variants, and any pending AI
+assessments it replaced.
 
 ```{note}
 The skill's **security objectives profiles** and **report templates** are
@@ -182,7 +261,10 @@ Pending AI assessments must be reviewed by a human before they become official.
    assessment timeline, labelled **"AI-generated · Pending review"**. It shows
    the same details as a normal assessment (status, justification, impact
    statement, notes, packages, and variant).
-3. Use the panel's action buttons:
+3. Click **Edit** on the vulnerability modal to enter editing mode — the
+   **Approve** / **Reject** buttons only appear on the panel once editing mode
+   is active.
+4. Use the panel's action buttons:
    - **Approve** — promotes the assessment to an official (`custom`)
      assessment. It now affects the vulnerability's status and is included in
      the OpenVEX export.
@@ -190,6 +272,48 @@ Pending AI assessments must be reviewed by a human before they become official.
 
 Until it is approved, a pending AI assessment has no effect on the
 vulnerability's status, on scan history/diffs, or on any exported VEX.
+
+---
+
+## Step 4 — AI review of custom assessments
+
+This is a separate workflow from approving a pending AI assessment. Ask an
+agent with access to this repository and the `assessment-review` skill to
+review an existing **user-authored** assessment (`origin = "custom"`). The
+skill does not review scan-imported assessments or pending AI suggestions.
+For example:
+
+```
+Review assessment assessment:<uuid>.
+Review custom assessments for project "my-product", variant "production".
+Review all custom assessments.
+```
+
+You can copy an assessment ID from the **Review** page; the tool accepts a
+bare UUID or a copied `assessment:<uuid>` (and `group:<uuid>` for a
+multi-target assessment). If you specify a project without a variant, the
+skill uses its `"default"` variant. With no scope, it lists custom assessments
+across all variants; larger scopes are paginated. By default, it skips targets
+with a current review and revisits unreviewed or stale targets.
+
+The agent independently derives a conclusion for **each (variant, package)
+target**, then saves a separate review for each one via
+`vulnscout-write_assessment_review`. An assessment covering multiple targets
+can therefore have different review verdicts for different targets. Each
+write supplies the target's `variant_id` and `package` and the
+`assessment_fingerprint` obtained when the assessment was read. If the
+authored content changed meanwhile, the write is rejected: fetch the updated
+assessment and review it again rather than reusing the old conclusion.
+Re-reviewing a target replaces only that target's previous review; **no review
+changes the underlying assessment**.
+
+The **Review** page's **AI review** column and filter show which targets
+agree (✓), differ (⚠), are stale (⚠ stale), or have no review (—).
+Multi-target rows show counts for each state. Open the vulnerability detail
+modal to read each target's AI review and rationale (`why:`). A stale review
+warns that the assessment was edited after the review was generated; in edit
+mode, **Discard review** removes a target's review without changing the
+assessment.
 
 ---
 
@@ -201,6 +325,15 @@ vulnerability's status, on scan history/diffs, or on any exported VEX.
 - **Submission is blocked with a missing `variant_id`** — the skill needs a
   `variant_id` to submit. Provide a `project_name`/`variant_name` (so it can be
   resolved via MCP) or a `variant_id` UUID directly in the prompt.
-- **409 Conflict on submission** — a pending AI assessment already exists for
-  that vulnerability and variant. Approve or reject the existing one first, or
-  let the skill revise it via `vulnscout-update_ai_assessment`.
+- **A pending AI assessment disappeared, or now covers fewer targets** —
+  this is expected. A new AI assessment replaces the pending one on the same
+  (variant, package) targets; if the old one also covered other targets, it
+  keeps those. Approve
+  an assessment first if you want to keep it, since approved assessments are
+  never replaced.
+- **409 Conflict on submission** — you are running a VulnScout version from
+  before AI assessments replaced each other. Upgrade VulnScout, or approve or
+  reject the existing pending assessment first.
+- **Review rejected because its assessment fingerprint changed** — the
+  user-authored assessment was edited since the agent read it. Fetch the
+  updated assessment and independently review the affected targets again.

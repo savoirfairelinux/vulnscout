@@ -110,7 +110,10 @@ def setup_demo_db(app, extra_packages=None):
             scan_id=scan.id,
         )
         db.session.add(sbom_doc)
-        db.session.add(SBOMPackage(sbom_document_id=sbom_doc.id, package_id=pkg.id))
+        db.session.add(SBOMPackage(
+            sbom_document_id=sbom_doc.id, package_id=pkg.id,
+            cpe=list(pkg.cpe or []), purl=list(pkg.purl or []), source_urls=[],
+        ))
         db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
         db.session.add(
             SBOMObservation(

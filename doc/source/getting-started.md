@@ -35,6 +35,8 @@ http://localhost:7275
 
 The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, imports the input files, and runs a scan.
 
+Once the initial import finishes, background scans, vulnerability-data refreshes, SBOM uploads, and document exports appear in the web interface's **Operation queue**. See {ref}`Operation Queue <operation-queue>` for progress, cancellation, and recovery after a reload.
+
 ---
 
 ## Starting the Web Interface

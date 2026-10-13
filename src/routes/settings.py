@@ -6,7 +6,6 @@ import json
 import uuid
 import time
 import tempfile
-import threading
 import tarfile
 import subprocess
 import shutil
@@ -24,12 +23,16 @@ from ..controllers import (
     ScanController,
     SBOMDocumentController,
 )
+from ..controllers.job_context import JobContext
+from ..controllers.operation_queue import queue as operation_queue
+from ..controllers.operation_registry import KIND_UPLOAD, LANE_UPLOAD, registry
 from ..extensions import db, batch_session
 from ..models.scan import Scan as ScanModel
 from ..models.project import Project
 from ..models.variant import Variant
 from ..helpers.verbose import verbose
 from ..bin.cmd_process import REFRESH_SOURCES, refresh_vulnerability_sources
+from ..views.fast_spdx3 import FastSPDX3
 from ._scan_helpers import parse_uuid_or_400, ErrorResponse
 
 if TYPE_CHECKING:
@@ -49,22 +52,7 @@ class _CrudController(Protocol[_C]):
         ...
 
 
-# Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
-_upload_status: dict[str, dict] = {}
-_UPLOAD_STATUS_TTL = 3600  # seconds – entries older than this are pruned
 _REFRESH_SOURCES = set(REFRESH_SOURCES)
-
-
-def _prune_upload_status() -> None:
-    """Remove completed/errored entries older than _UPLOAD_STATUS_TTL."""
-    now = time.time()
-    stale = [
-        uid for uid, info in _upload_status.items()
-        if info.get("status") in ("done", "error")
-        and now - info.get("ts", 0) > _UPLOAD_STATUS_TTL
-    ]
-    for uid in stale:
-        _upload_status.pop(uid, None)
 
 
 def _retry_on_lock(fn: Callable[[], T], max_retries: int = 5, delay: float = 0.5) -> T:
@@ -85,14 +73,32 @@ def _retry_on_lock(fn: Callable[[], T], max_retries: int = 5, delay: float = 0.5
     raise RuntimeError("retry loop exhausted without returning")
 
 
+def _has_valid_spdx_graph(data: dict) -> bool:
+    """Validate JSON-LD graph shape and SPDX version types."""
+    graph = data.get("@graph", [])
+    if not isinstance(graph, list) or any(not isinstance(item, dict) for item in graph):
+        return False
+    for item in graph:
+        if (item.get("type") == "CreationInfo" or item.get("@type") == "CreationInfo") and (
+            "specVersion" in item and not isinstance(item["specVersion"], str)
+        ):
+            return False
+    return True
+
+
 def _detect_format(filename: str, data: dict) -> str:
-    """Guess SBOM format from the filename and parsed JSON content."""
+    """Guess SBOM format, validating JSON-LD before SPDX detection."""
+    if not isinstance(data, dict):
+        return "unknown"
     lower = filename.lower()
     if lower.endswith(".spdx.json"):
-        return "spdx"
+        return "spdx" if _has_valid_spdx_graph(data) else "unknown"
     if lower.endswith(".cdx.json"):
         return "cdx"
-    if "spdxVersion" in data or "spdxId" in data or "SPDXRef" in str(data.get("SPDXID", "")):
+    if not _has_valid_spdx_graph(data):
+        return "unknown"
+    if ("spdxVersion" in data or "spdxId" in data or "SPDXRef" in str(data.get("SPDXID", ""))
+            or FastSPDX3.could_parse_spdx(data)):
         return "spdx"
     if data.get("bomFormat") == "CycloneDX":
         return "cdx"
@@ -126,9 +132,7 @@ def _is_archive(filename: str) -> bool:
 
 def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, str]]:
     """Extract an SPDX archive (.tar / .tar.gz / .tar.zst) and return the
-    contained ``*.spdx.json`` files as a list of ``(tmp_path, member_name)``.
-
-    Used for SPDX2 inputs which are commonly shipped as tar archives.
+    contained ``*.spdx.json`` and ``*.jsonld`` files as ``(tmp_path, member_name)`` pairs.
     """
     lower = filename.lower()
     extract_dir = tempfile.mkdtemp(prefix="vulnscout_archive_")
@@ -149,12 +153,13 @@ def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, s
             for member in tar.getmembers():
                 if not member.isfile():
                     continue
-                if not member.name.lower().endswith(".spdx.json"):
+                if not member.name.lower().endswith((".spdx.json", ".jsonld")):
                     continue
                 src = cast(_io.BufferedReader, tar.extractfile(member))
                 base = os.path.basename(member.name)
-                fd, out_path = tempfile.mkstemp(suffix=".spdx.json", prefix="vulnscout_upload_")
-                with os.fdopen(fd, "wb") as dst:
+                suffix = ".jsonld" if base.lower().endswith(".jsonld") else ".spdx.json"
+                fd, out_path = tempfile.mkstemp(suffix=suffix, prefix="vulnscout_upload_")
+                with src, os.fdopen(fd, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 results.append((out_path, base))
             return results
@@ -168,74 +173,62 @@ def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, s
 
 
 def _process_sbom_background(
-    app: Flask, upload_id: str, file_paths: list[str],
+    ctx: JobContext, file_paths: list[str],
     scan_id: uuid.UUID, variant_id: uuid.UUID, refresh_sources: set[str] | None = None,
 ) -> None:
-    """Run SBOM parsing in a background thread for one or more files."""
+    """Parse uploaded SBOM files and run the selected enrichment refreshes."""
     if refresh_sources is None:
         refresh_sources = {"epss"}
-    with app.app_context():
-        try:
-            _upload_status[upload_id] = {"status": "processing", "message": "Parsing SBOM file(s)..."}
+    try:
+        ctx.report(0, 3, "Parsing SBOM file(s)…")
 
-            from ..bin.cmd_process import read_inputs, populate_observations
+        from ..bin.cmd_process import read_inputs, populate_observations
 
-            controllers = ControllersCache()
-            vulnCtrl = controllers.vulnerabilities
-            assessCtrl = controllers.assessments
-            assessCtrl.current_variant_id = variant_id
+        controllers = ControllersCache()
+        vulnCtrl = controllers.vulnerabilities
+        assessCtrl = controllers.assessments
+        assessCtrl.current_variant_id = variant_id
 
-            with batch_session():
-                vulnCtrl.use_savepoints = False
-                assessCtrl.use_savepoints = False
-                read_inputs(controllers, scan_id=scan_id)
-                verbose("settings/upload: Finished reading inputs")
+        with batch_session():
+            vulnCtrl.use_savepoints = False
+            assessCtrl.use_savepoints = False
+            read_inputs(controllers, scan_id=scan_id)
+            verbose("settings/upload: Finished reading inputs")
 
-            verbose("settings/upload: DB commit done")
+        verbose("settings/upload: DB commit done")
+        ctx.report(1, 3, "Recording observations…")
 
-            # Populate observations table
-            scan = ScanModel.get_by_id(scan_id) if isinstance(scan_id, uuid.UUID) \
-                else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
-            populate_observations(scan, vulnCtrl, log_prefix="settings/upload")
+        scan = ScanModel.get_by_id(scan_id) if isinstance(scan_id, uuid.UUID) \
+            else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
+        populate_observations(scan, vulnCtrl, log_prefix="settings/upload")
 
-            def update_refresh_status(label: str, _step: int, _total: int) -> None:
-                _upload_status[upload_id] = {
-                    "status": "processing",
-                    "message": f"Refreshing {label} data...",
-                }
+        def update_refresh_status(label: str, step: int, total: int) -> None:
+            ctx.report(2, 3, f"Refreshing {label} data… ({step}/{total})")
 
-            failed_sources = refresh_vulnerability_sources(
-                controllers,
-                vulnCtrl._encountered_this_run,
-                refresh_sources,
-                update_refresh_status,
-            )
+        failed_sources = refresh_vulnerability_sources(
+            controllers,
+            vulnCtrl._encountered_this_run,
+            refresh_sources,
+            update_refresh_status,
+        )
 
-            done_message = "SBOM imported successfully."
-            if failed_sources:
-                unique_failed = list(dict.fromkeys(failed_sources))
-                done_message += f" ({', '.join(unique_failed)} refresh failed; check server logs.)"
+        done_message = "SBOM imported successfully."
+        if failed_sources:
+            unique_failed = list(dict.fromkeys(failed_sources))
+            done_message += f" ({', '.join(unique_failed)} refresh failed; check server logs.)"
 
-            _upload_status[upload_id] = {
-                "status": "done",
-                "message": done_message,
-                "ts": time.time(),
-            }
+        ctx.report(3, 3, done_message)
+        ctx.log(done_message)
 
-        except Exception as e:
-            verbose(f"settings/upload: SBOM import failed: {e}")
-            _upload_status[upload_id] = {
-                "status": "error",
-                "message": "SBOM import failed. Check server logs for details.",
-                "ts": time.time(),
-            }
-        finally:
-            # Clean up the temporary files
-            for fp in file_paths:
-                try:
-                    os.unlink(fp)
-                except OSError:
-                    pass
+    except Exception as e:
+        verbose(f"settings/upload: SBOM import failed: {e}")
+        raise RuntimeError("SBOM import failed. Check server logs for details.")
+    finally:
+        for fp in file_paths:
+            try:
+                os.unlink(fp)
+            except OSError:
+                pass
 
 
 def _findings_for_variant(assessment: "DBAssessment", variant_id: "uuid.UUID"):  # noqa: F821
@@ -1147,7 +1140,7 @@ def init_app(app: Flask) -> None:
         one logical import.
 
         Expects a multipart/form-data request with:
-        - files: one or more SBOM files (.json)  (field name ``files``)
+        - files: one or more SBOM files or SPDX archives (field name ``files``)
         - project_id: UUID of the target project
         - variant_id: UUID of the target variant
 
@@ -1227,8 +1220,7 @@ def init_app(app: Flask) -> None:
                 os.unlink(tmp_path)
                 raise
 
-            # Tar archives (commonly used for SPDX2) — extract the contained
-            # .spdx.json documents and register each one individually.
+            # Keep companion SPDX 2/3 documents together in the same scan.
             if _is_archive(filename):
                 try:
                     members = _extract_spdx_archive(tmp_path, filename)
@@ -1242,29 +1234,45 @@ def init_app(app: Flask) -> None:
                 if not members:
                     _cleanup_validated()
                     return jsonify({
-                        "error": f"No .spdx.json files found inside archive '{filename}'.",
+                        "error": f"No .spdx.json or .jsonld files found inside archive '{filename}'.",
                     }), 400
-                for member_path, member_name in members:
-                    validated_files.append((member_path, member_name, "spdx"))
+                validated_files.extend((path, name, "spdx") for path, name in members)
+                archive_validated = False
+                try:
+                    for member_path, member_name in members:
+                        if not member_name.lower().endswith(".jsonld"):
+                            continue
+                        try:
+                            with open(member_path, "r") as f:
+                                data = json.load(f)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            return jsonify({"error": f"Could not parse '{member_name}' as JSON."}), 400
+                        if _detect_format(member_name, data) != "spdx":
+                            return jsonify({"error": f"Unrecognized SPDX format for '{member_name}'."}), 400
+                    archive_validated = True
+                finally:
+                    if not archive_validated:
+                        _cleanup_validated()
                 continue
 
             # Auto-detect format if not provided
             if not fmt:
+                file_validated = False
                 try:
                     with open(tmp_path, "r") as f:
                         data = json.load(f)
                     fmt = _detect_format(filename, data)
                     if fmt == "unknown":
-                        _cleanup_validated()
-                        os.unlink(tmp_path)
                         return jsonify({
                             "error": f"Unrecognized SBOM format for '{filename}'.",
                         }), 400
+                    file_validated = True
                 except (json.JSONDecodeError, UnicodeDecodeError):
-                    # Clean up all temp files saved so far
-                    _cleanup_validated()
-                    os.unlink(tmp_path)
                     return jsonify({"error": f"Could not parse '{filename}' as JSON."}), 400
+                finally:
+                    if not file_validated:
+                        _cleanup_validated()
+                        os.unlink(tmp_path)
 
             validated_files.append((tmp_path, filename, fmt))
 
@@ -1279,37 +1287,31 @@ def init_app(app: Flask) -> None:
             SBOMDocumentController.create(tmp_path, filename, scan.id, format=fmt)
             tmp_paths.append(tmp_path)
 
-        _prune_upload_status()
-
         upload_id = str(uuid.uuid4())
-        _upload_status[upload_id] = {"status": "processing", "message": "Starting..."}
-
-        # Process in background
-        threading.Thread(
-            target=_process_sbom_background,
-            args=(app, upload_id, tmp_paths, scan.id, variant.id, refresh_sources),
-            name=f"sbom-upload-{upload_id}",
-            daemon=True,
-        ).start()
+        op_id = f"upload:{upload_id}"
+        registry.create(
+            op_id=op_id,
+            kind=KIND_UPLOAD,
+            source="sbom",
+            label="SBOM import",
+            lane=LANE_UPLOAD,
+            scope={
+                "variant_id": str(variant.id),
+                "variant_name": variant.name,
+                "project_id": str(variant.project_id),
+            },
+        )
+        ctx = JobContext(op_id)
+        operation_queue.submit(
+            op_id, LANE_UPLOAD,
+            lambda job_ctx: _process_sbom_background(
+                job_ctx, tmp_paths, scan.id, variant.id, refresh_sources
+            ),
+            ctx,
+        )
 
         return jsonify({
-            "upload_id": upload_id,
+            "op_id": op_id,
             "scan_id": str(scan.id),
             "message": "Upload accepted. Processing started.",
         }), 202
-
-    # ------------------------------------------------------------------
-    # Upload SBOM status
-    # ------------------------------------------------------------------
-    @app.route('/api/sbom/upload/<upload_id>/status')
-    def upload_sbom_status(upload_id: str) -> ResponseReturnValue:
-        """Return the processing status of an asynchronous SBOM upload.
-
-        OpenAPI:
-        response 200 JsonObject Upload progress payload.
-        response 404 Error Unknown upload identifier.
-        """
-        status = _upload_status.get(upload_id)
-        if status is None:
-            return jsonify({"error": "Unknown upload ID."}), 404
-        return jsonify(status)

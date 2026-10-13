@@ -28,6 +28,7 @@ from ..models.finding import Finding
 from ..models.metrics import Metrics
 from ..models.observation import Observation
 from ..models.package import Package
+from ..models.package_dependency import PackageDependency
 from ..models.project import Project
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_observation import SBOMObservation
@@ -319,6 +320,16 @@ def _delete_stale_sbom_records(package_pairs: set[StalePackagePair]) -> tuple[in
     sbom_package_keys = {key for key, _ in sbom_package_rows}
     sbom_observation_keys = {key for key, _ in sbom_observation_rows}
     for key_chunk in _chunked(sbom_package_keys):
+        db.session.execute(
+            db.delete(PackageDependency).where(
+                tuple_(PackageDependency.sbom_document_id, PackageDependency.package_id).in_(key_chunk)
+            )
+        )
+        db.session.execute(
+            db.delete(PackageDependency).where(
+                tuple_(PackageDependency.sbom_document_id, PackageDependency.dependency_id).in_(key_chunk)
+            )
+        )
         db.session.execute(
             db.delete(SBOMPackage).where(
                 tuple_(SBOMPackage.sbom_document_id, SBOMPackage.package_id).in_(key_chunk)

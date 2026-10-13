@@ -10,6 +10,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.23.0] - 2026-10-13
+
+### Added
+- AI agent: add a local Copilot agent API and chat panel with provider connections, page-context sharing, scoped assessment chat, and auto-sent queued messages; add Assess with AI, AI review actions, and an AI action queue to the vulnerability modal.
+- AI context: add variant-scoped drag-and-drop codebase references for source files and ZIP/TAR/TAR.GZ/TGZ archives, with safe read-only browsing through MCP for embedded and external agents. Update assessment skills to use uploaded evidence alongside external Codebase Paths.
+- AI assessments: flag AI assessments whose project or variant context changed, confirm context edits, replace pending AI assessments instead of rejecting them, and let the cve-assessment skill cover multiple variants.
+- Operations: add an operation queue with a queue API and SSE event stream, queue exports and uploads, and show each enqueued batch and scan run as one entry in the queue and scan history.
+- SBOM: support Zephyr SPDX3 JSON-LD imports, SPDX3 JSON-LD companion archives, and scoped source revisions; persist package dependency relationships and show dependency counts and a per-variant dependency graph.
+- CLI: select scanners with `--perform-scans`.
+- Schemas: add VulnScout JSON v1 and v2 schemas and validate SBOM exports against JSON schemas in CI.
+- MCP: vendor the vulnscout-mcp stdio server into the repository.
+- Frontend: add client-side routing for top-level pages and a 404 page.
+
+### Changed
+- Operations: render the queue from SSE state, extract scanner and refresh jobs, and remove legacy polling endpoints.
+- Performance: optimize scan results and derive severity from stored CVSS metrics.
+- EPSS: stop automatic enrichment on startup.
+- Skills: expose `.github/skills` to all AI agents.
+- CI: consolidate Podman tests into the main workflow.
+- Documentation: document SSE queue workflows, uploaded codebase references, the VulnScout JSON format, and MCP tools.
+
+### Fixed
+- Operations: harden queued job execution, fix SSE replay cursors and event ordering, bound operation batches, retain export archives privately, and apply native scan filtering downstream.
+- CLI: honour `VULNSCOUT_IMAGE` from `config.env`, preserve legacy scans and stage Grype results safely, process inputs after scanner failures, and preserve source ownership in dev mode.
+- Assessments: scope targets to the active scan, preserve targets in run diffs, replace pending AI assessments only on shared targets, and set `created_at` from the server clock.
+- AI context: track project-context and context-file edits for staleness, block context saves when the variant context failed to load, and include context-outdated rows under the Review Outdated filter.
+- Vulnerability modal: keep the AI chat session across close and reopen, queue AI actions, and batch Assess with AI within the message limit without splitting variants.
+- SBOM: normalize SPDX2 export enums, scope SPDX graph validation, reject malformed JSON-LD, clean staged uploads, and honor codebase upload size limits.
+- Agent and dev mode: enforce full scope and keep agent writes reviewable, allow local Podman pasta requests, and proxy the frontend API over IPv4.
+- UI: restrict the SPA fallback, retain scanner notes and removals in run history, apply only the package filter after a "show vulnerabilities" redirect, and show the last assessed time in English.
+- Skills: submit exact per-variant target pairs and stop the context-free fallback on project or variant mismatch.
+
+---
+
 ## [0.22.0] - 2026-09-21
 
 ### Added

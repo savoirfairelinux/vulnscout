@@ -44,13 +44,26 @@ The interactive mode is where you investigate each CVE and record your triage de
 
 ---
 
+(operation-queue)=
+## Operation Queue
+
+The navigation bar's **Operation queue** shows the status, progress, and logs for scans, vulnerability-data refreshes, SBOM uploads, document exports, and startup enrichment. Each tab sees the same server-side operations. Closing a tab or reloading the page does not stop them; reopening the queue restores their current state. The initial database import still uses its own loading screen, and Scan History JSON imports and direct downloads are not queued document exports.
+
+Scans and refreshes share one serial pipeline. In a batch, scans run in Grype, NVD, OSV, sbom-cve-check order, followed by NVD, EPSS, GHSA, EUVD refreshes. Each source/variant pair is one operation; a batch accepts at most 100 expanded operations. Document exports run in a separate two-worker lane, and SBOM uploads have their own lane, so they can proceed during scans.
+
+An operation can be `queued`, `running`, `done`, `error`, or `cancelled`. Cancel a queued job to prevent it from starting; running jobs stop at a cancellation checkpoint, not necessarily immediately. Check whether an operation is cancellable before requesting cancellation. Failed or cancelled scans prevent dependent post-scan refreshes from doing work. Finished items can be dismissed from every tab without removing scan results.
+
+The queue keeps terminal operations for up to one hour unless dismissed. This state is process-local: restarting the server clears the queue, not just the browser view. A missed export download can be retried from the queue while its ZIP is retained, but the archive expires and is consumed on its first download. A repeat or expired download normally returns `404`; start a new export instead. Settings uploads also remain visible here when leaving Settings, and successful uploads refresh the affected data.
+
+---
+
 ## SBOM Table
 
 The SBOM table lists every package present in the imported SBOMs within your current scope. It provides a package-centric view of your software bill of materials, complementing the vulnerability-centric Vulnerability Table.
 
 ### Search
 
-The search bar accepts free-text queries that match against package name, version, CPE, and PURL identifiers. Typing at least two characters triggers a fuzzy search powered by Fuse.js. The search supports the same expression language as the vulnerability table:
+The search bar accepts free-text queries that match against package name, reported version, release version, full source revision, CPE, and PURL identifiers. Typing at least two characters triggers a fuzzy search powered by Fuse.js. The search supports the same expression language as the vulnerability table:
 
 - **`term`** — rows containing the term are shown.
 - **`term1 term2`** — AND semantics: both terms must match.
@@ -61,11 +74,19 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ### Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Version, Vulnerabilities, Variants, and Sources. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's incoming and outgoing dependency counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **In** + **Out** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
 - **Remaining Pending Vulnerabilities** — the count of vulnerabilities still awaiting triage for this package.
+
+**Release version** shows the release identified from the SBOM, PURL, or CPE.
+**Source revision** shows the Git commit, shortened to 12 characters. Hover either
+value to inspect its source information and the full revision. Missing values
+are shown as **—**; contradictory values are flagged as **Conflicting metadata**.
+A release version and a commit hash describe separate fields, not a conflict.
+
+Reimport older SBOMs to populate source revisions from the original files.
 
 ### Filters
 
@@ -83,6 +104,27 @@ See the [Match Conditions](ci_conditions.md) page for the full syntax and token 
 ### Actions
 
 Each row has a **Show Vulnerabilities** button that navigates to the Vulnerability Table pre-filtered to show only the vulnerabilities associated with that specific package.
+
+---
+
+## Dependency Graph
+
+The **Dependency** column of the SBOM table shows how many packages each package depends on (**In**) and how many packages depend on it (**Out**). Click the cell to open the graph and expandable trees for both directions. The graph shows every direct dependency (left, flowing in) and dependent (right, flowing out) of the package in a single diagram; zoom and pan to explore large ones. The **Variants** list beside the graph gives each variant a color, its own **In** / **Out** counts, and a checkbox to show or hide its relationships (all variants are shown by default). Select an SBOM source to narrow the graph and its version/revision labels to one active document. Neighbouring packages in the graph use the colors of the variants where the relationship exists, split into stripes when it exists in several. Dependency graphs are loaded only when opened, and packages without relationships show zero counts. Outdated packages show **Not in active scan** because dependency data covers active scans only.
+
+### Supported SBOM Formats
+
+Settings' **Import SBOM** accepts Yocto and Zephyr SPDX 3 JSON-LD (`.json` or
+`.jsonld`). Import all companion documents together so dependencies resolve.
+SPDX archives (`.tar`, `.tar.gz`, `.tgz`, `.tar.zst`) containing `.spdx.json` or
+`.jsonld` files are also supported.
+
+Dependencies are read only from SBOM formats that describe them:
+
+- **SPDX 3.0** (JSON-LD, including Yocto and Zephyr output) — `dependsOn`, `hasPrerequisite`, and reverse `dependencyOf` relationships.
+- **SPDX 2.2 and 2.3** (JSON) — `DEPENDS_ON` relationships and their reverse forms `DEPENDENCY_OF`, `BUILD_DEPENDENCY_OF`, `RUNTIME_DEPENDENCY_OF`, `DEV_DEPENDENCY_OF`, `OPTIONAL_DEPENDENCY_OF`, `PROVIDED_DEPENDENCY_OF`, and `TEST_DEPENDENCY_OF`. Cross-document references (`DocumentRef-<name>:SPDXRef-<id>`) are resolved through `externalDocumentRefs` against the other SPDX documents of the same scan, which covers Yocto SPDX 2.2 archives (`*.spdx.tar.zst`, one document per recipe and package).
+- **CycloneDX 1.4, 1.5, and 1.6** (JSON) — the `dependencies` array (`ref` → `dependsOn`).
+
+Grype, Yocto `cve-check`, Yocto VEX, and OpenVEX files carry no dependency relationships, so packages known only from them show zero counts. Only relationships between two packages are kept; relationships to files, snippets, or elements missing from the scan are ignored. SBOMs imported before dependency support existed have no recorded relationships: their packages show **Not recorded** instead of zero counts (also in the graph's **Variants** list), and the SBOM must be imported again to record them.
 
 ---
 
@@ -128,7 +170,7 @@ Each row has a checkbox on the left. Selecting one or more rows reveals the **mu
 
 The vulnerabilities table also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
 
-The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. Each refresh is added to the **Operation queue** and runs in the background; a progress banner appears below the toolbar with a live counter, and a per-source **Cancel** button lets you stop a run in progress. Because every source runs independently, several refreshes can be active at once.
+The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. The selected sources are submitted together to the **Operation queue** and run in NVD, EPSS, GHSA, EUVD order on the server's pipeline lane. A progress banner below the toolbar shows the current source and count; each queued or running refresh can be cancelled individually. Closing the page does not stop the work, and another tab can see its progress in the same queue. See [Operation Queue](#operation-queue) for recovery and cancellation behavior.
 
 The available sources are:
 
@@ -213,25 +255,30 @@ The Scan History page provides a chronological record of every SBOM import and v
 An SBOM lists the packages that make up your system, but a single vulnerability source rarely provides complete coverage. Different databases track different ecosystems, use different matching strategies, and update at different speeds. VulnScout cross-references your SBOM against several scanners to offer a wider set of information:
 
 - **NVD** correlates packages with NIST's National Vulnerability Database using CPE identifiers. It queries every CPE attached to each package, ensuring broad coverage across many ecosystems.
-- **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages. Grype scans run serially (one at a time) because the underlying export process is global.
+- **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages.
 - **OSV** queries the open-source OSV database, which aggregates advisories from language-specific ecosystems (PyPI, npm, Go, Rust, etc.) and Linux distributions. It queries every PURL attached to each package, providing precise ecosystem-level matching.
 
 By combining these sources, VulnScout reduces the chance of missing a relevant CVE while giving you the **Sources** column and filter to trace exactly where each finding originated. If a vulnerability is reported by multiple scanners, you can have higher confidence that it genuinely applies; if only one scanner flags it, that context helps you prioritise your triage effort.
 
 ### Running Scans
 
-The **Run Scans** button in the top-right corner of the Scan History page opens a dropdown menu with two sections:
+The **Run Scans** button in the top-right corner of Scan History opens a five-step wizard:
 
-- **Scan types** — checkboxes for Grype, NVD CPE, and OSV. Select which scanners you want to run.
-- **Variants** — checkboxes for the available variants. When a specific variant is selected in the project scope, only that variant appears here. When viewing a project, all variants within the project are listed. "Select all" and "Select none" shortcuts help when managing many variants.
+1. **Scans** — select Grype, NVD CPE, OSV, and/or sbom-cve-check.
+2. **Variants** — select variants in the current scope. A variant scope shows only that variant; a project scope offers its variants, with **Select all** and **Select none** controls.
+3. **Filters** — choose whether to exclude kernel companion packages (the main kernel package remains eligible) and Yocto build-host packages ending in `-native`.
+4. **Refresh** — optionally refresh newly discovered vulnerabilities from all applicable data sources or select a custom subset. With no refresh selected, the scans still run.
+5. **Review** — check the selections and launch the batch.
 
-The bottom of the menu shows a summary button ("Run N scans on M variants") that launches the selected scans. Each scan runs independently and displays a per-variant progress panel below the toolbar, showing real-time logs, a progress bar, and the current step. Grype scans are queued and run one at a time; NVD and OSV scans can run in parallel.
+The server queues Grype, NVD, OSV, and sbom-cve-check scans in that order, followed by selected vulnerability-data refreshes. Each source/variant pair has its own operation with live logs and progress in the Operation queue. While any scan is active, **Run Scans** is disabled; opening another tab does not create a second batch.
 
 Every scan and vulnerability-data refresh is also tracked in the **Operation queue** in the navigation bar. A counter shows how many operations have finished out of the total tracked; clicking it opens the Operation queue window, where each running or finished operation has its own progress panel. The window can be closed at any time without interrupting the operations, which keep running in the background.
 
+SBOM uploads and document exports appear in the same queue. Exports download automatically when ready; if the download was missed, the retained archive can be downloaded from the queue after reloading the page. An archive expires or is consumed on its first download. See [Operation Queue](#operation-queue) for details.
+
 ### Source Visibility Toggles
 
-Three coloured toggle buttons in the toolbar (Grype, NVD, OSV) let you show or hide scan entries by source. This is useful when you only want to see SBOM imports or a specific scanner's results without the others cluttering the timeline.
+Use **SBOM imports only** to hide every scanner scan/run while keeping SBOM imports visible. The individual source toggles (Grype, NVD, OSV, and sbom-cve-check) remain available when you want to show or hide particular scanners instead.
 
 ### Importing and Exporting Scan Data
 
@@ -251,7 +298,7 @@ A few properties are worth knowing:
 
 ### Timeline Layout
 
-Scans are displayed in a vertical timeline, most recent first. Each entry shows the timestamp of the import, the project and variant it belongs to, and a set of colour-coded badges summarising the delta:
+Scans are displayed in a vertical timeline, most recent first. Each entry shows the timestamp of the import, the project and variant it belongs to, and a set of colour-coded badges summarising the delta. Scan-run badges use a different colour from SBOM-import badges. On a grouped scan run, select a scanner badge under **Tool scan diff details** to open that scanner's diff:
 
 - **Green** badges indicate additions: new packages, new findings, or new vulnerabilities that appeared in this scan.
 - **Red** badges indicate removals: packages, findings, or vulnerabilities that were present before but are no longer in the SBOM.
@@ -312,10 +359,11 @@ The columns include:
 - **Notes**: free-text status notes attached to the assessment.
 - **Workaround**: any documented workaround.
 - **Assessment Date**: the timestamp of the most recent assessment in the group.
+- **AI review**: a second opinion on each target of a user-authored assessment. A single target shows ✓ when the review agrees, ⚠ when it differs, ⚠ stale when the assessment was edited since the review, or — when it has not been reviewed. Multi-target rows show counts for each state; hover for a breakdown. Open the vulnerability detail modal to read each target's review and rationale.
 
 ### Search and Filters
 
-The toolbar mirrors the vulnerability table's search bar. Filters are available for **Status** and **Justification**, and a **Reset Filters** button clears everything back to defaults.
+The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state. A **Reset Filters** button clears everything back to defaults. See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
 
 ### Import and Export
 

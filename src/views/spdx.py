@@ -4,10 +4,12 @@
 from ..models.package import Package
 from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
+from .fast_spdx import SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_provenance_only_sources
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
+from spdx_tools.spdx.jsonschema.document_converter import DocumentConverter
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
 from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_document_to_xml_stream
 from spdx_tools.spdx.model.package import (
@@ -50,6 +52,19 @@ _ACTOR_TYPE_LABELS = {
 }
 
 
+class _SPDXDocumentConverter(DocumentConverter):
+    def convert(self, instance: Document, document: Document | None = None) -> dict:
+        result = super().convert(instance, document)
+        # spdx-tools emits enum names instead of SPDX's hyphenated JSON/XML values.
+        for package in result.get("packages", []):
+            if package.get("primaryPackagePurpose") == "OPERATING_SYSTEM":
+                package["primaryPackagePurpose"] = "OPERATING-SYSTEM"
+            for reference in package.get("externalRefs", []):
+                if reference.get("referenceCategory") in {"PACKAGE_MANAGER", "PERSISTENT_ID"}:
+                    reference["referenceCategory"] = reference["referenceCategory"].replace("_", "-")
+        return result
+
+
 class SPDX:
     """
     SPDX class to handle SPDX SBOM and parse it.
@@ -62,6 +77,7 @@ class SPDX:
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.ref_dict: dict[str, str] = {}
         self.pkg_to_ref: dict[str, str] = {}
+        self._document_refs: dict[str, str] = {}
 
     def load_from_dict(self, spdx: dict):
         """Read data from SPDX json parsed format."""
@@ -91,7 +107,26 @@ class SPDX:
         Internal method.
         Merge components from SBOM into controller.
         """
+        self._document_refs = {}
+        provenance_sources = spdx2_provenance_only_sources({
+            "packages": [
+                {"SPDXID": package.spdx_id,
+                 "primaryPackagePurpose": (
+                     package.primary_package_purpose.name if package.primary_package_purpose else None
+                 ),
+                 "versionInfo": package.version, "downloadLocation": package.download_location,
+                 "comment": package.comment}
+                for package in self.sbom.packages
+            ],
+            "relationships": [
+                {"spdxElementId": relation.spdx_element_id, "relationshipType": relation.relationship_type.name,
+                 "relatedSpdxElement": relation.related_spdx_element_id}
+                for relation in self.sbom.relationships
+            ],
+        })
         for package in self.sbom.packages:
+            if package.spdx_id in provenance_sources:
+                continue
             supplier = ""
             try:
                 if package.supplier is not None and not isinstance(package.supplier, SpdxNoAssertion):
@@ -104,6 +139,8 @@ class SPDX:
                 verbose(f"[SPDX.merge_components] failed to read supplier for {package.name!r}")
 
             pkg = Package(package.name, package.version or "", [], [], "", supplier=supplier)
+            if isinstance(package.download_location, str):
+                pkg.add_source_url(package.download_location)
             license_declared = package.license_declared
             if license_declared is not None:
                 license_str = str(license_declared)
@@ -121,12 +158,36 @@ class SPDX:
             if package.spdx_id:
                 self.ref_dict[package.spdx_id] = pkg.string_id
                 self.pkg_to_ref[pkg.string_id] = package.spdx_id
+                self._document_refs[package.spdx_id] = pkg.string_id
 
             self.packagesCtrl.add(pkg)
 
     def parse_and_merge(self):
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
+        edges = set()
+        derivations = set()
+        inputs = set()
+        for relation in self.sbom.relationships:
+            edge = spdx2_dependency_edge(relation.spdx_element_id, relation.relationship_type.name,
+                                         relation.related_spdx_element_id)
+            if edge:
+                edges.add(edge)
+            source, target = relation.spdx_element_id, relation.related_spdx_element_id
+            if isinstance(target, str):
+                if relation.relationship_type == RelationshipType.GENERATED_FROM:
+                    derivations.add((source, target))
+                elif relation.relationship_type == RelationshipType.BUILD_DEPENDENCY_OF:
+                    inputs.add((target, source))
+        creation_info = self.sbom.creation_info
+        external_documents = {ref.document_ref_id: ref.document_uri for ref in creation_info.external_document_refs}
+        self.packagesCtrl.add_spdx_dependencies(creation_info.document_namespace, self._document_refs,
+                                                external_documents, edges)
+        urls = {package.spdx_id: package.download_location for package in self.sbom.packages
+                if isinstance(package.download_location, str)}
+        self.packagesCtrl.add_spdx_sources(
+            creation_info.document_namespace, self._document_refs, external_documents, urls, derivations, inputs,
+        )
 
     def register_components(self, with_cpe=False):
         """
@@ -147,6 +208,10 @@ class SPDX:
                 )
                 if pkg.version:
                     package.version = pkg.version
+                for purl in pkg.purl or []:
+                    package.external_references.append(ExternalPackageRef(
+                        category=ExternalPackageRefCategory.PACKAGE_MANAGER, reference_type="purl", locator=purl,
+                    ))
                 for cpe in pkg.cpe:
                     cpe_type = cpe.split(":")[2]
                     if cpe_type == "o":
@@ -164,6 +229,18 @@ class SPDX:
                         )
 
                 self.sbom.packages = self.sbom.packages + [package]
+                for url in pkg.source_urls or []:
+                    source_id = f"SPDXRef-{uuid7(as_type='str')}"
+                    self.sbom.packages.append(SpdxPackage(
+                        name=f"{pkg.name}-source", spdx_id=source_id,
+                        primary_package_purpose=PackagePurpose.SOURCE,
+                        download_location=url, files_analyzed=False,
+                        comment=SPDX2_SYNTHETIC_SOURCE_COMMENT,
+                    ))
+                    self.sbom.relationships.append(Relationship(
+                        spdx_element_id=package.spdx_id, relationship_type=RelationshipType.GENERATED_FROM,
+                        related_spdx_element_id=source_id,
+                    ))
                 self.sbom.relationships = self.sbom.relationships + [
                     Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, newid)
                 ]
@@ -205,11 +282,10 @@ class SPDX:
         # CPE validation may fail because the SPDX spec expects special characters in package
         # names to be escaped, but our CPE strings may contain unescaped special characters
         if with_cpe:
-            writer(self.sbom, stream, validate=False)
+            writer(self.sbom, stream, validate=False, converter=_SPDXDocumentConverter())
         else:
-            writer(self.sbom, stream, validate=validate)
-        # Replace is here until patch are applied upstream: https://github.com/spdx/tools-python/pull/828
-        return stream.getvalue().replace("OPERATING_SYSTEM", "OPERATING-SYSTEM")
+            writer(self.sbom, stream, validate=validate, converter=_SPDXDocumentConverter())
+        return stream.getvalue()
 
     def output_as_json(self, validate=True, author=None, with_cpe=False) -> str:
         """Output the SBOM to JSON format."""

@@ -7,6 +7,7 @@ import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
+import type { AgentViewContext } from "../types/agent";
 
 const asExportDocument = (data: any): ExportDocument | [] => {
     if (typeof data !== "object" || typeof data?.id !== "string") return [];
@@ -22,12 +23,13 @@ const asExportDocument = (data: any): ExportDocument | [] => {
 };
 
 type Props = {
+    onAgentContextChange?: (context: AgentViewContext) => void;
     projectId?: string;
     variantId?: string;
     variantIds?: string[];
 };
 
-function Exports({ projectId }: Readonly<Props>) {
+function Exports({ projectId, onAgentContextChange }: Readonly<Props>) {
     const [documents, setDocuments] = useState<ExportDocument[]>([]);
     const [projects, setProjects] = useState<Project[]>([]);
     const [variants, setVariants] = useState<Variant[]>([]);
@@ -77,6 +79,7 @@ function Exports({ projectId }: Readonly<Props>) {
             </div>
 
             <ExportWizard
+                onAgentContextChange={onAgentContextChange}
                 isOpen={true}
                 embedded={true}
                 project={project}

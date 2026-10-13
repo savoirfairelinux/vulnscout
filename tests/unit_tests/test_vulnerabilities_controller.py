@@ -131,10 +131,35 @@ class TestFetchPublishedDates:
         with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("no such file")):
             vuln_ctrl.fetch_published_dates()  # must not raise
 
-    # ---------------------------------------------------------------------------
-    # fetch_published_dates — GHSA thread-pool path (lines 346-359)
-    # ---------------------------------------------------------------------------
 
+class TestEnrichmentProgress:
+    @pytest.mark.parametrize("method_name", ["fetch_epss_scores", "fetch_nvd_data"])
+    def test_no_argument_runs_without_progress_tracker(self, app, method_name):
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        controller = VulnerabilitiesController(PackagesController())
+        result = getattr(controller, method_name)()
+
+        assert result.failed == 0
+
+    @pytest.mark.parametrize("method_name", ["fetch_epss_scores", "fetch_nvd_data"])
+    def test_explicit_reporter_receives_progress(self, app, method_name):
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        controller = VulnerabilitiesController(PackagesController())
+        reporter = MagicMock()
+        getattr(controller, method_name)(reporter)
+
+        reporter.report.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# fetch_published_dates — GHSA thread-pool path (lines 346-359)
+# ---------------------------------------------------------------------------
+
+class TestFetchPublishedDatesThreadPool:
     def test_ghsa_published_date_returned(self, app):
         """GHSA vulns use the ThreadPoolExecutor path; a mocked date is applied (lines 346-347)."""
         from src.controllers.vulnerabilities import VulnerabilitiesController

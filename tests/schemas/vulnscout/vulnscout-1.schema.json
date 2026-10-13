@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vulnscout.io/schema/vulnscout-1.schema.json",
+  "title": "VulnScout custom data version 1",
+  "type": "object",
+  "required": ["version", "assessments"],
+  "properties": {
+    "version": {
+      "oneOf": [
+        { "const": 1 },
+        { "enum": ["1", "1.0"] }
+      ]
+    },
+    "exported_at": { "type": "string", "format": "date-time" },
+    "assessments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/assessment" }
+    },
+    "ai_assessments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/assessment" }
+    },
+    "cvss": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/cvss" }
+    },
+    "time_estimates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/timeEstimate" }
+    }
+  },
+  "patternProperties": {
+    "^x-": true
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nullableString": {
+      "type": ["string", "null"]
+    },
+    "variantIdentity": {
+      "properties": {
+        "variant_id": { "$ref": "#/$defs/nullableString" },
+        "variant": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "required": ["vuln_id", "status", "packages"],
+      "properties": {
+        "vuln_id": { "type": "string", "minLength": 1 },
+        "status": {
+          "enum": [
+            "under_investigation",
+            "not_affected",
+            "affected",
+            "fixed",
+            "in_triage",
+            "false_positive",
+            "exploitable",
+            "resolved",
+            "resolved_with_pedigree"
+          ]
+        },
+        "simplified_status": { "type": "string" },
+        "justification": { "$ref": "#/$defs/nullableString" },
+        "impact_statement": { "$ref": "#/$defs/nullableString" },
+        "status_notes": { "$ref": "#/$defs/nullableString" },
+        "workaround": { "$ref": "#/$defs/nullableString" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "packages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "variant_id": { "$ref": "#/$defs/nullableString" },
+        "variant": { "$ref": "#/$defs/nullableString" }
+      },
+      "anyOf": [
+        {
+          "required": ["variant_id"],
+          "properties": { "variant_id": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "required": ["variant"],
+          "properties": { "variant": { "type": "string", "minLength": 1 } }
+        }
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false
+    },
+    "cvss": {
+      "type": "object",
+      "required": ["vuln_id", "version", "vector_string", "base_score"],
+      "properties": {
+        "vuln_id": { "type": "string", "minLength": 1 },
+        "variant_id": { "$ref": "#/$defs/nullableString" },
+        "variant": { "$ref": "#/$defs/nullableString" },
+        "version": { "type": "string" },
+        "vector_string": { "type": "string" },
+        "base_score": { "type": "number", "minimum": 0, "maximum": 10 },
+        "exploitability_score": { "type": "number", "minimum": 0 },
+        "impact_score": { "type": "number", "minimum": 0 },
+        "author": { "$ref": "#/$defs/nullableString" },
+        "origin": { "$ref": "#/$defs/nullableString" }
+      },
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false
+    },
+    "timeEstimate": {
+      "type": "object",
+      "required": ["vuln_id", "optimistic", "likely", "pessimistic"],
+      "properties": {
+        "vuln_id": { "type": "string", "minLength": 1 },
+        "variant_id": { "$ref": "#/$defs/nullableString" },
+        "variant": { "$ref": "#/$defs/nullableString" },
+        "optimistic": { "type": "string", "format": "duration" },
+        "likely": { "type": "string", "format": "duration" },
+        "pessimistic": { "type": "string", "format": "duration" }
+      },
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false
+    }
+  }
+}

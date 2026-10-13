@@ -99,6 +99,171 @@ def test_controller_from_dict_roundtrip_preserves_supplier(app):
     assert ctrl2.packages[key].supplier == "Organization: Acme Corp"
 
 
+def test_source_urls_remain_transient_through_package_crud_and_roundtrip(app):
+    from src.controllers.packages import PackagesController
+    urls = [f"git+https://example.org/repo-{i}.git@{str(i) * 40}" for i in range(1, 5)]
+    package = Package.create("lib", "1.0", source_urls=[urls[0]])
+    package_id = package.id
+    Package.find_or_create("lib", "1.0", source_urls=[urls[0], urls[1], "NOASSERTION"])
+    Package.bulk_find_or_create([{"name": "lib", "version": "1.0", "source_urls": [urls[2]]},
+                                {"name": "new", "version": "1", "source_urls": [urls[0]]}])
+    ctrl = PackagesController()
+    ctrl.add(Package("lib", "1.0", source_urls=[urls[3]]))
+    ctrl.add(Package("lib", "1.0", source_urls=[urls[0]]))
+    assert ctrl.to_dict()["lib@1.0"]["source_urls"] == urls
+    data = PackagesController.from_dict(ctrl.to_dict()).to_dict()
+    assert data["lib@1.0"]["source_urls"] == urls
+    _db.session.commit()
+    _db.session.remove()
+    restored = _db.session.get(Package, package_id)
+    assert restored.source_urls == []
+    assert not restored.version_info["revision_conflict"]
+    assert _db.session.query(Package).count() == 2
+
+
+def test_adding_to_preloaded_snapshots_still_persists_package_identifiers(app):
+    from src.controllers.packages import PackagesController
+
+    Package.create("lib", "1.0")
+    ctrl = PackagesController()
+    ctrl._preload_cache()
+    purl = "pkg:generic/lib@1.0"
+    cpe = "cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*"
+    ctrl.add(Package("lib", "1.0", cpe=[cpe], purl=[purl]))
+    _db.session.commit()
+    _db.session.remove()
+    restored = Package.get_by_string_id("lib@1.0")
+    assert restored.cpe == [cpe]
+    assert restored.purl == [purl]
+
+
+@pytest.mark.parametrize("evidence_location", ["document", "legacy"])
+def test_sbom_evidence_downgrade_rejects_source_url_loss_without_changing_evidence(app, evidence_location):
+    import importlib
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    import sqlalchemy as sa
+    from src.models import SBOMDocument, SBOMPackage
+
+    migration = importlib.import_module("src.migrations.versions.c83e91ab402d_add_sbom_package_evidence")
+    project = Project.create("downgrade")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    document = SBOMDocument.create("lib.json", "lib", scan.id)
+    purl = "pkg:generic/lib@1.0"
+    url = f"git+https://example.org/lib@{'a' * 40}"
+    package = Package.create("lib", "1.0")
+    link = SBOMPackage.create(document.id, package.id)
+    link.purl = [purl]
+    link.source_urls = [url] if evidence_location == "document" else []
+    # Legacy evidence can belong to a package with no document link.
+    legacy = Package.create("legacy-only", "1.0")
+    legacy._legacy_source_urls = [url] if evidence_location == "legacy" else []
+    _db.session.commit()
+    with _db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            with pytest.raises(RuntimeError, match="previous schema cannot retain"):
+                migration.downgrade()
+            assert {"source_urls", "purl", "cpe"} <= {
+                c["name"] for c in sa.inspect(connection).get_columns("sbom_packages")
+            }
+    _db.session.expire_all()
+    assert package.purl == []
+    assert link.purl == [purl]
+    assert link.source_urls == ([url] if evidence_location == "document" else [])
+    assert legacy._legacy_source_urls == ([url] if evidence_location == "legacy" else [])
+
+
+def test_sbom_evidence_migration_excludes_global_evidence_and_preserves_identifiers_on_downgrade(app):
+    import importlib
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    import sqlalchemy as sa
+    from src.models import SBOMDocument, SBOMPackage
+
+    migration = importlib.import_module("src.migrations.versions.c83e91ab402d_add_sbom_package_evidence")
+    project = Project.create("identifier-migration")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    documents = [SBOMDocument.create(f"{i}.json", str(i), scan.id) for i in range(2)]
+    cpes = [f"cpe:2.3:a:vendor:lib:{i}.0:*:*:*:*:*:*:*" for i in (1, 2, 3)]
+    purls = [f"pkg:generic/lib@{i}.0" for i in (1, 2, 3)]
+    package = Package.create("lib", "1.0", cpe=[cpes[0]], purl=[purls[0]])
+    fresh = Package.create("fresh", "1.0")
+    for document in documents:
+        for pkg in (package, fresh):
+            SBOMPackage.create(document.id, pkg.id)
+    with _db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            assert not {"source_urls", "purl", "cpe"} & {
+                c["name"] for c in sa.inspect(connection).get_columns("sbom_packages")
+            }
+            assert "legacy_source_urls" not in {
+                c["name"] for c in sa.inspect(connection).get_columns("packages")
+            }
+            migration.upgrade()
+            links = sa.table("sbom_packages", sa.column("cpe", sa.JSON()),
+                             sa.column("purl", sa.JSON()), sa.column("source_urls", sa.JSON()))
+            assert connection.execute(sa.select(links.c.cpe, links.c.purl, links.c.source_urls)).all() == [
+                (None, None, None),
+            ] * 4
+            packages = sa.table("packages", sa.column("name"), sa.column("version"),
+                                sa.column("legacy_source_urls", sa.JSON()))
+            assert connection.execute(sa.select(packages.c.name, packages.c.version, packages.c.legacy_source_urls)
+                                      .order_by(packages.c.name)).all() == [
+                ("fresh", "1.0", None), ("lib", "1.0", None),
+            ]
+    assert SBOMPackage.evidence_for_documents({document.id for document in documents})[package.id] == {
+        "cpe": [], "purl": [], "source_urls": [],
+    }
+    for i, document in enumerate(documents, 1):
+        link = SBOMPackage.get(document.id, package.id)
+        link.cpe = cpes[i:i + 1]
+        link.purl = purls[i:i + 1]
+        link = SBOMPackage.get(document.id, fresh.id)
+        link.cpe = cpes[1:]
+        link.purl = purls[1:]
+    _db.session.commit()
+    with _db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            packages = sa.table("packages", sa.column("name"),
+                                sa.column("cpe", sa.JSON()), sa.column("purl", sa.JSON()))
+            assert connection.execute(sa.select(packages.c.name, packages.c.cpe, packages.c.purl)
+                                      .order_by(packages.c.name)).all() == [
+                ("fresh", cpes[1:], purls[1:]), ("lib", cpes, purls),
+            ]
+            migration.upgrade()
+
+
+def test_already_upgraded_pr_database_remains_compatible_with_consolidated_migration(app, monkeypatch):
+    from src.models import SBOMDocument, SBOMPackage
+
+    project = Project.create("already-upgraded")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    document = SBOMDocument.create("lib.json", "lib", scan.id)
+    url = f"git+https://example.org/lib@{'a' * 40}"
+    package = Package.create("lib", "1.0")
+    package._legacy_source_urls = [url]
+    link = SBOMPackage.create(document.id, package.id)
+    link.source_urls = [url]
+    link.purl = ["pkg:generic/lib@1.0"]
+    _db.session.commit()
+    # Alembic's logging configuration must not disable other tests' loggers.
+    monkeypatch.setattr("logging.config.fileConfig", lambda _filename: None)
+    runner = app.test_cli_runner()
+    result = runner.invoke(args=["db", "stamp", "c83e91ab402d"])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(args=["db", "upgrade"])
+    assert result.exit_code == 0, result.output
+    _db.session.expire_all()
+    assert link.source_urls == [url]
+    assert link.purl == ["pkg:generic/lib@1.0"]
+    assert package._legacy_source_urls == [url]
+
+
 def test_controller_current_sbom_document_defaults_to_none(app):
     from src.controllers.packages import PackagesController
     ctrl = PackagesController()

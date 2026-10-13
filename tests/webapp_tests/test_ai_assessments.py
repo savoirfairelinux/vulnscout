@@ -6,6 +6,7 @@
 import json
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -89,14 +90,307 @@ def test_ai_post_creates_ai_origin(client):
     assert all(a["origin"] == "ai" for a in body["assessments"])
 
 
-def test_ai_post_duplicate_rejected(client):
-    first = _post_ai(client)
-    assert first.status_code == 200
+def _ai_rows(app, vuln_id=VULN_ID):
+    with app.app_context():
+        return [
+            (str(a.id), sorted(str(t.variant_id) for t in a.target_rows))
+            for a in DBAssessment.get_by_vulnerability(vuln_id)
+            if a.origin == "ai"
+        ]
 
-    second = _post_ai(client)
-    assert second.status_code == 409
+
+def _review_ai(client):
+    resp = client.get(f"/api/assessments/review/ai?variant_id={VARIANT_UUID}")
+    assert resp.status_code == 200
+    return json.loads(resp.data)
+
+
+def _set_context(app, **fields):
+    from src.models.variant_context import VariantContext
+    with app.app_context():
+        VariantContext.upsert(VARIANT_UUID, **fields)
+
+
+def _set_project_context(app, description):
+    from src.models.project_context import ProjectContext
+    with app.app_context():
+        ProjectContext.upsert(PROJECT_UUID, description=description)
+
+
+def test_ai_context_outdated_false_without_context(client):
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_true_when_first_context_is_added(client, app):
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_false_when_context_older(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_true_after_context_edit(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_stays_true_when_context_is_restored(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+    _set_context(app, threat_model="old")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_uses_creation_time_after_assessment_edit(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    _set_context(app, threat_model="new")
+
+    with app.app_context():
+        assessment = DBAssessment.get_by_origin(
+            [VARIANT_UUID], origin="ai"
+        )[0]
+        created_at = assessment.created_at
+        assessment.update(status_notes="revised after context edit")
+        assert assessment.timestamp > created_at
+        assert assessment.created_at == created_at
+
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_ignores_noop_save(client, app):
+    _set_context(app, threat_model="same")
+    _post_ai(client)
+    _set_context(app, threat_model="same")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_only_for_edited_variant(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    _post_ai(client)
+    _post_ai(client, variant_id=other_variant)
+    _set_context(app, threat_model="new")
+    resp = client.get("/api/assessments/review/ai")
+    by_variant = {a["targets"][0]["variant_id"]: a["context_outdated"] for a in json.loads(resp.data)}
+    assert by_variant == {str(VARIANT_UUID): True, other_variant: False}
+
+
+def test_ai_context_outdated_when_any_target_context_is_newer(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    response = _post_ai(
+        client,
+        targets=[
+            {"package": PKG, "variant_id": str(VARIANT_UUID)},
+            {"package": PKG2, "variant_id": other_variant},
+        ],
+    )
+    assert response.status_code == 200
+
+    _set_context(app, threat_model="changed")
+
+    rows = json.loads(client.get("/api/assessments/review/ai").data)
+    assert len(rows) == 1
+    assert rows[0]["context_outdated"] is True
+
+
+def test_reviews_endpoint_flags_ai_context_outdated(client, app):
+    _set_context(app, threat_model="old")
+    _post_ai(client)
+    url = f"/api/reviews/assessments?variant_id={VARIANT_UUID}&origin=ai"
+    assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [False]
+    _set_context(app, threat_model="new")
+    assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [True]
+
+
+def test_ai_context_outdated_true_after_project_description_edit(client, app):
+    """The project description is part of the context AI agents consume."""
+    _set_project_context(app, "old")
+    _post_ai(client)
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+    _set_project_context(app, "new")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_true_when_first_project_description_is_added(client, app):
+    _post_ai(client)
+    _set_project_context(app, "added later")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_ai_context_outdated_ignores_noop_project_save(client, app):
+    _set_project_context(app, "same")
+    _post_ai(client)
+    _set_project_context(app, "same")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_context_outdated_ignores_project_context_read(client, app):
+    """Reading the context creates an empty row; that is not an edit."""
+    _post_ai(client)
+    assert client.get(f"/api/projects/{PROJECT_UUID}/context").status_code == 200
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_project_description_edit_outdates_every_variant_of_the_project(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    _post_ai(client)
+    _post_ai(client, variant_id=other_variant)
+    _set_project_context(app, "changed")
+    resp = client.get("/api/assessments/review/ai")
+    by_variant = {a["targets"][0]["variant_id"]: a["context_outdated"] for a in json.loads(resp.data)}
+    assert by_variant == {str(VARIANT_UUID): True, other_variant: True}
+
+
+def test_project_description_edit_flagged_on_vuln_scoped_endpoint(client, app):
+    _set_project_context(app, "old")
+    _post_ai(client)
+    url = f"/api/vulnerabilities/{VULN_ID}/assessments"
+    ai_flags = lambda: [  # noqa: E731
+        a["context_outdated"] for a in json.loads(client.get(url).data) if a["origin"] == "ai"
+    ]
+    assert ai_flags() == [False]
+    _set_project_context(app, "new")
+    assert ai_flags() == [True]
+
+
+def test_future_payload_timestamp_does_not_suppress_outdating(client, app):
+    """created_at must come from the server clock, not the payload."""
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    assert _post_ai(client, timestamp=future).status_code == 200
+    _set_context(app, threat_model="changed after the assessment was written")
+    assert [a["context_outdated"] for a in _review_ai(client)] == [True]
+
+
+def test_past_payload_timestamp_does_not_outdate_a_fresh_assessment(client, app):
+    _set_context(app, threat_model="current")
+    past = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    assert _post_ai(client, timestamp=past).status_code == 200
+    assert [a["context_outdated"] for a in _review_ai(client)] == [False]
+
+
+def test_ai_post_replaces_pending_on_same_target(client, app):
+    first = _post_ai(client, packages=[PKG], status="affected")
+    assert first.status_code == 200
+    first_id = json.loads(first.data)["assessment"]["id"]
+
+    second = _post_ai(client, packages=[PKG], status="not_affected",
+                      justification="component_not_present")
+    assert second.status_code == 200
     body = json.loads(second.data)
-    assert body["error"] == "A pending AI assessment already exists for this variant"
+    assert body["assessment"]["id"] != first_id
+    assert body["replaced"] == [
+        {"id": first_id, "action": "deleted", "variant_ids": [str(VARIANT_UUID)]}]
+
+    rows = _ai_rows(app)
+    assert [r[0] for r in rows] == [body["assessment"]["id"]]
+
+
+def test_ai_post_keeps_pending_on_other_package_of_same_variant(client, app):
+    """Assessing another package of the variant must not discard the first
+    package's pending suggestion (separate Assess with AI requests)."""
+    first_id = json.loads(_post_ai(client, packages=[PKG]).data)["assessment"]["id"]
+
+    second = _post_ai(client, packages=[PKG2], status="not_affected",
+                      justification="component_not_present")
+    assert second.status_code == 200
+    body = json.loads(second.data)
+    assert "replaced" not in body
+
+    assert sorted(r[0] for r in _ai_rows(app)) == sorted([first_id, body["assessment"]["id"]])
+
+
+def test_ai_post_trims_only_the_overlapping_package(client, app):
+    first_id = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)["assessment"]["id"]
+
+    second = _post_ai(client, packages=[PKG2], status="not_affected",
+                      justification="component_not_present")
+    assert second.status_code == 200
+    body = json.loads(second.data)
+    assert body["replaced"] == [
+        {"id": first_id, "action": "trimmed", "variant_ids": [str(VARIANT_UUID)]}]
+
+    with app.app_context():
+        kept = DBAssessment.get_by_id(first_id)
+        assert kept is not None
+        assert [t.finding.package.string_id for t in kept.target_rows] == [PKG]
+
+
+def test_ai_post_without_pending_reports_nothing_replaced(client):
+    body = json.loads(_post_ai(client).data)
+    assert "replaced" not in body
+
+
+def test_ai_post_replace_leaves_approved_and_sbom_untouched(client, app):
+    approved_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+    assert _approve_id(client, approved_id).status_code == 200
+
+    with app.app_context():
+        before = sorted(str(a.id) for a in DBAssessment.get_by_vulnerability(VULN_ID)
+                        if a.origin != "ai")
+
+    resp = _post_ai(client, status="under_investigation")
+    assert resp.status_code == 200
+    assert "replaced" not in json.loads(resp.data)
+
+    with app.app_context():
+        after = sorted(str(a.id) for a in DBAssessment.get_by_vulnerability(VULN_ID)
+                       if a.origin != "ai")
+    assert after == before
+    assert approved_id in after
+
+
+def test_ai_post_failed_create_keeps_pending(client, app):
+    first_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+
+    resp = _post_ai(client, packages=["nonexistent@9.9.9"])
+    assert resp.status_code == 400
+    assert [r[0] for r in _ai_rows(app)] == [first_id]
+
+
+def test_ai_post_create_failure_rolls_back_the_replacement(client, app, monkeypatch):
+    """The create fails AFTER the old row was removed; the removal must roll back."""
+    from src.routes import assessments as routes
+
+    first_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated create failure")
+
+    monkeypatch.setattr(routes, "create_assessment_record", boom)
+    resp = _post_ai(client, status="not_affected", justification="component_not_present")
+    assert resp.status_code == 500
+    assert [r[0] for r in _ai_rows(app)] == [first_id]
+
+
+def test_ai_post_multi_variant_replaces_separate_pending_rows(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    first_id = json.loads(_post_ai(client).data)["assessment"]["id"]
+    second_id = json.loads(_post_ai(client, variant_id=other_variant).data)["assessment"]["id"]
+
+    resp = client.post(
+        f"/api/vulnerabilities/{VULN_ID}/assessments",
+        json={"packages": [PKG], "status": "affected", "ai_generated": True,
+              "variant_ids": [str(VARIANT_UUID), other_variant]},
+    )
+    assert resp.status_code == 200
+    body = json.loads(resp.data)
+    assert {r["id"] for r in body["replaced"]} == {first_id, second_id}
+    assert all(r["action"] == "deleted" for r in body["replaced"])
+    assert [r[0] for r in _ai_rows(app)] == [body["assessment"]["id"]]
 
 
 def test_ai_post_second_variant_allowed(client, app):
@@ -132,6 +426,9 @@ def _get_first_ai_id(client):
 
 def _approve(client, assessment_id):
     return client.post(f"/api/assessments/{assessment_id}/approve")
+
+
+_approve_id = _approve
 
 
 def _reject(client, assessment_id):

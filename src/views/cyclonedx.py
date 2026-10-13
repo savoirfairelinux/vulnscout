@@ -30,6 +30,8 @@ class CycloneDx:
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.ref_dict: dict = {}  # TODO exact type
+        self._document_refs: dict[str, str] = {}
+        self._dependency_edges: set[tuple[str, str]] = set()
 
     _SEVERITY_MAP = {
         "low": cyclonedx.model.vulnerability.VulnerabilitySeverity.LOW,
@@ -115,9 +117,17 @@ class CycloneDx:
 
     def load_from_dict(self, cyclonedx: dict):
         """Read data from CycloneDx json parsed format."""
+        self._dependency_edges = set()
         try:
             cyclonedx = self.clean_sbom(cyclonedx)
             self.sbom = Bom.from_json(data=cyclonedx)  # type: ignore
+            self._dependency_edges = {
+                (entry['ref'], target)
+                for entry in cyclonedx.get('dependencies', [])
+                if isinstance(entry, dict) and isinstance(entry.get('ref'), str)
+                and isinstance(entry.get('dependsOn'), list)
+                for target in entry['dependsOn'] if isinstance(target, str)
+            }
         except Exception as e:
             print(f"Error parsing CycloneDx format: {e}")
 
@@ -126,6 +136,7 @@ class CycloneDx:
         Internal method.
         Merge components from SBOM into controller.
         """
+        self._document_refs = {}
         if "sbom" not in self.__dict__ or not self.sbom:
             return
 
@@ -140,6 +151,7 @@ class CycloneDx:
 
             if component.bom_ref.value:
                 self.ref_dict[component.bom_ref.value] = package.string_id
+                self._document_refs[component.bom_ref.value] = package.string_id
 
             self.packagesCtrl.add(package)
 
@@ -272,6 +284,7 @@ class CycloneDx:
     def parse_and_merge(self):
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
+        self.packagesCtrl.add_dependencies(self._document_refs, self._dependency_edges)
         self.merge_vulnerabilities_into_controller()
 
     def register_components(self):

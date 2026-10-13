@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "assessments": [
+    {
+      "vuln_id": "CVE-2026-0002",
+      "status": "affected",
+      "packages": ["openssl@3.0.0"],
+      "targets": [
+        {
+          "variant_id": "e67d3c68-a22f-4517-91f2-65aebfa31251",
+          "package": "openssl@3.0.0"
+        }
+      ]
+    }
+  ]
+}

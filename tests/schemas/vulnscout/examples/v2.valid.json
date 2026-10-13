@@ -1,0 +1,51 @@
+{
+  "version": 2,
+  "exported_at": "2026-09-22T12:00:00+00:00",
+  "assessments": [
+    {
+      "vuln_id": "CVE-2026-0002",
+      "status": "affected",
+      "simplified_status": "Exploitable",
+      "justification": null,
+      "impact_statement": "The vulnerable path is reachable.",
+      "status_notes": null,
+      "workaround": "Disable the affected feature.",
+      "timestamp": "2026-09-22T11:30:00+00:00",
+      "packages": ["openssl@3.0.0", "zlib@1.3.1"],
+      "targets": [
+        { "variant": "default", "package": "openssl@3.0.0" },
+        { "variant": "production", "package": "zlib@1.3.1" }
+      ]
+    }
+  ],
+  "ai_assessments": [
+    {
+      "vuln_id": "CVE-2026-0003",
+      "status": "under_investigation",
+      "packages": ["libxml2@2.12.0"],
+      "targets": [
+        { "variant": "default", "package": "libxml2@2.12.0" }
+      ]
+    }
+  ],
+  "cvss": [
+    {
+      "vuln_id": "CVE-2026-0002",
+      "variant": "production",
+      "version": "3.1",
+      "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      "base_score": 9.8,
+      "author": "custom",
+      "origin": "custom"
+    }
+  ],
+  "time_estimates": [
+    {
+      "vuln_id": "CVE-2026-0002",
+      "variant": "production",
+      "optimistic": "PT2H",
+      "likely": "PT4H",
+      "pessimistic": "PT8H"
+    }
+  ]
+}

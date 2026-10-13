@@ -4,7 +4,7 @@
 import gzip
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, overload
 from uuid import UUID
 
@@ -72,12 +72,39 @@ def _is_scanner_author(author: str | None) -> bool:
     return False
 
 
-def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
-    """True if a pending AI assessment already exists for this (vuln, variant)."""
-    for a in DBAssessment.get_by_vulnerability(vuln_id):
-        if a.origin == "ai" and a.covers_variant(variant_id):
-            return True
-    return False
+def _replace_pending_ai(
+    vuln_id: str, targets: list[tuple[UUID, UUID]]
+) -> list[dict[str, Any]]:
+    """Make room for a new AI assessment on *targets* by removing the old one.
+
+    *targets* are the new assessment's ``(variant_id, finding_id)`` pairs. A
+    new AI assessment replaces a pending AI assessment (``origin == "ai"``)
+    only on the targets they share: the same variant **and** package. Its
+    other targets are kept (``trimmed``), so assessing other packages of the
+    same variant never discards an earlier suggestion; the old assessment is
+    deleted only once no target remains (``deleted``). Approved (``custom``)
+    and SBOM assessments are never touched.
+
+    Does not commit; call it inside ``batch_session`` together with the create
+    so a failed write leaves the old assessment intact.
+    """
+    replacing = set(targets)
+    replaced: list[dict[str, Any]] = []
+    for row in DBAssessment.get_by_vulnerability(vuln_id):
+        if row.origin != "ai":
+            continue
+        overlap = [t for t in row.target_rows if (t.variant_id, t.finding_id) in replacing]
+        if not overlap:
+            continue
+        removed = sorted({str(t.variant_id) for t in overlap})
+        if len(overlap) == len(row.target_rows):
+            replaced.append({"id": str(row.id), "action": "deleted", "variant_ids": removed})
+            row.delete()
+        else:
+            for target in overlap:
+                row.target_rows.remove(target)
+            replaced.append({"id": str(row.id), "action": "trimmed", "variant_ids": removed})
+    return replaced
 
 
 def _assessments_for_vulnerability(
@@ -370,6 +397,74 @@ def init_app(app: Flask) -> None:
             return {a["id"]: a for a in assessments}
         return assessments
 
+    def _current_context_updates(
+        assessments: list[DBAssessment],
+    ) -> dict[UUID, datetime | None]:
+        """Last real context-change time for every targeted variant.
+
+        AI agents consume the merged context, so a variant counts as changed when
+        either its own context or its project's description was edited.
+        """
+        from ..models.project_context import ProjectContext
+        from ..models.variant_context import VariantContext
+
+        variant_ids = {
+            target.variant_id
+            for assessment in assessments
+            for target in assessment.target_rows
+        }
+        updates: dict[UUID, datetime | None] = {
+            variant_id: None for variant_id in variant_ids
+        }
+        if not variant_ids:
+            return updates
+
+        for variant_id, updated_at in db.session.execute(
+            db.select(VariantContext.variant_id, VariantContext.updated_at).where(
+                VariantContext.variant_id.in_(variant_ids)
+            )
+        ):
+            updates[variant_id] = _as_utc(updated_at) if updated_at else None
+
+        variant_project_ids = {
+            variant_id: project_id
+            for variant_id, project_id in db.session.execute(
+                db.select(DBVariant.id, DBVariant.project_id).where(
+                    DBVariant.id.in_(variant_ids)
+                )
+            )
+        }
+        project_updates = {
+            project_id: _as_utc(updated_at)
+            for project_id, updated_at in db.session.execute(
+                db.select(ProjectContext.project_id, ProjectContext.updated_at).where(
+                    ProjectContext.project_id.in_(set(variant_project_ids.values()))
+                )
+            )
+            if updated_at
+        }
+        for variant_id, project_id in variant_project_ids.items():
+            project_updated_at = project_updates.get(project_id)
+            current = updates.get(variant_id)
+            if project_updated_at is not None and (current is None or project_updated_at > current):
+                updates[variant_id] = project_updated_at
+        return updates
+
+    def _as_utc(dt: datetime) -> datetime:
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    def _is_context_outdated(
+        assessment: DBAssessment,
+        context_updates: dict[UUID, datetime | None],
+    ) -> bool:
+        """True when any targeted variant changed after assessment creation."""
+        created_at = _as_utc(assessment.created_at)
+        return any(
+            (updated_at := context_updates.get(target.variant_id)) is not None
+            and updated_at > created_at
+            for target in assessment.target_rows
+        )
+
     def _review_assessments_by_origin(origin: str) -> ResponseReturnValue:
         """Return assessments matching ``origin``, enriched with a ``vuln_texts``
         key mapping to the vulnerability's ``texts`` dict so the front-end can
@@ -403,10 +498,14 @@ def init_app(app: Flask) -> None:
         vuln_ids = {a.vuln_id for a in assessments if a.vuln_id}
         vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
 
+        context_updates = _current_context_updates(assessments) if origin == "ai" else {}
+
         assessments_serialized = []
         for a in assessments:
             a_ser = a.to_dict()
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
+            if origin == "ai":
+                a_ser["context_outdated"] = _is_context_outdated(a, context_updates)
             assessments_serialized.append(a_ser)
 
         annotate_assessments_outdated(assessments_serialized)
@@ -1000,6 +1099,18 @@ def init_app(app: Flask) -> None:
 
         rows = _assessments_for_vulnerability(vuln_id, project_variant_ids)
         assessments = annotate_targets(rows)
+
+        ai_rows = [row for row in rows if row.origin == "ai"]
+        if ai_rows:
+            context_updates = _current_context_updates(ai_rows)
+            outdated_by_id = {
+                str(row.id): _is_context_outdated(row, context_updates)
+                for row in ai_rows
+            }
+            for a in assessments:
+                if a.get("origin") == "ai":
+                    a["context_outdated"] = outdated_by_id.get(str(a["id"]), False)
+
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments, 200
@@ -1117,6 +1228,15 @@ def init_app(app: Flask) -> None:
         vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
         for a in assessments:
             a["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts.get(a["vuln_id"], [])))
+
+        if origin == "ai":
+            context_updates = _current_context_updates(rows)
+            outdated_by_id = {
+                str(row.id): _is_context_outdated(row, context_updates)
+                for row in rows
+            }
+            for a in assessments:
+                a["context_outdated"] = outdated_by_id.get(str(a["id"]), False)
 
         return assessments, 200
 
@@ -1314,8 +1434,6 @@ def init_app(app: Flask) -> None:
 
         ai_generated = bool(payload_data.get("ai_generated"))
         target_origin = "ai" if ai_generated else "custom"
-        if ai_generated and any(_has_pending_ai(vuln_id, vid) for vid in variant_ids):
-            return {"error": "A pending AI assessment already exists for this variant"}, 409
 
         # Use a single timestamp so the created row's own targets (and any
         # sibling row a caller correlates by timestamp) share the exact same
@@ -1368,8 +1486,14 @@ def init_app(app: Flask) -> None:
             }
         targets = [(variant_id, finding.id) for (_pkg, variant_id), finding in resolved.items()]
 
+        replaced: list[dict[str, Any]] = []
         try:
             with batch_session():
+                # A new AI assessment replaces the pending one on the same
+                # (variant, package) targets. Done in the same transaction as
+                # the create, so a failed create rolls the removal back.
+                if ai_generated:
+                    replaced = _replace_pending_ai(vuln_id, targets)
                 # Always create a new record — never merge with an existing
                 # one. from_vuln_assessment does a find-or-update which would
                 # overwrite previous user assessments on the same target set.
@@ -1381,7 +1505,10 @@ def init_app(app: Flask) -> None:
             return {"error": f"DB error: {e}"}, 500
 
         created = [db_a.to_dict()]
-        response_body = {"status": "success", "assessments": created, "assessment": created[0]}
+        response_body: dict[str, Any] = {
+            "status": "success", "assessments": created, "assessment": created[0]}
+        if replaced:
+            response_body["replaced"] = replaced
         return response_body, 200
 
     @app.route("/api/assessments/batch", methods=["POST"])
@@ -1539,6 +1666,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         body JsonObject optional Assessment update payload.
+        body allowed_variant_ids uuid[] optional Reject if any current target is outside these variants.
         response 200 JsonObject Updated assessment payload.
         response 400 Error Invalid assessment update.
         response 404 Error Assessment not found.
@@ -1547,9 +1675,32 @@ def init_app(app: Flask) -> None:
         if not payload_data:
             return {"error": "Invalid request data"}, 400
 
-        existing = DBAssessment.get_by_id(assessment_id)
+        allowed_ids = None
+        if "allowed_variant_ids" in payload_data:
+            raw_ids = payload_data["allowed_variant_ids"]
+            if not isinstance(raw_ids, list) or not raw_ids or any(not isinstance(value, str) for value in raw_ids):
+                return {"error": "Invalid allowed_variant_ids"}, 400
+            try:
+                allowed_ids = {UUID(value) for value in raw_ids}
+                assessment_uuid = UUID(assessment_id)
+            except ValueError:
+                return {"error": "Invalid allowed_variant_ids or assessment ID"}, 400
+            existing = db.session.execute(
+                db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
+            ).scalar_one_or_none()
+        else:
+            existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
+        if allowed_ids is not None:
+            current_ids = db.session.execute(
+                db.select(AssessmentTarget.variant_id)
+                .where(AssessmentTarget.assessment_id == existing.id).with_for_update()
+            ).scalars().all()
+            if not current_ids or not set(current_ids) <= allowed_ids:
+                db.session.rollback()
+                return {"error": "Assessment targets changed or are outside the current agent scope."}, 409
+            db.session.expire(existing, ["target_rows"])
         if not existing.target_rows or any(
             find_valid_finding(
                 target.finding.package_id,

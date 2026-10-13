@@ -476,6 +476,20 @@ class TestSccBulkWriter:
             assert target.variant_id == variant.id
             assert target.finding_id == assessment.target_rows[0].finding_id
 
+    def test_new_pending_assessment_preserves_creation_timestamp(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            scan = Scan.create("scc", variant.id, scan_type="tool")
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+
+            writer = _SccBulkWriter(scan.id, variant.id, [pkg])
+            _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+            writer.flush()
+
+            assessment = _db.session.query(Assessment).one()
+            assert assessment.created_at == assessment.timestamp
+
 
 # ---------------------------------------------------------------------------
 # Pure-function helper coverage (no DB needed)

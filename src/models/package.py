@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, relationship, mapped_column
 from packageurl import PackageURL
 
 from ..extensions import db, Base
+from ..helpers.package_versions import PackageVersionInfo, git_revision_from_url, package_version_info
 
 
 if typing.TYPE_CHECKING:
@@ -73,6 +74,8 @@ class Package(Base):
     purl: Mapped[list | None] = mapped_column(JSON)
     licences: Mapped[str | None]
     supplier: Mapped[str] = mapped_column(default="")
+    # Pre-scope evidence cannot be attributed safely; retained only for recovery.
+    _legacy_source_urls: Mapped[list | None] = mapped_column("legacy_source_urls", JSON)
 
     __table_args__ = (
         db.Index('ix_packages_name_version_supplier', 'name', 'version', 'supplier'),
@@ -104,6 +107,7 @@ class Package(Base):
         purl: Optional[list[str]] = None,
         licences: str = "",
         supplier: str = "",
+        source_urls: Optional[list[str]] = None,
         **kwargs: Any,
     ):
         version = str(version).strip().split("+git")[0]
@@ -124,6 +128,9 @@ class Package(Base):
         self.purl = []
         self.licences = licences or ""
         self.supplier = _normalize_supplier(supplier)
+        self.source_urls = []
+        for url in source_urls or []:
+            self.add_source_url(url)
         for c in cpes:
             self.add_cpe(c)
         for p in purls:
@@ -159,6 +166,31 @@ class Package(Base):
             current.append(purl)
             self.purl = current
 
+    def add_source_url(self, url: str) -> None:
+        """Retain explicitly revision-pinned Git source provenance."""
+        if git_revision_from_url(url) is None:
+            return
+        current = list(self.source_urls or [])
+        if url not in current:
+            self.source_urls = [*current, url]
+
+    @property
+    def source_urls(self) -> list[str]:
+        """Transient source evidence for parser objects and explicitly scoped snapshots."""
+        return getattr(self, "_source_urls", [])
+
+    @source_urls.setter
+    def source_urls(self, values: list[str]) -> None:
+        self._source_urls = list(values)
+
+    def with_sbom_evidence(self, cpe: list[str] | None = None, purl: list[str] | None = None,
+                           source_urls: list[str] | None = None) -> "Package":
+        """Build a detached display/export snapshot without mutating the shared DB row."""
+        return Package(
+            self.name or "", self.version or "", cpe or [], purl or [],
+            self.licences or "", self.supplier, source_urls=source_urls, id=self.id,
+        )
+
     def generate_generic_cpe(self) -> str:
         """Build a generic cpe string for the package, add it to the cpe list and return it."""
         item = f"cpe:2.3:a:*:{self.name or '*'}:{self.version or '*'}:*:*:*:*:*:*:*"
@@ -186,6 +218,8 @@ class Package(Base):
                 self.add_cpe(c)
             for p in (other.purl or []):
                 self.add_purl(p)
+            for url in other.source_urls or []:
+                self.add_source_url(url)
             return True
         return False
 
@@ -265,6 +299,11 @@ class Package(Base):
     # Serialisation
     # ------------------------------------------------------------------
 
+    @property
+    def version_info(self) -> PackageVersionInfo:
+        return package_version_info(self.version, list(self.purl or []), list(self.cpe or []),
+                                    list(self.source_urls or []))
+
     def to_dict(self) -> dict:
         return {
             "id": self.string_id,
@@ -275,6 +314,8 @@ class Package(Base):
             "purl": list(self.purl or []),
             "licences": self.licences or "",
             "supplier": self.supplier,
+            "source_urls": list(self.source_urls or []),
+            **self.version_info,
         }
 
     @staticmethod
@@ -286,6 +327,7 @@ class Package(Base):
             purl=data.get("purl", []),
             licences=data.get("licences", ""),
             supplier=data.get("supplier", ""),
+            source_urls=data.get("source_urls", []),
         )
 
     # ------------------------------------------------------------------
@@ -299,9 +341,11 @@ class Package(Base):
         cpe: Optional[list] = None,
         purl: Optional[list] = None,
         licences: str = "",
+        source_urls: Optional[list[str]] = None,
     ) -> "Package":
         """Create a new package, persist it and return it."""
-        pkg = Package(name=name, version=version, cpe=cpe or [], purl=purl or [], licences=licences)
+        pkg = Package(name=name, version=version, cpe=cpe or [], purl=purl or [], licences=licences,
+                      source_urls=source_urls)
         db.session.add(pkg)
         db.session.commit()
         return pkg
@@ -314,6 +358,7 @@ class Package(Base):
         purl: Optional[list] = None,
         licences: str = "",
         supplier: str = "",
+        source_urls: Optional[list[str]] = None,
     ) -> "Package":
         """Return an existing Package for (name, version, supplier) or create a new one."""
         supplier = _normalize_supplier(supplier)
@@ -330,6 +375,7 @@ class Package(Base):
                 name=name or "", version=version or "",
                 cpe=cpe or [], purl=purl or [],
                 licences=licences, supplier=supplier or "",
+                source_urls=source_urls,
             )
             db.session.add(existing)
             db.session.flush()
@@ -343,6 +389,10 @@ class Package(Base):
                 if p not in (existing.purl or []):
                     existing.add_purl(p)
                     changed = True
+            for url in source_urls or []:
+                if url not in (existing.source_urls or []) and git_revision_from_url(url) is not None:
+                    existing.add_source_url(url)
+                    changed = True
             if changed:
                 db.session.flush()
 
@@ -355,7 +405,7 @@ class Package(Base):
         """Resolve many packages in two queries instead of N.
 
         *items* is a list of dicts with keys ``name``, ``version`` and
-        optionally ``cpe``, ``purl``, ``licences``, ``supplier``.
+        optionally ``cpe``, ``purl``, ``licences``, ``supplier``, ``source_urls``.
 
         Returns a ``{string_id: Package}`` mapping.
         """
@@ -389,6 +439,7 @@ class Package(Base):
                     purl=d.get("purl", []),
                     licences=d.get("licences", ""),
                     supplier=_normalize_supplier(d.get("supplier", "")),
+                    source_urls=d.get("source_urls", []),
                 )
                 db.session.add(pkg)
                 by_key[key] = pkg
@@ -399,6 +450,8 @@ class Package(Base):
                 for p in (d.get("purl") or []):
                     if p not in (pkg.purl or []):
                         pkg.add_purl(p)
+                for url in d.get("source_urls") or []:
+                    pkg.add_source_url(url)
             result[pkg.string_id] = pkg
 
         db.session.flush()
@@ -443,5 +496,11 @@ class Package(Base):
 
     def delete(self) -> None:
         """Delete this package from the database."""
+        from .package_dependency import PackageDependency
+
+        # SQLite foreign keys stay off, so edges on either side are removed explicitly.
+        db.session.execute(db.delete(PackageDependency).where(db.or_(
+            PackageDependency.package_id == self.id, PackageDependency.dependency_id == self.id,
+        )))
         db.session.delete(self)
         db.session.commit()

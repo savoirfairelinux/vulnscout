@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "assessments": [
+    {
+      "vuln_id": "CVE-2026-0001",
+      "status": "not_affected",
+      "packages": ["openssl@3.0.0"]
+    }
+  ]
+}

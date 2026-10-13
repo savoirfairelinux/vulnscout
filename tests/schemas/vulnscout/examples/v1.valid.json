@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "exported_at": "2026-09-22T12:00:00+00:00",
+  "assessments": [
+    {
+      "vuln_id": "CVE-2026-0001",
+      "status": "not_affected",
+      "simplified_status": "Not affected",
+      "justification": "component_not_present",
+      "impact_statement": null,
+      "status_notes": "Not included in the deployed image.",
+      "workaround": null,
+      "packages": ["openssl@3.0.0"],
+      "variant_id": "e67d3c68-a22f-4517-91f2-65aebfa31251",
+      "variant": "default",
+      "x-review-note": "Retained when an export is amended."
+    }
+  ],
+  "ai_assessments": [],
+  "cvss": [
+    {
+      "vuln_id": "CVE-2026-0001",
+      "variant_id": "e67d3c68-a22f-4517-91f2-65aebfa31251",
+      "variant": "default",
+      "version": "3.1",
+      "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      "base_score": 9.8,
+      "author": "custom",
+      "origin": "custom"
+    }
+  ],
+  "time_estimates": [
+    {
+      "vuln_id": "CVE-2026-0001",
+      "variant_id": "e67d3c68-a22f-4517-91f2-65aebfa31251",
+      "variant": "default",
+      "optimistic": "PT1H",
+      "likely": "PT2H",
+      "pessimistic": "PT4H"
+    }
+  ]
+}

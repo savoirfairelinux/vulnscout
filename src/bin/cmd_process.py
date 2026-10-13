@@ -28,6 +28,7 @@ import os
 from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
+from sqlalchemy.exc import SQLAlchemyError
 from ._common import DEFAULT_VARIANT_NAME, resolve_project, resolve_project_variant
 from ..controllers.projects import ProjectController
 from ..helpers.export_scope import compute_export_scope
@@ -67,9 +68,10 @@ def _ts_key(ts) -> str:
         return str(ts)
 
 
-def post_treatment(controllers: ControllersCache, documents=None):
+def post_treatment(controllers: ControllersCache, documents=None, reporter=None):
     """Enrich vulnerabilities with EPSS scores."""
-    return controllers.vulnerabilities.fetch_epss_scores()
+    from ..controllers.progress_reporter import NULL_REPORTER
+    return controllers.vulnerabilities.fetch_epss_scores(reporter or NULL_REPORTER)
 
 
 REFRESH_SOURCES = ("epss", "nvd", "euvd", "ghsa")
@@ -195,6 +197,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
+        document_path = doc.path
         pkgCtrl.current_sbom_document = doc
         try:
             verbose(f"merger_ci: Reading {doc.path} (format={doc.format!r})")
@@ -241,17 +244,26 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 grype.load_from_dict(data)
             else:
                 print(f"Warning: unknown format for {doc.path}, skipping")
+                continue
+            doc.dependencies_recorded = True
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
+        except SQLAlchemyError as e:
+            _db.session.rollback()
+            print(f"Error importing {document_path}: {e}")
+            raise
         except Exception as e:
             if not use_fastspdx:
-                print(f"Error parsing {doc.path}: {e}")
+                print(f"Error parsing {document_path}: {e}")
                 print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
-                raise e
+                raise
             else:
-                print(f"Ignored: Error parsing {doc.path}: {e}")
+                print(f"Ignored: Error parsing {document_path}: {e}")
         finally:
             pkgCtrl.current_sbom_document = None
+    pkgCtrl.flush_spdx_dependencies()
+    pkgCtrl.flush_spdx_sources()
+    _db.session.commit()
 
     return {
         "cdx": cdx,
@@ -275,6 +287,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
               help="Yocto VEX JSON file (may be repeated).")
 @click.option("--grype", "grype_inputs", multiple=True, type=click.Path(exists=True),
               help="Grype vulnerability JSON file (may be repeated).")
+@click.option("--run-id", default=None,
+              help="Operation queue id grouping this tool scan with the rest of its scan run.")
 @with_appcontext
 def create_project_context(
     project: str,
@@ -285,6 +299,7 @@ def create_project_context(
     yocto_cve_inputs: tuple,
     yocto_vex_inputs: tuple,
     grype_inputs: tuple,
+    run_id: str | None,
 ) -> None:
     """Register SBOM inputs into the database under a named project/variant scan.
 
@@ -305,7 +320,8 @@ def create_project_context(
     scan_source = "grype" if (not has_sbom_inputs and grype_inputs) else None
 
     scan = ScanController.create(scan_description, variant_obj.id, scan_type=scan_type,
-                                 scan_source=scan_source)
+                                 scan_source=scan_source,
+                                 run_id=run_id if scan_type == "tool" else None)
     click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}")
 
     format_groups: list[tuple[tuple, str]] = [
@@ -491,7 +507,7 @@ def _run_main(
             " assessments to -- parsed assessments will not be stored"
         )
 
-    # Wrap all ingestion + post-treatment inside batch_session so that the
+    # Wrap ingestion inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a
     # single SQLite transaction at the end of the block.
     with batch_session():
@@ -508,13 +524,6 @@ def _run_main(
 
     match_condition = os.getenv("MATCH_CONDITION", "")
 
-    # In interactive (serve) mode the webapp background thread handles all
-    # enrichment after the loading screen clears.  Running it here too would
-    # block the shell from writing the __END_OF_SCAN_SCRIPT__ marker, keeping
-    # the frontend stuck at Step 1.
-    # Match-condition evaluates stored data; refreshing it requires the
-    # explicit --refresh-vulnerability-data option.
-    interactive_mode = get_bool_env("INTERACTIVE_MODE", False)
     observations_populated = False
     if refresh_vulnerability_data:
         populate_observations(latest_scan, vulnCtrl)
@@ -532,14 +541,6 @@ def _run_main(
                 f"{', '.join(unique_failed)} vulnerability-data refresh failed."
             )
         click.echo("Vulnerability data refresh complete.")
-    elif match_condition:
-        verbose("merger_ci: Skipping automatic EPSS enrichment for match-condition")
-    elif not interactive_mode:
-        verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
-        post_treatment(controllers)
-        verbose("merger_ci: Post-treatment done")
-    else:
-        verbose("merger_ci: Skipping CLI enrichment in interactive mode (webapp background thread will handle it)")
 
     failed_vulns = []
     if match_condition:

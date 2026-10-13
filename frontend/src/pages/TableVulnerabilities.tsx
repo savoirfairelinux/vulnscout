@@ -2,10 +2,9 @@ import Vulnerabilities, { type Vulnerability } from "../handlers/vulnerabilities
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import Assessments from "../handlers/assessments";
-import type { NVDProgress } from "../handlers/nvd_progress";
-import type { EPSSProgress } from "../handlers/epss_progress";
+import type { RefreshProgressView } from "../handlers/operationStore";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER, getStatusSortIndex, getTopStatusSummaryLabel, getVulnerabilityStatusSummary } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -19,14 +18,10 @@ import { useDocUrl } from "../helpers/useDocUrl";
 import { formatPkgId } from "../helpers/pkgId";
 
 import MessageBanner from "../components/MessageBanner";
-import NVDProgressHandler from "../handlers/nvd_progress";
-import EPSSProgressHandler from "../handlers/epss_progress";
-import GHSAProgressHandler from "../handlers/ghsa_progress";
-import type { GHSAProgress } from "../handlers/ghsa_progress";
-import EUVDProgressHandler from "../handlers/euvd_progress";
-import type { EUVDProgress } from "../handlers/euvd_progress";
+import { getSnapshot as getOperations, refreshProgressOf, subscribe as subscribeToOperations } from "../handlers/operationStore";
 import useDismissablePopover from "../hooks/useDismissablePopover";
 import PopoverSurface from "../components/PopoverSurface";
+import type { AgentViewContext } from "../types/agent";
 
 type SourceBanner = { message: string; type: 'error' | 'success' } | null;
 
@@ -105,6 +100,8 @@ type Props = {
     onMissingEuvdDataBannerDismissedChange?: (dismissed: boolean) => void;
     missingPublishedDateDataBannerDismissed?: boolean;
     onMissingPublishedDateDataBannerDismissedChange?: (dismissed: boolean) => void;
+    onAgentContextChange?: (context: AgentViewContext) => void;
+    onOpenAgent?: () => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -187,7 +184,7 @@ type PublishedDateFilterProps = {
     setDaysValue: (value: string) => void;
     setDateFrom: (value: string) => void;
     setDateTo: (value: string) => void;
-    nvdProgress: NVDProgress | null;
+    nvdProgress: RefreshProgressView | null;
     hasAnyPublishedDate: boolean;
 };
 
@@ -387,7 +384,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
     'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed',
 ];
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
     const preferenceKey = `vulnscout.tables.vulnerabilities.${encodeURIComponent(preferenceScopeKey)}`;
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
@@ -460,24 +457,37 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         return () => controller.abort();
     }, [modalVuln, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
-    const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
-    const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
+    // A filter jump (e.g. "Show Vulnerabilities" from the packages table) remounts this
+    // component with filterLabel/filterValue set. The effect below resets every other
+    // filter dimension, but that only happens after mount — so the fields it resets must
+    // skip their stale localStorage read here, or the old values render for one frame
+    // (and, since applySearch's guard only covers the async re-run, an old search can
+    // otherwise still apply).
+    const isFilterJump = Boolean(filterLabel && filterValue);
+    const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '', { skipInitialRead: isFilterJump });
+    const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '', { skipInitialRead: isFilterJump });
     const [descriptionMatches, setDescriptionMatches] = useState<Record<string, Set<string>>>({});
     const [descriptionSearchLoading, setDescriptionSearchLoading] = useState(false);
     const [descriptionSearchError, setDescriptionSearchError] = useState(false);
-    const [selectedSeverities, setSelectedSeverities] = useLocalStorageState<string[]>(`${preferenceKey}.severities`, []);
-    const [selectedStatuses, setSelectedStatuses] = useLocalStorageState<string[]>(`${preferenceKey}.statuses`, []);
-    const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
-    const [selectedPackages, setSelectedPackages] = useLocalStorageState<string[]>(`${preferenceKey}.packages`, []);
-    const [publishedDateFilterType, setPublishedDateFilterType] = useLocalStorageState(`${preferenceKey}.publishedDate.type`, '');
-    const [publishedDateValue, setPublishedDateValue] = useLocalStorageState(`${preferenceKey}.publishedDate.value`, '');
-    const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '');
-    const [publishedDateFrom, setPublishedDateFrom] = useLocalStorageState(`${preferenceKey}.publishedDate.from`, '');
-    const [publishedDateTo, setPublishedDateTo] = useLocalStorageState(`${preferenceKey}.publishedDate.to`, '');
-    const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
-    const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
-    const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
-    const [euvdProgress, setEuvdProgress] = useState<EUVDProgress | null>(null);
+    const [selectedSeverities, setSelectedSeverities] = useLocalStorageState<string[]>(`${preferenceKey}.severities`, [], { skipInitialRead: isFilterJump });
+    const [selectedStatuses, setSelectedStatuses] = useLocalStorageState<string[]>(`${preferenceKey}.statuses`, [], { skipInitialRead: isFilterJump });
+    const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, [], { skipInitialRead: isFilterJump });
+    const [selectedPackages, setSelectedPackages] = useLocalStorageState<string[]>(`${preferenceKey}.packages`, [], { skipInitialRead: isFilterJump });
+    const [publishedDateFilterType, setPublishedDateFilterType] = useLocalStorageState(`${preferenceKey}.publishedDate.type`, '', { skipInitialRead: isFilterJump });
+    const [publishedDateValue, setPublishedDateValue] = useLocalStorageState(`${preferenceKey}.publishedDate.value`, '', { skipInitialRead: isFilterJump });
+    const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '', { skipInitialRead: isFilterJump });
+    const [publishedDateFrom, setPublishedDateFrom] = useLocalStorageState(`${preferenceKey}.publishedDate.from`, '', { skipInitialRead: isFilterJump });
+    const [publishedDateTo, setPublishedDateTo] = useLocalStorageState(`${preferenceKey}.publishedDate.to`, '', { skipInitialRead: isFilterJump });
+    const operations = useSyncExternalStore(subscribeToOperations, getOperations);
+    const progress = useMemo(() => {
+        const forSource = (source: string) => operations.some(operation => operation.op_id === `refresh:${source}`)
+            ? refreshProgressOf(source) : null;
+        return { nvd: forSource('nvd'), epss: forSource('epss'), ghsa: forSource('ghsa'), euvd: forSource('euvd') };
+    }, [operations]);
+    const nvdProgress = progress.nvd;
+    const epssProgress = progress.epss;
+    const ghsaProgress = progress.ghsa;
+    const euvdProgress = progress.euvd;
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [nvdBanner, setNvdBanner] = useState<SourceBanner>(null);
     const [epssBanner, setEpssBanner] = useState<SourceBanner>(null);
@@ -492,16 +502,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
-    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useLocalStorageState(`${preferenceKey}.customSeverity.enabled`, false);
-    const [severityRange, setSeverityRange] = useLocalStorageState(`${preferenceKey}.customSeverity.range`, { min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
-    const [showCustomEpssFilter, setShowCustomEpssFilter] = useLocalStorageState(`${preferenceKey}.customEpss.enabled`, false);
-    const [epssRange, setEpssRange] = useLocalStorageState(`${preferenceKey}.customEpss.range`, { min: 0, max: 100 });
-    const [selectedAttackVectors, setSelectedAttackVectors] = useLocalStorageState<string[]>(`${preferenceKey}.attackVectors`, []);
-    const [selectedFirstScanDates, setSelectedFirstScanDates] = useLocalStorageState<string[]>(`${preferenceKey}.firstScanDates`, []);
+    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useLocalStorageState(`${preferenceKey}.customSeverity.enabled`, false, { skipInitialRead: isFilterJump });
+    const [severityRange, setSeverityRange] = useLocalStorageState(`${preferenceKey}.customSeverity.range`, { min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX }, { skipInitialRead: isFilterJump });
+    const [showCustomEpssFilter, setShowCustomEpssFilter] = useLocalStorageState(`${preferenceKey}.customEpss.enabled`, false, { skipInitialRead: isFilterJump });
+    const [epssRange, setEpssRange] = useLocalStorageState(`${preferenceKey}.customEpss.range`, { min: 0, max: 100 }, { skipInitialRead: isFilterJump });
+    const [selectedAttackVectors, setSelectedAttackVectors] = useLocalStorageState<string[]>(`${preferenceKey}.attackVectors`, [], { skipInitialRead: isFilterJump });
+    const [selectedFirstScanDates, setSelectedFirstScanDates] = useLocalStorageState<string[]>(`${preferenceKey}.firstScanDates`, [], { skipInitialRead: isFilterJump });
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
-    const [aiSuggestionFilter, setAiSuggestionFilter] = useLocalStorageState<'any' | 'has' | 'no'>(`${preferenceKey}.aiSuggestion`, 'any');
+    const [aiSuggestionFilter, setAiSuggestionFilter] = useLocalStorageState<'any' | 'has' | 'no'>(`${preferenceKey}.aiSuggestion`, 'any', { skipInitialRead: isFilterJump });
     const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -523,7 +533,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const prevEuvdInProgress = useRef<boolean | null>(null);
     const prevEuvdPhase = useRef<string | null>(null);
     const prevEuvdStartedAt = useRef<string | null>(null);
-    const hasFetchedProgressOnce = useRef(false);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -540,11 +549,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         { syntax: '-term', description: 'NOT: exclude rows with term' },
         { syntax: 'only:text', description: 'Show a vuln only when all of its SBOM-affected packages contain text (e.g. only:native keeps vulns whose affected packages are all native)' },
     ];
-
-    const hasAnyGhsaVuln = useMemo(
-        () => vulnerabilities.some(v => v.id?.toUpperCase().startsWith('GHSA-')),
-        [vulnerabilities]
-    );
 
     // Published dates can come from sources other than NVD (e.g. an
     // sbom-cve-check scan). When at least one vulnerability already has a
@@ -610,11 +614,34 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
-        if (filterLabel === "Source") setSelectedSources([filterValue]);
-        if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
-        if (filterLabel === "Status") setSelectedStatuses([filterValue]);
-        if (filterLabel === "Package") setSelectedPackages([filterValue]);
-    }, [filterLabel, filterValue, setSelectedPackages, setSelectedSeverities, setSelectedSources, setSelectedStatuses]);
+        setSelectedSources(filterLabel === "Source" ? [filterValue] : []);
+        setSelectedSeverities(filterLabel === "Severity" ? [filterValue] : []);
+        setSelectedStatuses(filterLabel === "Status" ? [filterValue] : []);
+        setSelectedPackages(filterLabel === "Package" ? [filterValue] : []);
+        // Clear every other persisted filter dimension so the jump shows exactly
+        // the target filter, not last time's leftover search/date/range filters.
+        setSearch('');
+        setDraftSearch('');
+        setPublishedDateFilterType('');
+        setPublishedDateValue('');
+        setPublishedDaysValue('');
+        setPublishedDateFrom('');
+        setPublishedDateTo('');
+        setShowCustomSeverityFilter(false);
+        setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+        setShowCustomEpssFilter(false);
+        setEpssRange({ min: 0, max: 100 });
+        setSelectedAttackVectors([]);
+        setSelectedFirstScanDates([]);
+        setAiSuggestionFilter('any');
+    }, [
+        filterLabel, filterValue,
+        setSelectedPackages, setSelectedSeverities, setSelectedSources, setSelectedStatuses,
+        setSearch, setDraftSearch,
+        setPublishedDateFilterType, setPublishedDateValue, setPublishedDaysValue, setPublishedDateFrom, setPublishedDateTo,
+        setShowCustomSeverityFilter, setSeverityRange, setShowCustomEpssFilter, setEpssRange,
+        setSelectedAttackVectors, setSelectedFirstScanDates, setAiSuggestionFilter,
+    ]);
 
     // Fetch pending AI suggestions (origin == 'ai') for the current scope. These are
     // excluded from the vulnerabilities' assessments array by the backend, so they must
@@ -642,50 +669,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
     useRefreshProgressEffect(euvdProgress, 'EUVD', prevEuvdInProgress, prevEuvdPhase, prevEuvdStartedAt, setEuvdBanner, onRefreshComplete, 'CVEs');
 
-    const fetchAllProgress = useCallback(async (forceAll = false) => {
-        const shouldPollGhsa = forceAll || hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
-        const shouldPollEpss = forceAll || Boolean(epssProgress?.in_progress);
-        const shouldPollEuvd = forceAll || Boolean(euvdProgress?.in_progress);
-        const [nvd, epss, ghsa, euvd] = await Promise.allSettled([
-            NVDProgressHandler.getProgress(),
-            shouldPollEpss ? EPSSProgressHandler.getProgress() : Promise.resolve(null),
-            shouldPollGhsa ? GHSAProgressHandler.getProgress() : Promise.resolve(null),
-            shouldPollEuvd ? EUVDProgressHandler.getProgress() : Promise.resolve(null),
-        ]);
-        if (nvd.status === 'fulfilled') setNvdProgress(nvd.value);
-        else console.error('Failed to fetch NVD refresh progress:', nvd.reason);
-        if (epss.status === 'fulfilled') setEpssProgress(epss.value);
-        else console.error('Failed to fetch EPSS refresh progress:', epss.reason);
-        if (ghsa.status === 'fulfilled') setGhsaProgress(ghsa.value);
-        else console.error('Failed to fetch GHSA refresh progress:', ghsa.reason);
-        if (euvd.status === 'fulfilled') setEuvdProgress(euvd.value);
-        else console.error('Failed to fetch EUVD refresh progress:', euvd.reason);
-    }, [hasAnyGhsaVuln, ghsaProgress?.in_progress, epssProgress?.in_progress, euvdProgress?.in_progress]);
-
-    // Fetch once on mount so we can recover progress if a refresh was already running.
-    useEffect(() => {
-        if (!hasFetchedProgressOnce.current) {
-            hasFetchedProgressOnce.current = true;
-            void fetchAllProgress(true);
-        }
-    }, [fetchAllProgress]);
-
-    // Poll only while any refresh is actively running.
-    useEffect(() => {
-        const anyInProgress = Boolean(
-            nvdProgress?.in_progress || epssProgress?.in_progress || ghsaProgress?.in_progress || euvdProgress?.in_progress
-        );
-        if (!anyInProgress) {
-            return;
-        }
-
-        const interval = setInterval(() => {
-            void fetchAllProgress();
-        }, 3000);
-
-        return () => clearInterval(interval);
-    }, [nvdProgress?.in_progress, epssProgress?.in_progress, ghsaProgress?.in_progress, euvdProgress?.in_progress, fetchAllProgress]);
-
     const activeBanners = [nvdBanner, epssBanner, ghsaBanner, euvdBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
@@ -693,20 +676,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const visibleBannerCount = activeBanners.length +
         Number(shouldShowMissingDataBanner);
 
-    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => {
+    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', _refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
         else if (source === 'epss') setEpssBanner({ message, type });
         else if (source === 'ghsa') setGhsaBanner({ message, type });
         else if (source === 'euvd') setEuvdBanner({ message, type });
         else setGeneralBanner({ message, type });
 
-        // Refresh progress immediately when the caller signals a refresh has
-        // just started or been cancelled, so active polling can begin/stop
-        // without idle background polling. This relies on an explicit flag
-        // rather than parsing the user-facing banner text.
-        if (source && refreshActivity) {
-            void fetchAllProgress(true);
-        }
     };
 
     const closeBanner = () => {
@@ -1041,7 +1017,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
                 // Format the date using the same format as VulnModal
                 const formattedDate = mostRecentTime.getTime() > 0 ?
-                    mostRecentTime.toLocaleString(undefined, dt_options) : 'No assessment';
+                    mostRecentTime.toLocaleString('en-US', dt_options) : 'No assessment';
 
                 return (
                     <div className="flex items-center justify-center h-full text-center text-sm">
@@ -1527,7 +1503,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     // any in-flight description request before starting a new one. Depending on
     // `vulnerabilities` (not `draftSearch`) avoids firing a description search
     // on every keystroke.
+    // A filter jump (filterLabel/filterValue set at mount, e.g. from "Show
+    // Vulnerabilities") clears search in the effect above. Skip this restore
+    // once on that initial mount so it doesn't immediately reapply the
+    // pre-clear `draftSearch` it captured from localStorage before the clear
+    // took effect.
+    const skipInitialSearchRestore = useRef(isFilterJump);
     useEffect(() => {
+        if (skipInitialSearchRestore.current) {
+            skipInitialSearchRestore.current = false;
+            return;
+        }
         if (draftSearch.trim()) void applySearchRef.current();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [vulnerabilities]);
@@ -1537,6 +1523,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
+
+    useEffect(() => {
+        onAgentContextChange?.({
+            visibleVulnerabilityIds: searchFilteredData.map(vuln => vuln.id),
+            selectedVulnerabilityIds: selectedVulns,
+            openVulnerabilityId: modalVuln?.id,
+            search,
+        });
+    }, [onAgentContextChange, searchFilteredData, selectedVulns, modalVuln?.id, search]);
 
     const availableStatuses = useMemo(() => {
         const statuses = new Set<string>();
@@ -2003,6 +1998,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
+            onOpenAgent={onOpenAgent}
             detailsLoading={modalDetailsLoading}
             detailsError={modalDetailsError}
             isEditing={isEditing}

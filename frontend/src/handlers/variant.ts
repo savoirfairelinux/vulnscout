@@ -1,4 +1,4 @@
-import type { RefreshType } from "./activeScanQueue";
+import type { RefreshType } from "../helpers/refreshSources";
 
 type Variant = {
     id: string;
@@ -191,7 +191,7 @@ class Variants {
         variantId: string,
         files: File[],
         refreshSources: RefreshType[] = ["epss"],
-    ): Promise<{ upload_id: string; scan_id: string; message: string }> {
+    ): Promise<{ op_id: string; scan_id: string; message: string }> {
         const formData = new FormData();
         for (const file of files) {
             formData.append("files", file);
@@ -214,17 +214,6 @@ class Variants {
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `Upload failed (${response.status})`);
-        }
-        return response.json();
-    }
-
-    static async getUploadStatus(uploadId: string): Promise<{ status: string; message: string }> {
-        const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/sbom/upload/${encodeURIComponent(uploadId)}/status`,
-            { mode: "cors" }
-        );
-        if (!response.ok) {
-            return { status: "error", message: "Failed to check upload status." };
         }
         return response.json();
     }

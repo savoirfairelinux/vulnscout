@@ -5,12 +5,64 @@
 
 import pytest
 from src.views.fast_spdx3 import FastSPDX3
+from src.views.spdx3 import SPDX3
 from src.controllers import ControllersCache
 
 
 @pytest.fixture
 def spdx3_parser():
     return FastSPDX3(ControllersCache())
+
+
+def test_commit_version_preserves_all_release_identifiers(spdx3_parser):
+    revision = "a" * 40
+    spdx3_parser.parse_from_dict({"@graph": [{
+        "type": "software_Package", "spdxId": "pkg:mbedtls", "name": "mbedtls",
+        "software_packageVersion": revision,
+        "externalIdentifier": [
+            {"externalIdentifierType": "packageUrl", "identifier": f"pkg:github/org/lib@{revision}"},
+            {"externalIdentifierType": "packageUrl", "identifier": "pkg:github/Mbed-TLS/mbedtls@v4.1.1"},
+            {"externalIdentifierType": "cpe23Type",
+             "identifier": "cpe:2.3:a:trustedfirmware:mbed_tls:4.1.1:*:*:*:*:*:*:*"},
+        ],
+    }]})
+    package = spdx3_parser.packagesCtrl.get(f"mbedtls@{revision}")
+    assert package.version == revision
+    assert package.version_info["release_version"] == "4.1.1"
+    assert package.version_info["source_revision"] == revision
+    assert len(package.purl) == 3
+    assert {item["source"] for item in package.version_info["version_evidence"]} == {"sbom", "purl", "cpe"}
+    exported = SPDX3(ControllersCache()).generate_package_element(package)
+    assert exported["software_packageVersion"] == revision
+    assert any(identifier["identifier"] == "pkg:github/mbed-tls/mbedtls@v4.1.1"
+               for identifier in exported["externalIdentifier"])
+
+
+def test_spdx3_purl_conflicts_remain_visible(spdx3_parser):
+    spdx3_parser.parse_from_dict({"@graph": [{
+        "type": "software_Package", "spdxId": "pkg:lib", "name": "lib",
+        "software_packageVersion": "a" * 40, "packageUrl": "pkg:generic/lib@1.0",
+        "externalIdentifier": [{"externalIdentifierType": "purl", "identifier": "pkg:generic/lib@2.0"}],
+    }]})
+    package = spdx3_parser.packagesCtrl.get(f"lib@{'a' * 40}")
+    assert package.version_info["release_version"] is None
+    assert package.version_info["version_conflict"]
+
+
+def test_spdx3_collects_valid_purls_from_all_supported_fields(spdx3_parser):
+    first = "pkg:generic/lib@1.0"
+    second = "pkg:github/org/lib@v1.0"
+    element = {
+        "packageUrl": first, "software_packageUrl": second,
+        "externalIdentifier": [
+            None, {"externalIdentifierType": "purl", "identifier": first},
+            {"externalIdentifierType": "packageUrl", "identifier": 123},
+            {"externalIdentifierType": "packageUrl", "identifier": ""},
+        ],
+    }
+    assert spdx3_parser.extract_purls(element) == [first, second]
+    assert spdx3_parser.extract_purl(element) == first
+    assert spdx3_parser.extract_purls({"packageUrl": 123}) == []
 
 
 def test_parse_empty_json(spdx3_parser):
@@ -726,7 +778,7 @@ def test_graph_with_invalid_element_types(spdx3_parser):
 
 
 def test_package_missing_required_fields(spdx3_parser):
-    """Test parsing packages with missing name or version."""
+    """A name is required, but SPDX 3 package versions are optional."""
     spdx_data = {
         "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
         "specVersion": "3.0.1",
@@ -755,8 +807,8 @@ def test_package_missing_required_fields(spdx3_parser):
 
     spdx3_parser.parse_from_dict(spdx_data)
 
-    # Only the valid package should be added
-    assert len(spdx3_parser.packagesCtrl) == 1
+    assert len(spdx3_parser.packagesCtrl) == 2
+    assert "test-package@" in spdx3_parser.packagesCtrl
     assert "valid-package@2.0" in spdx3_parser.packagesCtrl
 
 
@@ -1233,6 +1285,36 @@ def test_convert_to_package_with_cpe_and_purl(spdx3_parser):
     assert pkg is not None
     assert any("libfoo" in c for c in pkg.cpe)
     assert any("libfoo" in p for p in pkg.purl)
+
+
+def test_convert_to_package_with_spdx_external_package_url(spdx3_parser):
+    """Read packageUrl ExternalIdentifier entries emitted by the Zephyr SBOM."""
+    purl = "pkg:github/zephyrproject-rtos/acpica@8d24867bc9c9d81c81eeac59391cda59333affd4"
+    component = {
+        "type": "software_Package",
+        "spdxId": "zephyr:packages/acpica-deps",
+        "name": "acpica-deps",
+        "software_packageVersion": "8d24867bc9c9d81c81eeac59391cda59333affd4",
+        "software_primaryPurpose": "library",
+        "externalIdentifier": [
+            {
+                "type": "ExternalIdentifier",
+                "externalIdentifierType": "packageUrl",
+                "identifier": purl,
+            },
+            {
+                "type": "ExternalIdentifier",
+                "externalIdentifierType": "cpe23",
+                "identifier": "cpe:2.3:a:zephyrproject:acpica:*:*:*:*:*:*:*:*",
+            },
+        ],
+    }
+
+    pkg = spdx3_parser._convert_to_package(component)
+
+    assert pkg is not None
+    assert purl in pkg.purl
+    assert any(cpe.startswith("cpe:2.3:") for cpe in pkg.cpe)
 
 
 def test_merge_vulnerabilities_non_dict(spdx3_parser):

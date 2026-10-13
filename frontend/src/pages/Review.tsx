@@ -10,7 +10,7 @@ import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
@@ -28,6 +28,7 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
+import { AGENT_WRITE_EVENT, type AgentViewContext } from '../types/agent';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -47,6 +48,8 @@ type Props = {
     variantId?: string;
     projectId?: string;
     onAssessmentChanged?: (mutation: AssessmentMutation) => void;
+    onAgentContextChange?: (context: AgentViewContext) => void;
+    onOpenAgent?: () => void;
 };
 
 export type { AssessmentMutation };
@@ -66,6 +69,8 @@ type ReviewRow = {
     responses: string[];
     origin: string;
     timestamp: string;
+    /** AI assessment written before the variant context was last modified. */
+    context_outdated: boolean;
     targets: NonNullable<Assessment["targets"]>;
     /** Unique packages across every target (for columns and search). */
     packages: string[];
@@ -99,6 +104,7 @@ function toReviewRow(
         responses: assessment.responses,
         origin: assessment.origin,
         timestamp: assessment.timestamp,
+        context_outdated: assessment.context_outdated === true,
         targets,
         packages,
         variant_ids,
@@ -220,10 +226,10 @@ function formatDate(iso: string): string {
 }
 
 function hasOutdatedAssessment(row: ReviewRow): boolean {
-    return row.targets.some(t => t.outdated);
+    return row.targets.some(t => t.outdated) || row.context_outdated;
 }
 
-function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
+function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<ReviewRow[]>([]);
@@ -283,6 +289,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnIds, setModalVulnIds] = useState<string[]>([]);
     const displayedVulnIdsRef = useRef<string[]>([]);
+    const [agentVisibleRows, setAgentVisibleRows] = useState<{ section: ReviewTab; ids: string[] }>({ section: 'assessments', ids: [] });
+
+    useEffect(() => {
+        onAgentContextChange?.({
+            section: activeTab,
+            search,
+            visibleVulnerabilityIds: agentVisibleRows.section === activeTab ? agentVisibleRows.ids : [],
+            openVulnerabilityId: modalVuln?.id,
+        });
+    }, [activeTab, search, agentVisibleRows, modalVuln?.id, onAgentContextChange]);
     const fetchGenRef = useRef(0);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -551,7 +567,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         }
         displayedVulnIdsRef.current = ids;
-    }, []);
+        if (onAgentContextChange) {
+            setAgentVisibleRows(previous => previous.section === activeTab
+                && previous.ids.length === ids.length
+                && previous.ids.every((id, index) => id === ids[index])
+                ? previous : { section: activeTab, ids });
+        }
+    }, [activeTab, onAgentContextChange]);
 
     const resetFilters = () => {
         setSearch('');
@@ -812,6 +834,14 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setAssessments(reviewRows.map(a => toReviewRow(a, vulnDescriptions)));
         setAiAssessments(aiRows.map(a => toReviewRow(a, vulnDescriptions)));
     }, [variantId, projectId, vulnDescriptions]);
+
+    useEffect(() => {
+        const refresh = () => {
+            void Promise.all([refreshAssessmentLists(), refreshReviews()]).catch(() => {});
+        };
+        window.addEventListener(AGENT_WRITE_EVENT, refresh);
+        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
+    }, [refreshAssessmentLists, refreshReviews]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -1145,8 +1175,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             size: 110,
             cell: info => {
                 return (
-                    <div className="flex items-center justify-center h-full">
+                    <div className="flex items-center justify-center h-full gap-1.5">
                         <code>{info.getValue()}</code>
+                        {info.row.original.context_outdated && (
+                            <span title="Context outdated: the variant's AI context was modified after this assessment was generated">
+                                <FontAwesomeIcon icon={faTriangleExclamation} className="w-3.5 h-3.5 text-amber-400" />
+                            </span>
+                        )}
                     </div>
                 );
             },
@@ -1307,22 +1342,20 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         header: () => <div className="flex items-center justify-center">Actions</div>,
         size: 140,
         cell: info => (
-            <div className="flex flex-wrap items-center justify-center gap-2 h-full">
+            <div className="flex flex-nowrap items-center justify-center gap-3 h-full">
                 <button
                     onClick={() => handleApproveAiRow(info.row.original)}
-                    className="px-2 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-xs flex items-center gap-1"
+                    className="text-green-400 hover:text-green-300 transition-colors"
                     title="Approve AI suggestion"
                 >
-                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
-                    Approve
+                    <FontAwesomeIcon icon={faCheck} className="w-4 h-4" />
                 </button>
                 <button
                     onClick={() => handleRejectAiRow(info.row.original)}
-                    className="px-2 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-xs flex items-center gap-1"
+                    className="text-red-400 hover:text-red-300 transition-colors"
                     title="Reject AI suggestion"
                 >
-                    <FontAwesomeIcon icon={faXmark} className="w-3 h-3" />
-                    Reject
+                    <FontAwesomeIcon icon={faXmark} className="w-4 h-4" />
                 </button>
                 <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
@@ -1885,6 +1918,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             {modalVuln && (
                 <VulnModal
                     vuln={modalVuln}
+                    onOpenAgent={onOpenAgent}
                     readOnly={true}
                     appendAssessment={() => {}}
                     appendCVSS={() => null}

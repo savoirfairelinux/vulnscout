@@ -12,43 +12,37 @@ import React from 'react';
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
+import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
+import type { Operation } from '../../src/types/operation';
 
-// Mock NVDProgressHandler to prevent unwanted fetch calls
-jest.mock('../../src/handlers/nvd_progress', () => ({
-    __esModule: true,
-    default: {
-        getProgress: jest.fn().mockResolvedValue(null),
-        getProgressPercentage: jest.fn().mockReturnValue(0),
-    },
-}));
+class PassiveEventSource {
+    static current: PassiveEventSource;
+    private handlers = new Map<string, (event: MessageEvent) => void>();
+    constructor() { PassiveEventSource.current = this; }
+    addEventListener(type: string, handler: EventListenerOrEventListenerObject) {
+        this.handlers.set(type, handler as (event: MessageEvent) => void);
+    }
+    close() {}
+    send(type: string, data: unknown) {
+        act(() => this.handlers.get(type)?.({ data: JSON.stringify(data), lastEventId: 'epoch:1' } as MessageEvent));
+    }
+}
 
-// Mock EPSSProgressHandler to prevent unwanted fetch calls
-jest.mock('../../src/handlers/epss_progress', () => ({
-    __esModule: true,
-    default: {
-        getProgress: jest.fn().mockResolvedValue(null),
-        getProgressPercentage: jest.fn().mockReturnValue(0),
-    },
-}));
+function sendRefresh(source: string, status: Operation['status'], current: number, total: number, startedAt = '2026-06-10T10:00:00Z') {
+    PassiveEventSource.current.send('operation', {
+        op_id: `refresh:${source}`, kind: 'refresh', source, status, created_at: startedAt, started_at: startedAt,
+        progress: { current, total, message: `${source.toUpperCase()} refresh` },
+    });
+}
 
-// Mock EUVDProgressHandler to prevent unwanted fetch calls
-jest.mock('../../src/handlers/euvd_progress', () => ({
-    __esModule: true,
-    default: {
-        getProgress: jest.fn().mockResolvedValue(null),
-        getProgressPercentage: jest.fn().mockReturnValue(0),
-    },
-}));
-
-// Mock GHSAProgressHandler to prevent unwanted fetch calls
-jest.mock('../../src/handlers/ghsa_progress', () => ({
-    __esModule: true,
-    default: {
-        getProgress: jest.fn().mockResolvedValue(null),
-        getProgressPercentage: jest.fn().mockReturnValue(0),
-    },
-}));
-
+let restoreStream: () => void;
+beforeEach(() => {
+    restoreStream = __setEventSourceFactory(() => new PassiveEventSource() as unknown as EventSource);
+});
+afterEach(() => {
+    __reset();
+    restoreStream();
+});
 
 const getDOMRect = (width: number, height: number) => ({
     width,
@@ -1165,6 +1159,132 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('package filter jump clears a stale severity filter', async () => {
+        // ARRANGE - seed a leftover severity filter from a previous visit
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.stale-severity-filter.severities',
+            JSON.stringify(['low'])
+        );
+
+        render(
+            <TableVulnerabilities
+                preferenceScopeKey="stale-severity-filter"
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="xxxyyyzzz@2.0.0"
+            />
+        );
+
+        // ASSERT - the package filter alone applies; the stale severity filter is cleared
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2018-5678/ })).toBeInTheDocument();
+            expect(screen.queryByRole('cell', { name: /CVE-2010-1234/ })).not.toBeInTheDocument();
+        });
+    })
+
+    test('package filter jump clears a stale search term', async () => {
+        // ARRANGE - seed a leftover search term from a previous visit
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.stale-search-filter.search',
+            JSON.stringify('authentification')
+        );
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.stale-search-filter.draftSearch',
+            JSON.stringify('authentification')
+        );
+
+        render(
+            <TableVulnerabilities
+                preferenceScopeKey="stale-search-filter"
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="xxxyyyzzz@2.0.0"
+            />
+        );
+
+        // ASSERT - the stale search never renders, not even for one frame: the
+        // filter-jump mount skips the localStorage read entirely instead of reading
+        // the stale value and clearing it in a later effect.
+        expect(screen.getByRole('searchbox')).toHaveValue('');
+
+        // ASSERT - the package filter alone applies; the stale search term is cleared
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2018-5678/ })).toBeInTheDocument();
+        });
+    })
+
+    test('package filter jump shows all of a package vulns after a prior CVE-id search on a fresh mount', async () => {
+        const pkgId = '@adobe/css-tools@1.0.0';
+        const makeVuln = (id: string): Vulnerability => ({
+            ...vulnerabilities[1],
+            id,
+            aliases: [],
+            datasource: `https://nvd.nist.gov/vuln/detail/${id}`,
+            packages: [pkgId],
+            packages_current: [pkgId],
+            texts: [{ title: 'description', content: `description for ${id}` }],
+            effort: {
+                optimistic: new Iso8601Duration('PT4H'),
+                likely: new Iso8601Duration('P1DT2H'),
+                pessimistic: new Iso8601Duration('P2.5D')
+            },
+        });
+
+        const twoVulns = [
+            makeVuln('CVE-2005-4890'),
+            makeVuln('CVE-2023-0001'),
+        ];
+
+        // ACT - fresh mount on the Vulnerabilities page, search one specific CVE
+        const firstMount = render(
+            <TableVulnerabilities
+                preferenceScopeKey="adobe-css-tools-repro"
+                vulnerabilities={twoVulns}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        const user = userEvent.setup();
+        const searchBox = screen.getByRole('searchbox');
+        await user.type(searchBox, 'CVE-2005-4890');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
+
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2005-4890/ })).toBeInTheDocument();
+            expect(screen.queryByRole('cell', { name: /CVE-2023-0001/ })).not.toBeInTheDocument();
+        });
+
+        firstMount.unmount();
+
+        // ACT - navigate back to SBOM page, then click "Show Vulnerabilities" for the package
+        render(
+            <TableVulnerabilities
+                preferenceScopeKey="adobe-css-tools-repro"
+                vulnerabilities={twoVulns}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue={pkgId}
+                filterVulnerabilityIds={['CVE-2005-4890', 'CVE-2023-0001']}
+            />
+        );
+
+        // ASSERT - both of the package's vulnerabilities show, not just the previously searched one
+        await waitFor(() => {
+            expect(screen.getByRole('cell', { name: /CVE-2005-4890/ })).toBeInTheDocument();
+            expect(screen.getByRole('cell', { name: /CVE-2023-0001/ })).toBeInTheDocument();
+        });
+    })
+
     test('filter by packages dropdown', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -1756,16 +1876,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter button is enabled when NVD sync is completed', async () => {
-        // Override the NVD progress mock for this test
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         await waitFor(() => {
@@ -1778,16 +1888,8 @@ describe('Vulnerability Table', () => {
     test('published date filter button is disabled while NVD sync is in progress even when published dates exist', async () => {
         // An active NVD sync takes priority: the button is disabled and shows
         // the sync tooltip, regardless of already-available published dates.
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: true,
-            phase: 'downloading',
-            current: 10,
-            total: 100,
-            message: 'Downloading',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        sendRefresh('nvd', 'running', 10, 100);
 
         await waitFor(() => {
             const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
@@ -1799,17 +1901,9 @@ describe('Vulnerability Table', () => {
     test('published date filter button is enabled when NVD sync is completed even without published dates', async () => {
         // A completed NVD sync makes the filter usable on its own, independent
         // of whether the loaded vulnerabilities carry published dates.
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         const noPublished = vulnerabilities.map(v => ({ ...v, published: undefined }));
         render(<TableVulnerabilities vulnerabilities={noPublished} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        sendRefresh('nvd', 'done', 100, 100);
 
         await waitFor(() => {
             const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
@@ -1819,15 +1913,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter dropdown opens and shows filter types', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -1854,15 +1939,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter "is" shows date input and filters exact date', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -1894,15 +1970,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter ">=" filters vulnerabilities on or after date', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -1930,15 +1997,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter "<=" filters vulnerabilities on or before date', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -1966,15 +2024,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter "between" filters vulnerabilities within date range', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -2006,15 +2055,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter "days_ago" shows number input', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -2042,15 +2082,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter excludes vulnerabilities without published date', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         // Add a vulnerability without a published date
         const vulnsWithMissing: Vulnerability[] = [
             ...vulnerabilities,
@@ -2116,15 +2147,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter clear button resets filter', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -2158,15 +2180,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter shows active indicator when filter is set', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -2193,15 +2206,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('reset filters button clears published date filter', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -2438,15 +2442,6 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter type change clears previous date values', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: false,
-            phase: 'completed',
-            current: 100,
-            total: 100,
-            message: 'Done',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
@@ -2472,16 +2467,8 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date filter button disabled when NVD in_progress is true', async () => {
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        NVDProgressHandler.getProgress.mockResolvedValueOnce({
-            in_progress: true,
-            phase: 'downloading',
-            current: 50,
-            total: 100,
-            message: 'Downloading...',
-        });
-
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        sendRefresh('nvd', 'running', 50, 100);
 
         // Button should remain disabled because NVD is in progress
         await waitFor(() => {
@@ -3096,14 +3083,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows NVD completion banner via phase transition (fast-complete path)', async () => {
         jest.useFakeTimers();
         try {
-            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-            // First poll must be in-progress so the component keeps polling; the refresh then
-            // completes on the next poll (polling only runs while a refresh is active).
-            NVDProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 5, total: 10, message: '' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('nvd', 'running', 5, 10);
+            sendRefresh('nvd', 'done', 10, 10);
 
             await act(async () => { await Promise.resolve(); });
             await act(async () => { jest.advanceTimersByTime(5001); });
@@ -3120,12 +3102,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows NVD cancelled banner when phase transitions to cancelled', async () => {
         jest.useFakeTimers();
         try {
-            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-            NVDProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 3, total: 10, message: '' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'cancelled', current: 3, total: 10, message: '' });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('nvd', 'running', 3, 10);
+            sendRefresh('nvd', 'cancelled', 3, 10);
 
             await act(async () => { await Promise.resolve(); });
             await act(async () => { jest.advanceTimersByTime(5001); });
@@ -3142,14 +3121,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS completion banner via phase transition (fast-complete path)', async () => {
         jest.useFakeTimers();
         try {
-            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
-            // First poll must be in-progress so the component keeps polling; the refresh then
-            // completes on the next poll (polling only runs while a refresh is active).
-            EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 25, total: 50, message: '' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '' });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('epss', 'running', 25, 50);
+            sendRefresh('epss', 'done', 50, 50);
 
             await act(async () => { await Promise.resolve(); });
             await act(async () => { jest.advanceTimersByTime(5001); });
@@ -3166,12 +3140,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS cancelled banner when phase transitions to cancelled', async () => {
         jest.useFakeTimers();
         try {
-            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
-            EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 5, total: 20, message: '' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'cancelled', current: 5, total: 20, message: '' });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('epss', 'running', 5, 20);
+            sendRefresh('epss', 'cancelled', 5, 20);
 
             await act(async () => { await Promise.resolve(); });
             await act(async () => { jest.advanceTimersByTime(5001); });
@@ -3188,15 +3159,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('does not show EPSS banner on first load when phase is already completed', async () => {
         jest.useFakeTimers();
         try {
-            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
-            // First poll returns completed — as if the server finished before the page loaded.
-            EPSSProgressHandler.getProgress.mockResolvedValue({
-                in_progress: false, phase: 'completed', current: 50, total: 50, message: ''
-            });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('epss', 'done', 50, 50);
 
-            // Flush the initial fetch
             await act(async () => { await Promise.resolve(); });
 
             expect(screen.queryByText(/EPSS refresh complete/i)).not.toBeInTheDocument();
@@ -3208,15 +3173,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('does not show NVD banner on first load when phase is already completed', async () => {
         jest.useFakeTimers();
         try {
-            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-            // First poll returns completed — as if the server finished before the page loaded.
-            NVDProgressHandler.getProgress.mockResolvedValue({
-                in_progress: false, phase: 'completed', current: 10, total: 10, message: ''
-            });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('nvd', 'done', 10, 10);
 
-            // Flush the initial fetch
             await act(async () => { await Promise.resolve(); });
 
             expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
@@ -3228,14 +3187,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS completion banner when refresh completes between polls (started_at changes)', async () => {
         jest.useFakeTimers();
         try {
-            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
-            // First poll must be in-progress so the component keeps polling; the refresh then
-            // completes on the next poll with a new started_at (polling only runs while active).
-            EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 25, total: 50, message: '', started_at: '2026-06-10T10:00:00Z' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('epss', 'running', 25, 50);
+            sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
 
             await act(async () => { await Promise.resolve(); });
             await act(async () => { jest.advanceTimersByTime(5001); });
@@ -3252,14 +3206,9 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS completion banner for a re-triggered fast refresh (started_at changes)', async () => {
         jest.useFakeTimers();
         try {
-            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
-            // A re-triggered refresh is in progress on the first poll (so polling continues),
-            // then completes on the next poll with a new started_at marking the fresh cycle.
-            EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 10, total: 50, message: '', started_at: '2026-06-10T09:00:00Z' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('epss', 'running', 10, 50, '2026-06-10T09:00:00Z');
+            sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
 
             await act(async () => { await Promise.resolve(); });
             await act(async () => { jest.advanceTimersByTime(5001); });
@@ -3334,13 +3283,6 @@ describe('Status helper, banner close, package filter, modal navigation, first s
 
     beforeEach(() => {
         fetchMock.resetMocks();
-        // Reset progress handler mocks to avoid queued once-responses from previous describe blocks
-        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-        const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
-        NVDProgressHandler.getProgress.mockReset();
-        NVDProgressHandler.getProgress.mockResolvedValue(null);
-        EPSSProgressHandler.getProgress.mockReset();
-        EPSSProgressHandler.getProgress.mockResolvedValue(null);
     });
 
     test('status summary helper button opens and closes dropdown', async () => {
@@ -3386,12 +3328,9 @@ describe('Status helper, banner close, package filter, modal navigation, first s
     test('banner can be dismissed via close button', async () => {
         jest.useFakeTimers();
         try {
-            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-            NVDProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 5, total: 10, message: '' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
-
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('nvd', 'running', 5, 10);
+            sendRefresh('nvd', 'done', 10, 10);
 
             await act(async () => { await Promise.resolve(); });
             await act(async () => { jest.advanceTimersByTime(5001); });
@@ -3556,15 +3495,6 @@ describe('Status helper, banner close, package filter, modal navigation, first s
     test('published date cell shows fetching… when NVD in progress and no published date', async () => {
         jest.useFakeTimers();
         try {
-            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-            NVDProgressHandler.getProgress.mockResolvedValue({
-                in_progress: true,
-                phase: 'bulk_nvd_refresh',
-                current: 3,
-                total: 10,
-                message: '',
-            });
-
             // Vuln without published date
             const vulnNoPub = {
                 ...vulnerabilities[0],
@@ -3573,6 +3503,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
             };
 
             render(<TableVulnerabilities vulnerabilities={[vulnNoPub]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            sendRefresh('nvd', 'running', 3, 10);
 
             await act(async () => { await Promise.resolve(); });
 
@@ -3621,68 +3552,14 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         });
     });
 
-    test('fetchAllProgress console.errors when progress handlers reject', async () => {
-        const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-        jest.useFakeTimers();
-        try {
-            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+    test('updates refresh progress through SSE without polling deleted endpoints', async () => {
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        sendRefresh('nvd', 'running', 1, 10);
+        sendRefresh('nvd', 'running', 5, 10);
+        sendRefresh('nvd', 'done', 10, 10);
 
-            NVDProgressHandler.getProgress.mockRejectedValueOnce(new Error('NVD network error'));
-            EPSSProgressHandler.getProgress.mockRejectedValueOnce(new Error('EPSS network error'));
-
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-            await act(async () => { await Promise.resolve(); });
-
-            // The console.error calls for rejected progress fetches should have fired (lines 441, 443, 445)
-            expect(consoleSpy).toHaveBeenCalledWith(
-                expect.stringContaining('Failed to fetch NVD refresh progress:'),
-                expect.any(Error)
-            );
-            expect(consoleSpy).toHaveBeenCalledWith(
-                expect.stringContaining('Failed to fetch EPSS refresh progress:'),
-                expect.any(Error)
-            );
-        } finally {
-            jest.useRealTimers();
-            consoleSpy.mockRestore();
-        }
-    });
-
-    test('polling setInterval fires when progress is in_progress (lines 488/511)', async () => {
-        jest.useFakeTimers();
-        try {
-            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
-            // First call: in_progress=true to start polling
-            // Second call (from interval): also returns in_progress=true
-            // Third call: completed
-            NVDProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 1, total: 10, message: '' })
-                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 5, total: 10, message: '' })
-                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
-
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-            // Initial fetch
-            await act(async () => { await Promise.resolve(); });
-
-            // Advance time to trigger the setInterval (3000ms — line 511)
-            await act(async () => { jest.advanceTimersByTime(3001); });
-            await act(async () => { await Promise.resolve(); });
-
-            // Advance again to complete
-            await act(async () => { jest.advanceTimersByTime(3001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/NVD refresh complete/i)).toBeInTheDocument();
-            });
-
-            expect(NVDProgressHandler.getProgress).toHaveBeenCalledTimes(3);
-        } finally {
-            jest.useRealTimers();
-        }
+        expect(await screen.findByText(/NVD refresh complete/i)).toBeInTheDocument();
+        expect(fetchMock.mock.calls.some(([url]) => /\/api\/(nvd|epss|ghsa|euvd)\/progress/.test(String(url)))).toBe(false);
     });
 
     test('click inside status helper dropdown does not close it (stopPropagation)', async () => {

@@ -1,10 +1,34 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..models import Package, Finding, SBOMDocument, SBOMPackage
+import uuid
+
+from ..models import Package, Finding, SBOMDocument, SBOMPackage, PackageDependency, Variant
+from ..models.sbom_package import PackageEvidence
+from ..helpers.active_scans import active_sbom_scan_ids_for_variant
 from ..helpers.verbose import verbose
+from ..helpers.spdx_sources import SPDXSources, SourceKey
 from ..extensions import db
 from ._base import to_dict_with_fallback
+
+SpdxKey = tuple[str, str]
+
+
+def _spdx_key(ref: str, namespace: str | None, external_documents: dict[str, str]) -> SpdxKey | None:
+    """Qualify an SPDX 2 element reference with the namespace of the document defining it."""
+    if ref.startswith("DocumentRef-"):
+        document_ref, _, element = ref.partition(":")
+        uri = external_documents.get(document_ref)
+        return (uri, element) if uri and element else None
+    return (namespace, ref) if namespace else None
+
+
+def _spdx3_key(ref: str, namespaces: dict[str, str]) -> SpdxKey | None:
+    """Expand SPDX 3 namespace prefixes; bare references remain document-local."""
+    prefix, separator, element = ref.partition(":")
+    if not separator:
+        return None
+    return ("", namespaces.get(prefix, f"{prefix}:") + element)
 
 
 class PackagesController:
@@ -28,6 +52,13 @@ class PackagesController:
         # _persist_vuln_to_db and reused by _persist_assessment_to_db to
         # avoid redundant Finding.get_or_create SELECTs.
         self._finding_cache: dict = {}
+        # (scan_id, namespace, SPDXID) -> (document_id, string_id) for packages read in this session.
+        self._spdx_refs: dict[tuple[uuid.UUID, str, str], tuple[uuid.UUID, str]] = {}
+        self._spdx_documents: dict[uuid.UUID, uuid.UUID] = {}
+        self._spdx_edges: list[tuple[uuid.UUID, str, str]] = []
+        self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey]] = []
+        self._source_provenance = SPDXSources()
+        self._document_evidence: dict[uuid.UUID, dict[str, PackageEvidence]] = {}
 
     def _preload_cache(self) -> None:
         """Bulk-load all packages from the DB into the session caches.
@@ -47,9 +78,16 @@ class PackagesController:
         """
         allowed = self._scope.package_ids if self._scope is not None else None
         try:
+            document_ids = self._scope.active_sbom_document_ids if self._scope is not None else {
+                document.id for variant in Variant.get_all()
+                for scan_id in active_sbom_scan_ids_for_variant(variant.id)
+                for document in SBOMDocument.get_by_scan(scan_id)
+            }
+            evidence = SBOMPackage.evidence_for_documents(document_ids)
             for pkg in Package.get_all():
                 if allowed is not None and pkg.id not in allowed:
                     continue
+                pkg = pkg.with_sbom_evidence(**evidence.get(pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[])))
                 sid = pkg.string_id
                 self._cache[sid] = pkg
                 self._db_id_cache[sid] = pkg.id
@@ -92,6 +130,154 @@ class PackagesController:
             return pkg.id
         return None
 
+    def add_dependencies(self, references: dict[str, str], edges: set[tuple[str, str]]) -> None:
+        """Persist source -> dependency references belonging to the active document."""
+        document = self._current_sbom_document
+        if document is None:
+            return
+        self._document_evidence.setdefault(document.id, {})
+        pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+        if edges:
+            package_ids = set(db.session.execute(
+                db.select(SBOMPackage.package_id).where(SBOMPackage.sbom_document_id == document.id)
+            ).scalars())
+            for source, target in edges:
+                if source not in references or target not in references:
+                    continue
+                source_id = self.get_or_resolve_db_id(references[source])
+                target_id = self.get_or_resolve_db_id(references[target])
+                if source_id != target_id and source_id in package_ids and target_id in package_ids:
+                    pairs.add((source_id, target_id))
+        PackageDependency.replace_for_documents(
+            {document.id}, {(document.id, source, target) for source, target in pairs},
+        )
+
+    def add_spdx_dependencies(self, namespace: str | None, references: dict[str, str],
+                              external_documents: dict[str, str], edges: set[tuple[str, str]]) -> None:
+        """Queue the active document's SPDX 2 edges; :meth:`flush_spdx_dependencies` persists them."""
+        document = self._current_sbom_document
+        if document is None:
+            return
+        self._spdx_documents[document.id] = document.scan_id
+        if namespace:
+            for ref, string_id in references.items():
+                self._spdx_refs[(document.scan_id, namespace, ref)] = (document.id, string_id)
+        for source, target in edges:
+            if not source.startswith("DocumentRef-") and not target.startswith("DocumentRef-"):
+                if source in references and target in references:
+                    self._spdx_edges.append((document.id, references[source], references[target]))
+                continue
+            source_key = _spdx_key(source, namespace, external_documents)
+            target_key = _spdx_key(target, namespace, external_documents)
+            if source_key is not None and target_key is not None:
+                self._pending_spdx_edges.append((document.scan_id, source_key, target_key))
+
+    def add_spdx3_dependencies(self, references: dict[str, str], namespaces: dict[str, str],
+                               edges: set[tuple[str, str]]) -> None:
+        """Queue SPDX 3 URI references for resolution across documents of the same scan."""
+        document = self._current_sbom_document
+        if document is None:
+            return
+        self._spdx_documents[document.id] = document.scan_id
+        local_namespace = str(document.id)
+        for ref, string_id in references.items():
+            key = _spdx3_key(ref, namespaces) or (local_namespace, ref)
+            self._spdx_refs[(document.scan_id, *key)] = (document.id, string_id)
+        for source, target in edges:
+            if source in references and target in references:
+                self._spdx_edges.append((document.id, references[source], references[target]))
+                continue
+            source_key = _spdx3_key(source, namespaces) or (local_namespace, source)
+            target_key = _spdx3_key(target, namespaces) or (local_namespace, target)
+            self._pending_spdx_edges.append((document.scan_id, source_key, target_key))
+
+    def flush_spdx_dependencies(self) -> None:
+        """Replace the edges of every queued document; cross-document ones go to the dependent's document."""
+        documents, self._spdx_documents = self._spdx_documents, {}
+        edges, self._spdx_edges = self._spdx_edges, []
+        pending, self._pending_spdx_edges = self._pending_spdx_edges, []
+        if not documents:
+            return
+        for scan_id, source_key, target_key in pending:
+            source_ref = self._spdx_refs.get((scan_id, *source_key))
+            target_ref = self._spdx_refs.get((scan_id, *target_key))
+            if source_ref is not None and target_ref is not None:
+                edges.append((source_ref[0], source_ref[1], target_ref[1]))
+        rows: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = set()
+        for document_id, source, target in edges:
+            source_id = self.get_or_resolve_db_id(source)
+            target_id = self.get_or_resolve_db_id(target)
+            if source_id is not None and target_id is not None and source_id != target_id:
+                rows.add((document_id, source_id, target_id))
+        PackageDependency.replace_for_documents(set(documents), rows)
+
+    def add_spdx_sources(self, namespace: str | None, references: dict[str, str],
+                         external_documents: dict[str, str], urls: dict[str, str],
+                         derivations: set[tuple[str, str]], inputs: set[tuple[str, str]]) -> None:
+        """Queue SPDX 2 source/recipe provenance, including external recipe references."""
+        document = self._current_sbom_document
+        local_namespace = namespace or str(document.id if document else uuid.uuid4())
+
+        def key(ref: str) -> SourceKey:
+            return _spdx_key(ref, local_namespace, external_documents) or (local_namespace, ref)
+
+        self._record_sources({key(ref): sid for ref, sid in references.items()},
+                             {key(ref): url for ref, url in urls.items()},
+                             {(key(derived), key(origin)) for derived, origin in derivations},
+                             {(key(derived), key(origin)) for derived, origin in inputs})
+
+    def add_spdx3_sources(self, references: dict[str, str], namespaces: dict[str, str], urls: dict[str, str],
+                          derivations: set[tuple[str, str]], inputs: set[tuple[str, str]],
+                          builds: set[str]) -> None:
+        """Queue SPDX 3 source/build/output provenance using namespace-qualified URIs."""
+        local_namespace = str(self._current_sbom_document.id if self._current_sbom_document else uuid.uuid4())
+
+        def key(ref: str) -> SourceKey:
+            return _spdx3_key(ref, namespaces) or (local_namespace, ref)
+
+        self._record_sources({key(ref): sid for ref, sid in references.items()},
+                             {key(ref): url for ref, url in urls.items()},
+                             {(key(derived), key(origin)) for derived, origin in derivations},
+                             {(key(derived), key(origin)) for derived, origin in inputs},
+                             {key(ref) for ref in builds})
+
+    def _record_sources(self, references: dict[SourceKey, str], urls: dict[SourceKey, str],
+                        derivations: set[tuple[SourceKey, SourceKey]],
+                        inputs: set[tuple[SourceKey, SourceKey]], builds: set[SourceKey] | None = None) -> None:
+        document = self._current_sbom_document
+        if document is not None:
+            self._document_evidence.setdefault(document.id, {})
+        self._source_provenance.record(document.scan_id if document else None, references, urls,
+                                       derivations, inputs, builds, document.id if document else None)
+        if document is None:
+            self._apply_source_provenance()
+
+    def _apply_source_provenance(self) -> None:
+        for (document_id, package_id), urls in self._source_provenance.resolve().items():
+            if document_id is not None:
+                evidence = self._document_evidence.setdefault(document_id, {}).setdefault(
+                    package_id, {"cpe": [], "purl": [], "source_urls": []},
+                )
+                evidence["source_urls"] = sorted(set(evidence["source_urls"]) | urls)
+            else:
+                package = self.get(package_id)
+                if package is not None:
+                    for url in sorted(urls):
+                        package.add_source_url(url)
+
+    def flush_spdx_sources(self) -> None:
+        """Resolve companion documents after import; persist provenance through the scan transaction."""
+        self._apply_source_provenance()
+        for document_id, packages in self._document_evidence.items():
+            by_id = {self.get_or_resolve_db_id(package_id): evidence for package_id, evidence in packages.items()}
+            for link in SBOMPackage.get_by_document(document_id):
+                evidence = by_id.get(link.package_id, {"cpe": [], "purl": [], "source_urls": []})
+                link.cpe = evidence["cpe"]
+                link.purl = evidence["purl"]
+                link.source_urls = evidence["source_urls"]
+        self._document_evidence = {}
+        self._source_provenance = SPDXSources()
+
     # ------------------------------------------------------------------
     # Core mutators
     # ------------------------------------------------------------------
@@ -100,6 +286,14 @@ class PackagesController:
         """Persist a Package to the DB and keep it in the session cache."""
         if package is None:
             return
+        if self._current_sbom_document is not None:
+            evidence = self._document_evidence.setdefault(self._current_sbom_document.id, {}).setdefault(
+                package.string_id, {"cpe": [], "purl": [], "source_urls": []},
+            )
+            evidence["cpe"] = sorted(set(evidence["cpe"]) | set(package.cpe or []))
+            evidence["purl"] = sorted(set(evidence["purl"]) | set(package.purl or []))
+            evidence["source_urls"] = sorted(set(evidence["source_urls"]) | set(package.source_urls))
+            package.source_urls = []
         string_id = package.string_id  # "name@version"
         already_persisted = string_id in self._db_id_cache
         if string_id in self._cache:
@@ -112,11 +306,14 @@ class PackagesController:
         # package instead of the whole ``batch_session()`` transaction.
         try:
             if already_persisted:
-                # Package already in DB — skip the expensive find_or_create
-                # SELECT.  Dirty-tracking will flush in-memory CPE/PURL
-                # changes automatically.  Only handle the SBOMPackage link.
-                if self._current_sbom_document is not None:
-                    with db.session.begin_nested():
+                with db.session.begin_nested():
+                    db_pkg = db.session.get(Package, self._db_id_cache[string_id])
+                    if db_pkg is None:
+                        raise RuntimeError(f"Cached package {string_id!r} no longer exists")
+                    # Preloaded export snapshots are detached; merge identifiers into the stored row too.
+                    if db_pkg is not self._cache[string_id]:
+                        db_pkg.merge(package)
+                    if self._current_sbom_document is not None:
                         SBOMPackage.get_or_create(
                             self._current_sbom_document.id,
                             self._db_id_cache[string_id],
@@ -131,6 +328,7 @@ class PackagesController:
                         list(package.purl or []),
                         package.licences or "",
                         supplier=package.supplier or "",
+                        source_urls=list(package.source_urls or []),
                     )
                     # Keep caches in sync with DB object
                     self._cache[string_id] = db_pkg
@@ -169,6 +367,11 @@ class PackagesController:
             if pkg is not None and self._scope is not None and pkg.id not in self._scope.package_ids:
                 return None  # out of the export scope
             if pkg:
+                if self._scope is not None:
+                    evidence = SBOMPackage.evidence_for_documents(self._scope.active_sbom_document_ids)
+                    pkg = pkg.with_sbom_evidence(**evidence.get(
+                        pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
+                    ))
                 self._cache[package_id] = pkg
             return pkg
         except Exception as e:
@@ -203,6 +406,7 @@ class PackagesController:
                 v.get("purl", []),
                 v.get("licences", ""),
                 supplier=v.get("supplier", ""),
+                source_urls=v.get("source_urls", []),
             )
             ctrl.add(pkg)
         return ctrl

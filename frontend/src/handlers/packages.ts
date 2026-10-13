@@ -1,6 +1,9 @@
+import type { PackageVersionMetadata } from '../helpers/packageVersions';
+import { asVersionEvidence } from '../helpers/packageVersions';
+
 type VulnCounts = { [key: string]: number }
 type Severities = { [key: string]: {label: string, index: number} }
-type Package = {
+type Package = PackageVersionMetadata & {
     id: string;
     name: string;
     version: string;
@@ -30,6 +33,12 @@ const asPackage = (data: any): Package | [] => {
         id: `${data.name}@${data.version}`,
         name: data.name,
         version: data.version,
+        release_version: typeof data.release_version === 'string' || data.release_version === null
+            ? data.release_version : undefined,
+        source_revision: typeof data.source_revision === 'string' ? data.source_revision : null,
+        version_evidence: Array.isArray(data.version_evidence) ? data.version_evidence.flatMap(asVersionEvidence) : [],
+        version_conflict: data.version_conflict === true,
+        revision_conflict: data.revision_conflict === true,
         cpe: [],
         purl: [],
         vulnerabilities: {},

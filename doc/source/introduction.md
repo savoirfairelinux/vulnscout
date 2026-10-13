@@ -23,7 +23,7 @@ VulnScout also provides a **web interface** for visualisation, triage and assess
 - Manage **projects and variants** for multi-target builds
 - Web interface for visualisation, triage, and assessment
 - **Vulnerability review** — assess, justify, and track the status of each vulnerability
-- **Scan and enrichment** — automatically enrich imported data with NVD, EPSS, and Grype
+- **Scan and enrichment** — scan imported data with Grype and refresh EPSS and other vulnerability metadata on demand
 - Non-interactive / CI mode with configurable **match conditions**
 - Generate customisable reports (AsciiDoc, HTML, PDF, CSV)
 - Export enriched SBOMs (SPDX 2.3, SPDX 3.0, CycloneDX 1.4–1.6, OpenVEX)

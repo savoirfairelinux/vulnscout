@@ -9,21 +9,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [Backend, Frontend, CI, Docker]
+        target: [Backend, Frontend, CI, Schema, Docker, Podman]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
 
       - name: Install cqfd on the CI
-        if: matrix.target != 'Docker'
+        if: matrix.target != 'Docker' && matrix.target != 'Podman'
         run: |
           git clone https://github.com/savoirfairelinux/cqfd.git
           cd cqfd
           sudo make install
 
       - name: Init cqfd container on the project
-        if: matrix.target != 'Docker'
+        if: matrix.target != 'Docker' && matrix.target != 'Podman'
         run: cqfd init
+
+      - name: Install Podman
+        if: matrix.target == 'Podman'
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install podman
 
       - name: Run Backend Tests in the container
         if: matrix.target == 'Backend'
@@ -37,6 +43,10 @@ jobs:
         if: matrix.target == 'CI'
         run: cqfd -b test_ci
 
+      - name: Run Schema Conformity Tests in the container
+        if: matrix.target == 'Schema'
+        run: cqfd -b validate_sbom
+
       - name: Docker Build
         if: matrix.target == 'Docker'
         run: BUILD_TAG=${{ github.sha }} make -C tests docker_build
@@ -48,3 +58,15 @@ jobs:
       - name: Docker Clean
         if: ${{ matrix.target == 'Docker' && always() }}
         run: BUILD_TAG=${{ github.sha }} make -C tests docker_clean
+
+      - name: Podman Build
+        if: matrix.target == 'Podman'
+        run: BUILD_TAG=${{ github.sha }} make -C tests podman_build
+
+      - name: Podman Test
+        if: matrix.target == 'Podman'
+        run: BUILD_TAG=${{ github.sha }} make -C tests podman_test
+
+      - name: Podman Clean
+        if: ${{ matrix.target == 'Podman' && always() }}
+        run: BUILD_TAG=${{ github.sha }} make -C tests podman_clean

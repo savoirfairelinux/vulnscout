@@ -12,12 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && gem install asciidoctor-pdf --version 2.3.24 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements/dev.txt /tmp/dev.txt
+COPY requirements /tmp/requirements
 
 RUN mkdir -p /cache/vulnscout && chmod -R 777 /cache
 
-RUN pip install --no-cache-dir -r /tmp/dev.txt \
-    && rm -rf /tmp/dev.txt
+RUN pip install --no-cache-dir -r /tmp/requirements/dev.txt \
+    && rm -rf /tmp/requirements
 
 COPY --from=koalaman/shellcheck:v0.11.0 /bin/shellcheck /bin/shellcheck
 

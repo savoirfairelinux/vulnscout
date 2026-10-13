@@ -195,7 +195,8 @@ DELETE /api/variants/<variant_id>
 GET /api/context?project_id=<project_id>&variant_id=<variant_id>
 ```
 
-Returns the merged project and variant context, including supplemental file metadata. Both UUID parameters are required,
+Returns the merged project and variant context, including uploaded codebase reference metadata
+(`files`: `id`, `original_name`, `description`; no server filesystem paths). Both UUID parameters are required,
 and the variant must belong to the selected project.
 
 ### Get or Update Project Context
@@ -226,15 +227,42 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-### Manage Supplemental Context Files
+### Manage Codebase References
 
 ```
 POST /api/variants/<variant_id>/context/files
 DELETE /api/variants/<variant_id>/context/files/<file_id>
 ```
 
-Upload uses `multipart/form-data` with a required `file`, an optional `description`, and a 10 MB size limit. These
-endpoints are retained for API compatibility but are not currently exposed by the frontend.
+Upload uses `multipart/form-data` with a required `file`, an optional `description`, and a 10 MB size limit.
+This endpoint permits a request body of 10 MiB plus 64 KiB of multipart overhead, without increasing
+the separate report-asset upload limit. Larger requests return HTTP 413 with a JSON error;
+files over 10 MiB within the request cap return HTTP 400.
+The AI tab exposes drag-and-drop and a file picker. Files belong to one variant and are saved immediately.
+ZIP, TAR and TAR.GZ/TGZ archives are validated before storage, limited to 5,000 entries and 100 MB expanded;
+each member is limited to 10 MB. Unsafe paths, duplicate file paths, encrypted ZIP members, links,
+sparse files and special entries are rejected. Archives are never extracted or executed.
+Upload/delete updates the variant context timestamp, marking older pending AI assessments outdated.
+Context JSON import/export includes text fields only, not uploaded references; text imports leave existing uploads intact.
+
+### Browse Uploaded Source
+
+```
+GET /api/variants/<variant_id>/context/files/<file_id>/source
+```
+
+The file must belong to that variant. `operation` selects `list` (default), `read` or `search`.
+
+| Operation | Parameters | Result |
+|-----------|------------|--------|
+| `list` | `pattern` (case-sensitive path glob, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
+| `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
+| `search` | `query` (1-200 characters, literal case-sensitive text), `pattern` (glob, default `*`), `max_results` (1-100, default 100) | `matches` with `path`/`line`/`text` (500-character snippets), `truncated`, `searched_files`, `skipped_binary_files` |
+
+Every response includes `file_id` and `original_name`. Follow pagination for complete evidence and narrow
+truncated searches. Binary/non-UTF-8 files return 400 for reads and are counted as skipped in searches.
+Missing references/members return 404; unavailable stored files return 500 with an explicit error.
+Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
 ---
 
@@ -259,6 +287,25 @@ GET /api/packages
 **Response:** JSON array of package objects enriched with `variants` and `sources` fields.
 
 When `compare_variant_id` is provided together with `variant_id`, the endpoint computes a diff or intersection of packages between the two variants.
+
+### Package Dependencies
+
+```
+GET /api/package-dependencies
+```
+
+**Query parameters:** at least one of `variant_id`, `project_id` or `variant_ids` is required.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | Filter by variant |
+| `project_id` | UUID | Filter by project |
+| `variant_ids` | string | Comma-separated variant IDs |
+| `compare_variant_id` | UUID | Second variant for comparison (requires `variant_id`) |
+| `operation` | string | `"difference"` (default for comparison), `"intersection"` or `"union"` (default for `variant_ids`) |
+| `counts` | string | `"1"` to return only per-package `in`/`out` totals |
+
+**Response:** `{"documents": [...]}` where each active SBOM document lists its `variant_id`, `variant_name`, `dependencies_recorded`, `packages` and directed `edges` (`package_id` depends on `dependency_id`), or `{"counts": {"name@version": {"in": n, "out": n}}, "unrecorded": ["name@version", ...]}` when `counts=1` (`in`: packages it depends on, `out`: packages that depend on it). `dependencies_recorded` is `false` for documents imported before dependency support, and `unrecorded` lists packages found only in such documents, whose relationships are unknown rather than zero. An edge is listed under the dependent package's document; its dependency may appear in another document of the same scan (SPDX 2 `DocumentRef-` links). Package selection follows the same comparison rules as `GET /api/packages`.
 
 ---
 
@@ -587,14 +634,29 @@ POST /api/vulnerabilities/<vuln_id>/assessments
 }
 ```
 
+`variant_ids` (a list) may be given instead of `variant_id` to scope one
+assessment to several variants. Set `"ai_generated": true` to create a pending
+AI assessment (`origin` `"ai"`) instead of a `custom` one.
+
 **Response:**
 ```
 {
   "status": "success",
   "assessments": [...],
-  "assessment": { ... }
+  "assessment": { ... },
+  "replaced": [ { "id": "...", "action": "trimmed", "variant_ids": ["..."] } ]
 }
 ```
+
+`replaced` is present only when an AI-generated write replaced a pending AI
+assessment. Such a write replaces pending AI assessments on the same
+vulnerability only on the (variant, package) targets it writes, in the same
+transaction as the create, so a failed write leaves the old assessment
+untouched. `action` is `"deleted"` when the old assessment had no other targets
+left and `"trimmed"` when it also covered other targets (other variants or
+packages) and keeps those; `variant_ids` lists the variants whose targets were
+removed. Approved (`custom`) and
+scan-imported assessments are never replaced.
 
 ### Batch Create Assessments
 
@@ -873,13 +935,14 @@ Renders selected document formats for every variant in one project. `consolidate
   "documents": [
     { "name": "summary.adoc", "extension": "pdf" },
     { "name": "CycloneDX 1.6", "extension": "json" }
-  ]
+  ],
+  "async": true
 }
 ```
 
 `variant_ids` selects one or more variants belonging to the project. When omitted, all project variants are exported. Reports support either output mode. SBOM selections require `per_variant` mode and cannot be mixed with reports in the same request. Document and extension pairs must match non-asset entries returned by `GET /api/documents`. Custom assets are resources used by report templates and cannot be exported directly.
 
-**Response:** ZIP file download (`Content-Type: application/zip`).
+With `"async": true`, returns `202 Accepted` with `{ "op_id": "export:<uuid>" }`. Watch `GET /api/events/stream` for a `done` operation, then download the retained ZIP from `GET /api/documents/export/<op_id>/download`. The archive is consumed on the first download and retained for up to one hour, subject to server limits. A repeat request or one after expiry normally returns `404` because the operation has been removed; request a new export rather than relying on `410` to identify those cases. An archive missing while its operation still exists can return `410`, and an unfinished export returns `409`. Without `async`, the response is a ZIP file (`Content-Type: application/zip`).
 
 ---
 
@@ -899,6 +962,10 @@ Returns all scans with diff statistics compared to the previous scan of the same
 - `packages_added`, `packages_removed`, `packages_upgraded`
 - `vulns_added`, `vulns_removed`
 - `variant_name`, `project_name`, `is_first`
+- `run_id`: operation queue id shared by the tool scans launched together, or `null`
+- `run`: for a tool scan that shares its `run_id` with other tool scans of the same variant, the combined
+  summary of that scan run (`id`, `scan_ids`, `sources`, `vuln_count`, `finding_count`, `assessment_count`,
+  `newly_detected_vulns`, `newly_detected_findings`, `newly_detected_assessments`); `null` otherwise
 
 ### List Scans for a Project
 
@@ -1087,183 +1154,56 @@ Fetches NVD data for the given CVE and updates the stored description, CVSS scor
 | `429` | `rate_limited` | API mode only: NVD rate limit exceeded. |
 | `401`/`403` | `unauthorized` | API mode only: API key rejected by NVD. |
 
-### Bulk NVD Refresh
+### Operation Queue and Event Stream
 
 ```
-POST /api/vulnerabilities/bulk-nvd-refresh
+POST /api/operations
+GET /api/operations
+GET /api/events/stream
+POST /api/operations/<op_id>/cancel
+POST /api/operations/queue/<queue_id>/cancel
+DELETE /api/operations/<op_id>
 ```
 
-Triggers an asynchronous bulk refresh of NVD data for a list of CVE IDs. Returns `202 Accepted` immediately and runs in a background thread.
+Submit scans and vulnerability-data refreshes as one ordered batch. Scans run in Grype, NVD, OSV, sbom-cve-check order on the pipeline lane, followed by NVD, EPSS, GHSA, and EUVD refreshes. A batch may expand to at most 100 operations.
 
 **Request body:**
 ```json
 {
-  "cve_ids": ["CVE-2024-1234", "CVE-2024-5678"],
-  "mode": "local"
+  "jobs": [
+    { "kind": "scan", "source": "grype", "variant_ids": ["<variant-uuid>"], "options": { "exclude_kernel": true, "exclude_native": false } },
+    { "kind": "refresh", "source": "nvd", "variant_ids": ["<variant-uuid>"], "exclude_ids": ["CVE-2024-1234"] }
+  ]
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `cve_ids` | array of strings | CVE identifiers to refresh. Must match the pattern `CVE-YYYY-NNNNN`. |
-| `mode` | string | `"local"` (default) — no rate limit cap. `"api"` — capped at 1000 CVEs per request. |
+For a standalone refresh, supply `ids` (CVE IDs for NVD/EPSS/EUVD, GHSA IDs for GHSA) instead of `variant_ids`. Deferred refresh jobs resolve the variant's newly discovered IDs after preceding scans; `exclude_ids` omits the pre-scan baseline. Scan options `exclude_kernel` and `exclude_native` default to `true` and `false`, respectively. `options.mode` accepts `"local"` (default) or `"api"` where supported. Duplicate or invalid operations are rejected before any job is queued; active conflicts return `409` with the conflicting operation IDs.
 
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "total": 42 }
+**Response:** `202 Accepted` with `{ "queue_id": "q-...", "operations": [ ... ] }`. Each operation contains `op_id`, `kind`, `source`, `queue_id`, `position`, `status`, `progress` (`current`, `total`, `message`), `logs`, `error`, `result`, `scope`, and `cancellable`. `GET /api/operations` returns `{ "operations": [ ... ] }` with the current snapshot. Status values are `queued`, `running`, `done`, `error`, and `cancelled`; do not infer completion from the HTTP 202 response.
+
+`GET /api/events/stream` returns `text/event-stream`. A fresh connection starts with a `snapshot` containing `seq` and `operations`. Each `operation` event replaces the full state for one `op_id`; `operation_removed` contains only the removed `op_id`. Idle clients receive `heartbeat` events every 15 seconds. Server shutdown sends `bye` and the client reconnects. For example, a fresh empty stream begins with:
+
+```text
+id: <epoch>:0
+event: snapshot
+data: {"seq": 0, "operations": []}
 ```
 
-Returns `409 Conflict` if a bulk refresh is already in progress. Returns `400` if `cve_ids` is empty or contains no valid identifiers, or if `mode` is `"api"` and more than 1000 IDs are supplied.
+The cursor is instance-specific and changes on server restart. Reconnect with the **complete** `<epoch>:<seq>` `Last-Event-ID` header (or a URL-encoded `last_event_id` query parameter) to replay buffered updates. An invalid or too-old cursor yields a new snapshot. The SSE stream has a default limit of 32 concurrent clients (`VULNSCOUT_SSE_MAX_STREAMS`); requests above the limit return `503`. `GET /api/operations` is a diagnostic snapshot endpoint, not an automatic fallback in the web UI.
 
-Progress can be polled via `GET /api/nvd/progress`.
+To stop one queued/running operation, `POST /api/operations/<op_id>/cancel` returns `200` with `{"status":"cancelling","op_id":"..."}` if accepted, `404` when no active operation has that ID, or `409` for a known non-cancellable operation. Cancellation of running work is cooperative, so wait for a `cancelled` event. `POST /api/operations/queue/<queue_id>/cancel` returns `{"cancelled": <count>}`. For terminal work, `DELETE /api/operations/<op_id>` returns `200` on dismissal or `409` if the operation is unknown or still active; dismissal does not remove its scan results. Upload, export, and boot-enrichment operations also appear in the stream, but not every kind supports cancellation.
 
-### Cancel Bulk NVD Refresh
+Invalid job bodies or batches above 100 expanded operations return `400`; unknown variants return `404`, and active operation conflicts return `409`. The server may return `503` if the SSE stream or document export queue is full.
 
-```
-POST /api/vulnerabilities/cancel-nvd-refresh
-```
-
-Requests cancellation of an in-progress bulk NVD refresh. The running refresh stops after completing its current CVE.
-
-**Response:**
-```json
-{ "status": "cancelled" }
-```
-
-Returns `404` if no refresh is currently running.
+The registry and replay buffer are process-local, so a restart clears queued and retained operations. Terminal items remain for up to one hour unless dismissed sooner. For queue behavior and user-facing recovery, see {ref}`Operation Queue <operation-queue>`.
 
 ---
 
-## Scan Triggers
+## Scan Sources
 
-These endpoints trigger asynchronous vulnerability scans for a specific variant. Each returns `202 Accepted` immediately; use the corresponding `/status` endpoint to poll progress.
+`POST /api/operations` accepts `scan` jobs for `grype`, `nvd`, `osv`, and `scc` (sbom-cve-check). Each scan takes one or more `variant_ids`. The Grype job exports CycloneDX, runs Grype, merges the results and processes findings. NVD scans use the local advisory database by default; set `options.mode` to `"api"` to query NVD by CPE. OSV scans query every package PURL. SCC scans match packages against the local NVD-FKIE and CVEList databases. Progress and errors arrive as operation events, not separate per-scanner status responses.
 
-All trigger endpoints return `409 Conflict` if a scan of the same type is already running for the variant, `404` if the variant is not found, and `503` if the required tool is unavailable (Grype only).
-
-### Trigger Grype Scan
-
-```
-POST /api/variants/<variant_id>/grype-scan
-```
-
-Runs Grype on the export, filters the results to only the variant's SBOM packages, and merges findings back as a tool scan.
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-Progress steps: `1/4 Exporting CycloneDX` → `2/4 Running Grype` → `3/4 Merging results` → `4/4 Processing`.
-
-### Check Grype Scan Status
-
-```
-GET /api/variants/<variant_id>/grype-scan/status
-```
-
-**Response:**
-```json
-{
-  "status": "running",
-  "error": null,
-  "progress": "2/4 Running Grype",
-  "logs": ["[1/4] CycloneDX export complete", "..."],
-  "total": 4,
-  "done_count": 1
-}
-```
-
-Status values: `"idle"` (no scan started), `"running"`, `"done"`, `"error"`.
-
-### Trigger NVD Scan
-
-```
-POST /api/variants/<variant_id>/nvd-scan
-```
-
-Triggers a CVE scan for the given variant. Supports two modes controlled by the `?mode` query parameter:
-
-- **`local`** (default) — uses the local NVD-FKIE advisory database via the sbom-cve-check engine; no network calls, no rate limits.
-- **`api`** — queries the NVD REST API v2 using CPE identifiers from packages; honours the `NVD_API_KEY` environment variable and rate limits.
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `mode` | string | `"local"` (default) or `"api"` — selects the NVD data source. |
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-### Check NVD Scan Status
-
-```
-GET /api/variants/<variant_id>/nvd-scan/status
-```
-
-Same response shape as Grype status. In local mode `total` is the number of active packages; in API mode it is the number of unique CPEs to query. `done_count` advances per package or CPE respectively.
-
-### Trigger OSV Scan
-
-```
-POST /api/variants/<variant_id>/osv-scan
-```
-
-For every active package with PURL identifiers, queries the OSV API. All PURLs per package are queried (e.g. generic + ecosystem-specific) so no vulnerabilities are missed.
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-### Check OSV Scan Status
-
-```
-GET /api/variants/<variant_id>/osv-scan/status
-```
-
-Same response shape as Grype status. `total` is the number of unique PURLs to query.
-
-### Trigger sbom-cve-check Scan
-
-```
-POST /api/variants/<variant_id>/sbom-cve-check-scan
-```
-
-Runs a CVE scan powered by the sbom-cve-check engine. For every active package, the engine looks up candidate advisories from locally-cloned NVD-FKIE and CVEList V5 databases, applies product-name aliasing, evaluates version ranges locally, and records findings as a tool scan. No network calls are made during matching.
-
-The databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/local_databases`, inside the cache volume next to `vulnscout.db`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to use a shared clone mounted at `/local_databases` instead. Set `SBOM_CVE_CHECK_AUTO_UPDATE=1` to let the engine clone the databases on first use and fetch fresh advisories before every scan.
-
-**Response:** `202 Accepted`
-```json
-{ "status": "started", "variant_id": "..." }
-```
-
-`total` is the number of active packages to scan. Progress is reported per package.
-
-### Check sbom-cve-check Scan Status
-
-```
-GET /api/variants/<variant_id>/sbom-cve-check-scan/status
-```
-
-Same response shape as Grype status. `total` is the number of active packages being scanned, `done_count` advances per package.
-
-**Response:**
-```json
-{
-  "status": "running",
-  "error": null,
-  "progress": "42/120 packages",
-  "logs": ["Resolved 120 active packages", "Index ready — scanning packages", "[1/120] busybox@1.35.0 → 3 vuln(s): CVE-2022-28391, ..."],
-  "total": 120,
-  "done_count": 42
-}
-```
-
-Status values: `"idle"` (no scan started), `"running"`, `"done"`, `"error"`.
+The SCC databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/local_databases`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to mount a shared clone, or `SBOM_CVE_CHECK_AUTO_UPDATE=1` to update before scans.
 
 ---
 
@@ -1284,78 +1224,15 @@ Upload one or more SBOM files for asynchronous processing.
 | `files` | file(s) | One or more SBOM files |
 | `project_id` | UUID | Target project |
 | `variant_id` | UUID | Target variant |
-| `format` | string | Optional: `spdx`, `cdx`, `openvex`, `yocto_cve_check`, `grype` — auto-detected if omitted |
+| `refresh_sources` | repeated string | NVD, EPSS, GHSA, EUVD; use `none` to disable post-import refreshes |
 
 **Response:** `202 Accepted`
 ```json
 {
-  "upload_id": "...",
+  "op_id": "upload:<uuid>",
   "scan_id": "...",
-  "message": "Upload accepted, processing started"
+  "message": "Upload accepted. Processing started."
 }
 ```
 
-### Check Upload Status
-
-```
-GET /api/sbom/upload/<upload_id>/status
-```
-
-**Response:**
-```json
-{
-  "status": "processing",
-  "message": "Merging inputs..."
-}
-```
-
-Status values: `"processing"`, `"done"`, `"error"`.
-
----
-
-## Progress
-
-### NVD Progress
-
-```
-GET /api/nvd/progress
-```
-
-Get the current progress of NVD database updates.
-
-**Response:**
-```json
-{
-  "in_progress": true,
-  "phase": "Fetching CVE data",
-  "current": 42,
-  "total": 100,
-  "message": "Processing page 42/100",
-  "last_update": "2026-04-07T10:30:00Z",
-  "started_at": "2026-04-07T10:25:00Z"
-}
-```
-
-### EPSS Progress
-
-```
-GET /api/epss/progress
-```
-
-Get the current progress of EPSS score enrichment.
-
-**Response:**
-```json
-{
-  "in_progress": false,
-  "phase": "Complete",
-  "current": 100,
-  "total": 100,
-  "message": "EPSS enrichment complete",
-  "last_update": "2026-04-07T10:35:00Z",
-  "started_at": "2026-04-07T10:30:00Z"
-}
-```
-
----
-
+Follow the returned `op_id` in `GET /api/events/stream` (or `GET /api/operations`) for progress, completion, and errors. There is no separate upload-status endpoint.

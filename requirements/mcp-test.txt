@@ -1,0 +1,4 @@
+-r mcp.txt
+
+# Test-only dependencies for tests/mcp
+respx>=0.21

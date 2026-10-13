@@ -81,6 +81,14 @@ It is also possible to add sources files on a specific project and variant with 
 
 Full documentation is available at https://vulnscout.readthedocs.io/
 
+===  MCP Server Source
+
+The VulnScout MCP server source is now vendored in this repository under
+`vulnscout_mcp/`.
+
+It is launched as a stdio process by MCP clients (for example VS Code /
+Copilot) via `vulnscout_mcp/run_server.py`.
+
 ===  Container Lifecycle
 
 The `vulnscout` script manages the container lifecycle. The container runs in the background and accepts commands via `docker exec`.
@@ -223,17 +231,19 @@ VulnScout can run Grype on the current database contents. This exports the curre
 
 [source,shell]
 ----
-./vulnscout --project demo --variant x86 --perform-grype-scan
+./vulnscout --project demo --variant x86 --perform-scans grype
 ----
 
 This can be chained with other inputs to scan newly added files immediately:
 
 [source,shell]
 ----
-./vulnscout --project demo --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-grype-scan
+./vulnscout --project demo --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-scans grype
 ----
 
-`--perform-grype-scan` can consume significant RAM when the SBOM contains many packages.
+`--perform-scans` also accepts `nvd`, `osv`, and `sbom-cve-check`. Use comma-separated types such as `--perform-scans nvd,osv`, repeat the option, or pass `all` to run every scanner in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh remains a separate option.
+
+`--perform-scans grype` can consume significant RAM when the SBOM contains many packages.
 By default VulnScout caps Grype's memory at ~80 % of the container/cgroup limit.
 Override with the `GRYPE_MEMLIMIT` environment variable (see the Environment Variables table above).
 
@@ -244,7 +254,7 @@ Override with the `GRYPE_MEMLIMIT` environment variable (see the Environment Var
 
 # One-off: override via the host environment before starting the container
 export GRYPE_MEMLIMIT=24GiB
-./vulnscout --project demo --variant x86 --perform-grype-scan
+./vulnscout --project demo --variant x86 --perform-scans grype
 ----
 
 ===  Generating Reports
@@ -421,7 +431,7 @@ The following environment variables can be set via `vulnscout config` or exporte
 
 |`VULNSCOUT_IMAGE`
 |Docker image to use
-|`docker.io/sflinux/vulnscout:v0.22`
+|`docker.io/sflinux/vulnscout:v0.23`
 
 |`VULNSCOUT_BUILD_DIR`
 |Root build directory on the host (parent of `cache/` and `outputs/`)

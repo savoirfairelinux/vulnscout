@@ -4,13 +4,19 @@
 import typing
 import uuid
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db, Base
 
 if typing.TYPE_CHECKING:
     from ..models import SBOMDocument, Package
+
+
+class PackageEvidence(typing.TypedDict):
+    cpe: list[str]
+    purl: list[str]
+    source_urls: list[str]
 
 
 class SBOMPackage(Base):
@@ -20,6 +26,9 @@ class SBOMPackage(Base):
 
     sbom_document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sbom_documents.id"), primary_key=True)
     package_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("packages.id"), primary_key=True, index=True)
+    source_urls: Mapped[list | None] = mapped_column(JSON)
+    cpe: Mapped[list | None] = mapped_column(JSON)
+    purl: Mapped[list | None] = mapped_column(JSON)
 
     sbom_document: Mapped["SBOMDocument"] = relationship(back_populates="sbom_packages")
     package: Mapped["Package"] = relationship(back_populates="sbom_packages")
@@ -82,7 +91,37 @@ class SBOMPackage(Base):
         except Exception:
             return SBOMPackage.get(sbom_document_id, package_id)  # type: ignore[return-value]
 
+    @staticmethod
+    def evidence_for_documents(document_ids: set[uuid.UUID]) -> dict[uuid.UUID, PackageEvidence]:
+        """Aggregate only selected document evidence, never global matching identifiers."""
+        if not document_ids:
+            return {}
+        evidence: dict[uuid.UUID, tuple[set[str], set[str], set[str]]] = {}
+        for package_id, cpe, purl, source_urls in db.session.execute(
+            db.select(SBOMPackage.package_id, SBOMPackage.cpe, SBOMPackage.purl, SBOMPackage.source_urls)
+            .where(SBOMPackage.sbom_document_id.in_(document_ids))
+        ):
+            cpes, purls, urls = evidence.setdefault(package_id, (set(), set(), set()))
+            cpes.update(cpe or [])
+            purls.update(purl or [])
+            urls.update(source_urls or [])
+        return {
+            package_id: {"cpe": sorted(cpes), "purl": sorted(purls), "source_urls": sorted(urls)}
+            for package_id, (cpes, purls, urls) in evidence.items()
+        }
+
     def delete(self) -> None:
         """Remove this association from the database."""
+        from .package_dependency import PackageDependency
+
+        db.session.execute(
+            db.delete(PackageDependency).where(
+                PackageDependency.sbom_document_id == self.sbom_document_id,
+                db.or_(
+                    PackageDependency.package_id == self.package_id,
+                    PackageDependency.dependency_id == self.package_id,
+                ),
+            )
+        )
         db.session.delete(self)
         db.session.commit()

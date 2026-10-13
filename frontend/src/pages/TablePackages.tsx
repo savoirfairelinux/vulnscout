@@ -1,11 +1,11 @@
 import type { Package, VulnCounts } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef, useEffect } from "react";
+import { lazy, Suspense, useMemo, useState, useRef, useEffect, useCallback } from "react";
 import TableGeneric from "../components/TableGeneric";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faC, faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faC, faCircleQuestion, faCircleInfo, faBook, faDiagramProject } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { extractSupplierName } from '../helpers/pkgId';
 import { formatSourceName, getOriginalSourceName } from '../helpers/sourceNames';
@@ -16,14 +16,34 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import { useLocalStorageState } from '../handlers/localStorage';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
+import type { AgentViewContext } from '../types/agent';
+import { listDependencyCounts } from '../handlers/dependencies';
+import type { DependencyCounts } from '../handlers/dependencies';
+import SourceRevision from '../components/SourceRevision';
+import { releaseVersion, versionEvidenceTitle } from '../helpers/packageVersions';
+
+const DependencyModal = lazy(() => import('../components/DependencyModal'));
+
+type PackageRow = Package & {
+    versionMetadataSearch: string;
+    dependencyCount?: { in: number; out: number };
+    dependenciesUnrecorded?: boolean;
+};
 
 type Props = {
     packages: Package[];
     vulnerabilities?: Vulnerability[];
     onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
+    variantId?: string;
+    projectId?: string;
+    variantIds?: string[];
+    compareVariantId?: string;
+    operation?: string;
+    dataRevision?: number;
     onLoadOutdatedPackages?: () => Promise<Package[]>;
     outdatedScopeKey?: string;
     preferenceScopeKey?: string;
+    onAgentContextChange?: (context: AgentViewContext) => void;
 };
 
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
@@ -41,13 +61,24 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
     return vulnsA - vulnsB
 }
 
-const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
+const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl', 'versionMetadataSearch']
 const emptyVulnerabilities: Vulnerability[] = [];
 
-function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey, preferenceScopeKey = 'unscoped' }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages,
+    outdatedScopeKey, preferenceScopeKey = 'unscoped', onAgentContextChange, variantId, projectId, variantIds,
+    compareVariantId, operation, dataRevision }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const preferenceKey = `vulnscout.tables.packages.${encodeURIComponent(preferenceScopeKey)}`;
     const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
+    const [agentPackageIds, setAgentPackageIds] = useState<string[]>([]);
+    const updateAgentPackages = useCallback((rows: Package[]) => {
+        const ids = rows.map(pkg => pkg.id);
+        setAgentPackageIds(previous => previous.length === ids.length
+            && previous.every((id, index) => id === ids[index]) ? previous : ids);
+    }, []);
+    useEffect(() => {
+        onAgentContextChange?.({ visiblePackageIds: agentPackageIds, search });
+    }, [agentPackageIds, search, onAgentContextChange]);
     const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
     const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
     const [selectedSbomDocs, setSelectedSbomDocs] = useLocalStorageState<string[]>(`${preferenceKey}.sbomDocuments`, []);
@@ -63,6 +94,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMatchConditionHelper, setShowMatchConditionHelper] = useState(false);
+    const [dependencyCounts, setDependencyCounts] = useState<DependencyCounts | null>(null);
+    const [dependencyError, setDependencyError] = useState(false);
+    const [selectedDependencyPackage, setSelectedDependencyPackage] = useState<string | null>(null);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -127,12 +161,40 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
     const defaultVisibleColumns = useMemo(() => {
-        const cols = ['Name', 'Version', 'Vulnerabilities', 'Variants', 'Sources'];
+        const cols = ['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
         if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
         return cols;
     }, [hasSupplierInfo]);
 
     const [visibleColumns, setVisibleColumns] = useLocalStorageState<string[]>(`${preferenceKey}.visibleColumns`, defaultVisibleColumns);
+    const [revisionColumnDefaulted, setRevisionColumnDefaulted] = useLocalStorageState(`${preferenceKey}.revisionColumnDefaulted`, false);
+    useEffect(() => {
+        if (revisionColumnDefaulted) return;
+        setRevisionColumnDefaulted(true);
+        setVisibleColumns(columns => {
+            const renamed = columns.map(column => column === 'Version' ? 'Release version' : column);
+            return renamed.includes('Source revision') ? renamed : [...renamed, 'Source revision'];
+        });
+    }, [revisionColumnDefaulted, setRevisionColumnDefaulted, setVisibleColumns]);
+    const [dependencyColumnDefaulted, setDependencyColumnDefaulted] = useLocalStorageState(`${preferenceKey}.dependencyColumnDefaulted`, false);
+    // Column choices saved before the Dependency column existed still get it once.
+    useEffect(() => {
+        if (dependencyColumnDefaulted) return;
+        setDependencyColumnDefaulted(true);
+        setVisibleColumns(columns => columns.includes('Dependency') ? columns : [...columns, 'Dependency']);
+    }, [dependencyColumnDefaulted, setDependencyColumnDefaulted, setVisibleColumns]);
+    const variantIdsKey = variantIds?.join(',');
+    const showDependencyColumn = visibleColumns.includes('Dependency');
+    useEffect(() => {
+        if (!showDependencyColumn) return;
+        let cancelled = false;
+        setDependencyCounts(null);
+        setDependencyError(false);
+        listDependencyCounts(variantId, projectId, variantIdsKey?.split(','), compareVariantId, operation)
+            .then(counts => { if (!cancelled) setDependencyCounts(counts); })
+            .catch(() => { if (!cancelled) setDependencyError(true); });
+        return () => { cancelled = true; };
+    }, [showDependencyColumn, variantId, projectId, variantIdsKey, compareVariantId, operation, dataRevision]);
 
     const matchingVulnerabilityCounts = useMemo(() => {
         const counts = new Map<string, number>();
@@ -230,7 +292,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
 
     const columnDisplayNames = useMemo(() => ({
         'name': 'Name',
-        'version': 'Version',
+        'version': 'Release version',
+        'source_revision': 'Source revision',
+        'dependencies': 'Dependency',
         'cpe': 'CPE',
         'purl': 'PURL',
         'supplier': 'Supplier',
@@ -241,7 +305,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }), []);
 
     const allColumns = useMemo(() => {
-        const columnHelper = createColumnHelper<Package>()
+        const columnHelper = createColumnHelper<PackageRow>()
         return [
             columnHelper.accessor('name', {
                 id: 'name',
@@ -257,11 +321,45 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
-            columnHelper.accessor('version', {
+            columnHelper.accessor(row => releaseVersion(row) ?? '', {
                 id: 'version',
-                header: () => <div className="flex items-center justify-center">Version</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
-                size: 80
+                header: () => <div className="flex items-center justify-center">Release version</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center"
+                    title={versionEvidenceTitle(info.row.original)}>
+                    {info.row.original.version_conflict
+                        ? <span className="text-amber-300">Conflicting metadata</span>
+                        : info.getValue() || <span className="text-neutral-500">—</span>}
+                </div>,
+                size: 140
+            }),
+            columnHelper.accessor(row => row.source_revision ?? '', {
+                id: 'source_revision',
+                header: () => <div className="flex items-center justify-center">Source revision</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">
+                    <SourceRevision key={info.row.original.id} {...info.row.original} />
+                </div>,
+                size: 180
+            }),
+            columnHelper.accessor(row => (row.dependencyCount?.in ?? 0) + (row.dependencyCount?.out ?? 0), {
+                id: 'dependencies',
+                header: () => <div className="flex items-center justify-center">Dependency</div>,
+                cell: info => {
+                    const counts = info.row.original.dependencyCount;
+                    // Dependency data covers active scans only, so historical rows have no graph to open.
+                    if (info.row.original.outdated) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
+                        title="Dependencies are only available for packages of active scans">Not in active scan</div>;
+                    if (info.row.original.dependenciesUnrecorded) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
+                        title="Its SBOM was imported before dependency support; import it again to record relationships">Not recorded</div>;
+                    return <button type="button"
+                        className="flex items-center justify-center gap-2 w-full h-full p-4 text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        onClick={() => setSelectedDependencyPackage(info.row.original.id)}
+                        aria-label={`View dependency graph for ${info.row.original.name}`}>
+                        <FontAwesomeIcon icon={faDiagramProject} />
+                        {dependencyError ? 'Unavailable' : counts ? `In ${counts.in} / Out ${counts.out}` : 'Loading…'}
+                    </button>;
+                },
+                sortDescFirst: true,
+                size: 160,
             }),
             columnHelper.accessor('cpe', {
                 id: 'cpe',
@@ -460,7 +558,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 size: 10
             })
         ]
-    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts]);
+    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -498,7 +596,25 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         });
     }, [packages, packagesWithOutdated, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers]);
 
+    // Counts live in the row data so an active sort re-runs when they arrive.
+    const tableRows = useMemo<PackageRow[]>(() => {
+        const unrecorded = new Set(dependencyCounts?.unrecorded);
+        return filteredPackages.map(pkg => {
+            const row = { ...pkg, versionMetadataSearch:
+                `${pkg.id} ${pkg.source_revision ?? ''} ${versionEvidenceTitle(pkg)}` };
+            if (!showDependencyColumn || !dependencyCounts || pkg.outdated) return row;
+            const counts = dependencyCounts.counts[pkg.id];
+            if (!counts && unrecorded.has(pkg.id)) return { ...row, dependenciesUnrecorded: true };
+            return { ...row, dependencyCount: counts ?? { in: 0, out: 0 } };
+        });
+    }, [filteredPackages, showDependencyColumn, dependencyCounts]);
+
     return (<>
+        {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency graph…</div>}>
+            <DependencyModal variantId={variantId} projectId={projectId} variantIds={variantIds}
+                compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
+                packageId={selectedDependencyPackage} onClose={() => setSelectedDependencyPackage(null)} />
+        </Suspense>}
         {showOnlyOutdated && outdatedLoading && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" role="status" aria-live="polite">
                 <div className="flex flex-col items-center gap-3 text-white">
@@ -611,7 +727,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 label="Columns"
                 options={[
                     'Name',
-                    'Version',
+                    'Release version',
+                    'Source revision',
+                    'Dependency',
                     'CPE',
                     'PURL',
                     'Supplier',
@@ -700,7 +818,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         </div>
 
         <div ref={tableRef}>
-            <TableGeneric persistenceKey={preferenceKey} fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+            <TableGeneric persistenceKey={preferenceKey} fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={tableRows} estimateRowHeight={57} onFilteredDataChange={updateAgentPackages} />
         </div>
     </>);
 }

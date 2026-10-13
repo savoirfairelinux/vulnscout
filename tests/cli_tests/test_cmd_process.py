@@ -432,8 +432,21 @@ class TestCmdProcessCoverage:
 
         assert "Warning: could not populate observations table" in capsys.readouterr().out
 
+    def test_run_main_no_refresh_does_not_enrich(self, app, monkeypatch):
+        monkeypatch.delenv("INTERACTIVE_MODE", raising=False)
+        monkeypatch.delenv("MATCH_CONDITION", raising=False)
+        with patch("src.bin.cmd_process.post_treatment") as post_treatment_call, \
+             patch("src.bin.cmd_process.refresh_vulnerability_sources") as refresh_call, \
+             patch("src.bin.cmd_process.read_inputs"), \
+             patch("src.bin.cmd_process.populate_observations"):
+            with app.app_context():
+                from src.bin.cmd_process import _run_main
+                _run_main()
+
+        post_treatment_call.assert_not_called()
+        refresh_call.assert_not_called()
+
     def test_run_main_interactive_mode_skips_post_treatment(self, app, monkeypatch):
-        """_run_main skips post_treatment when INTERACTIVE_MODE=true (line 348)."""
         monkeypatch.setenv("INTERACTIVE_MODE", "true")
         with patch("src.bin.cmd_process.post_treatment") as mock_pt, \
              patch("src.bin.cmd_process.read_inputs") as mock_ri, \
@@ -528,3 +541,32 @@ class TestCmdProcessCoverage:
                 read_inputs(ControllersCache(), scan_id=scan.id)
 
         mock_parse.assert_called_once_with(spdx3_data)
+
+    @pytest.mark.parametrize("ignore_parsing_errors", ["false", "true"])
+    def test_read_inputs_preserves_database_failure_without_accessing_expired_document(
+            self, app, tmp_path, monkeypatch, capsys, ignore_parsing_errors):
+        from sqlalchemy.exc import IntegrityError
+        from src.bin.cmd_process import read_inputs
+        from src.controllers import ControllersCache
+        from src.models import Project, SBOMDocument, Scan
+
+        monkeypatch.setenv("IGNORE_PARSING_ERRORS", ignore_parsing_errors)
+        path = tmp_path / "failed.spdx.json"
+        path.write_text(json.dumps({"@graph": [{"type": "CreationInfo", "specVersion": "3.0.1"}]}))
+
+        def fail_flush(_parser, _data):
+            _db.session.add(Project(name="ProcessProject"))
+            _db.session.flush()
+
+        with app.app_context():
+            scan = _db.session.execute(_db.select(Scan)).scalar_one()
+            scan_id = scan.id
+            SBOMDocument.create(str(path), path.name, scan.id, format="spdx")
+            with patch("src.views.fast_spdx3.FastSPDX3.parse_from_dict", fail_flush):
+                with pytest.raises(IntegrityError):
+                    read_inputs(ControllersCache(), scan_id)
+            assert _db.session.execute(_db.select(Project)).scalars().all()
+        output = capsys.readouterr().out
+        assert f"Error importing {path}" in output
+        assert "UNIQUE constraint failed" in output
+        assert "Ignored:" not in output

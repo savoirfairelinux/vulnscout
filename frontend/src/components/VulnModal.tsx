@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faWandMagicSparkles, faClock, faCircleNotch } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
@@ -31,6 +31,8 @@ import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
+import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
+import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
 
 type Props = {
     vuln: Vulnerability;
@@ -39,6 +41,7 @@ type Props = {
     isEditing?: boolean;
     readOnly?: boolean;
     onClose: () => void;
+    onOpenAgent?: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
@@ -139,6 +142,13 @@ type VariantScopedSnapshot = {
         const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
+    const [assessmentChatOpen, setAssessmentChatOpen] = useState(false);
+    const [assessmentChatMounted, setAssessmentChatMounted] = useState(false);
+    const [assessmentThreadId, setAssessmentThreadId] = useState(() => crypto.randomUUID());
+    const activeAssessmentThread = useRef<string | null>(null);
+    // FIFO of AI actions waiting for the chat; the head is sent once the chat is idle.
+    const [agentMessageQueue, setAgentMessageQueue] = useState<QueuedAgentMessage[]>([]);
+    const [runningAgentAction, setRunningAgentAction] = useState<QueuedAgentMessage | null>(null);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
@@ -177,6 +187,145 @@ type VariantScopedSnapshot = {
     const [editingAssessmentIsServerConfirmed, setEditingAssessmentIsServerConfirmed] = useState(false);
     const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [reviewToDiscard, setReviewToDiscard] = useState<AssessmentReview | null>(null);
+
+    // Closing only hides the panel; the chat stays mounted so its session (and
+    // any in-flight reply) persists until the modal closes or the CVE changes.
+    const closeAssessmentChat = () => {
+        setAssessmentChatOpen(false);
+    };
+
+    const discardAssessmentChat = () => {
+        const threadId = activeAssessmentThread.current;
+        activeAssessmentThread.current = null;
+        setAssessmentChatMounted(false);
+        setAssessmentChatOpen(false);
+        setAgentMessageQueue([]);
+        setRunningAgentAction(null);
+        if (threadId) void fetch('/api/agent/conversation', {
+            method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
+        });
+    };
+
+    useEffect(() => {
+        return () => {
+            const threadId = activeAssessmentThread.current;
+            if (threadId) void fetch('/api/agent/conversation', {
+                method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
+            });
+        };
+    }, []);
+
+    useEffect(() => {
+        discardAssessmentChat();
+    }, [vuln.id]);
+
+    const agentActionState = (key: string): AgentActionState | undefined => {
+        if (runningAgentAction?.key === key) return { status: 'running' };
+        const index = agentMessageQueue.findIndex(item => item.key === key);
+        return index >= 0 ? { status: 'queued', position: index + 1 } : undefined;
+    };
+
+    const openAssessmentChat = (actions: Omit<QueuedAgentMessage, 'id'>[] = []) => {
+        if (!activeAssessmentThread.current) {
+            const threadId = crypto.randomUUID();
+            activeAssessmentThread.current = threadId;
+            setAssessmentThreadId(threadId);
+        }
+        setAssessmentChatMounted(true);
+        setAssessmentChatOpen(true);
+        setIsEditing(true);
+        // An identical request already queued or running is not queued again.
+        if (actions.length && !agentActionState(actions[0].key)) {
+            setAgentMessageQueue(queue => [...queue, ...actions.map(action => ({ ...action, id: crypto.randomUUID() }))]);
+        }
+    };
+
+    const onQueuedAgentMessageSent = (id: string) => {
+        const sent = agentMessageQueue.find(item => item.id === id);
+        if (sent) setRunningAgentAction(sent);
+        setAgentMessageQueue(queue => queue.filter(item => item.id !== id));
+    };
+
+    const onQueuedAgentMessageDone = (id: string) => {
+        setRunningAgentAction(running => running?.id === id ? null : running);
+    };
+
+    const toggleAssessmentChat = () => {
+        if (assessmentChatOpen) closeAssessmentChat();
+        else openAssessmentChat();
+    };
+
+    const assessmentKey = (targets: AssessmentTargetPair[]) =>
+        `assess:${targets.map(target => `${target.variant_id}|${target.package}`).sort().join(',')}`;
+
+    const assessWithAiState = (targets: AssessmentTargetPair[]) => agentActionState(assessmentKey(targets));
+
+    const assessWithAi = (targets: AssessmentTargetPair[]) => {
+        const variantName = (id?: string | null) => availableVariants.find(v => v.id === id)?.name;
+        const variantLabel = (id?: string | null) => {
+            const name = variantName(id);
+            return name ? `"${name}" (variant_id ${id})` : `variant_id ${id}`;
+        };
+        // One line per variant; a variant is kept whole within one batch so
+        // the agent assesses all of its selected packages together.
+        const groupMap = new Map<string, AssessmentTargetPair[]>();
+        targets.forEach(target => {
+            const id = target.variant_id ?? '';
+            groupMap.set(id, [...(groupMap.get(id) ?? []), target]);
+        });
+        const groups = [...groupMap.values()];
+        const lines = groups.map(group =>
+            `- variant ${variantLabel(group[0].variant_id)}: ${group.map(target => target.package).join(', ')}`);
+        const prompt = (batchLines: string[], batch = '') =>
+            `Assess ${vuln.id}${batch} for exactly these targets (packages listed per variant):\n${batchLines.join('\n')}\n` +
+            `Retrieve the vulnerability details and each variant's merged context with VulnScout MCP first, ` +
+            `then record the result with write_assessment for these targets only.`;
+        // Split large selections into batches of whole variants that fit the
+        // agent message limit, reserving room for the " (batch N of M)" label.
+        const budget = AGENT_MESSAGE_MAX_LENGTH - ' (batch 9999 of 9999)'.length;
+        const oversized = groups.filter((_, index) => prompt([lines[index]]).length > budget);
+        if (oversized.length) {
+            const names = oversized.map(group => variantName(group[0].variant_id) ?? group[0].variant_id).join(', ');
+            showMessage(`Too many packages selected for variant ${names} to assess with AI in one request. Select fewer packages for that variant.`, 'error');
+            return;
+        }
+        const batches: number[][] = [];
+        lines.forEach((line, index) => {
+            const current = batches[batches.length - 1];
+            if (current && prompt([...current.map(i => lines[i]), line]).length <= budget) current.push(index);
+            else batches.push([index]);
+        });
+        const key = assessmentKey(targets);
+        openAssessmentChat(batches.map((indexes, index) => {
+            const batchTargets = indexes.flatMap(i => groups[i]);
+            const unique = (values: string[]) => [...new Set(values)].join(', ');
+            const batchLabel = batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '';
+            return {
+                key, kind: 'assess',
+                text: prompt(indexes.map(i => lines[i]), batchLabel),
+                title: `${batchTargets.length} target${batchTargets.length === 1 ? '' : 's'}${batches.length > 1 ? ` · batch ${index + 1} of ${batches.length}` : ''}`,
+                detail: `${unique(batchTargets.map(target => variantName(target.variant_id) ?? target.variant_id ?? ''))} · ${unique(batchTargets.map(target => target.package))}`,
+            };
+        }));
+    };
+
+    const reviewKey = (assessmentId: string) => `review:${assessmentId}`;
+
+    const reviewWithAi = (assessment: Assessment) => {
+        openAssessmentChat([{
+            key: reviewKey(assessment.id), kind: 'review',
+            text: `Review the user assessment ${assessment.id} for ${vuln.id}. Retrieve it with get_custom_assessment, ` +
+                `independently re-derive the verdict for each of its targets using VulnScout MCP data, and record one ` +
+                `review per target with write_assessment_review. Do not modify the assessment itself.`,
+            title: `assessment ${assessment.id.slice(0, 8)}`,
+            detail: [vuln.id, ...assessment.packages].join(' · '),
+        }]);
+    };
+
+    const assessmentAgentContext: AgentContext = {
+        page: 'vulnerabilities', projectId, variantId,
+        view: { openVulnerabilityId: vuln.id, matchingVariantIds: availableVariants.map(variant => variant.id) },
+    };
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
@@ -295,6 +444,17 @@ type VariantScopedSnapshot = {
             // covers the case where nothing ever loaded successfully.
         }
     }, [vuln.id, projectId]);
+
+    useEffect(() => {
+        const refresh = () => {
+            void refreshAllVulnAssessments();
+            void refreshAssessmentRows();
+            refreshReviews();
+            setSnapshotVersion(version => version + 1);
+        };
+        window.addEventListener(AGENT_WRITE_EVENT, refresh);
+        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
+    }, [refreshAllVulnAssessments, refreshAssessmentRows, refreshReviews]);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -1565,6 +1725,20 @@ type VariantScopedSnapshot = {
             )}
             {!readOnly && (
                 <button
+                    onClick={toggleAssessmentChat}
+                    type="button"
+                    aria-label={`Toggle AI chat for ${vuln.id}`}
+                    aria-expanded={assessmentChatOpen}
+                    aria-controls="assessment-agent-panel"
+                    title={assessmentChatOpen ? "Close AI chat" : "Open AI chat"}
+                    className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${assessmentChatOpen ? "border-cyan-400 bg-cyan-900/50 text-cyan-100" : "border-cyan-500 text-cyan-200 hover:bg-cyan-900/40"}`}
+                >
+                    <FontAwesomeIcon icon={faWandMagicSparkles} className="mr-2" />
+                    AI
+                </button>
+            )}
+            {!readOnly && (
+                <button
                     onClick={() => setIsEditing(!isEditing)}
                     type="button"
                     className={`rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${isEditing ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-600 hover:bg-blue-700"}`}
@@ -1618,7 +1792,7 @@ type VariantScopedSnapshot = {
             backdropClassName="!bg-gray-900/90"
             panelClassName="!h-[calc(100vh-6rem)] !max-w-[calc(100vw-6rem)]"
             surfaceClassName="!border-gray-600 !bg-gray-700"
-            contentClassName="relative flex min-h-0 flex-1 flex-col p-0 md:p-0"
+            contentClassName="relative flex min-h-0 flex-1 flex-col p-0 md:p-0 lg:flex-row"
             footer={footer}
         >
             {submittingMessage && (
@@ -1630,7 +1804,7 @@ type VariantScopedSnapshot = {
                 </div>
             )}
                     {/* Scrollable content region (only the body scrolls) */}
-                    <div className="flex-1 overflow-y-auto min-h-0">
+                    <div className="scrollbar-minimal min-w-0 flex-1 overflow-y-auto min-h-0">
 
                     {/* Message Banner - Sticky at top */}
                     {showBanner && (
@@ -1901,7 +2075,9 @@ type VariantScopedSnapshot = {
                         </div>
 
                         <div className="mt-6">
-                            <h3 className="font-bold mb-2">Assessments</h3>
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                <h3 className="font-bold">Assessments</h3>
+                            </div>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
                                     <h4 className="font-semibold text-gray-200 mb-2">Assessments on current SBOM packages and variants</h4>
@@ -1934,6 +2110,8 @@ type VariantScopedSnapshot = {
                                             findingsLoading={!variantPackageMapLoaded}
                                             findingsError={variantPackageMapError ?? undefined}
                                             exactTargetSelection={true}
+                                            onAssessWithAi={readOnly ? undefined : assessWithAi}
+                                            aiAssessState={assessWithAiState}
                                         />
                                     </li>
                                 )}
@@ -1958,6 +2136,14 @@ type VariantScopedSnapshot = {
                                                         const v = availableVariants.find(v => v.id === firstTarget?.variant_id);
                                                         return v ? <span className="ml-1 opacity-80 text-xs">({v.name})</span> : null;
                                                     })()}
+                                                    {row.context_outdated && (
+                                                        <span
+                                                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300"
+                                                            title="The variant's AI context was modified after this assessment was generated"
+                                                        >
+                                                            Context outdated
+                                                        </span>
+                                                    )}
                                                 </span>
                                                 <div className="flex items-center gap-2">
                                                     {isEditing && (
@@ -2068,6 +2254,26 @@ type VariantScopedSnapshot = {
                                                         {originLabel(row.origin)}
                                                     </span>
                                                 )}
+                                                {!readOnly && row.origin === "custom" && (() => {
+                                                    const reviewState = agentActionState(reviewKey(row.id));
+                                                    const stateLabel = reviewState?.status === 'running' ? ' (running)'
+                                                        : reviewState ? ` (queued, position ${reviewState.position})` : '';
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => reviewWithAi(row)}
+                                                            disabled={Boolean(reviewState)}
+                                                            aria-label={`Review assessment ${row.id} with AI${stateLabel}`}
+                                                            title={reviewState?.status === 'running' ? "AI review in progress"
+                                                                : reviewState ? `AI review queued (#${reviewState.position} in the AI chat)` : "Review with AI"}
+                                                            className="inline-flex items-center gap-1 rounded border border-cyan-500 px-2 py-0.5 text-xs font-medium text-cyan-200 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:border-neutral-600 disabled:text-neutral-400 disabled:hover:bg-transparent"
+                                                        >
+                                                            {reviewState?.status === 'running' ? <><FontAwesomeIcon icon={faCircleNotch} spin className="h-3 w-3" />Running…</>
+                                                                : reviewState ? <><FontAwesomeIcon icon={faClock} className="h-3 w-3" />Queued · #{reviewState.position}</>
+                                                                : <><FontAwesomeIcon icon={faWandMagicSparkles} className="h-3 w-3" />Review with AI</>}
+                                                        </button>
+                                                    );
+                                                })()}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {targets.map(target => {
@@ -2232,6 +2438,9 @@ type VariantScopedSnapshot = {
                     </div>
 
                     </div>
+                    {assessmentChatMounted && <aside id="assessment-agent-panel" hidden={!assessmentChatOpen} role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queue={agentMessageQueue} onQueuedMessageSent={onQueuedAgentMessageSent} onQueuedMessageDone={onQueuedAgentMessageDone} onQueueRemove={id => setAgentMessageQueue(queue => queue.filter(item => item.id !== id))} onQueueClear={() => setAgentMessageQueue([])} />
+                    </aside>}
         </ModalShell>
 
             <ConfirmationModal
