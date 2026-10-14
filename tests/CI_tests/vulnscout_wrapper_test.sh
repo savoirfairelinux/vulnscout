@@ -114,7 +114,6 @@ expect_fail() {
     refute_log "/scan/src/entrypoint.sh"
 }
 
-"$ROOT_DIR/vulnscout" --help | grep -q -- '--refresh-vulnerability-data'
 
 "$ROOT_DIR/vulnscout" --refresh-vulnerability-data
 grep -q -- '/scan/src/entrypoint.sh --refresh-vulnerability-data' "$VULNSCOUT_TEST_LOG"
@@ -250,5 +249,57 @@ for dropped in perform-grype-scan perform-nvd-scan perform-osv-scan perform-sbom
     sbom-cve-check-scan --sbom-cve-check-scan; do
     expect_fail "Unknown command: $dropped" "$dropped"
 done
+
+# --- New grammar: parser, help, lifecycle verbs ---
+run_ok --help
+assert_stdout "scan [types|all]"
+assert_stdout "still works until v0.26"
+refute_stderr "deprecated:"
+
+run_ok
+assert_stdout "Usage: vulnscout [global options] <command>"
+
+run_ok help scan
+assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]"
+
+run_ok scan --help
+assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]"
+if [ -s "$VULNSCOUT_TEST_LOG" ]; then
+    echo "Help must not call the container engine." >&2
+    exit 1
+fi
+
+run_ok version
+assert_stdout "VulnScout v0.24"
+run_ok --version
+assert_stdout "VulnScout v0.24"
+
+run_ok update
+assert_log "pull "
+assert_stdout "Image already up to date (v0.24)."
+
+run_ok stop
+assert_log "rm -f vulnscout"
+
+run_ok start
+assert_log "run -d --name vulnscout"
+
+run_ok restart
+assert_log "rm -f vulnscout"
+assert_log "run -d --name vulnscout"
+
+run_ok serve
+assert_log "exec vulnscout pkill -f"
+assert_log "/scan/src/entrypoint.sh --serve"
+
+expect_fail "missing command. Run 'vulnscout help' for usage." -p cli
+expect_fail "Unknown command: frobnicate" frobnicate
+expect_fail "Unknown command: frobnicate" frobnicate --help
+expect_fail "'start' does not accept --project or --variant." -p cli start
+expect_fail "'serve' does not accept --project or --variant." serve -v x86
+expect_fail "'stop' does not accept argument 'now'." stop now
+expect_fail "'version' does not accept option --json." version --json
+expect_fail "-p requires a value." scan -p
+expect_fail "--variant requires a value." --variant --dev scan
 
 echo "Host wrapper scope tests passed."

@@ -64,7 +64,7 @@ def test_wrapper_lists_scan_selection():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "--perform-scans <types|all>" in result.stdout
+    assert "scan [types|all]" in result.stdout
 
 
 @pytest.mark.parametrize(
