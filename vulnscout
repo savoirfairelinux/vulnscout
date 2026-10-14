@@ -42,127 +42,212 @@ DEV_MODE=false
 
 VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.26"
 LEGACY_TOKENS=()
+SCOPE_ARGS=()
 
 show_help() {
-    cat <<EOF
+    cat <<'EOF'
 VulnScout - Vulnerability Scanner
-Usage: vulnscout [--project <name>] [--variant <name>] <command> [options]
+Usage: vulnscout [global options] <command> [arguments] [options]
+       vulnscout <command> --help
+       vulnscout help [<command>]
 
-Project and variant options:
-    --project <name>                Select a project
-    --variant <name>                Select a variant within --project
+Global options (before or after the command):
+    -p, --project <name>    Project (default: "default" for commands that use a project)
+    -v, --variant <name>    Variant of the project
+    --dev                   Mount local src/ and vulnscout_mcp/; start, restart and serve
+                            also run the frontend dev server
+    -h, --help              Show help for a command, or this overview
+    --version               Show the VulnScout version
 
-Commands without --project or --variant:
+Data commands (accept --project and --variant):
+    add <input options>     Add files to the project/variant and process them:
+                            --spdx, --cdx, --cve-check, --yocto-vex, --openvex, --grype <path>
+                            (each repeatable)
+    scan [types|all]        Run grype, nvd, osv, sbom-cve-check scans (default: all)
+    check <expr>            Test stored vulnerabilities; exit 2 when the condition matches
+    report <template|path>... [--format pdf|html] [--condition <expr>]
+                            Generate reports into VULNSCOUT_OUTPUTS_DIR
+    export <kind>... [--amend]
+                            Export spdx, cdx, openvex, custom-data, custom-openvex, context
+    import <kind> <path> [--timestamps original|current]
+                            Import custom-data, custom-openvex, or context
+    refresh                 Refresh stored vulnerability data, including EPSS
 
-    Container lifecycle:
-    start|--start                   Start VulnScout container (auto-started by other commands)
-    stop|--stop                     Stop and remove VulnScout container
-    restart|--restart               Restart VulnScout container
-    --update                        Pull latest image and restart if a new version is available
-    --version                       Show current version
+Maintenance commands:
+    delete scan <id>|outdated|empty-scans|orphaned-vulns [--dry-run] [--yes]
+                            Delete data; asks for confirmation on a terminal
+    list projects|scans [--json]
+                            List projects and variants, or past scans
+    config get <key> | set <key> <value> | unset <key> | list
+                            Read or change the host config file
+    asset add <path>...     Stage image assets for report templates
 
-    Development and web interface:
-    --dev                           Mount local src/ and vulnscout_mcp/ and start the frontend dev server
-    --serve                         Run scan then start web UI (port 7275)
-
-    Report assets:
-    --add-asset <path>              Stage an image asset for report templates
-
-    Data maintenance:
-    --delete-scan <id>              Delete a past scan by ID
-    --delete-outdated               Delete outdated packages and assessments
-    --delete-empty-scans            Delete scans with no recorded changes
-    --delete-orphaned-vulns         Delete CVEs absent from every project and variant
-
-    Refresh vulnerability data:
-    --refresh-vulnerability-data    Refresh stored vulnerability data, including EPSS
-                                     (optionally limited by --project and --variant)
-
-    Data listing:
-    --list-projects                 List all projects and their variants (optionally in JSON format with --json)
-    --list-scans                    List all past scans (optionally in JSON format with --json)
-
-    Import or export AI assessment context for a project:
-    --export-context                Export AI assessment context
-    --import-context <path>         Import AI assessment context
-    
-    Configuration:
-    --config <key> <value>          Set a config value
-    --config-list                   Show current configuration
-    --config-clear <key>            Remove a config key
-
-
-Commands with optional --project and --variant (uses "default" project and variant if not specified):
-
-    Import a SBOM or vulnerability data file into the selected project/variant:
-    --add-spdx <path>               Add an SPDX 2/3 SBOM file or archive
-    --add-cve-check <path>          Add a Yocto CVE check JSON file
-    --add-yocto-vex <path>          Add a Yocto VEX JSON file
-    --add-openvex <path>            Add an OpenVEX JSON file
-    --add-cdx <path>                Add a CycloneDX file
-    --add-grype <path>              Add a Grype results file
-
-    Trigger scanning to detect new vulnerabilities in the selected project/variant:
-    --perform-scans <types|all>     Run grype, nvd, osv, sbom-cve-check, or all
-                                    (comma-separated types or repeated flag)
-
-    Export the selected project/variant's vulnerability data to a SBOM file:
-    --export-spdx                   Export as SPDX 3.0 SBOM
-    --export-cdx                    Export as CycloneDX 1.6 SBOM
-    --export-openvex                Export as OpenVEX
-
-    Import or export custom OpenVEX custom assessments for a project/variant:
-    --export-custom-openvex-assessments Export custom OpenVEX assessments
-    --import-custom-openvex-assessments <path> Import custom OpenVEX assessments
-
-    Report generation by project or variant:
-        --report <template|path>    Generate a report from a template
-                                     --project includes all project variants;
-                                     add --variant to report on one variant only
-
-    Test for vulnerabilities matching a condition:
-    --match-condition <expr>        Test stored vulnerability data
-                                     --project without --variant tests all project variants
-                                     No scope tests the default project/variant
-
-Commands only requiring --project (uses default project if not specified):
-
-    Import or export custom VulnScout data for a project:
-    --export-custom-vulnscout-data  Export custom VulnScout JSON data
-    --import-custom-vulnscout-data <path> Import custom VulnScout JSON data
-
-Timestamp options for custom data imports:
-    Applies to --import-custom-vulnscout-data and --import-custom-openvex-assessments.
-    --use-original-timestamps       Preserve assessment timestamps from the imported file
-    --use-current-timestamps        Set imported assessment timestamps to the current time
-    Default: current time for VulnScout JSON; original timestamps for OpenVEX.
-
-Custom review export options:
-    Applies to --export-custom-vulnscout-data and --export-custom-openvex-assessments.
-    --amend                         Update the existing output file while preserving stable review ordering
+Container commands:
+    start                   Start the container (other commands start it when needed)
+    stop                    Stop and remove the container
+    restart                 Restart the container
+    update                  Pull the image and restart if a new version is available
+    version                 Show the VulnScout version
+    serve                   Start the web UI on port 7275
+    help [<command>]        Show help
 
 Environment variables:
     VULNSCOUT_CONTAINER     Container name (default: vulnscout)
-    VULNSCOUT_IMAGE         Docker image (default: docker.io/sflinux/vulnscout:v0.23)
+    VULNSCOUT_IMAGE         Container image (default: docker.io/sflinux/vulnscout:v0.23)
     VULNSCOUT_BUILD_DIR     Build base dir (default: ./.vulnscout)
     VULNSCOUT_CACHE_DIR     Cache dir (default: VULNSCOUT_BUILD_DIR/cache)
     VULNSCOUT_OUTPUTS_DIR   Output directory (default: VULNSCOUT_BUILD_DIR/outputs)
+    VULNSCOUT_NO_DEPRECATION_WARNING=1
+                            Hide warnings about the legacy flag syntax
 
 Examples:
-  vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
-    vulnscout --project test --variant x86 --perform-scans nvd,osv
-    vulnscout --project test --perform-scans all
-  vulnscout --project test --match-condition "cvss >= 9.0"
-  vulnscout --project test --variant x86 --report summary.adoc
-  vulnscout --serve
-  vulnscout --report summary.adoc
-  vulnscout --config NVD_API_KEY abc123
+    vulnscout -p demo -v x86 add --spdx sbom.spdx.json --cve-check cve.json
+    vulnscout -p demo -v x86 scan nvd,osv
+    vulnscout -p demo report summary.adoc --condition "cvss >= 9.0"
+    vulnscout -p demo export cdx custom-openvex
+    vulnscout -p demo check "cvss >= 9.0"
+    vulnscout config set NVD_API_KEY abc123
+    vulnscout serve
 
 Exit codes:
-  0   Success
-  1   Execution error
-  2   Match condition triggered
+    0   Success
+    1   Error
+    2   check matched the condition
+
+The legacy flag syntax (for example --add-spdx, --perform-scans, --report)
+still works until v0.26 and prints a deprecation warning. See doc/source/vulnscout-script.md for the mapping.
 EOF
+}
+
+show_verb_help() {
+    case "$1" in
+        add) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] add <input options>
+
+Add input files to the project/variant, then process them.
+Input options (repeatable, types can be mixed; all files form one scan):
+    --spdx <path>           SPDX 2/3 SBOM file or archive (.tar, .tar.gz, .tgz, .tar.zst)
+    --cdx <path>            CycloneDX file
+    --cve-check <path>      Yocto cve-check JSON file
+    --yocto-vex <path>      Yocto VEX JSON file
+    --openvex <path>        OpenVEX JSON file
+    --grype <path>          Grype results file
+Without --project/--variant, the "default" project and variant are used.
+EOF
+            ;;
+        scan) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]
+
+Run vulnerability scans. Types: grype, nvd, osv, sbom-cve-check, all (default: all).
+Separate several types with commas or spaces: scan nvd,osv or scan nvd osv.
+EOF
+            ;;
+        check) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] check <expr>
+
+Test stored vulnerability data against a condition, e.g. check "cvss >= 9.0".
+Exit 0 = no match, 1 = error, 2 = match. Run 'vulnscout refresh' first for current EPSS.
+Without scope, the default project/variant is tested; --project alone tests every variant.
+EOF
+            ;;
+        report) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] report <template|path>... [options]
+
+Generate one or more reports into VULNSCOUT_OUTPUTS_DIR. A template is a built-in name
+(e.g. summary.adoc) or a local file. --project alone reports on every variant.
+Options:
+    --format pdf|html       Output format
+    --condition <expr>      Fill the matched-vulnerabilities section; a match does not
+                            fail the call (use 'vulnscout check' as the gate)
+EOF
+            ;;
+        export) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] export <kind>... [--amend]
+
+Kinds:
+    spdx                    SPDX 3.0 SBOM
+    cdx                     CycloneDX 1.6 SBOM
+    openvex                 OpenVEX document
+    custom-data             Custom VulnScout JSON data
+    custom-openvex          Custom OpenVEX assessments (all variants without --variant)
+    context                 AI assessment context (context-export.json)
+Options:
+    --amend                 Update the existing custom-* output file, keeping review order
+EOF
+            ;;
+        import) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] import <kind> <path> [options]
+
+Kinds:
+    custom-data             Custom VulnScout JSON data (variants come from the file;
+                            --variant is rejected)
+    custom-openvex          Custom OpenVEX assessments. Without --variant, the project's
+                            only variant is used; with several variants, --variant is required.
+    context                 AI assessment context. No scope: entries go where the file says.
+                            -p P: every entry goes to project P. -p P -v V: the file must
+                            hold one entry, imported into P/V.
+Options:
+    --timestamps original|current
+                            custom-* only. Defaults: custom-data = current,
+                            custom-openvex = original.
+SBOMs and scan results are added with 'vulnscout add'.
+EOF
+            ;;
+        refresh) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] refresh
+
+Refresh stored vulnerability data, including EPSS. Without scope, all projects are refreshed.
+EOF
+            ;;
+        delete) cat <<'EOF'
+Usage: vulnscout delete <target> [--dry-run] [--yes]
+
+Targets:
+    scan <id>               A past scan (see 'vulnscout list scans')
+    outdated                Outdated packages and assessments
+    empty-scans             Scans with no recorded changes
+    orphaned-vulns          CVEs absent from every project and variant
+Options:
+    --dry-run               Show what would be deleted, delete nothing
+    --yes                   Do not ask for confirmation
+On a terminal, the command shows a preview and asks before deleting. Without a terminal
+(e.g. CI), it deletes without asking.
+EOF
+            ;;
+        list) cat <<'EOF'
+Usage: vulnscout list projects|scans [--json]
+
+List all projects and their variants, or all past scans.
+EOF
+            ;;
+        config) cat <<'EOF'
+Usage: vulnscout config get <key>
+       vulnscout config set <key> <value>
+       vulnscout config unset <key>
+       vulnscout config list
+
+Read or change the host config file (VULNSCOUT_CACHE_DIR/config.env). 'list' masks values
+of keys containing API_KEY, PASSWORD or SECRET. Setting VULNSCOUT_CACHE_DIR restarts a
+running container.
+EOF
+            ;;
+        asset) cat <<'EOF'
+Usage: vulnscout asset add <path>...
+
+Stage image assets (png, jpg, jpeg, gif, svg, webp) for report templates.
+EOF
+            ;;
+        start|stop|restart|update|version|serve|help) cat <<EOF
+Usage: vulnscout $1
+
+See 'vulnscout help' for a description.
+EOF
+            ;;
+        *)
+            echo "Unknown command: $1" >&2
+            echo "Run 'vulnscout help' for usage." >&2
+            return 1 ;;
+    esac
 }
 
 exec_container() {
@@ -559,6 +644,178 @@ start_frontend_dev() {
     trap _cleanup_frontend SIGINT SIGTERM EXIT
 }
 
+# require_value <option> <remaining argc> <next token>
+require_value() {
+    if [ "$2" -lt 2 ] || [[ "$3" == -* ]]; then
+        die "$1 requires a value."
+    fi
+}
+
+reject_scope() {
+    if [ "$PROJECT_SPECIFIED" = true ] || [ "$VARIANT_SPECIFIED" = true ]; then
+        die "'$1' does not accept --project or --variant."
+    fi
+}
+
+# Send only the scope options the user gave; the entrypoint applies its own defaults.
+set_explicit_scope_args() {
+    SCOPE_ARGS=()
+    if [ "$PROJECT_SPECIFIED" = true ]; then
+        SCOPE_ARGS+=(--project "$PROJECT")
+    fi
+    if [ "$VARIANT_SPECIFIED" = true ]; then
+        SCOPE_ARGS+=(--variant "$VARIANT")
+    fi
+}
+
+# Always send --project ("default" if not given); --variant only if given.
+set_project_scope_args() {
+    SCOPE_ARGS=(--project "$PROJECT")
+    if [ "$VARIANT_SPECIFIED" = true ]; then
+        SCOPE_ARGS+=(--variant "$VARIANT")
+    fi
+}
+
+reject_option() {
+    local verb="$1" token="$2"
+    case "$token" in
+        --use-original-timestamps|--use-current-timestamps)
+            die "'$verb' does not accept $token; use 'import <kind> <path> --timestamps original|current'." ;;
+        amend)
+            die "'$verb' does not accept argument 'amend'; use 'export <kind> --amend'." ;;
+        -*)
+            die "'$verb' does not accept option $token." ;;
+        *)
+            die "'$verb' does not accept argument '$token'." ;;
+    esac
+}
+
+require_no_args() {
+    local verb="$1"
+    shift
+    if [ $# -gt 0 ]; then
+        reject_option "$verb" "$1"
+    fi
+}
+
+require_file() {
+    if [ ! -f "$1" ]; then
+        die "file not found: $1"
+    fi
+}
+
+verb_start() {
+    reject_scope start
+    require_no_args start "$@"
+    do_start
+    if [ "$DEV_MODE" = true ]; then
+        start_frontend_dev
+    fi
+}
+
+verb_stop() {
+    reject_scope stop
+    require_no_args stop "$@"
+    call_container_engine rm -f "$CONTAINER_NAME"
+}
+
+verb_restart() {
+    reject_scope restart
+    require_no_args restart "$@"
+    call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    do_start
+    if [ "$DEV_MODE" = true ]; then
+        start_frontend_dev
+    fi
+}
+
+verb_update() {
+    reject_scope update
+    require_no_args update "$@"
+    do_update
+}
+
+verb_version() {
+    reject_scope version
+    require_no_args version "$@"
+    do_version
+}
+
+verb_help() {
+    reject_scope help
+    if [ $# -gt 1 ]; then
+        reject_option help "$2"
+    fi
+    if [ $# -eq 1 ]; then
+        show_verb_help "$1"
+    else
+        show_help
+    fi
+}
+
+verb_serve() {
+    reject_scope serve
+    require_no_args serve "$@"
+    ensure_running
+    # Kill any previous Flask process to free port 7275
+    call_container_engine exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
+    sleep 1
+    if [ "$DEV_MODE" = true ]; then
+        start_frontend_dev
+    fi
+    exec_container --serve
+}
+
+parse_new() {
+    local help=false verb
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -p|--project)
+                require_value "$1" "$#" "${2:-}"
+                PROJECT="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
+            -v|--variant)
+                require_value "$1" "$#" "${2:-}"
+                VARIANT="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
+            --dev)
+                DEV_MODE=true; shift ;;
+            -h|--help)
+                help=true; shift ;;
+            --version)
+                do_version
+                return 0 ;;
+            *)
+                rest+=("$1"); shift ;;
+        esac
+    done
+    if [ ${#rest[@]} -eq 0 ]; then
+        if [ "$help" = true ]; then
+            show_help
+            return 0
+        fi
+        die "missing command. Run 'vulnscout help' for usage."
+    fi
+    verb="${rest[0]}"
+    rest=("${rest[@]:1}")
+    if [ "$help" = true ]; then
+        show_verb_help "$verb"
+        return
+    fi
+    case "$verb" in
+        start) verb_start "${rest[@]}" ;;
+        stop) verb_stop "${rest[@]}" ;;
+        restart) verb_restart "${rest[@]}" ;;
+        update) verb_update "${rest[@]}" ;;
+        version) verb_version "${rest[@]}" ;;
+        help) verb_help "${rest[@]}" ;;
+        serve) verb_serve "${rest[@]}" ;;
+        *)
+            echo "Unknown command: $verb" >&2
+            echo "Run 'vulnscout help' for usage." >&2
+            return 1 ;;
+    esac
+}
+
 parse_legacy() {
     # Pre-scan args for --dev so it takes effect regardless of position
     for _arg in "$@"; do
@@ -759,8 +1016,7 @@ main() {
         warn_legacy_tokens
         parse_legacy "$@"
     else
-        # Replaced by parse_new in the next task.
-        parse_legacy "$@"
+        parse_new "$@"
     fi
 }
 
