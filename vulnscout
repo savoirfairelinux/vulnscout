@@ -40,6 +40,9 @@ MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false
 
+VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.26"
+LEGACY_TOKENS=()
+
 show_help() {
     cat <<EOF
 VulnScout - Vulnerability Scanner
@@ -187,23 +190,80 @@ ensure_running() {
     fi
 }
 
-add_input() {
-    local cmd="$1"
-    local file
-    file="$(readlink -f "$2")"
-    local staged
-    staged="/tmp/vulnscout_stage_$(basename "$file")"
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
 
-    call_container_engine cp "$file" "$CONTAINER_NAME:$staged"
-    PENDING_ARGS+=("--${cmd}" "$staged")
+# Copy a host file into the container and print its staged path (stdout carries only the path).
+stage_file() {
+    local file staged
+    file="$(readlink -f "$1")"
+    staged="/tmp/vulnscout_stage_$(basename "$file")"
+    call_container_engine cp "$file" "$CONTAINER_NAME:$staged" >&2 || return 1
+    echo "$staged"
+}
+
+add_input() {
+    local staged
+    staged="$(stage_file "$2")"
+    PENDING_ARGS+=("--$1" "$staged")
+}
+
+# Print the entrypoint template argument: a staged path for a local file, a bare name unchanged.
+stage_report_template() {
+    local tpl="$1"
+    if [ -f "$tpl" ]; then
+        stage_file "$tpl"
+    elif [[ "$tpl" == */* ]]; then
+        echo "Error: template file not found: $tpl" >&2
+        return 1
+    else
+        echo "$tpl"
+    fi
+}
+
+image_version() {
+    call_container_engine inspect "$1" \
+        --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown
+}
+
+do_version() {
+    echo "VulnScout $(image_version "$DOCKER_IMAGE")"
+}
+
+do_update() {
+    local cur_ver new_ver running_id target_id
+    cur_ver="$(image_version "$DOCKER_IMAGE")"
+    if call_container_engine pull "$DOCKER_IMAGE" > /dev/null 2>&1; then
+        new_ver="$(image_version "$DOCKER_IMAGE")"
+        if [ "$cur_ver" != "$new_ver" ]; then
+            echo "Updated image: $cur_ver -> $new_ver"
+        else
+            echo "Image already up to date ($cur_ver)."
+        fi
+    else
+        echo "Could not pull '$DOCKER_IMAGE' (local-only or registry not reachable)."
+    fi
+    # Restart the container if it is running on a different image
+    if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        running_id="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)"
+        target_id="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+        if [ -n "$target_id" ] && [ "$running_id" != "$target_id" ]; then
+            echo "Restarting container on $DOCKER_IMAGE ($(image_version "$DOCKER_IMAGE"))..."
+            do_start
+        else
+            echo "Container already running on the target image."
+        fi
+    fi
 }
 
 validate_scan_types() {
-    local selection="$1" scan_type
+    local selection="$1" label="${2:---perform-scans}" scan_type
     local -a scan_types
     IFS=',' read -r -a scan_types <<< "$selection"
     if [[ -z "$selection" || "$selection" == ,* || "$selection" == *, || "$selection" == *,,* ]]; then
-        echo "Error: --perform-scans requires scan types: grype, nvd, osv, sbom-cve-check, or all." >&2
+        echo "Error: $label requires scan types: grype, nvd, osv, sbom-cve-check, or all." >&2
         return 1
     fi
     for scan_type in "${scan_types[@]}"; do
@@ -211,6 +271,116 @@ validate_scan_types() {
             grype|nvd|osv|sbom-cve-check|all) ;;
             *) echo "Error: unknown scan type '$scan_type'. Expected grype, nvd, osv, sbom-cve-check, or all." >&2; return 1 ;;
         esac
+    done
+}
+
+# Print the new-grammar replacement for a legacy action token; return 1 for other tokens.
+legacy_replacement() {
+    case "$1" in
+        --add-spdx|add-spdx) echo "add --spdx <path>" ;;
+        --add-cdx|add-cdx) echo "add --cdx <path>" ;;
+        --add-grype|add-grype) echo "add --grype <path>" ;;
+        --add-openvex|add-openvex) echo "add --openvex <path>" ;;
+        --add-cve-check|add-cve-check) echo "add --cve-check <path>" ;;
+        --add-yocto-vex|add-yocto-vex) echo "add --yocto-vex <path>" ;;
+        --add-asset|add-asset) echo "asset add <path>" ;;
+        --perform-scans) echo "scan <types>" ;;
+        --perform-grype-scan) echo "scan grype" ;;
+        --perform-nvd-scan) echo "scan nvd" ;;
+        --perform-osv-scan) echo "scan osv" ;;
+        --perform-sbom-cve-check-scan) echo "scan sbom-cve-check" ;;
+        --match-condition) echo "check <expr>" ;;
+        --refresh-vulnerability-data) echo "refresh" ;;
+        --export-spdx|export-spdx) echo "export spdx" ;;
+        --export-cdx|export-cdx) echo "export cdx" ;;
+        --export-openvex|export-openvex) echo "export openvex" ;;
+        --export-custom-vulnscout-data|export-custom-vulnscout-data) echo "export custom-data" ;;
+        --export-custom-openvex-assessments|export-custom-openvex-assessments) echo "export custom-openvex" ;;
+        --export-context|export-context) echo "export context" ;;
+        --import-custom-vulnscout-data|import-custom-vulnscout-data) echo "import custom-data <path>" ;;
+        --import-custom-openvex-assessments|import-custom-openvex-assessments) echo "import custom-openvex <path>" ;;
+        --import-context|import-context) echo "import context <path>" ;;
+        --list-projects|list-projects) echo "list projects" ;;
+        --list-scans|list-scans) echo "list scans" ;;
+        --delete-scan|delete-scan) echo "delete scan <id>" ;;
+        --delete-outdated|delete-outdated) echo "delete outdated" ;;
+        --delete-empty-scans|delete-empty-scans) echo "delete empty-scans" ;;
+        --delete-orphaned-vulns|delete-orphaned-vulns|--delete-orphaned-vulnerabilities|delete-orphaned-vulnerabilities)
+            echo "delete orphaned-vulns" ;;
+        --config) echo "config set <key> <value>" ;;
+        --config-list|config-list) echo "config list" ;;
+        --config-clear|config-clear) echo "config unset <key>" ;;
+        --serve) echo "serve" ;;
+        --report) echo "report <template>" ;;
+        --start) echo "start" ;;
+        --stop) echo "stop" ;;
+        --restart) echo "restart" ;;
+        --update) echo "update" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Legacy-only modifiers: warned about in legacy calls, but they do not select the legacy grammar.
+legacy_modifier_replacement() {
+    case "$1" in
+        --use-original-timestamps) echo "import <kind> <path> --timestamps original" ;;
+        --use-current-timestamps) echo "import <kind> <path> --timestamps current" ;;
+        amend) echo "export <kind> --amend" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Collect legacy tokens into LEGACY_TOKENS; return 0 when the call uses the legacy grammar.
+# Values of -p/--project/-v/--variant are skipped, so "-p list-scans" is not a legacy token.
+find_legacy_tokens() {
+    local is_legacy=1 skip_value=false
+    LEGACY_TOKENS=()
+    while [ $# -gt 0 ]; do
+        if [ "$skip_value" = true ]; then
+            skip_value=false
+        else
+            case "$1" in
+                -p|--project|-v|--variant)
+                    skip_value=true ;;
+                config)
+                    # Legacy "config KEY VALUE" always has a key and a value. "config get|set|unset|list",
+                    # "config --help", "help config" and typos such as "config show" use the new grammar.
+                    if [ $# -ge 3 ]; then
+                        case "$2" in
+                            -*|get|set|unset|list) ;;
+                            *) LEGACY_TOKENS+=("$1"); is_legacy=0 ;;
+                        esac
+                    fi ;;
+                *)
+                    if legacy_replacement "$1" > /dev/null; then
+                        LEGACY_TOKENS+=("$1"); is_legacy=0
+                    elif legacy_modifier_replacement "$1" > /dev/null; then
+                        LEGACY_TOKENS+=("$1")
+                    fi ;;
+            esac
+        fi
+        shift
+    done
+    return "$is_legacy"
+}
+
+warn_legacy_tokens() {
+    if [ "${VULNSCOUT_NO_DEPRECATION_WARNING:-}" = 1 ]; then
+        return 0
+    fi
+    local token replacement
+    local -A seen=()
+    for token in "${LEGACY_TOKENS[@]}"; do
+        if [ -n "${seen[$token]:-}" ]; then
+            continue
+        fi
+        seen[$token]=1
+        if [ "$token" = config ]; then
+            replacement="config set <key> <value>"
+        elif ! replacement="$(legacy_replacement "$token")"; then
+            replacement="$(legacy_modifier_replacement "$token")"
+        fi
+        echo "deprecated: $token (removed in $VULNSCOUT_LEGACY_REMOVAL_VERSION); use 'vulnscout $replacement'" >&2
     done
 }
 
@@ -389,7 +559,7 @@ start_frontend_dev() {
     trap _cleanup_frontend SIGINT SIGTERM EXIT
 }
 
-parse_and_run() {
+parse_legacy() {
     # Pre-scan args for --dev so it takes effect regardless of position
     for _arg in "$@"; do
         [ "$_arg" = "--dev" ] && DEV_MODE=true
@@ -403,9 +573,9 @@ parse_and_run() {
         case "$1" in
             --dev)
                 DEV_MODE=true; shift ;;
-            --project)
+            -p|--project)
                 PROJECT="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
-            --variant)
+            -v|--variant)
                 VARIANT="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
             --match-condition)
                 MATCH_CONDITION="$2"; shift 2 ;;
@@ -421,18 +591,14 @@ parse_and_run() {
                 fi
                 validate_scan_types "$2"
                 ensure_running
-                if ! exec_container --help | grep -q -- '--perform-scans <types|all>'; then
-                    echo "Error: the running container does not support --perform-scans. Set VULNSCOUT_IMAGE to a compatible image or use --dev." >&2
-                    exit 1
-                fi
                 PENDING_ARGS+=(--perform-scans "$2"); shift 2 ;;
-            perform-grype-scan|--perform-grype-scan)
+            --perform-grype-scan)
                 ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
-            perform-nvd-scan|--perform-nvd-scan)
+            --perform-nvd-scan)
                 ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
-            perform-osv-scan|--perform-osv-scan)
+            --perform-osv-scan)
                 ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
-            perform-sbom-cve-check-scan|--perform-sbom-cve-check-scan|sbom-cve-check-scan|--sbom-cve-check-scan)
+            --perform-sbom-cve-check-scan)
                 ensure_running; PENDING_ARGS+=(--perform-sbom-cve-check-scan); shift ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
@@ -448,32 +614,23 @@ parse_and_run() {
                 EXPORT_ARGS+=(--amend); shift ;;
             import-custom-vulnscout-data|--import-custom-vulnscout-data)
                 ensure_running
-                local import_file
-                import_file="$(readlink -f "$2")"
                 local import_staged
-                import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
-                call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
+                import_staged="$(stage_file "$2")"
                 EXPORT_ARGS+=(--import-custom-vulnscout-data "$import_staged")
                 shift 2 ;;
             import-custom-openvex-assessments|--import-custom-openvex-assessments)
                 ensure_running
-                local import_file
-                import_file="$(readlink -f "$2")"
                 local import_staged
-                import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
-                call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
+                import_staged="$(stage_file "$2")"
                 EXPORT_ARGS+=(--import-custom-openvex-assessments "$import_staged")
                 shift 2 ;;
             export-context|--export-context)
                 ensure_running; EXPORT_ARGS+=(--export-context); shift ;;
             import-context|--import-context)
                 ensure_running
-                local import_ctx_file
-                import_ctx_file="$(readlink -f "$2")"
-                local import_ctx_staged
-                import_ctx_staged="/tmp/vulnscout_stage_$(basename "$import_ctx_file")"
-                call_container_engine cp "$import_ctx_file" "$CONTAINER_NAME:$import_ctx_staged"
-                EXPORT_ARGS+=(--import-context "$import_ctx_staged")
+                local import_staged
+                import_staged="$(stage_file "$2")"
+                EXPORT_ARGS+=(--import-context "$import_staged")
                 shift 2 ;;
             --use-original-timestamps)
                 EXPORT_ARGS+=(--use-original-timestamps); shift ;;
@@ -499,16 +656,8 @@ parse_and_run() {
                 SERVE_REQUESTED=true; shift ;;
             report|--report)
                 ensure_running
-                local tpl="$2"
-                if [ -f "$tpl" ]; then
-                    local tpl_abs tpl_staged
-                    tpl_abs="$(readlink -f "$tpl")"
-                    tpl_staged="/tmp/vulnscout_stage_$(basename "$tpl_abs")"
-                    call_container_engine cp "$tpl_abs" "$CONTAINER_NAME:$tpl_staged"
-                    tpl="$tpl_staged"
-                elif [[ "$tpl" == */* ]]; then
-                    echo "Error: template file not found: $tpl" >&2; exit 1
-                fi
+                local tpl
+                tpl="$(stage_report_template "$2")"
                 REPORT_ARGS+=(--report "$tpl")
                 shift 2 ;;
             list-projects|--list-projects|list-scans|--list-scans)
@@ -549,40 +698,12 @@ parse_and_run() {
             help|--help|-h)
                 show_help; shift ;;
             version|--version)
-                local _v
-                _v="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
-                echo "VulnScout $_v"
-                shift ;;
+                do_version; shift ;;
             update|--update)
-                local _cur_ver _new_ver _running_img
-                _cur_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
-                if call_container_engine pull "$DOCKER_IMAGE" > /dev/null 2>&1; then
-                    _new_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
-                    if [ "$_cur_ver" != "$_new_ver" ]; then
-                        echo "Updated image: $_cur_ver -> $_new_ver"
-                    else
-                        echo "Image already up to date ($_cur_ver)."
-                    fi
-                else
-                    echo "Could not pull '$DOCKER_IMAGE' (local-only or registry not reachable)."
-                fi
-                # Restart the container if it is running on a different image
-                if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-                    _running_img="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Config.Image}}' 2>/dev/null || true)"
-                    local _running_id _target_id
-                    _running_id="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)"
-                    _target_id="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
-                    if [ -n "$_target_id" ] && [ "$_running_id" != "$_target_id" ]; then
-                        echo "Restarting container on $DOCKER_IMAGE ($(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown))..."
-                        do_start
-                    else
-                        echo "Container already running on the target image."
-                    fi
-                fi
-                shift ;;
+                do_update; shift ;;
             *)
-                echo "Unknown command: $1"
-                echo "Run 'vulnscout help' for usage."
+                echo "Unknown command: $1" >&2
+                echo "Run 'vulnscout help' for usage." >&2
                 exit 1 ;;
         esac
     done
@@ -629,10 +750,18 @@ parse_and_run() {
     return $_exit
 }
 
-if [ $# -eq 0 ]; then
-    show_help
-    exit 0
-fi
+main() {
+    if [ $# -eq 0 ]; then
+        show_help
+        return 0
+    fi
+    if find_legacy_tokens "$@"; then
+        warn_legacy_tokens
+        parse_legacy "$@"
+    else
+        # Replaced by parse_new in the next task.
+        parse_legacy "$@"
+    fi
+}
 
-parse_and_run "$@"
-exit $?
+main "$@"
