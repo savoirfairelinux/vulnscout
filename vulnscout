@@ -1022,6 +1022,130 @@ verb_import() {
     exec_container "${SCOPE_ARGS[@]}" "${import_args[@]}"
 }
 
+stdin_is_tty() {
+    [ -t 0 ]
+}
+
+verb_delete() {
+    local target="${1:-}" dry_run=false yes=false answer=""
+    local -a delete_args=()
+    reject_scope delete
+    case "$target" in
+        scan)
+            if [ $# -lt 2 ] || [[ "$2" == -* ]]; then
+                die "'delete scan' needs a scan ID; run 'vulnscout list scans'."
+            fi
+            delete_args=(--delete-scan "$2")
+            shift 2 ;;
+        outdated)
+            delete_args=(--delete-outdated); shift ;;
+        empty-scans)
+            delete_args=(--delete-empty-scans); shift ;;
+        orphaned-vulns|orphaned-vulnerabilities)
+            delete_args=(--delete-orphaned-vulns); shift ;;
+        "")
+            die "'delete' needs a target: scan <id>, outdated, empty-scans, or orphaned-vulns." ;;
+        *)
+            die "unknown delete target '$target'. Expected scan <id>, outdated, empty-scans, or orphaned-vulns." ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) dry_run=true ;;
+            --yes) yes=true ;;
+            *) reject_option delete "$1" ;;
+        esac
+        shift
+    done
+    ensure_running
+    if [ "$dry_run" = true ]; then
+        exec_container --dry-run "${delete_args[@]}"
+        return 0
+    fi
+    # Ask only on a terminal, so CI jobs keep deleting without input.
+    if [ "$yes" = false ] && stdin_is_tty; then
+        exec_container --dry-run "${delete_args[@]}"
+        read -r -p "Proceed with deletion? [y/N] " answer || true
+        case "$answer" in
+            y|Y|yes|Yes) ;;
+            *)
+                echo "Aborted." >&2
+                return 1 ;;
+        esac
+    fi
+    exec_container "${delete_args[@]}"
+}
+
+verb_list() {
+    local target="${1:-}" json=false
+    reject_scope list
+    case "$target" in
+        projects|scans) shift ;;
+        "") die "'list' needs projects or scans." ;;
+        *) die "unknown list target '$target'. Expected projects or scans." ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=true ;;
+            *) reject_option list "$1" ;;
+        esac
+        shift
+    done
+    ensure_running
+    if [ "$json" = true ]; then
+        exec_container "--list-$target" --json
+    else
+        exec_container "--list-$target"
+    fi
+}
+
+validate_config_key() {
+    if [[ ! "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        die "invalid config key '$1'; use letters, digits and underscores."
+    fi
+}
+
+verb_config() {
+    local action="${1:-}" line
+    reject_scope config
+    case "$action" in
+        get)
+            if [ $# -ne 2 ]; then
+                die "usage: vulnscout config get <key>"
+            fi
+            validate_config_key "$2"
+            line="$(grep "^$2=" "$VULNSCOUT_CONFIG_FILE" 2>/dev/null | tail -n 1 || true)"
+            if [ -z "$line" ]; then
+                die "config key not set: $2"
+            fi
+            echo "${line#*=}" ;;
+        set)
+            if [ $# -ne 3 ]; then
+                die "usage: vulnscout config set <key> <value>"
+            fi
+            validate_config_key "$2"
+            config_set "$2" "$3" ;;
+        unset)
+            if [ $# -ne 2 ]; then
+                die "usage: vulnscout config unset <key>"
+            fi
+            validate_config_key "$2"
+            config_clear "$2" ;;
+        list)
+            if [ $# -gt 1 ]; then
+                reject_option "config list" "$2"
+            fi
+            if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
+                sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
+            else
+                echo "No config file found."
+            fi ;;
+        "")
+            die "'config' needs get, set, unset, or list." ;;
+        *)
+            die "unknown config action '$action'. Expected get, set, unset, or list." ;;
+    esac
+}
+
 parse_new() {
     local help=false verb
     local -a rest=()
@@ -1073,6 +1197,9 @@ parse_new() {
         report) verb_report "${rest[@]}" ;;
         export) verb_export "${rest[@]}" ;;
         import) verb_import "${rest[@]}" ;;
+        delete) verb_delete "${rest[@]}" ;;
+        list) verb_list "${rest[@]}" ;;
+        config) verb_config "${rest[@]}" ;;
         *)
             echo "Unknown command: $verb" >&2
             echo "Run 'vulnscout help' for usage." >&2
