@@ -766,6 +766,89 @@ verb_serve() {
     exec_container --serve
 }
 
+verb_add() {
+    local i
+    local -a inputs=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --spdx|--cdx|--cve-check|--yocto-vex|--openvex|--grype)
+                if [ $# -lt 2 ]; then
+                    die "add $1 requires a path."
+                fi
+                require_file "$2"
+                inputs+=("add-${1#--}" "$2")
+                shift 2 ;;
+            *)
+                reject_option add "$1" ;;
+        esac
+    done
+    if [ ${#inputs[@]} -eq 0 ]; then
+        die "'add' needs at least one input option: --spdx, --cdx, --cve-check, --yocto-vex, --openvex, or --grype."
+    fi
+    ensure_running
+    for ((i = 0; i < ${#inputs[@]}; i += 2)); do
+        add_input "${inputs[i]}" "${inputs[i + 1]}"
+    done
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" "${PENDING_ARGS[@]}"
+}
+
+verb_scan() {
+    local selection="all" arg
+    for arg in "$@"; do
+        if [[ "$arg" == -* ]]; then
+            reject_option scan "$arg"
+        fi
+    done
+    if [ $# -gt 0 ]; then
+        selection="$(IFS=,; echo "$*")"
+    fi
+    validate_scan_types "$selection" scan
+    ensure_running
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --perform-scans "$selection"
+}
+
+verb_check() {
+    if [ $# -ne 1 ]; then
+        die "'check' needs exactly one condition expression, e.g. vulnscout check \"cvss >= 9.0\"."
+    fi
+    ensure_running
+    set_explicit_scope_args
+    # Exit 2 (condition matched) propagates as the wrapper's exit code.
+    exec_container "${SCOPE_ARGS[@]}" --match-condition "$1"
+}
+
+verb_refresh() {
+    require_no_args refresh "$@"
+    ensure_running
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --refresh-vulnerability-data
+}
+
+verb_asset() {
+    local path
+    reject_scope asset
+    if [ "${1:-}" != add ]; then
+        die "usage: vulnscout asset add <path>..."
+    fi
+    shift
+    if [ $# -eq 0 ]; then
+        die "'asset add' needs at least one path."
+    fi
+    for path in "$@"; do
+        if [[ "$path" == -* ]]; then
+            reject_option "asset add" "$path"
+        fi
+        require_file "$path"
+    done
+    ensure_running
+    for path in "$@"; do
+        add_input add-asset "$path"
+    done
+    exec_container "${PENDING_ARGS[@]}"
+}
+
 parse_new() {
     local help=false verb
     local -a rest=()
@@ -809,6 +892,11 @@ parse_new() {
         version) verb_version "${rest[@]}" ;;
         help) verb_help "${rest[@]}" ;;
         serve) verb_serve "${rest[@]}" ;;
+        add) verb_add "${rest[@]}" ;;
+        scan) verb_scan "${rest[@]}" ;;
+        check) verb_check "${rest[@]}" ;;
+        refresh) verb_refresh "${rest[@]}" ;;
+        asset) verb_asset "${rest[@]}" ;;
         *)
             echo "Unknown command: $verb" >&2
             echo "Run 'vulnscout help' for usage." >&2
