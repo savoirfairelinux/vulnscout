@@ -940,12 +940,20 @@ def _exported_spdx2_edges(document):
                   for relation in document['relationships'] if relation['relationshipType'] == 'DEPENDS_ON')
 
 
+def _exported_spdx3_edges(document):
+    names = {item['spdxId']: item['name'] for item in document['@graph'] if item.get('type') == 'software_Package'}
+    return sorted((names[relation['from']], names[target]) for relation in document['@graph']
+                  if relation.get('relationshipType') == 'dependsOn' for target in relation['to'])
+
+
+@pytest.mark.parametrize('format_name', ['spdx2', 'spdx3'])
 @pytest.mark.parametrize('ignore_parsing_errors', ['false', 'true'])
-def test_scoped_spdx2_export_import_cycles_preserve_cross_document_dependencies(
-        app, tmp_path, monkeypatch, ignore_parsing_errors):
+def test_scoped_spdx_export_import_cycles_preserve_cross_document_dependencies(
+        app, tmp_path, monkeypatch, format_name, ignore_parsing_errors):
     from xml.etree import ElementTree
     from src.helpers.export_scope import compute_export_scope
     from src.views.spdx import SPDX
+    from src.views.spdx3 import SPDX3
 
     monkeypatch.setenv('IGNORE_PARSING_ERRORS', ignore_parsing_errors)
     project = Project.create('dependency-export')
@@ -973,12 +981,17 @@ def test_scoped_spdx2_export_import_cycles_preserve_cross_document_dependencies(
         db.session.remove()
         controllers = ControllersCache(scope=compute_export_scope(variant_id=variant_id))
         controllers.packages._preload_cache()
-        exporter = SPDX(controllers)
-        exported = json.loads(exporter.output_as_json())
-        assert _exported_spdx2_edges(exported) == [('app', 'lib'), ('app', 'util')]
-        xml = ElementTree.fromstring(exporter.output_as_xml())
-        assert [relation.findtext('relationshipType') for relation in xml.findall('relationships')].count(
-            'DEPENDS_ON') == 2
+        if format_name == 'spdx2':
+            exporter = SPDX(controllers)
+            exported = json.loads(exporter.output_as_json())
+            assert _exported_spdx2_edges(exported) == [('app', 'lib'), ('app', 'util')]
+            xml = ElementTree.fromstring(exporter.output_as_xml())
+            assert [relation.findtext('relationshipType') for relation in xml.findall('relationships')].count(
+                'DEPENDS_ON') == 2
+        else:
+            exported = json.loads(SPDX3(controllers).output_as_json())
+            assert _exported_spdx3_edges(exported) == [('app', 'lib'), ('app', 'util')]
+            assert len([item for item in exported['@graph'] if item.get('relationshipType') == 'dependsOn']) == 1
         path = tmp_path / f'cycle-{index}.spdx.json'
         path.write_text(json.dumps(exported))
         scan_id = Scan.create('SBOM', variant_id).id
@@ -991,9 +1004,9 @@ def test_scoped_spdx2_export_import_cycles_preserve_cross_document_dependencies(
 
     global_controllers = ControllersCache()
     global_controllers.packages._preload_cache()
-    assert _exported_spdx2_edges(json.loads(SPDX(global_controllers).output_as_json())) == [
-        ('app', 'lib'), ('app', 'util'), ('util', 'lib'),
-    ]
+    global_edges = [('app', 'lib'), ('app', 'util'), ('util', 'lib')]
+    assert _exported_spdx2_edges(json.loads(SPDX(global_controllers).output_as_json())) == global_edges
+    assert _exported_spdx3_edges(json.loads(SPDX3(global_controllers).output_as_json())) == global_edges
     assert SPDX(ControllersCache()).packagesCtrl.dependency_edges() == set()
 
 
