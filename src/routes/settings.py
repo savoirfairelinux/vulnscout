@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import os
+import re
 import json
 import uuid
 import time
@@ -276,6 +277,9 @@ def _assessment_covers(
     return (variant_id, finding_id) in assessment.targets
 
 
+_ENTITY_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_@-]{0,63}")
+
+
 def init_app(app: Flask) -> None:
 
     def _validate_name_from_request(entity_label: str) -> tuple[str, None] | tuple[None, ErrorResponse]:
@@ -289,6 +293,11 @@ def init_app(app: Flask) -> None:
         name = data["name"].strip()
         if not name:
             return None, (jsonify({"error": f"{entity_label} name must not be empty."}), 400)
+        if not _ENTITY_NAME_PATTERN.fullmatch(name):
+            return None, (jsonify({"error": (
+                f"{entity_label} name must be at most 64 characters long and may only contain "
+                "letters, digits, '_', '-' and '@', starting with a letter or digit."
+            )}), 400)
         return name, None
 
     def _delete_entity(
