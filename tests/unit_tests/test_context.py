@@ -424,7 +424,158 @@ class TestPutProjectContext:
         assert resp.status_code == 404
 
 
+class TestPatchVariantContext:
+
+    def test_editor_mode_is_presentation_metadata_and_does_not_outdate_assessments(self, client, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, threat_model="Saved", editor_mode="free")
+        previous_time = vc.updated_at
+        response = client.patch(
+            f"/api/variants/{variant.id}/context",
+            json={"editor_mode": "stride", "expected": {"editor_mode": "free"}},
+        )
+        assert response.status_code == 200
+        assert response.json["editor_mode"] == "stride"
+        assert vc.updated_at == previous_time
+        assert vc.threat_model == "Saved"
+        response = client.patch(
+            f"/api/variants/{variant.id}/context",
+            json={"risks": "Draft", "expected": {"editor_mode": "free"}},
+        )
+        assert response.status_code == 409
+        assert vc.risks is None
+        assert vc.updated_at == previous_time
+        response = client.patch(f"/api/variants/{variant.id}/context", json={"editor_mode": None})
+        assert response.status_code == 200
+        assert vc.editor_mode is None
+        assert vc.updated_at == previous_time
+
+    def test_editor_mode_can_be_saved_before_content_without_a_timestamp(self, client, variant):
+        response = client.patch(f"/api/variants/{variant.id}/context", json={"editor_mode": "free"})
+        assert response.status_code == 200
+        assert response.json["editor_mode"] == "free"
+        assert response.json["updated_at"] is None
+
+    def test_updates_only_supplied_fields_and_can_clear_them(self, client, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(
+            variant.id, threat_model="Saved threats", risks="Saved risks",
+            environment="Linux", codebase_path="/src",
+        )
+        previous_time = vc.updated_at
+        response = client.patch(
+            f"/api/variants/{variant.id}/context",
+            json={"environment": "Zephyr", "codebase_path": None,
+                  "expected": {"environment": "Linux", "codebase_path": "/src"}},
+        )
+        assert response.status_code == 200
+        assert response.json["environment"] == "Zephyr"
+        assert response.json["codebase_path"] is None
+        assert response.json["threat_model"] == "Saved threats"
+        assert response.json["risks"] == "Saved risks"
+        assert vc.updated_at > previous_time
+
+    def test_noop_does_not_outdate_assessments(self, client, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, threat_model="Saved")
+        previous_time = vc.updated_at
+        response = client.patch(
+            f"/api/variants/{variant.id}/context",
+            json={"threat_model": "Saved", "expected": {"threat_model": "Saved"}},
+        )
+        assert response.status_code == 200
+        assert vc.updated_at == previous_time
+
+    def test_creates_partial_context_without_mandatory_other_sections(self, client, variant):
+        response = client.patch(
+            f"/api/variants/{variant.id}/context", json={"environment": "Zephyr"},
+        )
+        assert response.status_code == 200
+        assert response.json["environment"] == "Zephyr"
+        assert response.json["threat_model"] is None
+
+    def test_conflict_preserves_all_stored_fields(self, client, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, threat_model="Agent model", risks="Saved")
+        previous_time = vc.updated_at
+        response = client.patch(
+            f"/api/variants/{variant.id}/context",
+            json={"risks": "Draft", "expected": {"threat_model": "Old model", "risks": "Saved"}},
+        )
+        assert response.status_code == 409
+        assert "reload" in response.json["error"]
+        assert vc.threat_model == "Agent model"
+        assert vc.risks == "Saved"
+        assert vc.updated_at == previous_time
+
+    def test_conflict_during_update_is_rejected(self, client, variant):
+        from unittest.mock import Mock
+        from sqlalchemy.sql.dml import Update
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, risks="Saved")
+        execute = _db.session.execute
+
+        def concurrent_execute(statement, *args, **kwargs):
+            if isinstance(statement, Update):
+                result = Mock()
+                result.scalar_one_or_none.return_value = None
+                return result
+            return execute(statement, *args, **kwargs)
+
+        with patch.object(_db.session, "execute", side_effect=concurrent_execute):
+            response = client.patch(
+                f"/api/variants/{variant.id}/context",
+                json={"risks": "Draft", "expected": {"risks": "Saved"}},
+            )
+        assert response.status_code == 409
+        assert vc.risks == "Saved"
+
+    @pytest.mark.parametrize("body", [
+        [], {}, {"unexpected": "value"}, {"expected": {}}, {"risks": 3},
+        {"risks": "text", "expected": None}, {"risks": "text", "expected": {"risks": []}},
+        {"risks": "text", "expected": {"unknown": None}},
+        {"editor_mode": "unsupported"}, {"editor_mode": []},
+        {"risks": "text", "expected": {"editor_mode": "unsupported"}},
+    ])
+    def test_rejects_invalid_patch(self, client, variant, body):
+        response = client.patch(f"/api/variants/{variant.id}/context", json=body)
+        assert response.status_code == 400
+        assert "error" in response.json
+
+    @pytest.mark.parametrize("identifier, status", [
+        ("invalid", 400), ("00000000-0000-0000-0000-000000000001", 404),
+    ])
+    def test_rejects_invalid_variant(self, client, identifier, status):
+        response = client.patch(
+            f"/api/variants/{identifier}/context", json={"risks": "text"},
+        )
+        assert response.status_code == status
+
+
 class TestPutVariantContext:
+
+    def test_omitting_mode_preserves_an_explicit_legacy_preference(self, client, variant):
+        from src.controllers.context import VariantContextController
+        from src.models.variant_context import VariantContext
+        response = client.put(
+            f"/api/variants/{variant.id}/context", json={"threat_model": "Saved", "editor_mode": "free"},
+        )
+        assert response.json["editor_mode"] == "free"
+        timestamp = response.json["updated_at"]
+        response = client.put(f"/api/variants/{variant.id}/context", json={"threat_model": "Saved"})
+        assert response.json["editor_mode"] == "free"
+        assert response.json["updated_at"] == timestamp
+        vc = VariantContextController.upsert(variant.id, threat_model="Saved", editor_mode="stride")
+        assert vc.editor_mode == "stride"
+        assert vc.to_dict()["updated_at"] == timestamp
+        with pytest.raises(ValueError, match="editor_mode"):
+            VariantContext.upsert(variant.id, editor_mode="unsupported")
+
+    @pytest.mark.parametrize("mode", ["unsupported", [], 1])
+    def test_rejects_invalid_mode(self, client, variant, mode):
+        response = client.put(f"/api/variants/{variant.id}/context", json={"editor_mode": mode})
+        assert response.status_code == 400
+        assert "editor_mode" in response.json["error"]
 
     def test_upsert_creates_row(self, client, variant):
         resp = client.put(

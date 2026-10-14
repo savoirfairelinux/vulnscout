@@ -111,7 +111,9 @@ class VariantContext(Base):
     threat_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     risks: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Bumped only when a field's value actually changes; AI assessments older
+    # NULL keeps automatic format detection; imported legacy files explicitly use free mode.
+    editor_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bumped only when assessment content changes, not for editor preferences; assessments older
     # than this were written against a previous context.  NULL = never modified.
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -130,6 +132,7 @@ class VariantContext(Base):
             "threat_model": self.threat_model,
             "risks": self.risks,
             "other_info": self.other_info,
+            "editor_mode": self.editor_mode,
             "updated_at": ensure_utc_iso(self.updated_at) if self.updated_at else None,
             "files": [f.to_dict() for f in self.files],
         }
@@ -154,7 +157,25 @@ class VariantContext(Base):
         risks: str | None = None,
         other_info: str | None = None,
         commit: bool = True,
+        editor_mode: str | None = None,
+        _sync_shared: bool = True,
     ) -> "VariantContext":
+        if editor_mode not in (None, "stride", "free"):
+            raise ValueError("editor_mode must be stride or free")
+        from .project_context import ProjectContext
+        from .variant import Variant
+        variant = None
+        pc = None
+        if _sync_shared:
+            variant = Variant.get_by_id(variant_id)
+            pc = ProjectContext.get_by_project(variant.project_id) if variant else None
+            if pc is not None and pc.shared_context is not None:
+                from ..helpers.shared_context import write_variant
+                return write_variant(variant_id, {
+                    "variant_description": variant_description, "codebase_path": codebase_path,
+                    "environment": environment, "threat_model": threat_model, "risks": risks,
+                    "other_info": other_info, "editor_mode": editor_mode,
+                }, commit)
         existing = VariantContext.get_by_variant(variant_id)
         if existing is not None:
             new_values = {
@@ -165,13 +186,16 @@ class VariantContext(Base):
                 "risks": risks,
                 "other_info": other_info,
             }
-            changed = False
+            changed = any(getattr(existing, name) != value for name, value in new_values.items())
+            mode_changed = editor_mode is not None and existing.editor_mode != editor_mode
+            if _sync_shared and variant is not None and (changed or mode_changed):
+                ProjectContext.advance_revision(variant.project_id, pc.context_revision if pc else 0)
             for name, value in new_values.items():
-                if getattr(existing, name) != value:
-                    setattr(existing, name, value)
-                    changed = True
+                setattr(existing, name, value)
             if changed:
                 existing.updated_at = datetime.now(timezone.utc)
+            if editor_mode is not None:
+                existing.editor_mode = editor_mode
             if commit:
                 db.session.commit()
             return existing
@@ -179,6 +203,8 @@ class VariantContext(Base):
             v is not None
             for v in (variant_description, codebase_path, environment, threat_model, risks, other_info)
         )
+        if _sync_shared and variant is not None and (has_content or editor_mode is not None):
+            ProjectContext.advance_revision(variant.project_id, pc.context_revision if pc else 0)
         vc = VariantContext(
             variant_id=variant_id,
             variant_description=variant_description,
@@ -187,6 +213,7 @@ class VariantContext(Base):
             threat_model=threat_model,
             risks=risks,
             other_info=other_info,
+            editor_mode=editor_mode,
             updated_at=datetime.now(timezone.utc) if has_content else None,
         )
         db.session.add(vc)

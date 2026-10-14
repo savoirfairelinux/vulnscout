@@ -15,6 +15,7 @@ import Vulnerabilities from '../../src/handlers/vulnerabilities';
 import Assessments from '../../src/handlers/assessments';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
+import type { AgentContext, AgentViewContext } from '../../src/types/agent';
 
 class TestEventSource {
     static current: TestEventSource;
@@ -82,13 +83,14 @@ jest.mock('../../src/handlers/assessments', () => ({
 
 jest.mock('../../src/components/NavigationBar', () => ({
     __esModule: true,
-    default: ({ defaultProject, defaultScope, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
+    default: ({ defaultProject, defaultScope, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount, onToggleAgent }: {
         defaultProject?: { id: string } | null;
         defaultScope?: { project_id: string } | null;
         onOpenOperationQueue: () => void;
         trackedScanCount: number;
         finishedScanCount: number;
         activeScanCount: number;
+        onToggleAgent: () => void;
     }) => (
         <div>
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
@@ -98,6 +100,7 @@ jest.mock('../../src/components/NavigationBar', () => ({
                 <Link key={tab} to={ROUTES[tab]}>{tab}</Link>
             ))}
             <button onClick={onOpenOperationQueue}>progress</button>
+            <button onClick={onToggleAgent}>Toggle agent</button>
         </div>
     ),
 }));
@@ -192,7 +195,17 @@ jest.mock('../../src/pages/Settings', () => ({
 }));
 jest.mock('../../src/pages/Transfer', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../src/pages/Exports', () => ({ __esModule: true, default: () => <div>exports page</div> }));
-jest.mock('../../src/pages/AIContext', () => ({ __esModule: true, default: () => <div>ai context page</div> }));
+jest.mock('../../src/pages/AIContext', () => ({
+    __esModule: true,
+    default: ({ onAgentContextChange }: { onAgentContextChange: (context: AgentViewContext) => void }) => <div>
+        ai context page
+        <button onClick={() => onAgentContextChange({ selectedProjectId: 'ai-project', section: 'system' })}>Select AI project</button>
+    </div>,
+}));
+jest.mock('../../src/components/AgentChat', () => ({
+    __esModule: true, default: ({ context }: { context: AgentContext }) =>
+        <div data-testid="agent-context">{JSON.stringify(context)}</div>,
+}));
 
 const mockConfigGet = Config.get as jest.MockedFunction<typeof Config.get>;
 const mockGetFrontendScope = Config.getFrontendScope as jest.MockedFunction<typeof Config.getFrontendScope>;
@@ -499,6 +512,21 @@ describe('Explorer saved-scope validation', () => {
 
         fireEvent.click(screen.getByRole('link', { name: 'ai' }));
         expect(screen.getByText('ai context page')).toBeInTheDocument();
+    });
+
+    test('AI agent context uses the page project without inheriting the explorer variant', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([]);
+        mockVariantsList.mockResolvedValue([]);
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockPackagesList).toHaveBeenCalled());
+        fireEvent.click(screen.getByRole('link', { name: 'ai' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Toggle agent' }));
+        expect(JSON.parse(screen.getByTestId('agent-context').textContent!)).toEqual({ page: 'ai', view: {} });
+        fireEvent.click(screen.getByRole('button', { name: 'Select AI project' }));
+        expect(JSON.parse(screen.getByTestId('agent-context').textContent!)).toEqual({
+            page: 'ai', projectId: 'ai-project', view: { selectedProjectId: 'ai-project', section: 'system' },
+        });
     });
 
     test('an unknown URL shows the 404 page', async () => {

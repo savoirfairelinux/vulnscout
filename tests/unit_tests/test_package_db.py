@@ -238,6 +238,8 @@ def test_sbom_evidence_migration_excludes_global_evidence_and_preserves_identifi
 
 
 def test_already_upgraded_pr_database_remains_compatible_with_consolidated_migration(app, monkeypatch):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
     from src.models import SBOMDocument, SBOMPackage
 
     project = Project.create("already-upgraded")
@@ -251,6 +253,13 @@ def test_already_upgraded_pr_database_remains_compatible_with_consolidated_migra
     link.source_urls = [url]
     link.purl = ["pkg:generic/lib@1.0"]
     _db.session.commit()
+    with _db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)) as operations:
+            with operations.batch_alter_table("variant_context") as batch_op:
+                batch_op.drop_column("editor_mode")
+            with operations.batch_alter_table("project_context") as batch_op:
+                batch_op.drop_column("shared_context")
+                batch_op.drop_column("context_revision")
     # Alembic's logging configuration must not disable other tests' loggers.
     monkeypatch.setattr("logging.config.fileConfig", lambda _filename: None)
     runner = app.test_cli_runner()

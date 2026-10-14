@@ -510,12 +510,12 @@ function Explorer() {
 
     const agentContext: AgentContext = {
         page: tab,
-        projectId: currentProjectId,
-        variantId: currentVariantId,
-        baseVariantId: currentBaseVariantId,
-        compareOperation: currentOperation,
-        variantIds: currentVariantIds ?? (!currentVariantId && projectVariantScope?.projectId === currentProjectId ? projectVariantScope?.ids : undefined),
-        multiOperation: currentMultiOperation,
+        projectId: tab === 'ai' ? aiAgentView.selectedProjectId || undefined : currentProjectId,
+        variantId: tab === 'ai' ? undefined : currentVariantId,
+        baseVariantId: tab === 'ai' ? undefined : currentBaseVariantId,
+        compareOperation: tab === 'ai' ? undefined : currentOperation,
+        variantIds: tab === 'ai' ? undefined : currentVariantIds ?? (!currentVariantId && projectVariantScope?.projectId === currentProjectId ? projectVariantScope?.ids : undefined),
+        multiOperation: tab === 'ai' ? undefined : currentMultiOperation,
         view: activeAgentView && {
             ...activeAgentView,
             matchingVariantIds: openAgentVulnerabilityId && modalVariantScope?.vulnId === openAgentVulnerabilityId && modalVariantScope.projectId === currentProjectId

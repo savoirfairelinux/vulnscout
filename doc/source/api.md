@@ -208,14 +208,54 @@ PUT /api/projects/<project_id>/context
 
 The `PUT` request accepts a JSON object with a `description` field.
 
+### Shared Project Context
+
+```
+GET /api/projects/<project_id>/context/shared
+PATCH /api/projects/<project_id>/context/shared
+POST /api/projects/<project_id>/context/shared
+```
+
+`GET` returns `project_id`, `description`, `revision`, a canonical shared `context`,
+and variant choices (`id`, `name`). Existing variant context is derived lazily;
+reading does not rewrite it. Records use explicit `variant_ids` and stable
+project-local IDs; future variants do not inherit existing scopes.
+
+`PATCH` accepts `section` (`context`, `system`, `threat_model`, `risks`), a full
+draft `context`, integer `expected_revision`, optional boolean `dry_run`, and
+an optional `description` for Context. Only the selected section is saved.
+Context owns editor mode; persist a mode change there before saving another
+section. Dependencies must be saved and cover every referencing variant.
+Previously unavailable references may be preserved, but new ghost references
+and reuse of their identifiers are rejected.
+
+With `dry_run: true`, the response reports `changed_variant_ids` and
+`description_changed` without writing. A real save returns those values along
+with the updated shared response and revision. Concurrent changes return HTTP
+409 without replacing saved content. Only changed variant content outdates its
+pending AI assessments; a project-description change affects the whole project.
+
+`POST` accepts only `context` and `editor_mode` (`stride` or `free`) and returns a
+converted `context` for preview, without writing. Conversion preserves readable
+context and scoped description/environment/path entries.
+
 ### Update Variant Context
 
 ```
 PUT /api/variants/<variant_id>/context
+PATCH /api/variants/<variant_id>/context
 ```
 
-Accepts a JSON object containing any of `variant_description`, `codebase_path`, `environment`, `threat_model`, `risks`,
-and `other_info`.
+`PUT` replaces `variant_description`, `codebase_path`, `environment`, `threat_model`, `risks`, and `other_info`;
+omitted text fields become null. Optional `editor_mode` (`stride` or `free`) persists the UI preference;
+omitting it preserves the existing preference. Mode-only changes do not outdate assessments.
+
+`PATCH` updates only supplied fields and can include an `expected` object for optimistic conflict checks.
+A mismatched expected value returns HTTP 409 without replacing saved content.
+For shared projects, these endpoints synchronize the canonical document and its
+readable per-variant projections. Content changes affect only the requested
+variant, splitting it out of shared entries as necessary. Editor mode is
+project-wide; null/omitted mode retains that project preference.
 
 ### Import or Export Context
 
@@ -225,7 +265,12 @@ POST /api/context/import
 ```
 
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
-export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
+export all context. Exports containing shared projects use format 3.0 with one
+canonical document per project and portable `variant_names` scopes, intersected
+with the selected recipients. Other exports retain format 2.0 with structured
+STRIDE system, threat and risk objects, or explicit free-text mode.
+Import accepts both formats and legacy 1.0/unversioned files as Advanced free text
+and applies all valid entries atomically. See [AI context import/export](ai-assessments.md#import-and-export).
 
 ### Manage Codebase References
 

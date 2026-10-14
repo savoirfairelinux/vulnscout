@@ -49,6 +49,134 @@ replaced.
 
 ---
 
+## Fill in the AI context
+
+Select a project in the **AI** tab. Each description, source path, environment
+entry, system component, interaction, threat, risk and additional note has its
+own **variants** selection. Shared entries are stored once: editing one updates
+every selected recipient. Add another entry for variant-specific information,
+or narrow an entry's scope. New entries initially select all currently loaded
+variants; variants created later do **not** inherit existing entries.
+Each saved entry must target at least one variant; this is checked on save.
+Identical existing information is grouped where its ordering permits, without
+overwriting the original per-variant content.
+
+Use **Context** for descriptions,
+source paths and the operating environment, **System** for architecture,
+**Threat model** for threats, and **Risks** for their evaluation. **Summary**
+provides a read-only STRIDE category overview and threat/risk tables, including
+unsaved edits, incomplete entries, variant scopes and unavailable references.
+Counts refer to shared entries, not summed per-variant copies, and do not
+indicate completed review or safety. In Advanced free mode, Summary shows the
+current text instead. Switching subtabs keeps unsaved edits. Each editable subtab
+has its own **Save** button; other sections' drafts remain unsaved.
+Save new system elements before threats that reference them, and new threats
+before their risks. When removing references, save the risks or threats first.
+System and threats share a text field, but their saves preserve the other
+section's saved content. A reference must be available in every variant selected
+for the referencing entry. Selecting a threat narrows a risk to compatible
+variants. Save expanded dependency scopes before using them in another section,
+and save reference changes before removing a dependency's scope.
+In Advanced free mode, **Save Threat model** saves the
+combined system/threat text; **Save Risks** saves only the risk text.
+
+Use **Add Codebase Path** and **Remove Codebase Path** to list source directories
+individually. Paths are context hints, not filesystem access or automatic mounts.
+Container-based assessment tools need explicitly mounted directories and their
+container paths. The embedded Agent currently exposes only VulnScout MCP tools,
+not source-file read/search tools.
+
+Choose **Editor mode** in **Context**; it applies to **System**, **Threat model**
+and **Risks**, project-wide. The default is a guided **STRIDE template**.
+Save other sections' drafts before changing mode, then save **Context** before
+editing other sections in the new mode. A presentation-only mode change does
+not outdate AI assessments. If legacy variants use mixed editors, the project
+starts in Advanced free mode to retain all original text.
+In **System**, describe assets, actors, entry points and trust boundaries.
+Use **Add component** for security-relevant device parts, services, stores and
+external actors. Use **Add interaction** for named, directed flows between
+components, including their interface, exchanged data and crossed trust boundary.
+This is a user-declared system model, not an inferred SBOM dependency graph.
+
+In **Threat model**, record each threat's
+description and select its category: **Spoofing**,
+**Tampering**, **Repudiation**, **Information disclosure**, **Denial of service**
+and **Elevation of privilege**. Use **Add threat** and **Add risk** to create
+empty entries. The prompts are examples, not prefilled answers.
+Several threats can share a category. Leave unknowns blank; the **Additional notes**
+area can record assumptions or explain why a category does not apply.
+Optionally select one or more **Affected system elements** from System.
+Renaming an element updates its references; remove or reassign references before
+deleting components or interactions. Existing threats need not acquire a target.
+
+In the risk register, **select a threat from Threat model**, then record its
+qualitative likelihood and impact, mitigations and residual-risk decisions.
+A threat cannot be removed until its linked risks are reassigned or removed.
+**Advanced free mode** remains available for your own format. Existing free-text
+context opens in that mode;
+switching to STRIDE retains it as additional notes. In free mode, system details
+remain in the Threat Model text. Both modes save readable text
+and work with existing AI tools and context imports/exports. Existing variant
+API/MCP writes change only the requested recipient, splitting changed information
+out of shared entries rather than editing other variants. Changing editor mode
+is project-wide once shared context is saved.
+
+Each save checks a project revision and keeps drafts on conflicts. Only variants
+whose context changes have their pending AI assessments marked outdated;
+changing the project description affects every project variant. Agent writes
+and imports reload clean forms but retain dirty drafts with a warning.
+**Reload saved context** asks before discarding unsaved drafts.
+
+### Import and export
+
+Exports contain **saved context only**. Projects using shared entries export
+JSON format **3.0**, with one canonical `context` per project, a `variants` list
+containing variant names, and `variant_names` on every scoped record. Portable
+names replace database UUIDs. All projects in a 3.0 file use this shape; there
+are no conflicting per-variant context copies.
+
+The shared context contains one `editor_mode`, scoped text collections in
+`fields` (`variant_description`, `codebase_path`, `environment`, `other_info`,
+`scope`, `actors`, `entry_points`, `trust_boundaries`), and `components`,
+`interactions`, `threats`, `risks`, `threat_notes`, `risk_notes`,
+`free_threat_model` and `free_risks` arrays. Records have stable project-local
+IDs (`C`, `I`, `T`, `R`, or `X` followed by a positive integer).
+Text records have `id`, `value` and `variant_names`; structured records retain
+their existing STRIDE fields and add a scope. Free mode uses the two free-text
+arrays instead of structured system/threat/risk records.
+
+Selecting export recipients intersects every entry's scope with that selection.
+Imports replace only matching recipients, preserving unselected variants and
+shared identities where content and ordering permit. Identifier collisions are remapped
+together with their references; unavailable references remain unavailable.
+
+Projects not yet using shared entries still export JSON format **2.0**.
+Each variant has `editor_mode` (`stride` or `free`),
+`codebase_paths` as an array, and its description, environment and other notes.
+In STRIDE mode, `system` contains scope, actors, entry points, trust boundaries,
+components and directed interactions. `threat_model` contains threats with stable
+IDs, categories, descriptions, system `targetIds` and additional notes; `risks`
+contains threat-linked risk entries and additional notes. Summary is derived,
+not exported. Blank ratings and unavailable references remain explicit.
+
+Advanced free-mode exports retain the original `threat_model` and `risks` text
+instead of structured objects. **Legacy 1.0 and unversioned files still import,
+always into Advanced free mode**, including files whose text happens to use a
+STRIDE template. That choice survives reloads. Switching to STRIDE remains
+explicit; save Context to persist an editor-mode change without saving other
+drafts. Mode-only changes do not outdate AI assessments.
+
+Formats 2.0 and 3.0 support partially completed contexts, including empty sections.
+Malformed structured records, invalid IDs/categories/ratings and unknown format
+versions are reported rather than silently discarded. Omit completely blank
+editor-placeholder rows in 2.0; 3.0 retains scoped draft records explicitly.
+Imports replace context for matching existing variants;
+unknown projects/variants are ignored. Legacy imports retain their required
+project-description and threat-model fields. The HTTP API and context CLI
+commands use the same format.
+
+---
+
 ## Prerequisites
 
 For the **embedded Agent**, use its connector setup described in
@@ -157,8 +285,11 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 
 ## Codebase references in the AI tab
 
-Select a project and variant in **AI**, then drag source files or archives onto
-**Codebase References**, or use the file picker. Multiple uploads are supported.
+Select a project in **AI**, then choose **Codebase reference variant** in the
+**Context** section and drag source files or archives onto **Codebase References**,
+or use the file picker. Uploaded references belong only to that variant;
+this selector is independent of the shared text entries' variant scopes.
+Multiple uploads are supported.
 An optional description can identify the component/version and whether the
 upload is a complete source tree or only selected files. References are saved
 **immediately**, independently of **Save context**; unsaved text fields are kept.

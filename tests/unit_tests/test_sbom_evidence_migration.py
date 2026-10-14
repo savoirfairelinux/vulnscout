@@ -36,7 +36,7 @@ def _upgrade(app, revision="head"):
 
 def test_fresh_database_reaches_the_evidence_schema_and_can_use_its_links(app):
     _upgrade(app)
-    assert db.session.execute(text("SELECT version_num FROM alembic_version")).scalar() == "c83e91ab402d"
+    assert db.session.execute(text("SELECT version_num FROM alembic_version")).scalar() == "f38ab91c620d"
     inspector = inspect(db.engine)
     for table in ("packages", "sbom_packages"):
         assert {column["name"] for column in inspector.get_columns(table)} == set(
@@ -114,4 +114,4 @@ def test_empty_evidence_schema_can_downgrade_to_an_older_schema_and_upgrade_agai
         table: {column["name"] for column in inspect(db.engine).get_columns(table)}
         for table in inspect(db.engine).get_table_names()
     } == expected_columns
-    assert db.session.execute(text("SELECT version_num FROM alembic_version")).scalar() == "c83e91ab402d"
+    assert db.session.execute(text("SELECT version_num FROM alembic_version")).scalar() == "f38ab91c620d"

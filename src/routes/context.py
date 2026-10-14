@@ -4,6 +4,7 @@
 import os
 import uuid
 import logging
+from datetime import datetime, timezone
 
 from flask import jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,6 +18,10 @@ from ..helpers.context_io import (
     collect_entries,
     extract_entries,
     import_entries,
+)
+from ..helpers.shared_context import (
+    ContextConflict, convert_mode, load_document, response as shared_response,
+    save_section, validate_document, write_variant,
 )
 from ..models.project import Project
 from ..models.variant import Variant
@@ -32,6 +37,46 @@ def _get_cache_dir() -> str:
 
 
 def init_app(app):
+
+    @app.route('/api/projects/<project_id>/context/shared', methods=['GET', 'PATCH', 'POST'])
+    def shared_project_context(project_id):
+        """Read shared entries, save one section, or preview editor-mode conversion.
+
+        OpenAPI:
+        body JsonObject optional Section update or mode-conversion preview.
+        response 200 JsonObject Shared project context or preview.
+        response 400 Error Invalid shared entries or scope.
+        response 404 Error Project not found.
+        response 409 Error Saved project context changed.
+        """
+        project_uuid, err = parse_uuid_or_400(project_id, 'project_id')
+        if err:
+            return err
+        assert project_uuid is not None
+        if Project.get_by_id(project_uuid) is None:
+            return jsonify({"error": "Project not found"}), 404
+        if request.method == 'GET':
+            return jsonify(shared_response(project_uuid))
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Supply a shared context object"}), 400
+        try:
+            if request.method == 'POST':
+                if set(body) != {'context', 'editor_mode'}:
+                    raise ValueError("Supply context and editor_mode only")
+                _, _, variants = load_document(project_uuid)
+                identifiers = [str(variant.id) for variant in variants]
+                validate_document(body.get('context'), set(identifiers))
+                if body.get('editor_mode') not in ('stride', 'free'):
+                    raise ValueError("editor_mode must be stride or free")
+                return jsonify({"context": convert_mode(body['context'], body['editor_mode'], identifiers)})
+            return jsonify(save_section(project_uuid, body))
+        except ContextConflict as exc:
+            db.session.rollback()
+            return jsonify({"error": str(exc)}), 409
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({"error": str(exc)}), 400
 
     @app.route('/api/context', methods=['GET'])
     def get_merged_context():
@@ -79,6 +124,7 @@ def init_app(app):
             "threat_model": vc.threat_model if vc else None,
             "risks": vc.risks if vc else None,
             "other_info": vc.other_info if vc else None,
+            "editor_mode": vc.editor_mode if vc else None,
             "files": [f.to_dict() for f in vc.files] if vc else [],
         })
 
@@ -143,6 +189,14 @@ def init_app(app):
             return err
         assert variant_uuid is not None
         body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict) or body.get('editor_mode') not in (None, 'stride', 'free'):
+            return jsonify({"error": "editor_mode must be stride or free."}), 400
+        if any(body.get(key) is not None and not isinstance(body[key], str) for key in (
+            'variant_description', 'codebase_path', 'environment', 'threat_model', 'risks', 'other_info',
+        )):
+            return jsonify({"error": "Context fields must be text or null."}), 400
+        if Variant.get_by_id(variant_uuid) is None:
+            return jsonify({"error": "Variant not found"}), 404
         try:
             vc = VariantContextController.upsert(
                 variant_uuid,
@@ -152,7 +206,86 @@ def init_app(app):
                 threat_model=body.get('threat_model'),
                 risks=body.get('risks'),
                 other_info=body.get('other_info'),
+                editor_mode=body.get('editor_mode'),
             )
+        except ContextConflict as exc:
+            db.session.rollback()
+            return jsonify({"error": str(exc)}), 409
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(VariantContextController.serialize(vc))
+
+    @app.route('/api/variants/<variant_id>/context', methods=['PATCH'])
+    def patch_variant_context(variant_id):
+        """Update only supplied variant context fields.
+
+        OpenAPI:
+        body JsonObject required Changed fields and optional expected field values.
+        response 200 JsonObject Updated variant context.
+        response 400 Error Invalid identifier, fields or expected values.
+        response 404 Error Variant not found.
+        response 409 Error Context changed since it was loaded.
+        """
+        variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
+        if err:
+            return err
+        assert variant_uuid is not None
+        body = request.get_json(silent=True)
+        fields = (
+            'variant_description', 'codebase_path', 'environment',
+            'threat_model', 'risks', 'other_info',
+            'editor_mode',
+        )
+        if not isinstance(body, dict) or not body or any(key not in (*fields, 'expected') for key in body):
+            return jsonify({"error": "Supply variant context fields to update."}), 400
+        expected = body.get('expected', {})
+        if (
+            not any(key in body for key in fields)
+            or any(body[key] is not None and not isinstance(body[key], str) for key in fields if key in body)
+            or not isinstance(expected, dict)
+            or any(key not in fields or (value is not None and not isinstance(value, str))
+                   for key, value in expected.items())
+        ):
+            return jsonify({"error": "Context fields and expected values must be text or null."}), 400
+        if body.get('editor_mode') not in (None, 'stride', 'free') or expected.get('editor_mode') not in (
+            None, 'stride', 'free',
+        ):
+            return jsonify({"error": "editor_mode must be stride, free or null."}), 400
+        try:
+            variant = Variant.get_by_id(variant_uuid)
+            if variant is None:
+                return jsonify({"error": "Variant not found"}), 404
+            from ..models.project_context import ProjectContext
+            pc = ProjectContext.get_by_project(variant.project_id)
+            if pc is not None and pc.shared_context is not None:
+                vc = write_variant(variant_uuid, {key: body[key] for key in fields if key in body},
+                                   partial=True, expected=expected)
+                return jsonify(VariantContextController.serialize(vc))
+            vc = VariantContextController.get_or_create(variant_uuid)
+            if any(getattr(vc, key) != value for key, value in expected.items()):
+                return jsonify({"error": (
+                    "The saved context changed since it was loaded. Keep a copy of your "
+                    "drafts and reload the page before saving this section."
+                )}), 409
+            values = {key: body[key] for key in fields if key in body}
+            if any(getattr(vc, key) != value for key, value in values.items()):
+                ProjectContext.advance_revision(variant.project_id, pc.context_revision if pc else 0)
+            if any(key != 'editor_mode' and getattr(vc, key) != value for key, value in values.items()):
+                values['updated_at'] = datetime.now(timezone.utc)
+            statement = db.update(VariantContext).where(
+                VariantContext.variant_id == variant_uuid,
+                *(getattr(VariantContext, key) == value for key, value in expected.items()),
+            ).values(**values).returning(VariantContext.id)
+            if db.session.execute(statement).scalar_one_or_none() is None:
+                db.session.rollback()
+                return jsonify({"error": (
+                    "Context changed during the save. Keep your drafts and reload before saving."
+                )}), 409
+            db.session.commit()
+        except ContextConflict as exc:
+            db.session.rollback()
+            return jsonify({"error": str(exc)}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))
