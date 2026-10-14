@@ -140,6 +140,13 @@ Commands without --project or --variant:
         --export-context                Export AI assessment context
         --import-context <path>         Import AI assessment context
 
+Options used by the host wrapper's subcommands:
+        --dry-run                       Preview the --delete-* flag that follows without deleting anything
+        --all-variants                  Custom OpenVEX export/import: do not default --variant to "default"
+        --retarget-context              --import-context: import into --project (and --variant) instead of
+                                        the names in the file
+        --report-format <pdf|html>      Override the report output format
+
 Report generation by project (uses "default" if --project is omitted):
         --report <template|path>        Generate a report from a template
                     Includes all variants in the selected project
@@ -607,7 +614,9 @@ cmd_report() {
         scope_args+=(--variant "$VARIANT_NAME")
     fi
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp report "$template" --output-dir "$output_dir" "${scope_args[@]}"
+    local -a format_args=()
+    if [[ -n "$REPORT_FORMAT" ]]; then format_args+=(--format "$REPORT_FORMAT"); fi
+    flask --app src.bin.webapp report "$template" --output-dir "$output_dir" "${scope_args[@]}" "${format_args[@]}"
     setup_user
 }
 
@@ -665,23 +674,31 @@ cmd_import_custom_vulnscout_data() {
     setup_user
 }
 
-cmd_export_custom_openvex_assessments() {
-    local variant_name="${VARIANT_NAME:-default}"
+# Scope for custom OpenVEX export/import. Without --variant, the legacy default
+# is the "default" variant; --all-variants lets the Flask command choose.
+custom_openvex_scope_args() {
+    CUSTOM_OPENVEX_SCOPE=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        CUSTOM_OPENVEX_SCOPE+=(--variant "$VARIANT_NAME")
+    elif [[ "$ALL_VARIANTS" != "true" ]]; then
+        CUSTOM_OPENVEX_SCOPE+=(--variant default)
+    fi
+}
 
+cmd_export_custom_openvex_assessments() {
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
     local -a amend_args=()
-    [[ "${AMEND_REVIEW_EXPORT:-false}" == "true" ]] && amend_args+=(--amend)
+    if [[ "${AMEND_REVIEW_EXPORT:-false}" == "true" ]]; then amend_args+=(--amend); fi
+    custom_openvex_scope_args
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp export-custom-openvex-assessments \
-        --project "$PROJECT_NAME" --variant "$variant_name" --output-dir "$output_dir" \
-        "${amend_args[@]}"
+        "${CUSTOM_OPENVEX_SCOPE[@]}" --output-dir "$output_dir" "${amend_args[@]}"
     setup_user
 }
 
 cmd_import_custom_openvex_assessments() {
     local file="$1"
-    local variant_name="${VARIANT_NAME:-default}"
 
     cd "$BASE_DIR"
     local raw_basename dest_name dest_file
@@ -695,7 +712,8 @@ cmd_import_custom_openvex_assessments() {
     fi
 
     flask --app src.bin.webapp db upgrade
-    local -a import_args=(--project "$PROJECT_NAME" --variant "$variant_name")
+    custom_openvex_scope_args
+    local -a import_args=("${CUSTOM_OPENVEX_SCOPE[@]}")
     if [[ "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-original}" == "current" ]]; then
         import_args+=(--use-current-timestamps)
     fi
@@ -734,7 +752,12 @@ cmd_import_context() {
     fi
 
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp import-context "$file"
+    local -a import_args=()
+    if [[ "$RETARGET_CONTEXT" == "true" ]]; then
+        import_args+=(--project "$PROJECT_NAME")
+        if [[ -n "$VARIANT_NAME" ]]; then import_args+=(--variant "$VARIANT_NAME"); fi
+    fi
+    flask --app src.bin.webapp import-context "${import_args[@]}" "$file"
     setup_user
 }
 
@@ -790,20 +813,27 @@ cmd_do_get_data() {
 }
 
 cmd_delete_scan() {
-    scan_id="$1"
-    flask --app src.bin.webapp delete-scan "$scan_id"
+    local -a args=(delete-scan "$1")
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 cmd_delete_outdated() {
-    flask --app src.bin.webapp delete-outdated
+    local -a args=(delete-outdated)
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 cmd_delete_empty_scans() {
-    flask --app src.bin.webapp delete-empty-scans
+    local -a args=(delete-empty-scans)
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 cmd_delete_orphaned_vulnerabilities() {
-    flask --app src.bin.webapp delete-orphaned-vulns
+    local -a args=(delete-orphaned-vulns)
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 #######################################
@@ -894,6 +924,10 @@ SCAN_REQUIRED=false
 JSON_OUTPUT=false
 DATA_REQUESTED=""
 IMPORT_CUSTOM_TIMESTAMP_POLICY=""
+DRY_RUN=false
+ALL_VARIANTS=false
+RETARGET_CONTEXT=false
+REPORT_FORMAT=""
 
 if [[ $# -eq 0 ]]; then
     cmd_daemon
@@ -946,6 +980,17 @@ while [[ $# -gt 0 ]]; do
             request_scans sbom-cve-check; shift ;;
         --refresh-vulnerability-data)
             REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
+        --dry-run)
+            DRY_RUN=true; shift ;;
+        --all-variants)
+            ALL_VARIANTS=true; shift ;;
+        --retarget-context)
+            RETARGET_CONTEXT=true; shift ;;
+        --report-format)
+            if [[ "${2:-}" != "pdf" && "${2:-}" != "html" ]]; then
+                echo "Error: --report-format must be pdf or html." >&2; exit 1
+            fi
+            REPORT_FORMAT="$2"; shift 2 ;;
         --delete-scan)
             cmd_delete_scan "$2"; shift 2 ;;
         --delete-outdated)
