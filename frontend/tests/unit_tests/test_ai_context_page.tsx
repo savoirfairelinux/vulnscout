@@ -120,6 +120,65 @@ function importFile(value: unknown, invalid = false) {
 }
 beforeEach(() => { fetchMock.resetMocks(); jest.restoreAllMocks(); });
 
+test("variant references preserve shared drafts and project-level agent scope", async () => {
+    const f = fixture();
+    const agent = jest.fn();
+    render(<AIContext onAgentContextChange={agent} />);
+    await load();
+    edit("Project Description", "Unsaved project");
+    expect(screen.queryByLabelText("Upload codebase references")).not.toBeInTheDocument();
+    fetchMock.mockResponseOnce(JSON.stringify({ files: [] }));
+    edit("Codebase reference variant", "v1");
+    await screen.findByLabelText("Upload codebase references");
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("project_id=p1&variant_id=v1");
+    fetchMock.mockResponseOnce("[]");
+    fetchMock.mockResponseOnce(JSON.stringify({ id: "f1", original_name: "source.zip", description: null }), { status: 201 });
+    fireEvent.drop(screen.getByRole("region", { name: "Drop codebase files" }), {
+        dataTransfer: { files: [new File(["source"], "source.zip")] },
+    });
+    await screen.findByRole("button", { name: "Delete reference source.zip" });
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("/api/variants/v1/context/files");
+    expect(screen.getByLabelText("Project Description")).toHaveValue("Unsaved project");
+    expect(f.writes).toHaveLength(0);
+    expect(agent.mock.calls.at(-1)?.[0]).not.toHaveProperty("selectedVariantId");
+    fetchMock.mockResponseOnce(JSON.stringify({ files: [] }));
+    edit("Codebase reference variant", "v2");
+    await screen.findByText("No codebase references uploaded.");
+    expect(screen.queryByRole("button", { name: "Delete reference source.zip" })).not.toBeInTheDocument();
+    edit("Project", "p2");
+    await waitFor(() => expect(screen.getByLabelText("Project Description")).toHaveValue("Second"));
+    expect(screen.getByLabelText("Codebase reference variant")).toHaveValue("");
+    expect(screen.queryByLabelText("Upload codebase references")).not.toBeInTheDocument();
+});
+
+test("failed reference loads require a successful retry before uploading", async () => {
+    fixture(); render(<AIContext />); await load();
+    fetchMock.mockResponseOnce(JSON.stringify({ error: "References unavailable" }), { status: 500 });
+    edit("Codebase reference variant", "v1");
+    await screen.findByText("References unavailable");
+    expect(screen.queryByLabelText("Upload codebase references")).not.toBeInTheDocument();
+    fetchMock.mockResponseOnce(JSON.stringify({ files: [{ id: "f1", original_name: "main.c", description: null }] }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry references" }));
+    await screen.findByRole("button", { name: "Delete reference main.c" });
+    expect(screen.getByLabelText("Upload codebase references")).toBeEnabled();
+});
+
+test("late reference responses cannot leak across variant selections", async () => {
+    fixture(); render(<AIContext />); await load();
+    let finish: ((response: string) => void) | undefined;
+    fetchMock.mockResponseOnce(() => new Promise(resolve => { finish = resolve; }));
+    edit("Codebase reference variant", "v1");
+    await screen.findByText("Loading codebase references...");
+    fetchMock.mockResponseOnce(JSON.stringify({ files: [] }));
+    edit("Codebase reference variant", "v2");
+    await screen.findByText("No codebase references uploaded.");
+    await act(async () => {
+        finish?.(JSON.stringify({ files: [{ id: "old", original_name: "old.zip", description: null }] }));
+    });
+    expect(screen.queryByRole("button", { name: "Delete reference old.zip" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Codebase reference variant")).toHaveValue("v2");
+});
+
 test("removes the top variant selector and retains accessible subtabs and project-level agent context", async () => {
     fixture();
     const agent = jest.fn();

@@ -285,8 +285,11 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 
 ## Codebase references in the AI tab
 
-Select a project and variant in **AI**, then drag source files or archives onto
-**Codebase References**, or use the file picker. Multiple uploads are supported.
+Select a project in **AI**, then choose **Codebase reference variant** in the
+**Context** section and drag source files or archives onto **Codebase References**,
+or use the file picker. Uploaded references belong only to that variant;
+this selector is independent of the shared text entries' variant scopes.
+Multiple uploads are supported.
 An optional description can identify the component/version and whether the
 upload is a complete source tree or only selected files. References are saved
 **immediately**, independently of **Save context**; unsaved text fields are kept.
