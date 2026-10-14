@@ -52,8 +52,9 @@ This project contains default examples of VulnScout.
 To run VulnScout demo in interactive mode, you can simply run the command:
 [source,shell]
 ----
-./vulnscout --serve --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---add-cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout add --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout serve
 ----
 
 Then open your browser to view the results:
@@ -63,18 +64,18 @@ Then open your browser to view the results:
 http://localhost:7275
 ----
 
-If you don't need additional source files, VulnScout can be rerun directly without any additional arguments:
+If you don't need additional source files, start the web UI alone:
 
 [source,shell]
 ----
-./vulnscout --serve
+./vulnscout serve
 ----
 
-It is also possible to add sources files on a specific project and variant with the `--project` and `--variant` arguments:
+It is also possible to add sources files on a specific project and variant with `-p`/`--project` and `-v`/`--variant`:
 [source,shell]
 ----
-./vulnscout --project demo --variant x86 --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---add-cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout -p demo -v x86 add --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
 === Bundled example data
@@ -95,14 +96,15 @@ command so their cross-document references can be resolved:
 
 [source,shell]
 ----
-./vulnscout --serve --project zephyr_demo --variant mbedtls_native_sim \
-  --add-spdx "$(pwd)/example/zephyr/app.jsonld" \
-  --add-spdx "$(pwd)/example/zephyr/build.jsonld" \
-  --add-spdx "$(pwd)/example/zephyr/modules-deps.jsonld" \
-  --add-spdx "$(pwd)/example/zephyr/zephyr.jsonld"
+./vulnscout -p zephyr_demo -v mbedtls_native_sim add \
+  --spdx "$(pwd)/example/zephyr/app.jsonld" \
+  --spdx "$(pwd)/example/zephyr/build.jsonld" \
+  --spdx "$(pwd)/example/zephyr/modules-deps.jsonld" \
+  --spdx "$(pwd)/example/zephyr/zephyr.jsonld"
+./vulnscout serve
 ----
 
-The Zephyr SBOMs describe the component inventory. Add `--perform-scans all`
+The Zephyr SBOMs describe the component inventory. Run `vulnscout scan all`
 to request vulnerability discovery; scanners may require network access and credentials.
 See link:doc/source/examples.md[Bundled Examples] for commands for every dataset,
 including the SPDX 2 archives and CycloneDX exports.
@@ -135,50 +137,52 @@ The `vulnscout` script manages the container lifecycle. The container runs in th
 ./vulnscout restart
 ----
 
+NOTE: Releases before v0.24 used flags instead of commands. They still work until v0.26 and print a deprecation warning. See link:doc/source/vulnscout-script.md#migrating-from-the-flag-syntax[Migrating from the flag syntax].
+
 ===  Projects and Variants
 
 VulnScout organises data into *projects* and *variants*. A project typically maps to a product, and variants represent different builds or architectures (e.g. `x86_64`, `aarch64`).
 
-Both flags are optional and default to `default` if not provided.
+Select them with `-p, --project` and `-v, --variant`. Each command documents how it uses them (see link:doc/source/vulnscout-script.md#commands[commands reference]); commands that do not use a scope reject these options.
 
 [source,shell]
 ----
-./vulnscout --project <name> --variant <name> <command>
+./vulnscout -p <name> -v <name> <command>
 ----
 
 ===  Adding Input Files to the Database
 
-VulnScout accepts multiple input file types. Commands can be chained and will automatically trigger a scan.
+VulnScout accepts multiple input file types through `add`. Repeat an option or mix types in one call; the inputs are processed together.
 
 [source,shell]
 ----
 # SPDX 2/3 SBOM (JSON, tag-value, or .tar/.tar.gz/.tar.zst archive)
-./vulnscout --add-spdx <path>
+./vulnscout add --spdx <path>
 
 # Yocto CVE check JSON output
-./vulnscout --add-cve-check <path>
+./vulnscout add --cve-check <path>
 
 # Yocto VEX JSON output (from vex.bbclass)
-./vulnscout --add-yocto-vex <path>
+./vulnscout add --yocto-vex <path>
 
 # CycloneDX file
-./vulnscout --add-cdx <path>
+./vulnscout add --cdx <path>
 
 # OpenVEX file
-./vulnscout --add-openvex <path>
+./vulnscout add --openvex <path>
 
 # Grype file
-./vulnscout --add-grype <path>
+./vulnscout add --grype <path>
 ----
 
-Multiple inputs can be chained in a single command:
+Repeat or mix input options in one `add` call:
 
 [source,shell]
 ----
-./vulnscout --project demo --variant x86 \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json \
-  --add-openvex /path/to/assessments.openvex.json
+./vulnscout -p demo -v x86 add \
+  --spdx /path/to/sbom.spdx.json \
+  --cve-check /path/to/cve-check.json \
+  --openvex /path/to/assessments.openvex.json
 ----
 
 [TIP]
@@ -206,51 +210,50 @@ The web interface includes a *Settings* tab that provides:
 
 * *Rename Project* — Select a project and give it a new name (must be unique across all projects).
 * *Rename Variant* — Select a variant within a project and rename it (must be unique within the project).
-* *Import SBOM* — Upload an SBOM file directly from the browser instead of using CLI flags like `--add-spdx` or `--add-cve-check`.
+* *Import SBOM* — Upload an SBOM file directly from the browser instead of `vulnscout add`.
   When importing, you must select (or create) the target project and variant.
   Supported formats are auto-detected or can be specified explicitly: SPDX (2/3), CycloneDX, OpenVEX, Yocto CVE check, and Grype.
 
 === Run VulnScout in non-interactive mode
 
-If you want to use the non-interactive mode, without the web interface, you can use the command with the `--match-condition` argument:
+If you want to use the non-interactive mode, without the web interface, you can use `check`:
 
 [source,shell]
 ----
-./vulnscout --project demo --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
+./vulnscout -p demo check "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ----
 
 The command exits with code `2` if any vulnerability matches the condition, enabling use in CI pipelines.
 
-Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Add `--refresh-vulnerability-data` to the same command when the condition must use current enrichment data.
+Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `check` when the condition must use current enrichment data.
 
 See the link:doc/source/ci_conditions.md[match conditions documentation] for the full condition syntax and token reference.
 
-You can combine inputs with a match condition in a single invocation:
+In CI, import the inputs and then run `check` last:
 
 [source,shell]
 ----
-./vulnscout --project demo \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json \
-  --match-condition "((cvss >= 9.0) and (pending or affected)) "
+./vulnscout -p demo add --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
+./vulnscout -p demo check "((cvss >= 9.0) and (pending or affected))"
 ----
 
 ===  Refreshing Vulnerability Data
 
-Use `--refresh-vulnerability-data` with an input command to enrich vulnerabilities imported by that run with current EPSS, NVD, ENISA EUVD, and GitHub Advisory data:
+Use `refresh` to enrich vulnerabilities with current EPSS, NVD, ENISA EUVD, and GitHub Advisory data. After importing new inputs, refresh the same project:
 
 [source,shell]
 ----
-./vulnscout --add-spdx /path/to/sbom.spdx.json --refresh-vulnerability-data
+./vulnscout -p demo add --spdx /path/to/sbom.spdx.json
+./vulnscout -p demo refresh
 ----
 
-The option can also refresh vulnerabilities already in the database. Without a project it refreshes all vulnerabilities; project and variant options restrict the scope:
+`refresh` also works on its own. Without a project it refreshes all vulnerabilities; project and variant options restrict the scope:
 
 [source,shell]
 ----
-./vulnscout --refresh-vulnerability-data
-./vulnscout --project demo --refresh-vulnerability-data
-./vulnscout --project demo --variant x86 --refresh-vulnerability-data
+./vulnscout refresh
+./vulnscout -p demo refresh
+./vulnscout -p demo -v x86 refresh
 ----
 
 The refresh enriches existing CVE and GHSA records; it does not discover new findings. A variant requires its project because variant names are project-local.
@@ -261,63 +264,66 @@ VulnScout can run Grype on the current database contents. This exports the curre
 
 [source,shell]
 ----
-./vulnscout --project demo --variant x86 --perform-scans grype
+./vulnscout -p demo -v x86 scan grype
 ----
 
-This can be chained with other inputs to scan newly added files immediately:
+To scan newly added files, run `add` and then `scan` with the same scope:
 
 [source,shell]
 ----
-./vulnscout --project demo --add-spdx example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-scans grype
+./vulnscout -p demo add --spdx example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json
+./vulnscout -p demo scan grype
 ----
 
-`--perform-scans` also accepts `nvd`, `osv`, and `sbom-cve-check`. Use comma-separated types such as `--perform-scans nvd,osv`, repeat the option, or pass `all` to run every scanner in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh remains a separate option.
+`scan` accepts `grype`, `nvd` (CPE-based), `osv` (PURL-based), and `sbom-cve-check` (local advisory databases). Select several with commas (`scan nvd,osv`) or spaces (`scan nvd osv`). With no type, or with `all`, every available scanner runs. Scans always run in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh is a separate command (`refresh`).
 
-`--perform-scans grype` can consume significant RAM when the SBOM contains many packages.
+`scan grype` can consume significant RAM when the SBOM contains many packages.
 By default VulnScout caps Grype's memory at ~80 % of the container/cgroup limit.
 Override with the `GRYPE_MEMLIMIT` environment variable (see the Environment Variables table above).
 
 [source,shell]
 ----
 # Persistent: keep Grype below 6 GiB across all future scans in this container
-./vulnscout --config GRYPE_MEMLIMIT 6GiB
+./vulnscout config set GRYPE_MEMLIMIT 6GiB
 
 # One-off: override via the host environment before starting the container
 export GRYPE_MEMLIMIT=24GiB
-./vulnscout --project demo --variant x86 --perform-scans grype
+./vulnscout -p demo -v x86 scan grype
 ----
 
 ===  Generating Reports
 
 Reports are generated from AsciiDoc templates. VulnScout ships with built-in templates and also supports custom ones.
-Use `--project` to select the report scope; when omitted, the `default` project is used. A project report includes all its variants. Add `--variant` to restrict the report to one variant in that project. Unknown project or variant names fail instead of broadening the report scope.
+Use `-p` to select the report scope; when omitted, the `default` project is used. A project report includes all its variants. Add `-v` to restrict the report to one variant in that project. Unknown project or variant names fail instead of broadening the report scope.
 
 [source,shell]
 ----
 # Generate a report from a built-in template
-./vulnscout --project demo --report summary.adoc
+./vulnscout -p demo report summary.adoc
 
 # Generate a report for one variant only
-./vulnscout --project demo --variant x86 --report summary.adoc
+./vulnscout -p demo -v x86 report summary.adoc
 
 # Generate a match-condition report (lists vulnerabilities that triggered the condition)
-./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
+./vulnscout -p demo report match_condition.adoc --condition "cvss >= 9.0"
 
 # Register a custom template permanently in the container and generate a report
-./vulnscout --project demo --report /path/to/my-custom-report.adoc
+./vulnscout -p demo report /path/to/my-custom-report.adoc
 
 # Then generate a report from it by name
-./vulnscout --project demo --report my-custom-report.adoc
+./vulnscout -p demo report my-custom-report.adoc
 
 # Or pass the file path directly — registers and runs it in one step
-./vulnscout --project demo --report /path/to/my-custom-report.adoc
+./vulnscout -p demo report /path/to/my-custom-report.adoc
 ----
+
+`--condition` fills the report's list of matching vulnerabilities. A match does not fail `report`; use `check` to fail a CI job. `--format pdf` or `--format html` overrides the format implied by the template extension.
 
 Multiple reports can be generated in one command:
 
 [source,shell]
 ----
-./vulnscout --project demo --report summary.adoc --report all_assessments.adoc
+./vulnscout -p demo report summary.adoc all_assessments.adoc
 ----
 
 Reports are written to the outputs directory (default: `.vulnscout/outputs/`).
@@ -331,24 +337,20 @@ VulnScout can export the enriched project data as standard SBOM formats. Exporte
 [source,shell]
 ----
 # Export as SPDX 3.0 SBOM
-./vulnscout --project demo --export-spdx
+./vulnscout -p demo export spdx
 
 # Export as CycloneDX 1.6 SBOM
-./vulnscout --project demo --export-cdx
+./vulnscout -p demo export cdx
 
 # Export as OpenVEX document (vulnerabilities + assessments)
-./vulnscout --project demo --export-openvex
+./vulnscout -p demo export openvex
 ----
 
-Export commands can be chained with inputs and reports in a single invocation:
+One `export` call can write several formats:
 
 [source,shell]
 ----
-./vulnscout --project demo \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json \
-  --export-spdx --export-cdx --export-openvex \
-  --report summary.adoc
+./vulnscout -p demo export spdx cdx openvex
 ----
 
 ===  Exporting and Importing Custom Assessments
@@ -361,65 +363,74 @@ VulnScout lets you export and re-import the assessments you have manually create
 
 ==== VulnScout JSON
 
-The `--export-custom-vulnscout-data` flag exports custom assessments, CVSS scores, and time estimates as one VulnScout JSON file. It includes every variant in the selected project unless `--variant` is provided.
+`export custom-data` exports custom assessments, CVSS scores, and time estimates as one VulnScout JSON file. It includes every variant in the selected project unless `-v` is provided.
 
 [source,shell]
 ----
 # Export all project variants
-./vulnscout --project demo --export-custom-vulnscout-data
+./vulnscout -p demo export custom-data
 
 # Export one variant
-./vulnscout --project demo --variant x86 --export-custom-vulnscout-data
+./vulnscout -p demo -v x86 export custom-data
 
 # Update the existing export with current review data
-./vulnscout --project demo --export-custom-vulnscout-data --amend
+./vulnscout -p demo export custom-data --amend
 ----
 
 Add `--amend` to reconcile current review data with the existing file in the output directory. The file must already exist at the path produced by the same export scope. Existing records retain stable ordering and extension fields while updated and new records are incorporated.
 
-The `--import-custom-vulnscout-data` command restores entries according to the variant metadata in the file. Imported assessments use the current system time by default. Add `--use-original-timestamps` to preserve assessment timestamps from the file. `--use-current-timestamps` is also accepted to select the default explicitly.
+`import custom-data` restores entries according to the variant metadata stored in the file, so it rejects `-v`. Imported assessments use the current system time by default. Add `--timestamps original` to preserve assessment timestamps from the file; `--timestamps current` selects the default explicitly.
 
 Current version 2 exports identify assessment targets by variant name and package, without instance-local variant UUIDs, so they can be shared between VulnScout installations. Legacy version 1 files remain importable; unsupported future versions are rejected explicitly.
 
 [source,shell]
 ----
-./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json
+./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json
 
-./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json --use-original-timestamps
+./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json --timestamps original
 ----
 
 ==== OpenVEX
 
-The OpenVEX custom-assessment commands operate on one JSON document and require `--variant` for both import and export.
+OpenVEX custom-assessment transfers operate on one JSON document. With `-v`,
+`export custom-openvex` writes that variant; without it, it writes one document
+for every variant of the project (`custom_openvex_all.json`). `import
+custom-openvex` imports into `-v`, or into the project's only variant when `-v`
+is omitted. If the project has several variants, it exits with code 1 and lists
+them.
 
 [source,shell]
 ----
 # Export a variant
-./vulnscout --project demo --variant x86 --export-custom-openvex-assessments
+./vulnscout -p demo -v x86 export custom-openvex
 
 # Update the existing OpenVEX export
-./vulnscout --project demo --variant x86 --export-custom-openvex-assessments --amend
+./vulnscout -p demo -v x86 export custom-openvex --amend
 
 # Import into a variant
-./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json
+./vulnscout -p demo -v x86 import custom-openvex /path/to/custom_openvex_x86.json
 
 # Ignore OpenVEX statement timestamps and use the current system time
-./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json --use-current-timestamps
+./vulnscout -p demo -v x86 import custom-openvex /path/to/custom_openvex_x86.json --timestamps current
 ----
 
 For OpenVEX exports, `--amend` preserves the document ID and statement ordering from the existing output file and increments its version.
 
-OpenVEX imports preserve statement timestamps by default. Add `--use-current-timestamps` to use the current system time, or use `--use-original-timestamps` to select the default explicitly.
+OpenVEX imports preserve statement timestamps by default. Add
+`--timestamps current` to use the current system time, or
+`--timestamps original` to select the default explicitly.
 
-Both commands can be combined with other flags:
+A typical restore runs one command per step:
 
 [source,shell]
 ----
-./vulnscout --project demo \
-  --add-spdx /path/to/sbom.spdx.json \
-  --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json \
-  --export-spdx --report summary.adoc
+./vulnscout -p demo add --spdx /path/to/sbom.spdx.json
+./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json
+./vulnscout -p demo export spdx
+./vulnscout -p demo report summary.adoc
 ----
+
+Exports and reports now run after the import. The legacy call ran them before it.
 
 === Configuration
 
@@ -430,20 +441,23 @@ Persistent configuration is stored in `.vulnscout/cache/config.env` and is autom
 [source,shell]
 ----
 # Set a config value
-./vulnscout config <key> <value>
+./vulnscout config set <key> <value>
+
+# Print one value
+./vulnscout config get <key>
 
 # List current configuration (sensitive values masked)
-./vulnscout config-list
+./vulnscout config list
 
 # Remove a config key
-./vulnscout config-clear <key>
+./vulnscout config unset <key>
 ----
 
 Example — set an NVD API key for higher rate limits:
 
 [source,shell]
 ----
-./vulnscout config NVD_API_KEY abc123
+./vulnscout config set NVD_API_KEY abc123
 ----
 
 ==== Environment Variables
@@ -554,9 +568,9 @@ If you want to run VulnScout with an HTTP proxy, set variables in the config:
 
 [source,shell]
 ----
-./vulnscout config HTTP_PROXY http://proxy.example.com:8080
-./vulnscout config HTTPS_PROXY http://proxy.example.com:8080
-./vulnscout config NO_PROXY localhost,127.0.0.1
+./vulnscout config set HTTP_PROXY http://proxy.example.com:8080
+./vulnscout config set HTTPS_PROXY http://proxy.example.com:8080
+./vulnscout config set NO_PROXY localhost,127.0.0.1
 ----
 
 Or pass them directly as environment variables when calling `vulnscout`.

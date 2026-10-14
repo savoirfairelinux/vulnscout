@@ -22,9 +22,10 @@ cd vulnscout
 Start VulnScout and import the provided example data:
 
 ```bash
-./vulnscout start \
-  --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --add-cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout add \
+  --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout serve
 ```
 
 Then open the web interface:
@@ -33,7 +34,7 @@ Then open the web interface:
 http://localhost:7275
 ```
 
-The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, imports the input files, and runs a scan.
+The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, and imports the input files; `serve` then starts the web interface.
 
 Once the initial import finishes, background scans, vulnerability-data refreshes, SBOM uploads, and document exports appear in the web interface's **Operation queue**. See {ref}`Operation Queue <operation-queue>` for progress, cancellation, and recovery after a reload.
 
@@ -48,7 +49,7 @@ documents together into the same project and variant.
 If you have already loaded your data and just want to start the web interface:
 
 ```bash
-./vulnscout --serve
+./vulnscout serve
 ```
 
 Press `Ctrl+C` to stop the web server and return to your shell. The container keeps running in the background.
