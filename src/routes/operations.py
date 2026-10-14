@@ -116,6 +116,13 @@ def _plan_scan_job(job: dict) -> List[dict]:
     mode = _mode_option(options)
     exclude_kernel = _bool_option(options, "exclude_kernel", True)
     exclude_native = _bool_option(options, "exclude_native", False)
+    native_exceptions = options.get("native_package_exceptions", [])
+    if not isinstance(native_exceptions, list) or any(
+        not isinstance(name, str) or not name.strip().lower().endswith("-native")
+        or len(name) > 255 for name in native_exceptions
+    ) or len(native_exceptions) > 1000:
+        raise _PlanError("native_package_exceptions must be a list of native package names")
+    native_exceptions = sorted({name.strip().lower() for name in native_exceptions})
     planned: List[dict] = []
     for raw_id in variant_ids:
         try:
@@ -141,6 +148,7 @@ def _plan_scan_job(job: dict) -> List[dict]:
                 "variant_id": str(variant_uuid),
                 "exclude_kernel": exclude_kernel,
                 "exclude_native": exclude_native,
+                "native_package_exceptions": native_exceptions,
                 "mode": mode,
             },
             "runner": SCAN_JOBS[source],
