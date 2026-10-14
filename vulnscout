@@ -849,6 +849,179 @@ verb_asset() {
     exec_container "${PENDING_ARGS[@]}"
 }
 
+verb_report() {
+    local format="" condition="" status=0 tpl staged
+    local -a templates=() report_args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --format)
+                if [ $# -lt 2 ]; then
+                    die "report --format requires pdf or html."
+                fi
+                case "$2" in
+                    pdf|html) format="$2" ;;
+                    *) die "report --format must be pdf or html, got '$2'." ;;
+                esac
+                shift 2 ;;
+            --condition)
+                if [ $# -lt 2 ]; then
+                    die "report --condition requires an expression."
+                fi
+                condition="$2"
+                shift 2 ;;
+            -*)
+                reject_option report "$1" ;;
+            *)
+                templates+=("$1")
+                shift ;;
+        esac
+    done
+    if [ ${#templates[@]} -eq 0 ]; then
+        die "'report' needs at least one template name or path."
+    fi
+    for tpl in "${templates[@]}"; do
+        if [[ "$tpl" == */* ]] && [ ! -f "$tpl" ]; then
+            die "template file not found: $tpl"
+        fi
+    done
+    ensure_running
+    set_project_scope_args
+    if [ -n "$condition" ]; then
+        report_args+=(--match-condition "$condition")
+    fi
+    for tpl in "${templates[@]}"; do
+        staged="$(stage_report_template "$tpl")"
+        report_args+=(--report "$staged")
+    done
+    if [ -n "$format" ]; then
+        report_args+=(--report-format "$format")
+    fi
+    exec_container "${SCOPE_ARGS[@]}" "${report_args[@]}" || status=$?
+    # 'check' is the gate: with --condition, a match (exit 2) still means the report was written.
+    if [ "$status" -eq 2 ] && [ -n "$condition" ]; then
+        return 0
+    fi
+    return "$status"
+}
+
+verb_export() {
+    local amend=false has_custom=false kind
+    local -a kinds=() export_args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --amend) amend=true ;;
+            spdx|cdx|openvex|context) kinds+=("$1") ;;
+            custom-data|custom-openvex) kinds+=("$1"); has_custom=true ;;
+            -*|amend) reject_option export "$1" ;;
+            *) die "unknown export kind '$1'. Expected spdx, cdx, openvex, custom-data, custom-openvex, or context." ;;
+        esac
+        shift
+    done
+    if [ ${#kinds[@]} -eq 0 ]; then
+        die "'export' needs at least one kind: spdx, cdx, openvex, custom-data, custom-openvex, or context."
+    fi
+    if [ "$amend" = true ] && [ "$has_custom" = false ]; then
+        die "--amend only applies to the custom-data and custom-openvex exports."
+    fi
+    for kind in "${kinds[@]}"; do
+        case "$kind" in
+            spdx) export_args+=(--export-spdx) ;;
+            cdx) export_args+=(--export-cdx) ;;
+            openvex) export_args+=(--export-openvex) ;;
+            custom-data) export_args+=(--export-custom-vulnscout-data) ;;
+            custom-openvex)
+                export_args+=(--export-custom-openvex-assessments)
+                # D8: without --variant, export every variant of the project.
+                if [ "$VARIANT_SPECIFIED" = false ]; then
+                    export_args+=(--all-variants)
+                fi ;;
+            context) export_args+=(--export-context) ;;
+        esac
+    done
+    if [ "$amend" = true ]; then
+        export_args+=(--amend)
+    fi
+    ensure_running
+    set_project_scope_args
+    exec_container "${SCOPE_ARGS[@]}" "${export_args[@]}"
+}
+
+verb_import() {
+    local kind="${1:-}" path="" timestamps="" staged
+    local -a import_args=()
+    case "$kind" in
+        custom-data|custom-openvex|context) ;;
+        spdx|cdx|openvex|grype|cve-check|yocto-vex)
+            die "use 'vulnscout add --$kind <path>' for SBOMs and scan results." ;;
+        "")
+            die "'import' needs a kind and a path: custom-data, custom-openvex, or context." ;;
+        *)
+            die "unknown import kind '$kind'. Expected custom-data, custom-openvex, or context." ;;
+    esac
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --timestamps)
+                if [ "$kind" = context ]; then
+                    die "'import context' does not accept --timestamps."
+                fi
+                if [ $# -lt 2 ]; then
+                    die "--timestamps requires original or current."
+                fi
+                case "$2" in
+                    original|current) timestamps="$2" ;;
+                    *) die "--timestamps must be original or current, got '$2'." ;;
+                esac
+                shift 2 ;;
+            -*)
+                reject_option import "$1" ;;
+            *)
+                if [ -n "$path" ]; then
+                    reject_option import "$1"
+                fi
+                path="$1"
+                shift ;;
+        esac
+    done
+    if [ -z "$path" ]; then
+        die "'import $kind' needs a file path."
+    fi
+    require_file "$path"
+    case "$kind" in
+        custom-data)
+            if [ "$VARIANT_SPECIFIED" = true ]; then
+                die "'import custom-data' does not accept --variant; variants come from the file."
+            fi
+            SCOPE_ARGS=(--project "$PROJECT") ;;
+        custom-openvex)
+            set_project_scope_args
+            # D8: without --variant, the Flask command picks the project's only variant.
+            if [ "$VARIANT_SPECIFIED" = false ]; then
+                import_args+=(--all-variants)
+            fi ;;
+        context)
+            if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+                die "'import context' --variant requires --project."
+            fi
+            set_explicit_scope_args
+            # D7: with --project, retarget the file's entries instead of using the names it holds.
+            if [ "$PROJECT_SPECIFIED" = true ]; then
+                import_args+=(--retarget-context)
+            fi ;;
+    esac
+    if [ -n "$timestamps" ]; then
+        import_args+=("--use-$timestamps-timestamps")
+    fi
+    ensure_running
+    staged="$(stage_file "$path")"
+    case "$kind" in
+        custom-data) import_args+=(--import-custom-vulnscout-data "$staged") ;;
+        custom-openvex) import_args+=(--import-custom-openvex-assessments "$staged") ;;
+        context) import_args+=(--import-context "$staged") ;;
+    esac
+    exec_container "${SCOPE_ARGS[@]}" "${import_args[@]}"
+}
+
 parse_new() {
     local help=false verb
     local -a rest=()
@@ -897,6 +1070,9 @@ parse_new() {
         check) verb_check "${rest[@]}" ;;
         refresh) verb_refresh "${rest[@]}" ;;
         asset) verb_asset "${rest[@]}" ;;
+        report) verb_report "${rest[@]}" ;;
+        export) verb_export "${rest[@]}" ;;
+        import) verb_import "${rest[@]}" ;;
         *)
             echo "Unknown command: $verb" >&2
             echo "Run 'vulnscout help' for usage." >&2
