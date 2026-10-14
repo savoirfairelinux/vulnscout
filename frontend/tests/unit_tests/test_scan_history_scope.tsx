@@ -8,6 +8,7 @@ import Variants from '../../src/handlers/variant';
 import type { GlobalResult, Scan, ScanDiff } from '../../src/handlers/scans';
 import { downloadJson } from '../../src/helpers/exportJson';
 import Operations from '../../src/handlers/operations';
+import Projects from '../../src/handlers/project';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
 
@@ -181,6 +182,11 @@ describe('ScanHistory selected variant scope', () => {
     });
 
     test('submits selected scans and deferred refreshes together and waits for the full batch', async () => {
+        const configuration = jest.spyOn(Projects, 'scanConfiguration').mockResolvedValue({
+            exclude_native: true,
+            native_package_exceptions: ['gcc-native', 'g++-native', 'cmake-native'],
+            native_packages: [],
+        });
         mockList.mockResolvedValue([]);
         const listVulnerabilities = jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
         const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
@@ -192,11 +198,14 @@ describe('ScanHistory selected variant scope', () => {
         render(<ScanHistory projectId="project" variantIds={['v1']} onScanComplete={onScanComplete} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
         await screen.findByTestId('wizard-variants');
+        await waitFor(() => expect(configuration).toHaveBeenCalled());
         fireEvent.click(screen.getByText('wizard-launch'));
 
         await waitFor(() => expect(enqueue).toHaveBeenCalled());
         expect(enqueue.mock.calls[0][0]).toEqual(expect.arrayContaining([
-            expect.objectContaining({ kind: 'scan', source: 'grype', variant_ids: ['v1'], options: expect.objectContaining({ exclude_native: true }) }),
+            expect.objectContaining({ kind: 'scan', source: 'grype', variant_ids: ['v1'], options: expect.objectContaining({
+                exclude_native: true, native_package_exceptions: ['gcc-native', 'g++-native', 'cmake-native'],
+            }) }),
             expect.objectContaining({ kind: 'refresh', source: 'epss', variant_ids: ['v1'] }),
         ]));
         expect(listVulnerabilities).toHaveBeenCalled();

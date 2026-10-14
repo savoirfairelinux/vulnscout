@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBug, faCircleQuestion, faCrosshairs, faLeaf, faPlay, faShieldHalved } from "@fortawesome/free-solid-svg-icons";
+import { faBug, faChevronDown, faCircleQuestion, faCrosshairs, faLeaf, faPlay, faShieldHalved } from "@fortawesome/free-solid-svg-icons";
 import type { Variant } from "../handlers/variant";
+import type { ScanConfiguration } from "../handlers/project";
 import { refreshSourcesForScans } from "../helpers/refreshSources";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 
@@ -14,6 +15,10 @@ type Props = {
     refreshMode: "complete" | "custom";
     excludeKernel: boolean;
     excludeNative: boolean;
+    nativeConfigurations?: Record<string, ScanConfiguration>;
+    configurationLoading?: boolean;
+    configurationError?: string | null;
+    onNativeConfigurationChange?: (projectId: string, configuration: ScanConfiguration) => void;
     onClose: () => void;
     onToggleVariant: (variantId: string) => void;
     onToggleScanType: (scanType: string) => void;
@@ -51,6 +56,10 @@ export default function RunScansWizard({
     refreshMode,
     excludeKernel,
     excludeNative,
+    nativeConfigurations = {},
+    configurationLoading = false,
+    configurationError = null,
+    onNativeConfigurationChange,
     onClose,
     onToggleVariant,
     onToggleScanType,
@@ -79,15 +88,19 @@ export default function RunScansWizard({
     const effectiveRefreshTypes = refreshMode === "complete"
         ? availableRefreshTypes
         : new Set([...selectedRefreshTypes].filter(type => availableRefreshTypes.has(type)));
+    const selectedProjectIds = [...new Set(variants.filter(variant => selectedVariantIds.has(variant.id)).map(variant => variant.project_id))];
+    const nativeGroups = selectedProjectIds.filter(projectId => nativeConfigurations[projectId]);
+    const projectLabel = (projectId: string) => variants.filter(variant => variant.project_id === projectId).map(variant => variant.name).join(", ");
     const nextDisabled = (step === 1 && selectedScanTypes.size === 0)
-        || (step === 2 && selectedVariantIds.size === 0);
+        || (step === 2 && selectedVariantIds.size === 0)
+        || (step === 3 && (configurationLoading || !!configurationError));
     const footer = (
         <ModalActions align="between">
             <ModalButton onClick={() => setStep(value => value - 1)} disabled={step === 1}>Back</ModalButton>
             {step < reviewStep ? (
                 <ModalButton variant="primary" onClick={() => setStep(value => value + 1)} disabled={nextDisabled}>Next</ModalButton>
             ) : (
-                <ModalButton variant="primary" onClick={onLaunch}><FontAwesomeIcon icon={faPlay} className="mr-2" />Launch scans</ModalButton>
+                <ModalButton variant="primary" onClick={onLaunch} disabled={configurationLoading || !!configurationError}><FontAwesomeIcon icon={faPlay} className="mr-2" />Launch scans</ModalButton>
             )}
         </ModalActions>
     );
@@ -182,7 +195,50 @@ export default function RunScansWizard({
                     <FontAwesomeIcon icon={faCircleQuestion} className="mr-2" />Why exclude kernel packages?
                 </button>
                 {showKernelHelp && <p className="mt-2 rounded border border-sky-700/40 bg-sky-900/30 p-3 text-xs leading-relaxed text-sky-200">Yocto kernel recipes create many companion packages that share the same kernel CPE. Excluding those companions avoids duplicate findings and slower scans while retaining CVE coverage for the real kernel package.</p>}
-                <fieldset className="mt-5 min-w-0">
+                {configurationLoading && <p role="status" className="mt-5 text-sm text-neutral-400">Loading native package preferences...</p>}
+                {configurationError && <p role="alert" className="mt-5 text-sm text-red-400">{configurationError}</p>}
+                {nativeGroups.map(projectId => {
+                    const configuration = nativeConfigurations[projectId];
+                    const packageNames = [...new Set([
+                        "gcc-native", "g++-native", "cmake-native",
+                        ...configuration.native_packages, ...configuration.native_package_exceptions,
+                    ])].sort();
+                    return <fieldset key={projectId} className="mt-5 min-w-0 border-t border-slate-600 pt-4">
+                        <legend className="max-w-full break-words px-1 text-sm font-semibold text-white">{nativeGroups.length > 1 && <>{projectLabel(projectId)}: </>}Ignore -native packages?</legend>
+                        <div className="mt-5 grid grid-cols-2 gap-3">
+                            {([true, false] as const).map(exclude => (
+                                <label key={String(exclude)} className={[
+                                    "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
+                                    configuration.exclude_native === exclude ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                                ].join(" ")}>
+                                    <input type="radio" name={`exclude-native-${projectId}`} checked={configuration.exclude_native === exclude}
+                                        onChange={() => onNativeConfigurationChange?.(projectId, { ...configuration, exclude_native: exclude })} className="mt-0.5 accent-cyan-500" />
+                                    <span className="flex flex-col"><span className="font-medium">{exclude ? "Yes" : "No"}</span><span className="mt-1 text-xs text-zinc-400">{exclude ? "Skip Yocto build-host packages." : "Scan every native package."}</span></span>
+                                </label>
+                            ))}
+                        </div>
+                        {configuration.exclude_native && <details className="group mt-4">
+                            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-white [&::-webkit-details-marker]:hidden">
+                                <span>Native packages to scan</span>
+                                <FontAwesomeIcon icon={faChevronDown} className="shrink-0 text-xs text-neutral-400 transition-transform group-open:rotate-180" />
+                            </summary>
+                            <div className="mt-2 grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                                {packageNames.map(name => <label key={name} className="flex min-w-0 cursor-pointer items-start gap-2 text-sm text-zinc-300">
+                                    <input type="checkbox" className="mt-1 accent-cyan-500"
+                                        checked={configuration.native_package_exceptions.includes(name)}
+                                        onChange={event => onNativeConfigurationChange?.(projectId, {
+                                            ...configuration,
+                                            native_package_exceptions: event.target.checked
+                                                ? [...configuration.native_package_exceptions, name]
+                                                : configuration.native_package_exceptions.filter(value => value !== name),
+                                        })} />
+                                    <span className="min-w-0 break-all">{name}</span>
+                                </label>)}
+                            </div>
+                        </details>}
+                    </fieldset>;
+                })}
+                {nativeGroups.length === 0 && !configurationLoading && !configurationError && <fieldset className="mt-5 min-w-0">
                     <legend className="text-sm font-semibold text-white">Ignore -native packages?</legend>
                     <div className="mt-5 grid grid-cols-2 gap-3">
                         {([true, false] as const).map(exclude => (
@@ -195,7 +251,7 @@ export default function RunScansWizard({
                             </label>
                         ))}
                     </div>
-                </fieldset>
+                </fieldset>}
             </>}
 
             {step === 4 && <>
@@ -242,7 +298,16 @@ export default function RunScansWizard({
                         <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Context variants</h4><p className="mt-1 text-zinc-300">{variants.filter(variant => selectedVariantIds.has(variant.id)).map(variant => variant.name).join(", ")}</p></div><button type="button" onClick={() => setStep(2)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit context variants">Edit</button></div>
                     </section>
                     <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
-                        <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Package filters</h4><p className="mt-1 text-zinc-300">Kernel companions: {excludeKernel ? "Excluded" : "Included"}; -native packages: {excludeNative ? "Excluded" : "Included"}</p></div><button type="button" onClick={() => setStep(3)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit package filters">Edit</button></div>
+                        <div className="flex items-start justify-between gap-4"><div className="min-w-0"><h4 className="font-semibold text-white">Package filters</h4><p className="mt-1 text-zinc-300">Kernel companions: {excludeKernel ? "Excluded" : "Included"}{nativeGroups.length === 0 && <>; -native packages: {excludeNative ? "Excluded" : "Included"}</>}</p>
+                            {nativeGroups.map(projectId => {
+                                const configuration = nativeConfigurations[projectId];
+                                return <p key={projectId} className="mt-2 break-words text-zinc-300">
+                                    {nativeGroups.length > 1 && <>{projectLabel(projectId)}: </>}
+                                    -native packages: {configuration.exclude_native ? "Excluded" : "Included"}
+                                    {configuration.exclude_native && <>; exceptions: {configuration.native_package_exceptions.join(", ") || "None"}</>}
+                                </p>;
+                            })}
+                        </div><button type="button" onClick={() => setStep(3)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit package filters">Edit</button></div>
                     </section>
                     <section className="rounded-lg border border-slate-600 bg-slate-900/40 p-4">
                         <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-white">Vulnerability data refresh</h4><p className="mt-1 text-zinc-300">{refreshTypes.filter(({ key }) => effectiveRefreshTypes.has(key)).map(({ label }) => label).join(", ") || "No refresh selected"}</p></div><button type="button" onClick={() => setStep(4)} className="text-xs font-semibold text-cyan-300 hover:text-cyan-200" aria-label="Edit vulnerability data refresh">Edit</button></div>
