@@ -245,6 +245,19 @@ class SPDX:
                     Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, newid)
                 ]
 
+    def register_dependencies(self):
+        """Copy dependency edges between registered components into SBOM."""
+        existing = {
+            (relation.spdx_element_id, relation.related_spdx_element_id)
+            for relation in self.sbom.relationships
+            if relation.relationship_type == RelationshipType.DEPENDS_ON
+        }
+        for source, target in sorted(self.packagesCtrl.dependency_edges()):
+            edge = (self.pkg_to_ref[source], self.pkg_to_ref[target])
+            if edge not in existing:
+                existing.add(edge)
+                self.sbom.relationships.append(Relationship(edge[0], RelationshipType.DEPENDS_ON, edge[1]))
+
     def create_shell_document(self, author=None):
         if "sbom" not in self.__dict__ or not self.sbom:
             self.sbom = Document(
@@ -274,6 +287,7 @@ class SPDX:
     def _output_generic(self, writer, validate=True, author=None, with_cpe=True) -> str:
         self.create_shell_document(author)
         self.register_components(with_cpe=with_cpe)
+        self.register_dependencies()
 
         if len(self.sbom.relationships) == 0:
             self.sbom.relationships = [Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, SpdxNone())]
