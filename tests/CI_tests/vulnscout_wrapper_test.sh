@@ -382,4 +382,103 @@ expect_fail "usage: vulnscout asset add <path>..." asset remove "$TEST_DIR/logo.
 expect_fail "'asset add' needs at least one path." asset add
 expect_fail "file not found: $TEST_DIR/missing.png" asset add "$TEST_DIR/missing.png"
 
+# --- report ---
+run_ok report summary.adoc
+assert_log "/scan/src/entrypoint.sh --project default --report summary.adoc"
+
+run_ok -p demo -v x86 report summary.adoc all_assessments.adoc --format pdf
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --report summary.adoc --report all_assessments.adoc --report-format pdf"
+
+printf '= Custom\n' > "$TEST_DIR/custom.adoc"
+run_ok report "$TEST_DIR/custom.adoc"
+assert_log "--report /tmp/vulnscout_stage_custom.adoc"
+
+# Review focus 4: with --condition, a match (exit 2) still exits 0.
+export VULNSCOUT_TEST_EXEC_EXIT=2
+run_ok report summary.adoc --condition affected
+assert_log "/scan/src/entrypoint.sh --project default --match-condition affected --report summary.adoc"
+status=0
+"$ROOT_DIR/vulnscout" report summary.adoc < /dev/null > /dev/null 2>&1 || status=$?
+unset VULNSCOUT_TEST_EXEC_EXIT
+if [ "$status" -ne 2 ]; then
+    echo "Without --condition, report must propagate the entrypoint status, got $status." >&2
+    exit 1
+fi
+
+export VULNSCOUT_TEST_EXEC_EXIT=1
+status=0
+"$ROOT_DIR/vulnscout" report summary.adoc --condition affected < /dev/null > /dev/null 2>&1 || status=$?
+unset VULNSCOUT_TEST_EXEC_EXIT
+if [ "$status" -ne 1 ]; then
+    echo "report --condition must propagate errors other than 2, got $status." >&2
+    exit 1
+fi
+
+expect_fail "'report' needs at least one template name or path." report
+expect_fail "'report' needs at least one template name or path." report --format html
+expect_fail "template file not found: ./missing/t.adoc" report ./missing/t.adoc
+expect_fail "report --format must be pdf or html, got 'docx'." report summary.adoc --format docx
+expect_fail "report --condition requires an expression." report summary.adoc --condition
+expect_fail "'report' does not accept option --amend." report summary.adoc --amend
+
+# --- export ---
+run_ok export spdx cdx
+assert_log "/scan/src/entrypoint.sh --project default --export-spdx --export-cdx"
+
+run_ok -p demo export custom-openvex
+assert_log "/scan/src/entrypoint.sh --project demo --export-custom-openvex-assessments --all-variants"
+
+run_ok -p demo -v x86 export custom-openvex --amend
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --export-custom-openvex-assessments --amend"
+refute_log "--all-variants"
+
+run_ok export custom-data openvex context --amend
+assert_log "/scan/src/entrypoint.sh --project default --export-custom-vulnscout-data --export-openvex --export-context --amend"
+
+expect_fail "--amend only applies to the custom-data and custom-openvex exports." export spdx --amend
+expect_fail "unknown export kind 'assessments-openvex'." export assessments-openvex
+expect_fail "'export' needs at least one kind" export
+expect_fail "use 'export <kind> --amend'" export custom-data amend
+
+# --- import ---
+run_ok import custom-data "$DATA"
+assert_log "/scan/src/entrypoint.sh --project default --import-custom-vulnscout-data /tmp/vulnscout_stage_data.json"
+
+run_ok -p demo import custom-data "$DATA" --timestamps original
+assert_log "/scan/src/entrypoint.sh --project demo --use-original-timestamps --import-custom-vulnscout-data /tmp/vulnscout_stage_data.json"
+
+run_ok -p demo import custom-openvex "$DATA"
+assert_log "/scan/src/entrypoint.sh --project demo --all-variants --import-custom-openvex-assessments /tmp/vulnscout_stage_data.json"
+
+run_ok -p demo -v x86 import custom-openvex "$DATA" --timestamps current
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --use-current-timestamps --import-custom-openvex-assessments /tmp/vulnscout_stage_data.json"
+refute_log "--all-variants"
+
+run_ok import context "$DATA"
+assert_log "/scan/src/entrypoint.sh --import-context /tmp/vulnscout_stage_data.json"
+
+run_ok -p demo import context "$DATA"
+assert_log "/scan/src/entrypoint.sh --project demo --retarget-context --import-context /tmp/vulnscout_stage_data.json"
+
+run_ok -p demo -v x86 import context "$DATA"
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --retarget-context --import-context /tmp/vulnscout_stage_data.json"
+
+# Review focus 5: -v without -p fails before anything is staged.
+export VULNSCOUT_TEST_NOT_RUNNING=1
+expect_fail "'import context' --variant requires --project." -v x86 import context "$DATA"
+refute_log "run -d"
+unset VULNSCOUT_TEST_NOT_RUNNING
+
+expect_fail "'import custom-data' does not accept --variant; variants come from the file." \
+    -v x86 import custom-data "$DATA"
+expect_fail "'import context' does not accept --timestamps." import context "$DATA" --timestamps original
+expect_fail "--timestamps must be original or current, got 'now'." import custom-data "$DATA" --timestamps now
+expect_fail "--timestamps original|current" import custom-data "$DATA" --use-current-timestamps
+expect_fail "'import' does not accept argument 'extra.json'." import custom-data "$DATA" extra.json
+expect_fail "'import custom-data' needs a file path." import custom-data
+expect_fail "file not found: $TEST_DIR/missing.json" import custom-data "$TEST_DIR/missing.json"
+expect_fail "use 'vulnscout add --spdx <path>'" import spdx "$SBOM"
+expect_fail "unknown import kind 'foo'." import foo "$DATA"
+expect_fail "'import' needs a kind and a path" import
+
 echo "Host wrapper scope tests passed."
