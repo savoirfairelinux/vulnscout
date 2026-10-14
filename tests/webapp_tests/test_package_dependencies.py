@@ -1232,6 +1232,112 @@ def test_supported_formats_ingest_dependencies(app, tmp_path, format_name, docum
     assert len(graph['edges']) == 1
 
 
+def _cdx_bundled(root_type='application', root_edges=True):
+    """CycloneDX 1.4 BOM shaped like the bom-examples juice-shop npm "bare" output (bundled nested packages)."""
+    return {
+        'bomFormat': 'CycloneDX', 'specVersion': '1.4', 'version': 1,
+        'metadata': {'component': {'type': root_type, 'bom-ref': 'shop', 'name': 'shop', 'version': '11.1.2'}},
+        'components': [
+            {'type': 'library', 'bom-ref': 'express', 'name': 'express', 'version': '4.17.1', 'components': [
+                {'type': 'library', 'bom-ref': 'express|qs', 'name': 'qs', 'version': '6.7.0'},
+            ]},
+            {'type': 'library', 'bom-ref': 'qs', 'name': 'qs', 'version': '6.9.4'},
+        ],
+        'dependencies': [
+            *([{'ref': 'shop', 'dependsOn': ['express', 'qs']}] if root_edges else []),
+            {'ref': 'express', 'dependsOn': ['express|qs']},
+            {'ref': 'express|qs', 'dependsOn': []},
+            {'ref': 'qs', 'dependsOn': []},
+        ],
+        'vulnerabilities': [{'id': 'CVE-2022-24999', 'affects': [{'ref': 'express|qs'}]}],
+    }
+
+
+def test_cdx_nested_non_package_components_are_walked_but_not_imported(app, tmp_path):
+    variant_id, _ = _scan(app, tmp_path, 'nested-kinds', {
+        'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
+        'components': [{'type': 'application', 'bom-ref': 'app', 'name': 'app', 'version': '1.0', 'components': [
+            {'type': 'file', 'bom-ref': 'app|conf', 'name': 'app.conf', 'version': '1'},
+            {'type': 'container', 'bom-ref': 'app|layer', 'name': 'layer', 'version': '2', 'components': [
+                {'type': 'library', 'bom-ref': 'app|layer|zlib', 'name': 'zlib', 'version': '1.3'},
+                {'type': 'operating-system', 'bom-ref': 'app|layer|os', 'name': 'debian', 'version': '12'},
+            ]},
+        ]}],
+        'dependencies': [{'ref': 'app', 'dependsOn': ['app|conf', 'app|layer', 'app|layer|zlib', 'app|layer|os']}],
+        'vulnerabilities': [
+            {'id': 'CVE-2024-0001', 'affects': [{'ref': 'app|conf'}]},
+            {'id': 'CVE-2022-37434', 'affects': [{'ref': 'app|layer|zlib'}]},
+        ],
+    }, 'cdx')
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    assert {package['id'] for package in graph['packages']} == {'app@1.0', 'debian@12', 'zlib@1.3'}
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graph['edges']] == [
+        ('app@1.0', 'debian@12'), ('app@1.0', 'zlib@1.3'),
+    ]
+    assert sorted(db.session.execute(
+        db.select(Finding.vulnerability_id, Package.name).join(Package, Package.id == Finding.package_id)
+    ).all()) == [('CVE-2022-37434', 'zlib')]
+
+
+@pytest.mark.parametrize('root_type,root_edges,root_imported', [
+    ('container', True, False),
+    ('application', False, False),
+    ('application', True, True),
+])
+def test_cdx_inventory_nested_under_the_root_is_imported_whether_or_not_the_root_is(
+        app, tmp_path, root_type, root_edges, root_imported):
+    variant_id, _ = _scan(app, tmp_path, 'image', {
+        'bomFormat': 'CycloneDX', 'specVersion': '1.5', 'version': 1,
+        'metadata': {'component': {
+            'type': root_type, 'bom-ref': 'image', 'name': 'image', 'version': '1.0', 'components': [
+                {'type': 'library', 'bom-ref': 'app', 'name': 'app', 'version': '2.0'},
+                {'type': 'library', 'bom-ref': 'lib', 'name': 'lib', 'version': '3.0', 'components': [
+                    {'type': 'library', 'bom-ref': 'lib|zlib', 'name': 'zlib', 'version': '1.3'},
+                ]},
+            ],
+        }},
+        'dependencies': [
+            *([{'ref': 'image', 'dependsOn': ['app']}] if root_edges else []),
+            {'ref': 'app', 'dependsOn': ['lib']},
+            {'ref': 'lib', 'dependsOn': ['lib|zlib']},
+        ],
+        'vulnerabilities': [{'id': 'CVE-2022-37434', 'affects': [{'ref': 'lib|zlib'}]}],
+    }, 'cdx')
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    children = {'app@2.0', 'lib@3.0', 'zlib@1.3'}
+    assert {package['id'] for package in graph['packages']} == children | ({'image@1.0'} if root_imported else set())
+    expected = [('app@2.0', 'lib@3.0')] + ([('image@1.0', 'app@2.0')] if root_imported else []) + [
+        ('lib@3.0', 'zlib@1.3'),
+    ]
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graph['edges']] == expected
+    assert db.session.execute(
+        db.select(Package.name).join(Finding, Finding.package_id == Package.id)
+        .where(Finding.vulnerability_id == 'CVE-2022-37434')
+    ).scalars().all() == ['zlib']
+
+
+@pytest.mark.parametrize('root_type,root_edges,root_imported', [
+    ('application', True, True),
+    ('library', True, True),
+    ('container', True, False),
+    ('application', False, False),
+])
+def test_cdx_nested_components_and_dependency_root_are_imported(
+        app, tmp_path, root_type, root_edges, root_imported):
+    variant_id, _ = _scan(app, tmp_path, 'bundled', _cdx_bundled(root_type, root_edges), 'cdx')
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    nested = {'express@4.17.1', 'qs@6.7.0', 'qs@6.9.4'}
+    assert {package['id'] for package in graph['packages']} == nested | ({'shop@11.1.2'} if root_imported else set())
+    expected = [('express@4.17.1', 'qs@6.7.0')]
+    if root_imported:
+        expected += [('shop@11.1.2', 'express@4.17.1'), ('shop@11.1.2', 'qs@6.9.4')]
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graph['edges']] == expected
+    assert db.session.execute(
+        db.select(Package.version).join(Finding, Finding.package_id == Package.id)
+        .where(Finding.vulnerability_id == 'CVE-2022-24999')
+    ).scalars().all() == ['6.7.0']
+
+
 def test_migration_creates_composite_membership_constraints(app):
     from importlib import import_module
     from alembic.migration import MigrationContext

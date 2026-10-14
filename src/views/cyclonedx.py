@@ -10,13 +10,19 @@ from ..controllers import ControllersCache, PackagesController, VulnerabilitiesC
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from cyclonedx.model.bom import Bom
 from cyclonedx.output.json import JsonV1Dot4, JsonV1Dot5, JsonV1Dot6
-from cyclonedx.model.component import Component
+from cyclonedx.model.component import Component, ComponentType
 import cyclonedx.model.vulnerability
 from cyclonedx.model.impact_analysis import ImpactAnalysisState, ImpactAnalysisJustification
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from packageurl import PackageURL
-from typing import Optional
+from typing import Iterable, Iterator, Optional
+
+
+def _walk(components: Iterable[Component]) -> Iterator[Component]:
+    for component in components:
+        yield component
+        yield from _walk(component.components)
 
 
 class CycloneDx:
@@ -66,6 +72,13 @@ class CycloneDx:
         "requires_configuration": ImpactAnalysisJustification.REQUIRES_CONFIGURATION,
         "requires_dependency": ImpactAnalysisJustification.REQUIRES_DEPENDENCY,
         "requires_environment": ImpactAnalysisJustification.REQUIRES_ENVIRONMENT,
+    }
+
+    # Container, file or device roots describe the scan target rather than a package.
+    _ROOT_PACKAGE_TYPES = frozenset({ComponentType.APPLICATION, ComponentType.FRAMEWORK, ComponentType.LIBRARY})
+    # Nested containers, files, devices or data are walked for what they hold but are not packages.
+    _NESTED_PACKAGE_TYPES = _ROOT_PACKAGE_TYPES | {
+        ComponentType.OPERATING_SYSTEM, ComponentType.FIRMWARE, ComponentType.DEVICE_DRIVER,
     }
 
     @staticmethod
@@ -131,6 +144,21 @@ class CycloneDx:
         except Exception as e:
             print(f"Error parsing CycloneDx format: {e}")
 
+    def _inventory_components(self) -> Iterator[Component]:
+        """Yield top-level components, nested software packages, and the root when it is a package in the graph."""
+        root = self.sbom.metadata.component
+        if root is not None:
+            if root.type in self._ROOT_PACKAGE_TYPES and any(
+                    root.bom_ref.value in edge for edge in self._dependency_edges):
+                yield root
+            yield from self._nested_packages(root.components)
+        for component in self.sbom.components:
+            yield component
+            yield from self._nested_packages(component.components)
+
+    def _nested_packages(self, components: Iterable[Component]) -> Iterator[Component]:
+        return (component for component in _walk(components) if component.type in self._NESTED_PACKAGE_TYPES)
+
     def merge_components_into_controller(self):
         """
         Internal method.
@@ -140,7 +168,7 @@ class CycloneDx:
         if "sbom" not in self.__dict__ or not self.sbom:
             return
 
-        for component in self.sbom.components:
+        for component in self._inventory_components():
             package = Package(component.name, component.version or "", [], [])
             if component.purl:
                 package.add_purl(str(component.purl))
