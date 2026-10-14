@@ -506,6 +506,16 @@ class TestOutdatedFlag:
         with self.app.app_context():
             assert Package.get_by_string_id("firefox@1.0") is None
 
+    def test_delete_outdated_cli_dry_run_keeps_data(self):
+        """--dry-run previews the real cleanup candidates without deleting them."""
+        result = self.app.test_cli_runner().invoke(args=["delete-outdated", "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        assert "Would delete" in result.output
+        assert "and 1 assessments" in result.output
+        with self.app.app_context():
+            assert Package.get_by_string_id("firefox@1.0") is not None
+
     def test_delete_outdated_preserves_packages_active_in_other_variants(self):
         """Cleanup removes stale variant data without deleting shared active data."""
         second_variant_id = uuid.UUID("abababab-abab-abab-abab-abababababab")
