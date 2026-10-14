@@ -24,7 +24,7 @@ Pass the file path directly to `report` — it stages and runs the template in o
 Set the `GENERATE_DOCUMENTS` environment variable to automatically build templates at the end of every scan. Multiple templates are comma-separated (values are trimmed):
 
 ```bash
-./vulnscout config set GENERATE_DOCUMENTS "summary.adoc, all_assessments.adoc"
+./vulnscout config set GENERATE_DOCUMENTS "summary.adoc,all_assessments.adoc"
 ```
 
 Generated files are written to the outputs directory (default: `.vulnscout/outputs/`).

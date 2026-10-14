@@ -246,7 +246,10 @@ Path to a CycloneDX file.
 ### Yocto CVE Check Output
 
 ```
-add --cve-check <path> output from the Yocto `cve-check` task.
+add --cve-check <path>
+```
+
+JSON output from the Yocto `cve-check` task.
 
 ---
 
@@ -264,7 +267,10 @@ patch-file information than the plain cve-check output.
 ### OpenVEX
 
 ```
-add --openvex <path> vulnerability assessments provided as OpenVEX.
+add --openvex <path>
+```
+
+Include vulnerability assessments provided as OpenVEX.
 
 ---
 

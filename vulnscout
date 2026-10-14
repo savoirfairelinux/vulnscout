@@ -126,7 +126,7 @@ Usage: vulnscout [-p <project>] [-v <variant>] add <input options>
 
 Add input files to the project/variant, then process them.
 Input options (repeatable, types can be mixed; all files form one scan):
-    --spdx <path>           SPDX 2/3 SBOM file or archive (.tar, .tar.gz, .tgz, .tar.zst)
+    --spdx <path>           SPDX 2/3 SBOM file or archive (.tar, .tar.gz, .tar.zst)
     --cdx <path>            CycloneDX file
     --cve-check <path>      Yocto cve-check JSON file
     --yocto-vex <path>      Yocto VEX JSON file
@@ -812,6 +812,9 @@ verb_scan() {
 verb_check() {
     if [ $# -ne 1 ]; then
         die "'check' needs exactly one condition expression, e.g. vulnscout check \"cvss >= 9.0\"."
+    fi
+    if [ -z "$1" ]; then
+        die "check requires a non-empty condition"
     fi
     ensure_running
     set_explicit_scope_args

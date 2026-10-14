@@ -356,6 +356,7 @@ fi
 
 expect_fail "'check' needs exactly one condition expression" check
 expect_fail "'check' needs exactly one condition expression" check a b
+expect_fail "check requires a non-empty condition" check ""
 
 # --- refresh ---
 run_ok refresh
