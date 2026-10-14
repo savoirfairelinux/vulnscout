@@ -1338,6 +1338,58 @@ def test_cdx_nested_components_and_dependency_root_are_imported(
     ).scalars().all() == ['6.7.0']
 
 
+@pytest.mark.parametrize('version', [4, 5, 6])
+def test_scoped_cdx_export_import_cycles_preserve_dependencies(app, tmp_path, version):
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.cyclonedx import CycloneDx
+
+    def edges(variant_id):
+        documents = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents']
+        return [(edge['package_id'], edge['dependency_id']) for document in documents for edge in document['edges']]
+
+    variant_id, _ = _scan(app, tmp_path, 'bundled', _cdx_bundled(), 'cdx')
+    # The same packages depend on each other in another variant only; that edge must not leak.
+    _scan(app, tmp_path, 'other', {
+        'bomFormat': 'CycloneDX', 'specVersion': '1.5', 'version': 1,
+        'components': [{'type': 'library', 'bom-ref': name, 'name': name, 'version': release}
+                       for name, release in (('express', '4.17.1'), ('qs', '6.9.4'))],
+        'dependencies': [{'ref': 'qs', 'dependsOn': ['express']}],
+    }, 'cdx')
+    expected = [('express@4.17.1', 'qs@6.7.0'), ('shop@11.1.2', 'express@4.17.1'), ('shop@11.1.2', 'qs@6.9.4')]
+    assert edges(variant_id) == expected
+
+    for index in range(2):
+        db.session.remove()
+        controllers = ControllersCache(scope=compute_export_scope(variant_id=variant_id))
+        controllers.packages._preload_cache()
+        exporter = CycloneDx(controllers)
+        exported = json.loads(exporter.output_as_json(version))
+        names = {component['bom-ref']: f"{component['name']}@{component['version']}"
+                 for component in exported['components']}
+        assert sorted((names[entry['ref']], names[target]) for entry in exported['dependencies']
+                      for target in entry.get('dependsOn', [])) == expected
+        assert len(exported['dependencies']) == len(exported['components'])
+        # Leaves are declared by the exporter itself, not only by the library's deprecated Bom.validate().
+        exporter.register_dependencies()
+        assert {entry.ref.value for entry in exporter.sbom.dependencies} == {
+            component.bom_ref.value for component in exporter.sbom.components}
+        path = tmp_path / f'cycle-{index}.cdx.json'
+        path.write_text(json.dumps(exported))
+        scan_id = Scan.create('SBOM', variant_id).id
+        SBOMDocument.create(str(path), path.name, scan_id, format='cdx')
+        read_inputs(ControllersCache(), scan_id)
+        assert edges(variant_id) == expected
+
+    global_controllers = ControllersCache()
+    global_controllers.packages._preload_cache()
+    exported = json.loads(CycloneDx(global_controllers).output_as_json(version))
+    names = {component['bom-ref']: component['name'] + '@' + component['version'] for component in exported['components']}
+    assert sorted((names[entry['ref']], names[target]) for entry in exported['dependencies']
+                  for target in entry.get('dependsOn', [])) == sorted(expected + [('qs@6.9.4', 'express@4.17.1')])
+    assert not any(entry.get('dependsOn') for entry in json.loads(
+        CycloneDx(ControllersCache()).output_as_json(version)).get('dependencies', []))
+
+
 def test_migration_creates_composite_membership_constraints(app):
     from importlib import import_module
     from alembic.migration import MigrationContext

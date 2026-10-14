@@ -9,6 +9,8 @@ from ..models.assessment import Assessment
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from cyclonedx.model.bom import Bom
+from cyclonedx.model.bom_ref import BomRef
+from cyclonedx.model.dependency import Dependency
 from cyclonedx.output.json import JsonV1Dot4, JsonV1Dot5, JsonV1Dot6
 from cyclonedx.model.component import Component, ComponentType
 import cyclonedx.model.vulnerability
@@ -38,6 +40,7 @@ class CycloneDx:
         self.ref_dict: dict = {}  # TODO exact type
         self._document_refs: dict[str, str] = {}
         self._dependency_edges: set[tuple[str, str]] = set()
+        self._component_refs: dict[str, BomRef] = {}
 
     _SEVERITY_MAP = {
         "low": cyclonedx.model.vulnerability.VulnerabilitySeverity.LOW,
@@ -320,6 +323,7 @@ class CycloneDx:
         Internal method.
         Copy components from controller into SBOM.
         """
+        self._component_refs = {}
         for pkg in self.packagesCtrl:
             if len(pkg.cpe) < 1:
                 pkg.generate_generic_cpe()
@@ -336,6 +340,21 @@ class CycloneDx:
                 purl=PackageURL.from_string(pkg.purl[0]),
             )
             self.sbom.components.add(cmp)
+            self._component_refs[pkg.string_id] = cmp.bom_ref
+
+    def register_dependencies(self):
+        """
+        Internal method.
+        Copy dependency edges between registered components into SBOM.
+        """
+        graph: dict[str, list[str]] = {string_id: [] for string_id in self._component_refs}
+        for source, target in sorted(self.packagesCtrl.dependency_edges()):
+            graph[source].append(target)
+        self.sbom.dependencies = [
+            Dependency(ref=self._component_refs[source],
+                       dependencies=[Dependency(ref=self._component_refs[target]) for target in targets])
+            for source, targets in graph.items()
+        ]
 
     def register_vulnerabilities(self):
         """
@@ -451,6 +470,7 @@ class CycloneDx:
             )
         self.sbom.components = []
         self.register_components()
+        self.register_dependencies()
         self.sbom.vulnerabilities = []
         self.register_vulnerabilities()
 
