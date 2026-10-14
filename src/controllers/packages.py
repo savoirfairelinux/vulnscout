@@ -59,6 +59,7 @@ class PackagesController:
         self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey]] = []
         self._source_provenance = SPDXSources()
         self._document_evidence: dict[uuid.UUID, dict[str, PackageEvidence]] = {}
+        self._export_document_ids: set[uuid.UUID] = set()
 
     def _preload_cache(self) -> None:
         """Bulk-load all packages from the DB into the session caches.
@@ -83,6 +84,7 @@ class PackagesController:
                 for scan_id in active_sbom_scan_ids_for_variant(variant.id)
                 for document in SBOMDocument.get_by_scan(scan_id)
             }
+            self._export_document_ids = set(document_ids)
             evidence = SBOMPackage.evidence_for_documents(document_ids)
             for pkg in Package.get_all():
                 if allowed is not None and pkg.id not in allowed:
@@ -129,6 +131,20 @@ class PackagesController:
             self._db_id_cache[string_id] = pkg.id
             return pkg.id
         return None
+
+    def dependency_edges(self) -> set[tuple[str, str]]:
+        """Return ``(dependent, dependency)`` string IDs recorded by the preloaded documents."""
+        if not self._export_document_ids:
+            return set()
+        exported = {package.id: string_id for string_id, package in self._cache.items() if package.id is not None}
+        return {
+            (exported[source], exported[target])
+            for source, target in db.session.execute(
+                db.select(PackageDependency.package_id, PackageDependency.dependency_id)
+                .where(PackageDependency.sbom_document_id.in_(self._export_document_ids))
+            )
+            if source in exported and target in exported
+        }
 
     def add_dependencies(self, references: dict[str, str], edges: set[tuple[str, str]]) -> None:
         """Persist source -> dependency references belonging to the active document."""
