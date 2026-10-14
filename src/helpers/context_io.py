@@ -185,6 +185,43 @@ def extract_entries(body) -> list:
     return records
 
 
+def retarget_entries(entries: list, project_name: str, variant_name: str | None = None) -> list:
+    """Point flattened import records at *project_name* (and *variant_name*).
+
+    Without *variant_name*, every record keeps its variant name and the file
+    must name at most one project. With *variant_name*, the file must hold
+    exactly one record.
+
+    Raises
+    ------
+    ValueError
+        If the file does not fit the requested target.
+    """
+    if variant_name is not None:
+        if len(entries) != 1:
+            raise ValueError(f"--variant needs a file with exactly one entry; found {len(entries)}")
+    else:
+        names = sorted({
+            entry["project_name"] for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("project_name"), str)
+        })
+        if len(names) > 1:
+            raise ValueError(
+                "--project needs a file that names one project; "
+                f"it names more than one project ({', '.join(names)})"
+            )
+    retargeted: list = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            retargeted.append(entry)
+            continue
+        updated = {**entry, "project_name": project_name}
+        if variant_name is not None:
+            updated["variant_name"] = variant_name
+        retargeted.append(updated)
+    return retargeted
+
+
 def import_entries(entries: list) -> dict:
     """Apply import *entries* and return a classification summary.
 
