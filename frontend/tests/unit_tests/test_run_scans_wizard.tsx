@@ -1,4 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
+import type { ScanConfiguration } from "../../src/handlers/project";
 import "@testing-library/jest-dom";
 import RunScansWizard from "../../src/components/RunScansWizard";
 import { refreshSourcesForScans } from "../../src/helpers/refreshSources";
@@ -24,6 +26,58 @@ describe("RunScansWizard", () => {
         onExcludeNativeChange: jest.fn(),
         onLaunch: jest.fn(),
     };
+
+    it("keeps native exceptions selected while toggling exclusion and includes them in review", () => {
+        function Wizard() {
+            const [configuration, setConfiguration] = useState<ScanConfiguration>({
+                exclude_native: true,
+                native_package_exceptions: ["gcc-native", "g++-native", "cmake-native"],
+                native_packages: ["make-native", "gcc-native"],
+            });
+            return <RunScansWizard {...defaultProps}
+                nativeConfigurations={{ "project-1": configuration }}
+                onNativeConfigurationChange={(_id, value) => setConfiguration(value)} />;
+        }
+        render(<Wizard />);
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        const selector = screen.getByText("Native packages to scan");
+        expect(selector.closest("details")).not.toHaveAttribute("open");
+        fireEvent.click(selector);
+        expect(selector.closest("details")).toHaveAttribute("open");
+        for (const name of ["gcc-native", "g++-native", "cmake-native"]) {
+            expect(screen.getByRole("checkbox", { name })).toBeChecked();
+        }
+        expect(screen.getByRole("checkbox", { name: "make-native" })).not.toBeChecked();
+        fireEvent.click(screen.getByRole("checkbox", { name: "make-native" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: "gcc-native" }));
+        fireEvent.click(selector);
+        expect(selector.closest("details")).not.toHaveAttribute("open");
+        fireEvent.click(selector);
+        expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
+        fireEvent.click(screen.getByRole("radio", { name: /no scan every native package/i }));
+        expect(screen.queryByText("Native packages to scan")).not.toBeInTheDocument();
+        expect(screen.queryByRole("checkbox", { name: "make-native" })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("radio", { name: /yes skip yocto build-host packages/i }));
+        expect(screen.getByText("Native packages to scan").closest("details")).not.toHaveAttribute("open");
+        fireEvent.click(screen.getByText("Native packages to scan"));
+        expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
+        expect(screen.getByRole("checkbox", { name: "gcc-native" })).not.toBeChecked();
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByText(/exceptions: g\+\+-native, cmake-native, make-native/)).toBeInTheDocument();
+    });
+
+    it("blocks filter completion when preferences are loading or unavailable", () => {
+        const view = render(<RunScansWizard {...defaultProps} configurationLoading />);
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByRole("status")).toHaveTextContent("Loading native package preferences");
+        expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+        view.rerender(<RunScansWizard {...defaultProps} configurationError="Failed to load scan configuration" />);
+        expect(screen.getByRole("alert")).toHaveTextContent("Failed to load scan configuration");
+        expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    });
 
     it("moves through scan, variant, kernel, refresh, and review steps before launching", () => {
         const onLaunch = jest.fn();

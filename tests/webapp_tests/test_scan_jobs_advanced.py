@@ -633,6 +633,7 @@ class TestScanJobPackageFilters:
         assert resolved.call_args.kwargs == {
             "exclude_kernel": False,
             "exclude_native": True,
+            "native_package_exceptions": [],
         }
 
     def test_grype_filters_native_components_and_matches(self, tmp_path):

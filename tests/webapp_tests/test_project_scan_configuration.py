@@ -3,7 +3,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
-from uuid import uuid4
 
 import pytest
 
@@ -120,7 +119,7 @@ def test_invalid_settings_do_not_write_configuration(configuration_api, value):
     assert not (cache / "project-scan.json").exists()
 
 
-@pytest.mark.parametrize("project_id,status", [("invalid", 400), (str(uuid4()), 404)])
+@pytest.mark.parametrize("project_id,status", [("invalid", 400), ("00000000-0000-0000-0000-000000000001", 404)])
 def test_unknown_project_is_rejected(configuration_api, project_id, status):
     client, _, _, _ = configuration_api
     assert client.get(f"/api/projects/{project_id}/scan-configuration").status_code == status
