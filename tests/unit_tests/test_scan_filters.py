@@ -80,6 +80,18 @@ class TestFilterScannablePackages:
     def test_empty_list(self):
         assert filter_scannable_packages([]) == []
 
+    def test_native_exceptions_preserve_selected_packages(self):
+        packages = [_FakePkg(name) for name in (
+            "gcc-native", "g++-native", "cmake-native", "make-native", "openssl",
+        )]
+        result = filter_scannable_packages(
+            packages, exclude_native=True,
+            native_package_exceptions=["GCC-native", "g++-native", " cmake-native "],
+        )
+        assert [package.name for package in result] == [
+            "gcc-native", "g++-native", "cmake-native", "openssl",
+        ]
+
     def test_native_filter_is_opt_in_and_independent(self):
         pkgs = [
             _FakePkg("openssl"),

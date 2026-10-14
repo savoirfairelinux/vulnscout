@@ -138,6 +138,8 @@ def test_native_package_filter_applies_to_queued_scans(app, ids):
         for source in ("nvd", "osv", "scc"):
             ctx = _context(source, ids["variant_id"], exclude_native=True)
             assert "cmake-native" not in [pkg.name for pkg in _active_packages(ctx)]
+            ctx.options["native_package_exceptions"] = ["cmake-native"]
+            assert "cmake-native" in [pkg.name for pkg in _active_packages(ctx)]
             assert "cmake-native" in [
                 pkg.name for pkg in _active_packages(
                     JobContext(ctx.op_id, {"variant_id": ids["variant_id"]})

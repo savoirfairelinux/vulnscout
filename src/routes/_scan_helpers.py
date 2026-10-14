@@ -44,6 +44,7 @@ def resolve_active_packages(
     variant_uuid: uuid_module.UUID,
     exclude_kernel: bool = True,
     exclude_native: bool = False,
+    native_package_exceptions: Sequence[str] = (),
 ) -> Tuple[Sequence[Package], Optional[str]]:
     """Return the active ``Package`` list for *variant_uuid*.
 
@@ -80,6 +81,7 @@ def resolve_active_packages(
         packages,
         exclude_kernel=exclude_kernel,
         exclude_native=exclude_native,
+        native_package_exceptions=native_package_exceptions,
     ), None
 
 

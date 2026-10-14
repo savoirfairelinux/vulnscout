@@ -51,16 +51,19 @@ def filter_scannable_packages(
     *,
     exclude_kernel: bool = True,
     exclude_native: bool = False,
+    native_package_exceptions: Iterable[str] = (),
 ) -> List[T]:
     """Apply enabled package exclusions before scanning.
 
     Each item must expose a ``name`` attribute (e.g. a ``Package``).
     """
+    exceptions = {name.strip().lower() for name in native_package_exceptions}
     return [
         pkg for pkg in packages
         if not (
             exclude_kernel and is_kernel_package_name(getattr(pkg, "name", None))
         ) and not (
             exclude_native and is_native_package_name(getattr(pkg, "name", None))
+            and getattr(pkg, "name", "").strip().lower() not in exceptions
         )
     ]
