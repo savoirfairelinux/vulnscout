@@ -58,7 +58,7 @@ Open the Vite URL and select **Agent** in the navbar. The Vite dev proxy forward
 
 `VULNSCOUT_MCP_SERVER_PATH` is an optional override for a custom stdio entrypoint. Remove old overrides pointing at a separate MCP checkout to use the bundled implementation. External MCP clients may still use the repository's `vulnscout_mcp/run_server.py` bootstrap launcher; the built-in agent does not need it.
 
-## Run with `./vulnscout --serve --dev`
+## Run with `./vulnscout serve --dev`
 
 Build the normal image from this repository; it includes both the Copilot SDK and the MCP package:
 
@@ -66,7 +66,7 @@ Build the normal image from this repository; it includes both the Copilot SDK an
 docker build -t vulnscout:agent-demo .
 ```
 
-Select the locally built image in `.vulnscout/cache/config.env`, run `./vulnscout --stop`, and then run `./vulnscout --serve --dev`:
+Select the locally built image in `.vulnscout/cache/config.env`, run `./vulnscout stop`, and then run `./vulnscout serve --dev`:
 
 ```sh
 VULNSCOUT_IMAGE=vulnscout:agent-demo

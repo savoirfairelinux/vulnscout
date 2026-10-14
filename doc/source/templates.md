@@ -13,10 +13,10 @@ VulnScout uses [Jinja2](https://jinja.palletsprojects.com/) as its templating en
 
 ### Adding a Custom Template
 
-Pass the file path directly to `--report` — it stages and runs the template in one step:
+Pass the file path directly to `report` — it stages and runs the template in one step:
 
 ```bash
-./vulnscout --project demo --report /path/to/my-report.adoc
+./vulnscout -p demo report /path/to/my-report.adoc
 ```
 
 ### Automatic Generation
@@ -24,7 +24,7 @@ Pass the file path directly to `--report` — it stages and runs the template in
 Set the `GENERATE_DOCUMENTS` environment variable to automatically build templates at the end of every scan. Multiple templates are comma-separated (values are trimmed):
 
 ```bash
-./vulnscout config GENERATE_DOCUMENTS "summary.adoc, all_assessments.adoc"
+./vulnscout config set GENERATE_DOCUMENTS "summary.adoc, all_assessments.adoc"
 ```
 
 Generated files are written to the outputs directory (default: `.vulnscout/outputs/`).
@@ -45,7 +45,7 @@ All templates can also be run on-demand from the web interface using the export 
 | `client_name` | string | Customer company name. Set via `CLIENT_NAME` config or overridden per-export from the web UI. May be empty. |
 | `unfiltered_vulnerabilities` | dict | All vulnerabilities, bypassing any active export filter. Use `\| as_list` to get a list. Always the full dataset. |
 | `unfiltered_assessments` | dict | All assessments, bypassing any active export filter. Keyed by assessment ID. |
-| `failed_vulns` | list[string] | List of vulnerability IDs that triggered the `--match-condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
+| `failed_vulns` | list[string] | List of vulnerability IDs that matched the `report --condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
 | `projects` | dict | All projects, keyed by UUID. Use `projects \| as_list` to get a list. Each value has the fields described in the Project Object section below. |
 | `variants` | dict | All in-scope variants, keyed by UUID. A variant-scoped report contains only its selected variant. Use `variants \| as_list` to get a list. Each value has the fields described in the Variant Object section below. |
 | `scans` | dict | All scans, keyed by UUID. Use `scans \| as_list` to get a list. Each value has the fields described in the Scan Object section below. |
@@ -493,7 +493,8 @@ Drag and drop an image onto the *"Drag & drop a logo or image"* area in the Expo
 
 **Via the CLI:**
 ```bash
-./vulnscout --add-asset /path/to/logo.png --report my_report.adoc
+./vulnscout asset add /path/to/logo.png
+./vulnscout report my_report.adoc
 ```
 The image is staged to `/cache/vulnscout/templates/assets/logo.png` before the report runs.
 

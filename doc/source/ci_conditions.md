@@ -5,32 +5,32 @@ Evaluate and enforce conditions on vulnerabilities within a project.
 ## Synopsis
 
 ```
-./vulnscout --match-condition [CONDITION]
+./vulnscout [-p PROJECT] [-v VARIANT] check CONDITION
 ```
 
 ## Description
 
-The `vulnscout` command can optionally accept a `--match-condition CONDITION` argument that causes the command to exit with code **2** if the specified condition is met by any vulnerability in scope.
+`vulnscout check CONDITION` exits with code **2** if the specified condition is met by any vulnerability in scope.
 
-The condition uses vulnerability data already stored by VulnScout. It does not automatically refresh EPSS or other provider data. Add `--refresh-vulnerability-data` to the same command when the condition must use current enrichment data.
+The condition uses vulnerability data already stored by VulnScout. It does not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `check` when the condition must use current enrichment data.
 
 The scope is selected as follows:
 
-- With no `--project` or `--variant`, the condition is evaluated for the `default/default` project and variant.
-- With `--project NAME` and no variant, the condition is evaluated across all variants in that project.
-- With `--project NAME --variant NAME`, the condition is evaluated only for that variant.
-- With `--variant NAME` alone, the variant is selected from the `default` project.
+- With no `-p` or `-v`, the condition is evaluated for the `default/default` project and variant.
+- With `-p NAME` and no variant, the condition is evaluated across all variants in that project.
+- With `-p NAME -v NAME`, the condition is evaluated only for that variant.
+- With `-v NAME` alone, the variant is selected from the `default` project.
 
 The `CONDITION` is a boolean expression that is evaluated against each vulnerability identified. If the condition is met, the IDs of the matching vulnerabilities are displayed in the output. A vulnerability shared by multiple variants is displayed once for a project-wide evaluation. The command returns an exit code of **2** if at least one vulnerability meets the condition.
 
-Match conditions can be combined with input files in a single invocation:
+In CI, import the inputs first and run `check` last, so that a match does not stop the steps that follow:
 
 ```bash
-./vulnscout --project demo \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json \
-    --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
+./vulnscout -p demo add --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
+./vulnscout -p demo check "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ```
+
+To list the matching vulnerabilities in a report without failing the call, use `report <template> --condition CONDITION`.
 
 If the `CONDITION` is invalid, the configuration is not found, or an error occurs during the process, the command returns an exit code of **1**. This allows users to differentiate between a configuration error and a condition match.
 
@@ -45,10 +45,10 @@ If the `CONDITION` is invalid, the configuration is not found, or an error occur
 ## Examples
 
 ```sh
-./vulnscout --project demo --match-condition "cvss >= 7.0"
+./vulnscout -p demo check "cvss >= 7.0"
 ```
 
-This example evaluates every variant in `demo` and exits with code **2** if any vulnerability has a CVSS score of 7.0 or higher. Add `--variant NAME` to limit evaluation to one variant. An unknown project or variant exits with code **1**.
+This example evaluates every variant in `demo` and exits with code **2** if any vulnerability has a CVSS score of 7.0 or higher. Add `-v NAME` to limit evaluation to one variant. An unknown project or variant exits with code **1**.
 
 ---
 

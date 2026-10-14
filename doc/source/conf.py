@@ -15,6 +15,7 @@ release = 'v0.23'
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = ["myst_parser", "sphinx.ext.intersphinx"]
+myst_heading_anchors = 3
 
 templates_path = ['_templates']
 exclude_patterns = []

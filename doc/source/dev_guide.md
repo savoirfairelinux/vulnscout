@@ -34,12 +34,13 @@ Start the container in dev mode:
 ./vulnscout --dev start
 ```
 
-Or start with inputs and the web UI in one step:
+Or load inputs, then start the web UI:
 
 ```bash
-./vulnscout --dev --serve \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json
+./vulnscout --dev add \
+  --spdx /path/to/sbom.spdx.json \
+  --cve-check /path/to/cve-check.json
+./vulnscout --dev serve
 ```
 
 Flask will run with `--debug` when `DEV_MODE=true` is set in the container, enabling auto-reload on Python file changes.
@@ -66,12 +67,13 @@ By default, the `frontend/` directory is not mounted into the container. To get 
 ./vulnscout --dev start
 ```
 
-Or combined with a serve command that also loads input files:
+Or load inputs and start the web UI:
 
 ```bash
-./vulnscout --dev --serve \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json
+./vulnscout --dev add \
+  --spdx /path/to/sbom.spdx.json \
+  --cve-check /path/to/cve-check.json
+./vulnscout --dev serve
 ```
 
 Open the frontend dev server at `http://localhost:5173/`. By default, it sends `/api` requests through Vite's proxy to the backend container on IPv4 (`127.0.0.1:7275`), so the browser does not need direct access to the container port. The script generates `frontend/.env` with an empty `VITE_API_URL` for this same-origin setup; set a custom URL there or in the launcher config if the backend is elsewhere.
