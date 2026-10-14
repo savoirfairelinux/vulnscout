@@ -65,19 +65,47 @@ def list_scans_command(json_format: bool = False):
 
 @click.command("delete-scan")
 @click.argument("scan-id", type=click.UUID)
+@click.option("--dry-run", is_flag=True, help="Show the scan that would be deleted without deleting it.")
 @with_appcontext
-def delete_scan_command(scan_id: uuid.UUID):
+def delete_scan_command(scan_id: uuid.UUID, dry_run: bool):
+    if dry_run:
+        scan = ScanController.get(scan_id)
+        if scan is None:
+            raise click.ClickException(f"Scan not found: {scan_id}")
+        click.echo(
+            f"Would delete scan {scan.id} ({scan.variant.project.name}/{scan.variant.name}, "
+            f"{scan.timestamp.isoformat()}): {scan.description or ''}"
+        )
+        return
     ScanController.delete(scan_id)
     click.echo(f"Successfully deleted scan {scan_id}")
 
 
 @click.command("delete-outdated")
+@click.option("--dry-run", is_flag=True, help="List outdated data without deleting it.")
 @with_appcontext
-def delete_outdated_command():
+def delete_outdated_command(dry_run: bool):
     """Permanently remove all package evidence and assessments marked outdated."""
-    from ..helpers.outdated_cleanup import delete_outdated_data
+    from ..helpers import outdated_cleanup
 
-    summary = delete_outdated_data()
+    if dry_run:
+        preview = outdated_cleanup.outdated_data_preview()
+        packages = typing.cast("list[dict[str, typing.Any]]", preview["packages"])
+        assessments = typing.cast("list[dict[str, typing.Any]]", preview["assessments"])
+        click.echo(f"Would delete {len(packages)} outdated package links and {len(assessments)} assessments")
+        for package in packages:
+            click.echo(
+                f"  package {package['package']} in {package['project']}/{package['variant']}"
+                f" ({len(package['vulnerabilities'])} vulnerabilities)"
+            )
+        for assessment in assessments:
+            click.echo(
+                f"  assessment {assessment['vulnerability']} on {assessment['package']}"
+                f" in {assessment['project']}/{assessment['variant']}"
+            )
+        return
+
+    summary = outdated_cleanup.delete_outdated_data()
     click.echo(
         "Deleted outdated data: "
         f"{summary['assessments_deleted']} assessments, "
@@ -91,22 +119,39 @@ def delete_outdated_command():
 
 
 @click.command("delete-empty-scans")
+@click.option("--dry-run", is_flag=True, help="List empty scans without deleting them.")
 @with_appcontext
-def delete_empty_scans_command():
+def delete_empty_scans_command(dry_run: bool):
     """Permanently remove non-initial scans with no recorded changes."""
-    from ..helpers.outdated_cleanup import delete_empty_scans
+    from ..helpers import outdated_cleanup
 
-    summary = delete_empty_scans()
+    if dry_run:
+        scans = outdated_cleanup.empty_scans_preview()
+        click.echo(f"Would delete {len(scans)} empty scans")
+        for scan in scans:
+            line = f"  {scan['id']} {scan['project']}/{scan['variant']} {scan['timestamp']} {scan['description']}"
+            click.echo(line.rstrip())
+        return
+
+    summary = outdated_cleanup.delete_empty_scans()
     click.echo(f"Deleted {summary['scans_deleted']} empty scans")
 
 
 @click.command("delete-orphaned-vulns")
+@click.option("--dry-run", is_flag=True, help="List orphaned vulnerabilities without deleting them.")
 @with_appcontext
-def delete_orphaned_vulnerabilities_command():
+def delete_orphaned_vulnerabilities_command(dry_run: bool):
     """Permanently remove CVEs absent from every project and variant."""
-    from ..helpers.outdated_cleanup import delete_orphaned_vulnerabilities
+    from ..helpers import outdated_cleanup
 
-    summary = delete_orphaned_vulnerabilities()
+    if dry_run:
+        vulnerabilities = outdated_cleanup.orphaned_vulnerabilities_preview()
+        click.echo(f"Would delete {len(vulnerabilities)} orphaned vulnerabilities")
+        for vulnerability in vulnerabilities:
+            click.echo(f"  {vulnerability['id']} ({vulnerability['assessments']} assessments)")
+        return
+
+    summary = outdated_cleanup.delete_orphaned_vulnerabilities()
     click.echo(
         f"Deleted {summary['vulnerabilities_deleted']} orphaned vulnerabilities, "
         f"{summary['assessments_deleted']} assessments, "
