@@ -127,7 +127,7 @@ describe("RunScansWizard", () => {
         fireEvent.click(screen.getByRole("button", { name: /why exclude kernel packages/i }));
         expect(screen.getByText(/Yocto kernel recipes create many companion packages/i)).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /why exclude kernel packages/i }));
-        fireEvent.click(screen.getByRole("checkbox", { name: /ignore -native packages/i }));
+        fireEvent.click(screen.getByRole("radio", { name: /no scan every native package/i }));
         expect(onExcludeKernelChange).toHaveBeenCalledWith(false);
         expect(onExcludeNativeChange).toHaveBeenCalledWith(false);
 

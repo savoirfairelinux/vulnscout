@@ -182,18 +182,20 @@ export default function RunScansWizard({
                     <FontAwesomeIcon icon={faCircleQuestion} className="mr-2" />Why exclude kernel packages?
                 </button>
                 {showKernelHelp && <p className="mt-2 rounded border border-sky-700/40 bg-sky-900/30 p-3 text-xs leading-relaxed text-sky-200">Yocto kernel recipes create many companion packages that share the same kernel CPE. Excluding those companions avoids duplicate findings and slower scans while retaining CVE coverage for the real kernel package.</p>}
-                <label className={[
-                    "mt-5 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition-colors",
-                    excludeNative
-                        ? "border-cyan-500 bg-cyan-950/40 text-white"
-                        : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                ].join(" ")}>
-                    <input type="checkbox" checked={excludeNative} onChange={(event) => onExcludeNativeChange(event.target.checked)} className="mt-0.5 accent-cyan-500" />
-                    <span className="flex flex-col">
-                        <span className="font-medium">Ignore -native packages</span>
-                        <span className="mt-1 text-xs text-zinc-400">Do not scan Yocto build-host packages whose names end with <code>-native</code>.</span>
-                    </span>
-                </label>
+                <fieldset className="mt-5 min-w-0">
+                    <legend className="text-sm font-semibold text-white">Ignore -native packages?</legend>
+                    <div className="mt-5 grid grid-cols-2 gap-3">
+                        {([true, false] as const).map(exclude => (
+                            <label key={String(exclude)} className={[
+                                "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 transition-colors",
+                                excludeNative === exclude ? "border-cyan-500 bg-cyan-950/40 text-white" : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                            ].join(" ")}>
+                                <input type="radio" name="exclude-native" checked={excludeNative === exclude} onChange={() => onExcludeNativeChange(exclude)} className="mt-0.5 accent-cyan-500" />
+                                <span className="flex flex-col"><span className="font-medium">{exclude ? "Yes" : "No"}</span><span className="mt-1 text-xs text-zinc-400">{exclude ? "Skip Yocto build-host packages." : "Scan every native package."}</span></span>
+                            </label>
+                        ))}
+                    </div>
+                </fieldset>
             </>}
 
             {step === 4 && <>
