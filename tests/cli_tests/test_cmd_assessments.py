@@ -408,3 +408,117 @@ class TestImportCrossInstanceVariantId:
 
         assert result.exit_code == 0, result.output
         assert "Imported 1 assessments" in result.output
+
+
+def _seed_custom_assessment(project_name, variant_name, cve_id):
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+
+    project = Project.get_by_name(project_name) or Project.create(project_name)
+    variant = Variant.create(variant_name, project.id)
+    package = Package.create(f"pkg-{variant_name}", "1.0.0")
+    vulnerability = Vulnerability.create_record(cve_id)
+    finding = Finding.create(package.id, vulnerability.id)
+    Assessment.create(
+        status="not_affected", targets=[(variant.id, finding.id)], origin="custom",
+        impact_statement="Not reachable.",
+    )
+    _db.session.commit()
+    return variant
+
+
+class TestExportCustomOpenVexAllVariants:
+    """Without --variant the export covers every variant of the project."""
+
+    def test_export_without_variant_covers_every_variant(self, app, tmp_path):
+        with app.app_context():
+            _seed_custom_assessment("MultiProj", "v1", "CVE-2099-0001")
+            _seed_custom_assessment("MultiProj", "v2", "CVE-2099-0002")
+
+        result = app.test_cli_runner().invoke(args=[
+            "export-custom-openvex-assessments", "--project", "MultiProj", "--output-dir", str(tmp_path),
+        ])
+
+        assert result.exit_code == 0, result.output
+        document = json.loads((tmp_path / "custom_openvex_all.json").read_text())
+        names = {statement["vulnerability"]["name"] for statement in document["statements"]}
+        assert names == {"CVE-2099-0001", "CVE-2099-0002"}
+
+    def test_export_without_variant_ignores_other_projects(self, app, tmp_path):
+        from src.models.project import Project
+
+        with app.app_context():
+            Project.create("EmptyProj")
+            _seed_custom_assessment("OtherProj", "v1", "CVE-2099-0003")
+            _db.session.commit()
+
+        result = app.test_cli_runner().invoke(args=[
+            "export-custom-openvex-assessments", "--project", "EmptyProj", "--output-dir", str(tmp_path),
+        ])
+
+        assert result.exit_code != 0
+        assert "No custom assessments to export." in result.output
+        assert not (tmp_path / "custom_openvex_all.json").exists()
+
+
+_OPENVEX_IMPORT_DOC = {
+    "@context": "https://openvex.dev/ns/v0.2.0",
+    "statements": [{
+        "vulnerability": {"name": "CVE-2099-10009"},
+        "status": "affected",
+        "products": [{"@id": "fallback-pkg@1.0"}],
+        "timestamp": "2001-02-03T04:05:06+00:00",
+    }],
+}
+
+
+class TestImportCustomOpenVexVariantFallback:
+    """Without --variant the import targets the project's only variant."""
+
+    def _write(self, tmp_path):
+        path = tmp_path / "custom-openvex.json"
+        path.write_text(json.dumps(_OPENVEX_IMPORT_DOC))
+        return str(path)
+
+    def test_import_without_variant_uses_only_variant(self, app, tmp_path):
+        from src.models.assessment import Assessment
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("SoloProj")
+            variant_id = Variant.create("only", project.id).id
+            _db.session.commit()
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-openvex-assessments", "--project", "SoloProj", self._write(tmp_path),
+        ])
+
+        assert result.exit_code == 0, result.output
+        with app.app_context():
+            assert len(Assessment.get_by_origin([variant_id], origin="custom")) == 1
+
+    @pytest.mark.parametrize(
+        ("variant_names", "listed"),
+        [([], "0 variants (none)"), (["a", "b"], "2 variants (a, b)")],
+    )
+    def test_import_without_variant_requires_single_variant(self, app, tmp_path, variant_names, listed):
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            project = Project.create("AmbiguousProj")
+            for name in variant_names:
+                Variant.create(name, project.id)
+            _db.session.commit()
+
+        result = app.test_cli_runner().invoke(args=[
+            "import-custom-openvex-assessments", "--project", "AmbiguousProj", self._write(tmp_path),
+        ])
+
+        assert result.exit_code != 0
+        assert f"project 'AmbiguousProj' has {listed}; choose one with --variant." in result.output
