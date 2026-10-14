@@ -302,4 +302,84 @@ expect_fail "'version' does not accept option --json." version --json
 expect_fail "-p requires a value." scan -p
 expect_fail "--variant requires a value." --variant --dev scan
 
+# --- add ---
+run_ok -p demo -v x86 add --spdx "$SBOM" --cve-check "$DATA"
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --add-spdx /tmp/vulnscout_stage_input.spdx.json --add-cve-check /tmp/vulnscout_stage_data.json"
+refute_stderr "deprecated:"
+
+run_ok add --spdx "$SBOM" --spdx "$SBOM" --dev
+assert_log "/scan/src/entrypoint.sh --add-spdx /tmp/vulnscout_stage_input.spdx.json --add-spdx /tmp/vulnscout_stage_input.spdx.json"
+refute_log "/scan/src/entrypoint.sh --project"
+assert_log "DEV_MODE=true"
+
+expect_fail "'add' needs at least one input option" add
+expect_fail "'add' does not accept argument 'sbom.json'." add sbom.json
+expect_fail "'add' does not accept option --format." add --format spdx
+expect_fail "add --spdx requires a path." add --spdx
+
+# Review focus 2: a missing file fails before the container is started.
+export VULNSCOUT_TEST_NOT_RUNNING=1
+expect_fail "file not found: $TEST_DIR/missing.json" add --spdx "$SBOM" --cdx "$TEST_DIR/missing.json"
+refute_log "run -d"
+unset VULNSCOUT_TEST_NOT_RUNNING
+
+# --- scan ---
+run_ok scan
+assert_log "/scan/src/entrypoint.sh --perform-scans all"
+
+run_ok -p demo scan nvd osv
+assert_log "/scan/src/entrypoint.sh --project demo --perform-scans nvd\,osv"
+
+run_ok scan grype,sbom-cve-check -v x86
+assert_log "/scan/src/entrypoint.sh --variant x86 --perform-scans grype\,sbom-cve-check"
+
+expect_fail "unknown scan type 'x'" scan x
+expect_fail "scan requires scan types" scan nvd,
+expect_fail "'scan' does not accept option --all." scan --all
+
+# --- check ---
+run_ok check affected
+assert_log "/scan/src/entrypoint.sh --match-condition affected"
+refute_log "--project"
+
+run_ok -p demo check affected
+assert_log "/scan/src/entrypoint.sh --project demo --match-condition affected"
+
+export VULNSCOUT_TEST_EXEC_EXIT=2
+status=0
+"$ROOT_DIR/vulnscout" check affected < /dev/null > /dev/null 2>&1 || status=$?
+unset VULNSCOUT_TEST_EXEC_EXIT
+if [ "$status" -ne 2 ]; then
+    echo "check must exit 2 when the condition matches, got $status." >&2
+    exit 1
+fi
+
+expect_fail "'check' needs exactly one condition expression" check
+expect_fail "'check' needs exactly one condition expression" check a b
+
+# --- refresh ---
+run_ok refresh
+assert_log "/scan/src/entrypoint.sh --refresh-vulnerability-data"
+refute_log "--project"
+
+run_ok refresh -v x86 -p demo
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --refresh-vulnerability-data"
+
+# Review focus 1 (new grammar): a -p value equal to a legacy token does not select the legacy grammar.
+run_ok -p list-scans refresh
+assert_log "/scan/src/entrypoint.sh --project list-scans --refresh-vulnerability-data"
+refute_stderr "deprecated:"
+
+expect_fail "'refresh' does not accept option --epss." refresh --epss
+
+# --- asset add ---
+printf 'png\n' > "$TEST_DIR/logo.png"
+run_ok asset add "$TEST_DIR/logo.png" "$TEST_DIR/logo.png"
+assert_log "/scan/src/entrypoint.sh --add-asset /tmp/vulnscout_stage_logo.png --add-asset /tmp/vulnscout_stage_logo.png"
+
+expect_fail "'asset' does not accept --project or --variant." -p demo asset add "$TEST_DIR/logo.png"
+expect_fail "usage: vulnscout asset add <path>..." asset remove "$TEST_DIR/logo.png"
+expect_fail "'asset add' needs at least one path." asset add
+expect_fail "file not found: $TEST_DIR/missing.png" asset add "$TEST_DIR/missing.png"
+
 echo "Host wrapper scope tests passed."
