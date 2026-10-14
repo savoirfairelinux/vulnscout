@@ -310,6 +310,28 @@ class TestRenameVariant:
         assert resp.status_code == 409
 
 
+class TestEntityNameRestriction:
+
+    @pytest.mark.parametrize("name", ["my project", "v1.0", "-lead", "_lead", "@lead", "é", "a" * 65])
+    def test_disallowed_names_are_rejected(self, client, name):
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        requests = [
+            lambda: client.post("/api/projects", json={"name": name}),
+            lambda: client.patch(f"/api/projects/{pid}/rename", json={"name": name}),
+            lambda: client.post(f"/api/projects/{pid}/variants", json={"name": name}),
+            lambda: client.patch(f"/api/variants/{vid}/rename", json={"name": name}),
+        ]
+        for send in requests:
+            resp = send()
+            assert resp.status_code == 400
+            assert "may only contain" in resp.get_json()["error"]
+
+    @pytest.mark.parametrize("name", ["a", "Release_2-x86@64", "1st", "a" * 64])
+    def test_allowed_names_are_accepted(self, client, name):
+        assert client.post("/api/projects", json={"name": name}).status_code == 201
+
+
 class TestDeleteVariant:
 
     def test_delete_variant_success(self, client):
