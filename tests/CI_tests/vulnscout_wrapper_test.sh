@@ -481,4 +481,99 @@ expect_fail "use 'vulnscout add --spdx <path>'" import spdx "$SBOM"
 expect_fail "unknown import kind 'foo'." import foo "$DATA"
 expect_fail "'import' needs a kind and a path" import
 
+# --- delete ---
+# Without a terminal and without --yes, delete runs without asking (CI).
+run_ok delete outdated
+assert_log "/scan/src/entrypoint.sh --delete-outdated"
+refute_log "--dry-run"
+
+run_ok delete scan 42 --dry-run
+assert_log "/scan/src/entrypoint.sh --dry-run --delete-scan 42"
+refute_log "/scan/src/entrypoint.sh --delete-scan 42"
+
+run_ok delete orphaned-vulnerabilities --yes
+assert_log "/scan/src/entrypoint.sh --delete-orphaned-vulns"
+
+run_ok delete empty-scans
+assert_log "/scan/src/entrypoint.sh --delete-empty-scans"
+
+expect_fail "'delete' does not accept --project or --variant." -p demo delete outdated
+expect_fail "'delete scan' needs a scan ID" delete scan
+expect_fail "'delete scan' needs a scan ID" delete scan --yes
+expect_fail "unknown delete target 'everything'." delete everything
+expect_fail "'delete' needs a target" delete
+expect_fail "'delete' does not accept option -y." delete outdated -y
+
+# On a terminal: preview, then prompt.
+if command -v script > /dev/null; then
+    delete_cmd="$(printf '%q ' "$ROOT_DIR/vulnscout" delete outdated)"
+
+    reset_log
+    status=0
+    printf 'n\n' | SHELL=/bin/bash script -qec "$delete_cmd" /dev/null > "$TEST_DIR/stdout" 2>&1 || status=$?
+    if [ "$status" -ne 1 ]; then
+        echo "Declining the delete prompt must exit 1, got $status." >&2
+        cat "$TEST_DIR/stdout" >&2
+        exit 1
+    fi
+    assert_stdout "Proceed with deletion? [y/N]"
+    assert_stdout "Aborted."
+    assert_log "/scan/src/entrypoint.sh --dry-run --delete-outdated"
+    refute_log "/scan/src/entrypoint.sh --delete-outdated"
+
+    reset_log
+    printf 'y\n' | SHELL=/bin/bash script -qec "$delete_cmd" /dev/null > "$TEST_DIR/stdout" 2>&1
+    assert_log "/scan/src/entrypoint.sh --dry-run --delete-outdated"
+    assert_log "/scan/src/entrypoint.sh --delete-outdated"
+
+    reset_log
+    SHELL=/bin/bash script -qec "$delete_cmd--yes" /dev/null < /dev/null > "$TEST_DIR/stdout" 2>&1
+    refute_log "--dry-run"
+    assert_log "/scan/src/entrypoint.sh --delete-outdated"
+else
+    echo "script(1) not found; skipping the delete prompt tests." >&2
+fi
+
+# --- list ---
+run_ok list projects --json
+assert_log "/scan/src/entrypoint.sh --list-projects --json"
+
+run_ok list scans
+assert_log "/scan/src/entrypoint.sh --list-scans"
+refute_log "--json"
+
+expect_fail "'list' does not accept --project or --variant." -p demo list scans
+expect_fail "unknown list target 'variants'." list variants
+expect_fail "'list' needs projects or scans." list
+expect_fail "'list' does not accept option --format." list scans --format json
+
+# --- config ---
+run_ok config set NVD_API_KEY secret-value
+assert_stdout "Config set: NVD_API_KEY=secret-value"
+
+run_ok config get NVD_API_KEY
+if [ "$(cat "$TEST_DIR/stdout")" != "secret-value" ]; then
+    echo "config get must print only the value." >&2
+    cat "$TEST_DIR/stdout" >&2
+    exit 1
+fi
+
+run_ok config list
+assert_stdout "NVD_API_KEY=****"
+assert_stdout "LEGACY_KEY=legacy-value"
+if grep -qF "secret-value" "$TEST_DIR/stdout"; then
+    echo "config list must mask secret values." >&2
+    exit 1
+fi
+
+run_ok config unset NVD_API_KEY
+assert_stdout "Config cleared: NVD_API_KEY"
+expect_fail "config key not set: NVD_API_KEY" config get NVD_API_KEY
+
+expect_fail "invalid config key 'bad-key'" config set bad-key x
+expect_fail "usage: vulnscout config set <key> <value>" config set ONLY_KEY
+expect_fail "'config' does not accept --project or --variant." -p demo config list
+expect_fail "unknown config action 'show'." config show
+expect_fail "'config' needs get, set, unset, or list." config
+
 echo "Host wrapper scope tests passed."
