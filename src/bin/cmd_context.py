@@ -14,6 +14,7 @@ from ..helpers.context_io import (
     collect_entries,
     extract_entries,
     import_entries,
+    retarget_entries,
 )
 from ._common import resolve_project, resolve_project_variant
 
@@ -54,15 +55,24 @@ def export_context_command(output: str, project: str | None, variant: str | None
 
 @click.command("import-context")
 @click.argument("file_path")
+@click.option("--project", "-p", default=None,
+              help="Import every entry into this project, keeping its variant names.")
+@click.option("--variant", "-v", default=None,
+              help="Requires --project; import the file's single entry into this variant.")
 @with_appcontext
-def import_context_command(file_path: str) -> None:
+def import_context_command(file_path: str, project: str | None, variant: str | None) -> None:
     """Import AI assessment context from a JSON file.
 
     Accepts either the versioned export envelope or a bare array of entries.
     Existing context for each matching project/variant is overwritten. Entries
     whose project or variant does not exist are ignored; entries missing
-    mandatory fields fail.
+    mandatory fields fail. --project/--variant retarget the file's entries
+    and must name an existing project/variant.
     """
+    if variant and not project:
+        click.echo("Error: --variant requires --project.", err=True)
+        raise SystemExit(1)
+
     try:
         with open(file_path) as fh:
             data = _json.load(fh)
@@ -75,6 +85,12 @@ def import_context_command(file_path: str) -> None:
 
     try:
         entries = extract_entries(data)
+        if project:
+            if variant:
+                resolve_project_variant(project, variant, create=False)
+            else:
+                resolve_project(project)
+            entries = retarget_entries(entries, project, variant)
     except ValueError as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)

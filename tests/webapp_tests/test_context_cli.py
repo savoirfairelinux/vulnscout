@@ -219,3 +219,91 @@ class TestImportContextCLI:
         result = app.test_cli_runner().invoke(args=["import-context", path])
         assert result.exit_code != 0
         assert "projects" in result.output.lower()
+
+    @staticmethod
+    def _threat_model(app, project_name, variant_name):
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.variant_context import VariantContext
+
+        with app.app_context():
+            project = Project.get_by_name(project_name)
+            variant = Variant.get_by_name_and_project(variant_name, project.id)
+            context = VariantContext.get_by_variant(variant.id)
+            return context.threat_model if context else None
+
+    def test_import_project_retargets_entries_keeping_variant_names(self, app, tmp_path):
+        payload = [{"project_name": "Elsewhere", "project_description": "moved", "variants": [
+            {"variant_name": "VariantA2", "threat_model": "retargeted"},
+        ]}]
+        path = self._write(tmp_path, payload)
+
+        result = app.test_cli_runner().invoke(args=["import-context", "--project", "ProjectA", path])
+
+        assert result.exit_code == 0, result.output
+        assert "Imported 1 context entry" in result.output
+        assert self._threat_model(app, "ProjectA", "VariantA2") == "retargeted"
+
+    def test_import_project_rejects_file_with_several_projects(self, app, tmp_path):
+        payload = [
+            {"project_name": "ProjectA", "project_description": "d", "variants": [
+                {"variant_name": "VariantA1", "threat_model": "t"}]},
+            {"project_name": "ProjectB", "project_description": "d", "variants": [
+                {"variant_name": "VariantB1", "threat_model": "t"}]},
+        ]
+        path = self._write(tmp_path, payload)
+
+        result = app.test_cli_runner().invoke(args=["import-context", "-p", "ProjectA", path])
+
+        assert result.exit_code == 1
+        assert "names more than one project (ProjectA, ProjectB)" in result.output
+        assert self._threat_model(app, "ProjectA", "VariantA1") == "A1 threat model"
+
+    def test_import_project_variant_retargets_single_entry(self, app, tmp_path):
+        payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
+            {"variant_name": "VariantA1", "threat_model": "copied"},
+        ]}]
+        path = self._write(tmp_path, payload)
+
+        result = app.test_cli_runner().invoke(
+            args=["import-context", "--project", "ProjectB", "--variant", "VariantB1", path])
+
+        assert result.exit_code == 0, result.output
+        assert self._threat_model(app, "ProjectB", "VariantB1") == "copied"
+        assert self._threat_model(app, "ProjectA", "VariantA1") == "A1 threat model"
+
+    def test_import_project_variant_requires_exactly_one_entry(self, app, tmp_path):
+        payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
+            {"variant_name": "VariantA1", "threat_model": "t"},
+            {"variant_name": "VariantA2", "threat_model": "t"},
+        ]}]
+        path = self._write(tmp_path, payload)
+
+        result = app.test_cli_runner().invoke(
+            args=["import-context", "-p", "ProjectB", "-v", "VariantB1", path])
+
+        assert result.exit_code == 1
+        assert "exactly one entry; found 2" in result.output
+
+    @pytest.mark.parametrize("flags", [
+        ["-p", "Missing"],
+        ["-p", "ProjectA", "-v", "Missing"],
+    ])
+    def test_import_retarget_to_missing_target_fails(self, app, tmp_path, flags):
+        payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
+            {"variant_name": "VariantA1", "threat_model": "t"}]}]
+        path = self._write(tmp_path, payload)
+
+        result = app.test_cli_runner().invoke(args=["import-context", *flags, path])
+
+        assert result.exit_code == 1
+        assert "not found" in result.output
+        assert self._threat_model(app, "ProjectA", "VariantA1") == "A1 threat model"
+
+    def test_import_variant_without_project_errors(self, app, tmp_path):
+        path = self._write(tmp_path, [])
+
+        result = app.test_cli_runner().invoke(args=["import-context", "--variant", "VariantA1", path])
+
+        assert result.exit_code == 1
+        assert "--variant requires --project." in result.output
