@@ -130,25 +130,33 @@ def import_custom_vulnscout_data_command(
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
 @click.option("--project", "-p", default="default", show_default=True, help="Project name.")
-@click.option("--variant", "-v", default="default", show_default=True, help="Variant name to export.")
+@click.option("--variant", "-v", default=None,
+              help="Variant name to export. If empty, all project variants are exported.")
 @click.option("--amend", is_flag=True,
               help="Update the existing output file while preserving stable review ordering.")
 @with_appcontext
-def export_custom_openvex_assessments_command(output_dir: str, project: str, variant: str, amend: bool) -> None:
-    """Export custom assessments for one variant as an OpenVEX JSON file."""
-    _, variant_obj = resolve_project_variant(project, variant, create=False)
-    handmade = DBAssessment.get_by_origin([variant_obj.id])
+def export_custom_openvex_assessments_command(
+    output_dir: str, project: str, variant: str | None, amend: bool,
+) -> None:
+    """Export custom assessments for one or all project variants as an OpenVEX JSON file."""
+    if variant:
+        _, variant_obj = resolve_project_variant(project, variant, create=False)
+        variant_ids = [variant_obj.id]
+        filename_label = sanitize_variant_name(variant_obj.name)
+    else:
+        project_obj = resolve_project(project)
+        variant_ids = [project_variant.id for project_variant in DBVariant.get_by_project(project_obj.id)]
+        filename_label = "all"
+    # get_by_origin([]) means "no filter"; an empty project must export nothing.
+    handmade = DBAssessment.get_by_origin(variant_ids) if variant_ids else []
     if not handmade:
         raise click.ClickException("No custom assessments to export.")
 
     author = get_default_author()
     document = build_openvex_doc(
-        handmade, author, _dt.now(_tz.utc).isoformat(), variant_ids=[variant_obj.id])
+        handmade, author, _dt.now(_tz.utc).isoformat(), variant_ids=variant_ids)
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(
-        output_dir,
-        f"custom_openvex_{sanitize_variant_name(variant_obj.name)}{_JSON_SUFFIX}",
-    )
+    output_path = os.path.join(output_dir, f"custom_openvex_{filename_label}{_JSON_SUFFIX}")
     if amend:
         document = reconcile_review_export(_load_json_file(output_path), document)
     with open(output_path, "w") as file:
@@ -159,7 +167,8 @@ def export_custom_openvex_assessments_command(output_dir: str, project: str, var
 @click.command("import-custom-openvex-assessments")
 @click.argument("file_path")
 @click.option("--project", "-p", default="default", show_default=True, help="Project name.")
-@click.option("--variant", "-v", default="default", show_default=True, help="Variant name to import into.")
+@click.option("--variant", "-v", default=None,
+              help="Variant name to import into. If empty, the project's only variant is used.")
 @click.option(
     "--use-original-timestamps/--use-current-timestamps",
     default=True,
@@ -169,11 +178,21 @@ def export_custom_openvex_assessments_command(output_dir: str, project: str, var
 def import_custom_openvex_assessments_command(
     file_path: str,
     project: str,
-    variant: str,
+    variant: str | None,
     use_original_timestamps: bool,
 ) -> None:
-    """Import one OpenVEX JSON document into the specified variant."""
-    _, variant_obj = resolve_project_variant(project, variant, create=False)
+    """Import one OpenVEX JSON document into a variant of the project."""
+    if variant:
+        _, variant_obj = resolve_project_variant(project, variant, create=False)
+    else:
+        project_obj = resolve_project(project)
+        variants = DBVariant.get_by_project(project_obj.id)
+        if len(variants) != 1:
+            names = ", ".join(project_variant.name for project_variant in variants) or "none"
+            raise click.ClickException(
+                f"project '{project}' has {len(variants)} variants ({names}); choose one with --variant."
+            )
+        variant_obj = variants[0]
     data = _load_json_file(file_path)
     if not is_openvex_doc(data):
         raise click.ClickException("Not a valid OpenVEX document.")
