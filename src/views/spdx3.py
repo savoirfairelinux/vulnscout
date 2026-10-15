@@ -165,6 +165,7 @@ class SPDX3:
                 build_ref = self._next_spdx_ref()
                 elements_to_add.append({
                     "type": "build_Build", "spdxId": build_ref, "name": f"{pkg.name} source provenance",
+                    "build_buildType": "https://vulnscout.io/build-types/source-provenance",
                     "creationInfo": self._creation_info_ref,
                 })
                 source_refs = []

@@ -873,7 +873,7 @@ def handle_sbom_exports(
                     new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
                     return content, 200, {
                         "Content-Type": expected_mime,
-                        "Content-Disposition": f"attachment; filename={new_name}.json"
+                        "Content-Disposition": f"attachment; filename={new_name}.spdx.json"
                     }
             if expected_mime in {"application/xml", "text/xml"}:
                 content = spdx.output_as_xml(author)
@@ -881,7 +881,7 @@ def handle_sbom_exports(
                     new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
                     return content, 200, {
                         "Content-Type": expected_mime,
-                        "Content-Disposition": f"attachment; filename={new_name}.xml"
+                        "Content-Disposition": f"attachment; filename={new_name}.spdx.xml"
                     }
         elif doc_name == "SPDX 3.0":
             spdx3 = SPDX3(ctrls)
@@ -891,7 +891,7 @@ def handle_sbom_exports(
                     new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
                     return content, 200, {
                         "Content-Type": expected_mime,
-                        "Content-Disposition": f"attachment; filename={new_name}.json"
+                        "Content-Disposition": f"attachment; filename={new_name}.spdx.json"
                     }
 
     if doc_name == "OpenVex" and expected_mime == "application/json":
