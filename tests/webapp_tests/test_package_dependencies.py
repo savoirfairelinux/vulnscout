@@ -925,6 +925,91 @@ def test_yocto_spdx2_dependencies_resolve_across_documents_of_one_scan(
         ]
 
 
+def _scan_edges(scan_id):
+    names = {package.id: package.string_id for package in Package.get_all()}
+    return sorted((names[package], names[dependency]) for package, dependency in db.session.execute(
+        db.select(PackageDependency.package_id, PackageDependency.dependency_id)
+        .join(SBOMDocument, SBOMDocument.id == PackageDependency.sbom_document_id)
+        .where(SBOMDocument.scan_id == scan_id)
+    ))
+
+
+def _exported_spdx2_edges(document):
+    names = {package['SPDXID']: package['name'] for package in document['packages']}
+    return sorted((names[relation['spdxElementId']], names[relation['relatedSpdxElement']])
+                  for relation in document['relationships'] if relation['relationshipType'] == 'DEPENDS_ON')
+
+
+def _exported_spdx3_edges(document):
+    names = {item['spdxId']: item['name'] for item in document['@graph'] if item.get('type') == 'software_Package'}
+    return sorted((names[relation['from']], names[target]) for relation in document['@graph']
+                  if relation.get('relationshipType') == 'dependsOn' for target in relation['to'])
+
+
+@pytest.mark.parametrize('format_name', ['spdx2', 'spdx3'])
+@pytest.mark.parametrize('ignore_parsing_errors', ['false', 'true'])
+def test_scoped_spdx_export_import_cycles_preserve_cross_document_dependencies(
+        app, tmp_path, monkeypatch, format_name, ignore_parsing_errors):
+    from xml.etree import ElementTree
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.spdx import SPDX
+    from src.views.spdx3 import SPDX3
+
+    monkeypatch.setenv('IGNORE_PARSING_ERRORS', ignore_parsing_errors)
+    project = Project.create('dependency-export')
+    variant_id = Variant.create('default', project.id).id
+    scan_id = Scan.create('SBOM', variant_id).id
+    for name, document in _yocto_archive().items():
+        path = tmp_path / f'{name}.spdx.json'
+        path.write_text(json.dumps(document))
+        SBOMDocument.create(str(path), path.name, scan_id, format='spdx')
+    read_inputs(ControllersCache(), scan_id)
+    # The same packages depend on each other in another variant only; that edge must not leak.
+    other_variant = Variant.create('other', project.id)
+    other_scan_id = Scan.create('SBOM', other_variant.id).id
+    other = _yocto_spdx2('other', packages=(('SPDXRef-lib', 'lib'), ('SPDXRef-util', 'util')),
+                         relationships=(('SPDXRef-util', 'DEPENDS_ON', 'SPDXRef-lib'),))
+    path = tmp_path / 'other.spdx.json'
+    path.write_text(json.dumps(other))
+    SBOMDocument.create(str(path), path.name, other_scan_id, format='spdx')
+    read_inputs(ControllersCache(), other_scan_id)
+    expected = [('app@1.0', 'lib@1.0'), ('app@1.0', 'util@1.0')]
+    assert _scan_edges(scan_id) == expected
+    assert _scan_edges(other_scan_id) == [('util@1.0', 'lib@1.0')]
+
+    for index in range(2):
+        db.session.remove()
+        controllers = ControllersCache(scope=compute_export_scope(variant_id=variant_id))
+        controllers.packages._preload_cache()
+        if format_name == 'spdx2':
+            exporter = SPDX(controllers)
+            exported = json.loads(exporter.output_as_json())
+            assert _exported_spdx2_edges(exported) == [('app', 'lib'), ('app', 'util')]
+            xml = ElementTree.fromstring(exporter.output_as_xml())
+            assert [relation.findtext('relationshipType') for relation in xml.findall('relationships')].count(
+                'DEPENDS_ON') == 2
+        else:
+            exported = json.loads(SPDX3(controllers).output_as_json())
+            assert _exported_spdx3_edges(exported) == [('app', 'lib'), ('app', 'util')]
+            assert len([item for item in exported['@graph'] if item.get('relationshipType') == 'dependsOn']) == 1
+        path = tmp_path / f'cycle-{index}.spdx.json'
+        path.write_text(json.dumps(exported))
+        scan_id = Scan.create('SBOM', variant_id).id
+        SBOMDocument.create(str(path), path.name, scan_id, format='spdx')
+        read_inputs(ControllersCache(), scan_id)
+        assert _scan_edges(scan_id) == expected
+
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents']
+    assert [(edge['package_id'], edge['dependency_id']) for document in graph for edge in document['edges']] == expected
+
+    global_controllers = ControllersCache()
+    global_controllers.packages._preload_cache()
+    global_edges = [('app', 'lib'), ('app', 'util'), ('util', 'lib')]
+    assert _exported_spdx2_edges(json.loads(SPDX(global_controllers).output_as_json())) == global_edges
+    assert _exported_spdx3_edges(json.loads(SPDX3(global_controllers).output_as_json())) == global_edges
+    assert SPDX(ControllersCache()).packagesCtrl.dependency_edges() == set()
+
+
 def test_spdx3_ingestion_and_scoped_api(app, tmp_path):
     variant, scan_id = _scan(app, tmp_path, 'one', _spdx3())
     client = app.test_client()

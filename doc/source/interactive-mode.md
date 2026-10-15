@@ -126,6 +126,8 @@ Dependencies are read only from SBOM formats that describe them:
 
 Grype, Yocto `cve-check`, Yocto VEX, and OpenVEX files carry no dependency relationships, so packages known only from them show zero counts. Only relationships between two packages are kept; relationships to files, snippets, or elements missing from the scan are ignored. SBOMs imported before dependency support existed have no recorded relationships: their packages show **Not recorded** instead of zero counts (also in the graph's **Variants** list), and the SBOM must be imported again to record them.
 
+SPDX 2.3 and SPDX 3.0 exports write the dependencies recorded by the exported active scans back as `DEPENDS_ON` and `dependsOn` relationships between packages respectively, so re-importing an export restores the same graph.
+
 ---
 
 ## Vulnerability Table

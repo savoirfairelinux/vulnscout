@@ -165,6 +165,7 @@ class SPDX3:
                 build_ref = self._next_spdx_ref()
                 elements_to_add.append({
                     "type": "build_Build", "spdxId": build_ref, "name": f"{pkg.name} source provenance",
+                    "build_buildType": "https://vulnscout.io/build-types/source-provenance",
                     "creationInfo": self._creation_info_ref,
                 })
                 source_refs = []
@@ -178,6 +179,12 @@ class SPDX3:
                     })
                 relationships_to_add.append(self.generate_relationship(build_ref, source_refs, "hasInput"))
                 relationships_to_add.append(self.generate_relationship(build_ref, [pkg_element["spdxId"]], "hasOutput"))
+
+        dependencies: Dict[str, List[str]] = {}
+        for source, target in sorted(self.packagesCtrl.dependency_edges()):
+            dependencies.setdefault(self.pkg_to_ref[source], []).append(self.pkg_to_ref[target])
+        for source_ref, target_refs in dependencies.items():
+            relationships_to_add.append(self.generate_relationship(source_ref, target_refs, "dependsOn"))
 
         for vuln_id, vuln in self.vulnerabilitiesCtrl.vulnerabilities.items():
             vuln_element = self.generate_vulnerability_element(vuln_id, vuln)

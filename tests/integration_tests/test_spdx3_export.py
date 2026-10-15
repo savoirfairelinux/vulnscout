@@ -5,7 +5,9 @@
 
 import pytest
 import json
+from pathlib import Path
 import xml.etree.ElementTree as ET
+from jsonschema import Draft202012Validator, FormatChecker
 from src.views.spdx3 import SPDX3
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
@@ -50,6 +52,12 @@ def test_spdx3_export_roundtrips_source_urls_without_importing_source_nodes(spdx
     urls = [f"git+https://example.org/source-{i}.git@{str(i) * 40}" for i in (1, 2)]
     spdx3_exporter.packagesCtrl.add(Package("libc6", "2.41", source_urls=urls))
     document = json.loads(spdx3_exporter.output_as_json())
+    builds = [item for item in document["@graph"] if item.get("type") == "build_Build"]
+    assert len(builds) == 1
+    assert builds[0]["build_buildType"]
+    schema_path = Path(__file__).parents[1] / "schemas/spdx/spdx-json-schema-3.0.1.json"
+    schema = json.loads(schema_path.read_text())
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(document)
     assert sorted(item["software_downloadLocation"] for item in document["@graph"]
                   if item.get("software_primaryPurpose") == "source") == urls
     controllers = ControllersCache()
