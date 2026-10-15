@@ -11,6 +11,7 @@ import os
 import tempfile
 import uuid
 import tarfile
+import zipfile
 import pytest
 from unittest.mock import patch, MagicMock
 from werkzeug.datastructures import MultiDict
@@ -858,6 +859,65 @@ def _make_spdx_tar_archive(member_name="archive.spdx.json", package_name="archiv
 
 class TestSBOMUpload:
     """Tests for POST /api/sbom/upload (multi-file support)."""
+
+    def test_spdx3_export_upload_roundtrip(self, app, client, monkeypatch):
+        from pathlib import Path
+        from jsonschema import Draft202012Validator, FormatChecker
+        from src.extensions import db
+        from src.models import Package, PackageDependency, SBOMDocument, SBOMPackage
+
+        project_id = "11111111-1111-1111-1111-111111111111"
+        variant_id = "22222222-2222-2222-2222-222222222222"
+        source_url = f"git+https://example.org/cairo.git@{'a' * 40}"
+        with app.app_context():
+            package = Package.get_by_string_id("cairo@1.16.0")
+            link = db.session.query(SBOMPackage).filter_by(package_id=package.id).one()
+            link.source_urls = [source_url]
+            dependency = Package.find_or_create("libpng", "1.6.37")
+            db.session.add(SBOMPackage(
+                sbom_document_id=link.sbom_document_id, package_id=dependency.id,
+                cpe=[], purl=[], source_urls=[],
+            ))
+            db.session.add(PackageDependency(
+                sbom_document_id=link.sbom_document_id, package_id=package.id, dependency_id=dependency.id,
+            ))
+            SBOMDocument.get_by_id(link.sbom_document_id).dependencies_recorded = True
+            db.session.commit()
+
+        exported = client.post("/api/documents/export", json={
+            "project_id": project_id, "variant_ids": [variant_id], "mode": "per_variant",
+            "documents": [{"name": "SPDX 3.0", "extension": "json"}],
+        })
+        assert exported.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(exported.data)) as archive:
+            filename, = archive.namelist()
+            assert filename == "default/spdx_v3_0.spdx.json"
+            content = archive.read(filename)
+        schema_path = Path(__file__).parents[1] / "schemas/spdx/spdx-json-schema-3.0.1.json"
+        Draft202012Validator(
+            json.loads(schema_path.read_text()), format_checker=FormatChecker(),
+        ).validate(json.loads(content))
+
+        def run_inline(op_id, lane, runner, ctx):
+            runner(ctx)
+            ctx.flush()
+
+        monkeypatch.setattr("src.routes.settings.operation_queue.submit", run_inline)
+        response = client.post("/api/sbom/upload", data={
+            "project_id": project_id, "variant_id": variant_id, "refresh_sources": "none",
+            "files": (io.BytesIO(content), os.path.basename(filename)),
+        }, content_type="multipart/form-data")
+        assert response.status_code == 202
+        body = response.get_json()
+        assert registry.get(body["op_id"])["progress"]["message"] == "SBOM imported successfully."
+        packages = client.get(f"/api/packages?variant_id={variant_id}").get_json()
+        assert {package["id"] for package in packages} == {"cairo@1.16.0", "libpng@1.6.37"}
+        restored = next(package for package in packages if package["name"] == "cairo")
+        assert restored["source_urls"] == [source_url]
+        graphs = client.get(f"/api/package-dependencies?variant_id={variant_id}").get_json()["documents"]
+        assert [edge for document in graphs for edge in document["edges"]] == [
+            {"package_id": "cairo@1.16.0", "dependency_id": "libpng@1.6.37"},
+        ]
 
     def test_upload_single_file(self, queued_import, client):
         """Single file upload returns 202 with op_id and scan_id."""

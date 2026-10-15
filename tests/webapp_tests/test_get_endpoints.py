@@ -939,9 +939,9 @@ def test_export_documents_archive_multiple_sboms(client):
     assert response.mimetype == "application/zip"
     with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
         assert archive.namelist() == [
-            "default/spdx_v2_3.json",
-            "default/spdx_v2_3.xml",
-            "default/spdx_v3_0.json",
+            "default/spdx_v2_3.spdx.json",
+            "default/spdx_v2_3.spdx.xml",
+            "default/spdx_v3_0.spdx.json",
             "default/cyclonedx_v1_4.json",
             "default/cyclonedx_v1_5.json",
             "default/cyclonedx_v1_6.json",
@@ -1074,7 +1074,7 @@ def test_render_spdx_json(client):
     assert response.headers.get("Content-Type") == "application/json"
     cd = response.headers.get("Content-Disposition", "")
     assert "attachment" in cd
-    assert "filename=spdx_v2_3.json" in cd
+    assert "filename=spdx_v2_3.spdx.json" in cd
 
     data = json.loads(response.data)
     assert data["SPDXID"] == "SPDXRef-DOCUMENT"
@@ -1099,7 +1099,7 @@ def test_render_spdx_xml(monkeypatch, client):
     assert response.status_code == 200
     assert response.headers.get("Content-Type") == "text/xml"
     cd = response.headers.get("Content-Disposition", "")
-    assert "attachment" in cd and "filename=spdx_v2_3.xml" in cd
+    assert "attachment" in cd and "filename=spdx_v2_3.spdx.xml" in cd
     assert response.data.decode("utf-8").lstrip().startswith("<")
 
 
@@ -1169,7 +1169,7 @@ def test_render_spdx3_json(client):
     assert response.headers.get("Content-Type") == "application/json"
     cd = response.headers.get("Content-Disposition", "")
     assert "attachment" in cd
-    assert "spdx_v3_0.json" in cd
+    assert "spdx_v3_0.spdx.json" in cd
     data = json.loads(response.data)
     assert "@context" in data or "@graph" in data
 
