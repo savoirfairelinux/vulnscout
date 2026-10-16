@@ -52,7 +52,8 @@ jest.mock('../../src/components/RunScansWizard', () => ({
     __esModule: true,
     default: ({ isOpen, variants, onClose, onToggleVariant, onToggleScanType,
         onToggleRefreshType, onRefreshModeChange, onSelectAllVariants,
-        onSelectNoVariants, onExcludeKernelChange, onExcludeNativeChange, onLaunch }: any) => (
+        onSelectNoVariants, onExcludeKernelChange, nativeConfigurations, configurationLoading,
+        onNativeConfigurationChange, onLaunch }: any) => (
         isOpen ? <div>
             <div data-testid="wizard-variants">{variants.map((variant: any) => variant.name).join(',')}</div>
             <button onClick={onClose}>wizard-close</button>
@@ -64,7 +65,12 @@ jest.mock('../../src/components/RunScansWizard', () => ({
             <button onClick={onSelectAllVariants}>wizard-select-all</button>
             <button onClick={onSelectNoVariants}>wizard-select-none</button>
             <button onClick={() => onExcludeKernelChange(false)}>wizard-include-kernel</button>
-            <button onClick={() => onExcludeNativeChange(false)}>wizard-include-native</button>
+            <button disabled={configurationLoading} onClick={() => onNativeConfigurationChange(variants[0].project_id, {
+                ...nativeConfigurations[variants[0].project_id], exclude_native: false,
+            })}>wizard-include-native</button>
+            <button disabled={configurationLoading} onClick={() => onNativeConfigurationChange(variants[0].project_id, {
+                ...nativeConfigurations[variants[0].project_id], exclude_native: true, native_package_exceptions: [],
+            })}>wizard-unselect-native</button>
             <button onClick={onLaunch}>wizard-launch</button>
         </div> : null
     ),
@@ -218,6 +224,43 @@ describe('ScanHistory selected variant scope', () => {
         TestEventSource.current.send('operation', completed('scan:nvd:v1', 'scan'));
         expect(onScanComplete).not.toHaveBeenCalled();
         TestEventSource.current.send('operation', completed('refresh:epss', 'refresh'));
+        await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
+    });
+
+    test.each([
+        ['wizard-include-native', false, ['gcc-native', 'g++-native', 'cmake-native']],
+        ['wizard-unselect-native', true, []],
+    ] as const)('persists %s and applies it to scan jobs', async (button, excludeNative, exceptions) => {
+        const initial = {
+            exclude_native: true,
+            native_package_exceptions: ['gcc-native', 'g++-native', 'cmake-native'],
+            native_packages: ['make-native'],
+        };
+        const configuration = jest.spyOn(Projects, 'scanConfiguration').mockResolvedValue(initial);
+        mockList.mockResolvedValue([]);
+        jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
+            ok: true, queueId: 'native-q', operations: [{ op_id: 'native-scan' }] as Operation[],
+        });
+        const onScanComplete = jest.fn();
+        render(<ScanHistory projectId="project" variantIds={['v1']} onScanComplete={onScanComplete} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
+        await waitFor(() => expect(configuration).toHaveBeenCalled());
+        await waitFor(() => expect(screen.getByText(button)).toBeEnabled());
+        fireEvent.click(screen.getByText(button));
+        fireEvent.click(screen.getByText('wizard-launch'));
+        await waitFor(() => expect(enqueue).toHaveBeenCalled());
+        expect(configuration).toHaveBeenLastCalledWith('project', {
+            ...initial, exclude_native: excludeNative, native_package_exceptions: exceptions,
+        });
+        const jobs = enqueue.mock.calls[0][0].filter(job => job.kind === 'scan');
+        expect(jobs.length).toBeGreaterThan(0);
+        for (const job of jobs) expect(job.options).toEqual(expect.objectContaining({
+            exclude_native: excludeNative, native_package_exceptions: exceptions,
+        }));
+        TestEventSource.current.send('operation', {
+            op_id: 'native-scan', kind: 'scan', queue_id: 'native-q', status: 'done',
+        });
         await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
     });
 
