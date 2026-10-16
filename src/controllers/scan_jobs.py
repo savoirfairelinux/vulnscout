@@ -76,6 +76,7 @@ def _active_packages(ctx: JobContext) -> Sequence[Package]:
         _variant_uuid(ctx),
         exclude_kernel=_exclude_kernel(ctx),
         exclude_native=_exclude_native(ctx),
+        native_package_exceptions=ctx.options.get("native_package_exceptions", []),
     )
     if error:
         safe_errors = {
@@ -202,6 +203,9 @@ def _deduplicate_cyclonedx(
     kept_refs: Set[str] = set()
     seen: Set[Tuple[str, str]] = set()
     kernel_dropped = 0
+    native_exceptions = {
+        name.strip().lower() for name in ctx.options.get("native_package_exceptions", [])
+    }
 
     for component in components:
         name = component.get("name", "")
@@ -209,7 +213,10 @@ def _deduplicate_cyclonedx(
         if exclude_kernel and is_kernel_package_name(name):
             kernel_dropped += 1
             continue
-        if exclude_native and is_native_package_name(name):
+        if (
+            exclude_native and is_native_package_name(name)
+            and name.strip().lower() not in native_exceptions
+        ):
             continue
         if (name, version) in seen:
             continue
@@ -243,12 +250,18 @@ def _filter_grype_matches(
 
     matches = data.get("matches", [])
     kept = []
+    native_exceptions = {
+        name.strip().lower() for name in ctx.options.get("native_package_exceptions", [])
+    }
     for match in matches:
         artifact = match.get("artifact", {})
         name = GrypeVulns._normalize_artifact_name(
             artifact.get("name", ""), artifact.get("purl")
         )
-        if exclude_native and is_native_package_name(name):
+        if (
+            exclude_native and is_native_package_name(name)
+            and name.strip().lower() not in native_exceptions
+        ):
             continue
         if not sbom_packages or (name, artifact.get("version", "")) in sbom_packages:
             kept.append(match)
