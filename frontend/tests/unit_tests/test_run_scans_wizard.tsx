@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import type { ScanConfiguration } from "../../src/handlers/project";
 import "@testing-library/jest-dom";
@@ -14,7 +14,14 @@ describe("RunScansWizard", () => {
         selectedRefreshTypes: new Set(["epss"]),
         refreshMode: "complete" as const,
         excludeKernel: true,
-        excludeNative: true,
+        nativeConfigurations: {
+            "project-1": {
+                exclude_native: true,
+                native_package_exceptions: ["gcc-native", "g++-native", "cmake-native"],
+                native_packages: ["make-native", "gcc-native"],
+            },
+        },
+        onNativeConfigurationChange: jest.fn(),
         onClose: jest.fn(),
         onToggleVariant: jest.fn(),
         onToggleScanType: jest.fn(),
@@ -23,49 +30,138 @@ describe("RunScansWizard", () => {
         onSelectAllVariants: jest.fn(),
         onSelectNoVariants: jest.fn(),
         onExcludeKernelChange: jest.fn(),
-        onExcludeNativeChange: jest.fn(),
         onLaunch: jest.fn(),
     };
 
-    it("keeps native exceptions selected while toggling exclusion and includes them in review", () => {
+    function renderNativeWizard(
+        configurations: Record<string, ScanConfiguration> = defaultProps.nativeConfigurations,
+        variants = defaultProps.variants,
+    ) {
+        const onChange = jest.fn();
         function Wizard() {
-            const [configuration, setConfiguration] = useState<ScanConfiguration>({
-                exclude_native: true,
-                native_package_exceptions: ["gcc-native", "g++-native", "cmake-native"],
-                native_packages: ["make-native", "gcc-native"],
-            });
+            const [configuration, setConfiguration] = useState(configurations);
             return <RunScansWizard {...defaultProps}
-                nativeConfigurations={{ "project-1": configuration }}
-                onNativeConfigurationChange={(_id, value) => setConfiguration(value)} />;
+                variants={variants}
+                selectedVariantIds={new Set(variants.map(variant => variant.id))}
+                nativeConfigurations={configuration}
+                onNativeConfigurationChange={(id, value) => {
+                    onChange(id, value);
+                    setConfiguration(previous => ({ ...previous, [id]: value }));
+                }} />;
         }
         render(<Wizard />);
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
-        const selector = screen.getByText("Native packages to scan");
-        expect(selector.closest("details")).not.toHaveAttribute("open");
-        fireEvent.click(selector);
-        expect(selector.closest("details")).toHaveAttribute("open");
+        return onChange;
+    }
+
+    it("always shows native package checkboxes and keeps selections through navigation and review", () => {
+        renderNativeWizard();
+        expect(screen.getByRole("region", { name: "Native packages to scan" })).toBeVisible();
+        expect(screen.queryByText("Ignore -native packages?")).not.toBeInTheDocument();
+        expect(screen.queryByRole("radio", { name: /scan every native package/i })).not.toBeInTheDocument();
         for (const name of ["gcc-native", "g++-native", "cmake-native"]) {
             expect(screen.getByRole("checkbox", { name })).toBeChecked();
+            expect(screen.getByRole("checkbox", { name })).toBeVisible();
         }
         expect(screen.getByRole("checkbox", { name: "make-native" })).not.toBeChecked();
+        expect(screen.getByText("3 of 4 selected")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("checkbox", { name: "make-native" }));
         fireEvent.click(screen.getByRole("checkbox", { name: "gcc-native" }));
-        fireEvent.click(selector);
-        expect(selector.closest("details")).not.toHaveAttribute("open");
-        fireEvent.click(selector);
-        expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
-        fireEvent.click(screen.getByRole("radio", { name: /no scan every native package/i }));
-        expect(screen.queryByText("Native packages to scan")).not.toBeInTheDocument();
-        expect(screen.queryByRole("checkbox", { name: "make-native" })).not.toBeInTheDocument();
-        fireEvent.click(screen.getByRole("radio", { name: /yes skip yocto build-host packages/i }));
-        expect(screen.getByText("Native packages to scan").closest("details")).not.toHaveAttribute("open");
-        fireEvent.click(screen.getByText("Native packages to scan"));
+        fireEvent.click(screen.getByRole("button", { name: "Back" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
         expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
         expect(screen.getByRole("checkbox", { name: "gcc-native" })).not.toBeChecked();
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
-        expect(screen.getByText(/exceptions: g\+\+-native, cmake-native, make-native/)).toBeInTheDocument();
+        expect(screen.getByText("Native packages to scan: cmake-native, g++-native, make-native")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Edit package filters" }));
+        expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
+        expect(screen.getByRole("checkbox", { name: "gcc-native" })).not.toBeChecked();
+    });
+
+    it("shows one native package per list item", () => {
+        renderNativeWizard();
+        const list = within(screen.getByRole("list", { name: "Native packages" }));
+        const items = list.getAllByRole("listitem");
+        expect(items).toHaveLength(4);
+        expect(items.map(item => within(item).getByRole("checkbox").getAttribute("type"))).toEqual([
+            "checkbox", "checkbox", "checkbox", "checkbox",
+        ]);
+        expect(items.map(item => item.textContent)).toEqual([
+            "cmake-native", "g++-native", "gcc-native", "make-native",
+        ]);
+    });
+
+    it("selects and unselects all native packages without hiding the checklist", () => {
+        const onChange = renderNativeWizard();
+        fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+        expect(onChange).toHaveBeenLastCalledWith("project-1", expect.objectContaining({ exclude_native: false }));
+        expect(screen.getByText("4 of 4 selected")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+        for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeChecked();
+
+        fireEvent.click(screen.getByRole("button", { name: "Unselect all" }));
+        expect(onChange).toHaveBeenLastCalledWith("project-1", expect.objectContaining({
+            exclude_native: true, native_package_exceptions: [],
+        }));
+        expect(screen.getByText("0 of 4 selected")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Unselect all" })).toBeDisabled();
+        for (const checkbox of screen.getAllByRole("checkbox")) {
+            expect(checkbox).not.toBeChecked();
+            expect(checkbox).toBeVisible();
+        }
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByText("Native packages to scan: None")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Edit package filters" }));
+        fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByText("Native packages to scan: All")).toBeInTheDocument();
+    });
+
+    it("restores scan-all preferences and preserves other checked packages when one is unchecked", () => {
+        const onChange = renderNativeWizard({
+            "project-1": { ...defaultProps.nativeConfigurations["project-1"], exclude_native: false },
+        });
+        expect(screen.getByText("4 of 4 selected")).toBeInTheDocument();
+        expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
+        fireEvent.click(screen.getByRole("checkbox", { name: "gcc-native" }));
+        expect(onChange).toHaveBeenLastCalledWith("project-1", expect.objectContaining({
+            exclude_native: true,
+            native_package_exceptions: ["cmake-native", "g++-native", "make-native"],
+        }));
+        expect(screen.getByText("3 of 4 selected")).toBeInTheDocument();
+        expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
+        expect(screen.getByRole("checkbox", { name: "gcc-native" })).not.toBeChecked();
+    });
+
+    it("keeps bulk selections separate for each selected project", () => {
+        const onChange = renderNativeWizard({
+            ...defaultProps.nativeConfigurations,
+            "project-2": {
+                exclude_native: true, native_package_exceptions: [], native_packages: ["ninja-native"],
+            },
+        }, [...defaultProps.variants, { id: "variant-2", name: "Staging", project_id: "project-2" }]);
+        const production = within(screen.getByRole("group", { name: "Production" }));
+        const staging = within(screen.getByRole("group", { name: "Staging" }));
+        fireEvent.click(staging.getByRole("button", { name: "Select all" }));
+        expect(onChange).toHaveBeenLastCalledWith("project-2", expect.objectContaining({ exclude_native: false }));
+        expect(staging.getByRole("checkbox", { name: "ninja-native" })).toBeChecked();
+        expect(production.getByRole("checkbox", { name: "make-native" })).not.toBeChecked();
+        fireEvent.click(production.getByRole("button", { name: "Unselect all" }));
+        expect(onChange).toHaveBeenLastCalledWith("project-1", expect.objectContaining({
+            exclude_native: true, native_package_exceptions: [],
+        }));
+        expect(staging.getByRole("checkbox", { name: "ninja-native" })).toBeChecked();
+    });
+
+    it("offers checklist selection without a custom package-name field", () => {
+        renderNativeWizard();
+        expect(screen.getByRole("list", { name: "Native packages" })).toBeVisible();
+        expect(screen.queryByRole("textbox", { name: "Native package name" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Add native package" })).not.toBeInTheDocument();
     });
 
     it("blocks filter completion when preferences are loading or unavailable", () => {
@@ -98,7 +194,9 @@ describe("RunScansWizard", () => {
         expect(screen.getByRole("heading", { name: "Select context variants" })).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-        expect(screen.getByRole("heading", { name: "Filter scanner inputs" })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Exclude kernel companion packages?" })).toBeInTheDocument();
+        expect(screen.queryByText("Filter scanner inputs")).not.toBeInTheDocument();
+        expect(screen.queryByText("Skip package types that usually add little value to vulnerability analysis.")).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole("radio", { name: /no scan every kernel-related package/i }));
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
@@ -108,7 +206,7 @@ describe("RunScansWizard", () => {
         expect(screen.getByRole("heading", { name: "Review and launch" })).toBeInTheDocument();
         expect(screen.getByText("Grype")).toBeInTheDocument();
         expect(screen.getByText("Production")).toBeInTheDocument();
-        expect(screen.getByText(/-native packages: Excluded/)).toBeInTheDocument();
+        expect(screen.getByText("Native packages to scan: gcc-native, g++-native, cmake-native")).toBeInTheDocument();
         expect(screen.getByText("FKIE, EPSS, ENISA EUVD")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Edit vulnerability data refresh" }));
         expect(screen.getByRole("heading", { name: "Refresh data" })).toBeInTheDocument();
@@ -144,7 +242,6 @@ describe("RunScansWizard", () => {
         const onSelectAllVariants = jest.fn();
         const onSelectNoVariants = jest.fn();
         const onExcludeKernelChange = jest.fn();
-        const onExcludeNativeChange = jest.fn();
         const onToggleRefreshType = jest.fn();
         const onRefreshModeChange = jest.fn();
         const { rerender } = render(
@@ -159,7 +256,6 @@ describe("RunScansWizard", () => {
                 onSelectAllVariants={onSelectAllVariants}
                 onSelectNoVariants={onSelectNoVariants}
                 onExcludeKernelChange={onExcludeKernelChange}
-                onExcludeNativeChange={onExcludeNativeChange}
                 onToggleRefreshType={onToggleRefreshType}
                 onRefreshModeChange={onRefreshModeChange}
             />,
@@ -181,9 +277,7 @@ describe("RunScansWizard", () => {
         fireEvent.click(screen.getByRole("button", { name: /why exclude kernel packages/i }));
         expect(screen.getByText(/Yocto kernel recipes create many companion packages/i)).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /why exclude kernel packages/i }));
-        fireEvent.click(screen.getByRole("radio", { name: /no scan every native package/i }));
         expect(onExcludeKernelChange).toHaveBeenCalledWith(false);
-        expect(onExcludeNativeChange).toHaveBeenCalledWith(false);
 
         fireEvent.click(screen.getByRole("button", { name: "Next" }));
         fireEvent.click(screen.getByRole("radio", { name: /custom refresh/i }));
@@ -200,7 +294,6 @@ describe("RunScansWizard", () => {
                 onSelectAllVariants={onSelectAllVariants}
                 onSelectNoVariants={onSelectNoVariants}
                 onExcludeKernelChange={onExcludeKernelChange}
-                onExcludeNativeChange={onExcludeNativeChange}
                 onToggleRefreshType={onToggleRefreshType}
                 onRefreshModeChange={onRefreshModeChange}
             />,
@@ -225,7 +318,7 @@ describe("RunScansWizard", () => {
         for (const [buttonName, heading] of [
             ["Edit scans", "Select scans"],
             ["Edit context variants", "Select context variants"],
-            ["Edit package filters", "Filter scanner inputs"],
+            ["Edit package filters", "Exclude kernel companion packages?"],
         ]) {
             fireEvent.click(screen.getByRole("button", { name: buttonName }));
             expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();

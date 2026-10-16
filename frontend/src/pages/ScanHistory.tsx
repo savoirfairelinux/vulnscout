@@ -1256,8 +1256,8 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<RefreshType>>(new Set());
     const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
     const [excludeKernel, setExcludeKernel] = useState(true);
-    const [excludeNative, setExcludeNative] = useState(true);
     const [nativeConfigurations, setNativeConfigurations] = useState<Record<string, ScanConfiguration>>({});
+    const excludeNative = Object.values(nativeConfigurations).every(configuration => configuration.exclude_native);
     const [configurationLoading, setConfigurationLoading] = useState(false);
     const [configurationError, setConfigurationError] = useState<string | null>(null);
     const scanRequestRef = useRef<{ generation: number; controller?: AbortController }>({
@@ -2105,7 +2105,6 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
                             selectedRefreshTypes={selectedRefreshTypes}
                             refreshMode={refreshMode}
                             excludeKernel={excludeKernel}
-                            excludeNative={excludeNative}
                             nativeConfigurations={nativeConfigurations}
                             configurationLoading={configurationLoading}
                             configurationError={configurationError}
@@ -2118,7 +2117,6 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
                             onSelectAllVariants={() => setSelectedVariantIds(new Set(wizardVariants.map(v => v.id)))}
                             onSelectNoVariants={() => setSelectedVariantIds(new Set())}
                             onExcludeKernelChange={setExcludeKernel}
-                            onExcludeNativeChange={setExcludeNative}
                             onLaunch={handleRunSelectedScans}
                         />
                     </>
