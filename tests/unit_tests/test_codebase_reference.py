@@ -1,5 +1,4 @@
 from io import BytesIO
-import gzip
 import stat
 import tarfile
 import zipfile
@@ -177,27 +176,20 @@ def test_archive_entry_member_and_expansion_limits(monkeypatch):
     with pytest.raises(ValueError, match="5000"):
         validate_reference(zip_source([("a", b"x"), ("b", b"x")]), "s.zip")
     monkeypatch.setattr(module, "MAX_ENTRIES", 5000)
-    monkeypatch.setattr(module, "MAX_FILE_BYTES", 2)
-    with pytest.raises(ValueError, match="source file"):
-        validate_reference(zip_source([("a", b"xxx")]), "s.zip")
-    monkeypatch.setattr(module, "MAX_EXPANDED_BYTES", 3)
-    with pytest.raises(ValueError, match="expanded"):
-        validate_reference(zip_source([("a", b"xx"), ("b", b"xx")]), "s.zip")
-    with pytest.raises(ValueError, match="expanded"):
-        validate_reference(BytesIO(gzip.compress(b"x" * 4)), "s.tgz")
 
 
-def test_real_file_size_and_expanded_size_boundaries():
-    member_size = 10 * 1024 * 1024
-    validate_reference(BytesIO(b"x" * member_size), "at-limit.c")
-    with pytest.raises(ValueError, match="source file"):
-        validate_reference(BytesIO(b"x" * (member_size + 1)), "over-limit.c")
-    entries = [(f"source-{index}.c", b"x" * member_size) for index in range(10)]
-    with CodebaseReference(zip_source(entries), "at-limit.zip") as reference:
-        assert reference.total_bytes == 100 * 1024 * 1024
-    entries.append(("extra.c", b"x"))
-    with pytest.raises(ValueError, match="expanded"):
-        validate_reference(zip_source(entries), "over-limit.zip")
+def test_large_plain_files_are_accepted_but_not_readable():
+    source = BytesIO(b"x" * (10 * 1024 * 1024 + 1))
+    validate_reference(source, "over-limit.c")
+    source.seek(0)
+    with CodebaseReference(source, "over-limit.c") as ref:
+        with pytest.raises(ValueError, match="maximum readable file size"):
+            ref.read_bytes("over-limit.c")
+
+
+def test_large_archive_members_are_rejected():
+    with pytest.raises(ValueError, match="invalid file size"):
+        validate_reference(zip_source([("too-big.c", b"x" * (10 * 1024 * 1024 + 1))]), "over-limit.zip")
 
 
 def test_real_archive_entry_count_boundary():

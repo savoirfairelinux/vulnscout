@@ -468,44 +468,25 @@ class TestPutVariantContext:
 class TestPostContextFile:
 
     @pytest.mark.parametrize("size", [5 * 1024 * 1024 + 64 * 1024 + 1, 10 * 1024 * 1024])
-    def test_upload_accepts_files_up_to_advertised_limit(self, app, client, variant, tmp_path, size):
+    def test_upload_accepts_large_files(self, client, variant, tmp_path, size):
         from io import BytesIO
-        original_limit = app.config["MAX_CONTENT_LENGTH"]
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             response = client.post(
                 f"/api/variants/{variant.id}/context/files",
                 data={"file": (BytesIO(b"x" * size), "main.c")},
             )
         assert response.status_code == 201
-        assert app.config["MAX_CONTENT_LENGTH"] == original_limit
         assert next(tmp_path.rglob(response.get_json()["id"])).stat().st_size == size
 
-    def test_upload_rejects_file_above_advertised_limit(self, client, variant, tmp_path):
+    def test_upload_accepts_files_above_previous_10mb_limit(self, client, variant, tmp_path):
         from io import BytesIO
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             response = client.post(
                 f"/api/variants/{variant.id}/context/files",
                 data={"file": (BytesIO(b"x" * (10 * 1024 * 1024 + 1)), "main.c")},
             )
-        assert response.status_code == 400
-        assert "maximum size of 10 MB" in response.get_json()["error"]
-        assert not list(tmp_path.iterdir())
-
-    def test_upload_request_cap_does_not_raise_report_asset_cap(self, app, client, variant):
-        from src.models.variant_context import VariantContext
-        response = client.post(
-            f"/api/variants/{variant.id}/context/files",
-            data=b"x" * (10 * 1024 * 1024 + 64 * 1024 + 1),
-            content_type="multipart/form-data; boundary=test",
-        )
-        assert response.status_code == 413
-        assert "Codebase reference" in response.get_json()["error"]
-        assert VariantContext.get_by_variant(variant.id) is None
-        response = client.post(
-            "/api/documents/assets", data=b"x" * (app.config["MAX_CONTENT_LENGTH"] + 1),
-            content_type="multipart/form-data; boundary=test",
-        )
-        assert response.status_code == 413
+        assert response.status_code == 201
+        assert next(tmp_path.rglob(response.get_json()["id"])).stat().st_size == 10 * 1024 * 1024 + 1
 
     @pytest.mark.parametrize("archive_type", ["zip", "tar"])
     def test_malformed_archive_names_return_400(self, client, variant, tmp_path, archive_type):

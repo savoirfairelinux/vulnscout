@@ -37,7 +37,6 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
                 for (const file of action.files) {
                     if (!mounted.current) break;
                     try {
-                        if (file.size > 10 * 1024 * 1024) throw new Error("File exceeds maximum size of 10 MB.");
                         const reference = await Context.uploadFile(variantId, file, action.description);
                         uploaded++;
                         if (mounted.current) setFiles(current => [...current, reference]);
@@ -88,7 +87,7 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
             <p className="text-xs text-zinc-400">
                 Upload source files or ZIP, TAR, TAR.GZ/TGZ archives for the embedded Agent and external MCP clients.
                 References are saved immediately for this variant, separately from the context form.
-                Maximum 10 MB per upload, 100 MB expanded and 5,000 archive entries. Binary files cannot be read as source.
+                Archives are limited to 5,000 entries. Binary files cannot be read as source.
                 Upload only code you are permitted to share with your selected AI provider; exclude secrets.
             </p>
             <div

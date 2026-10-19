@@ -256,13 +256,11 @@ POST /api/variants/<variant_id>/context/files
 DELETE /api/variants/<variant_id>/context/files/<file_id>
 ```
 
-Upload uses `multipart/form-data` with a required `file`, an optional `description`, and a 10 MB size limit.
-This endpoint permits a request body of 10 MiB plus 64 KiB of multipart overhead, without increasing
-the separate report-asset upload limit. Larger requests return HTTP 413 with a JSON error;
-files over 10 MiB within the request cap return HTTP 400.
+Upload uses `multipart/form-data` with a required `file` and an optional `description`.
 The AI tab exposes drag-and-drop and a file picker. Files belong to one variant and are saved immediately.
-ZIP, TAR and TAR.GZ/TGZ archives are validated before storage, limited to 5,000 entries and 100 MB expanded;
-each member is limited to 10 MB. Unsafe paths, duplicate file paths, encrypted ZIP members, links,
+ZIP, TAR and TAR.GZ/TGZ archives are validated before storage and limited to 5,000 entries.
+Each archive member is capped at 10 MiB, and total expanded archive content is capped at 100 MiB.
+Unsafe paths, duplicate file paths, encrypted ZIP members, links,
 sparse files and special entries are rejected. Archives are never extracted or executed.
 Upload/delete updates the variant context timestamp, marking older pending AI assessments outdated.
 Context JSON import/export includes text fields only, not uploaded references; text imports leave existing uploads intact.

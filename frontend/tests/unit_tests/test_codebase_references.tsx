@@ -78,13 +78,14 @@ test("failed pending checks surface an error and require confirmation", async ()
     await screen.findByRole("button", { name: "Delete reference source.zip" });
 });
 
-test("oversized files are rejected explicitly before uploading", async () => {
+test("large files are sent to the backend instead of being blocked client-side", async () => {
+    fetchMock.mockResponseOnce(JSON.stringify(reference), { status: 201 });
     show();
-    const oversized = new File(["x"], "large.c");
-    Object.defineProperty(oversized, "size", { value: 10 * 1024 * 1024 + 1 });
-    fireEvent.change(screen.getByLabelText("Upload codebase references"), { target: { files: [oversized] } });
-    await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("maximum size of 10 MB"), "error"));
-    expect(fetchMock).not.toHaveBeenCalled();
+    const large = new File(["x"], "large.c");
+    Object.defineProperty(large, "size", { value: 10 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText("Upload codebase references"), { target: { files: [large] } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("1 reference(s) uploaded"), "success");
 });
 
 test.each([
@@ -97,7 +98,7 @@ test.each([
         target: { files: [new File(["source"], "main.c")] },
     });
     await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("HTTP 413"), "error"));
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("10 MB"), "error");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("request-size limit"), "error");
     expect(screen.getByText("No codebase references uploaded.")).toBeInTheDocument();
     expect(screen.getByLabelText("Upload codebase references")).not.toBeDisabled();
 });

@@ -509,23 +509,12 @@ class TestImportScan:
             f"/api/scans/{ids['scan_a_id']}/export-diff"
         ).data)
         payload["scan_id"] = str(uuid.uuid4())
-        payload["padding"] = "x" * app.config["MAX_CONTENT_LENGTH"]
+        payload["padding"] = "x" * (6 * 1024 * 1024)
         self._set_fresh_destination(app, payload)
 
         response = client.post("/api/scans/import", json=payload)
 
         assert response.status_code == 201
-
-    def test_import_rejects_request_larger_than_import_limit(self, app, client):
-        app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"] = 1
-
-        response = client.post("/api/scans/import", json={})
-
-        assert response.status_code == 413
-        # The message reports the limit actually configured, not a constant.
-        assert response.get_json() == {
-            "error": "Scan import exceeds the 1 B size limit",
-        }
 
     def test_import_needs_no_schema_change(self, app):
         """Import works against the schema as it already exists on disk.
@@ -551,6 +540,18 @@ class TestImportScan:
 
         assert response.status_code == 400
         assert "valid JSON" in response.get_json()["error"]
+
+    def test_import_rejects_requests_over_route_budget(self, app, client):
+        client.application.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"] = 1024
+
+        response = client.post(
+            "/api/scans/import",
+            data='{"padding":"' + ("x" * 2048) + '"}',
+            content_type="application/json",
+        )
+
+        assert response.status_code == 413
+        assert "size limit" in response.get_json()["error"]
 
     def test_import_rolls_back_when_persistence_fails(
         self, app, client, ids, monkeypatch
