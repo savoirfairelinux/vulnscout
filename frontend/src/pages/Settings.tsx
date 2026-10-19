@@ -41,6 +41,7 @@ import {
 } from "../helpers/refreshSources";
 import type { RefreshMode } from "../helpers/refreshSources";
 import CustomExportContentManager from "../components/CustomExportContentManager";
+import NativePackageSettings from "../components/NativePackageSettings";
 import type { AgentViewContext } from "../types/agent";
 
 type Props = {
@@ -1119,6 +1120,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, initialTab, onAg
             )}
           </div>
         </section>
+
+        <NativePackageSettings />
 
         {/* ======== Grype Scanner ======== */}
         <section aria-labelledby="settings-heading-grype">

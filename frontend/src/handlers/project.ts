@@ -5,9 +5,12 @@ type Project = {
 
 export type { Project };
 
-export type ScanConfiguration = {
+export type NativeScanPreferences = {
     exclude_native: boolean;
     native_package_exceptions: string[];
+};
+
+export type ScanConfiguration = NativeScanPreferences & {
     native_packages: string[];
 };
 

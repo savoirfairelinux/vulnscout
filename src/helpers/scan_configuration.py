@@ -33,23 +33,41 @@ def _read_configurations(path: Path) -> dict:
     try:
         configurations = json.loads(path.read_text())
     except FileNotFoundError:
-        return {}
+        configurations = {}
     if not isinstance(configurations, dict):
         raise ValueError("Project scan configurations must be an object keyed by project name")
-    return {name: validate_scan_configuration(value) for name, value in configurations.items()}
-
-
-def read_scan_configuration(project_name: str) -> dict:
-    configurations = _read_configurations(_configuration_path())
-    if project_name not in configurations:
+    defaults = {
+        "exclude_native": True,
+        "native_package_exceptions": list(DEFAULT_NATIVE_EXCEPTIONS),
+    }
+    legacy_projects_entry = configurations.get("projects")
+    legacy_named_projects = isinstance(legacy_projects_entry, dict) and isinstance(
+        legacy_projects_entry.get("exclude_native"), bool,
+    )
+    if "global" in configurations and "projects" in configurations and not legacy_named_projects:
+        if set(configurations) != {"global", "projects"} or not isinstance(configurations["projects"], dict):
+            raise ValueError("Scan configuration must contain global preferences and a projects object")
         return {
-            "exclude_native": True,
-            "native_package_exceptions": list(DEFAULT_NATIVE_EXCEPTIONS),
+            "global": validate_scan_configuration(configurations["global"]),
+            "projects": {
+                name: validate_scan_configuration(value) for name, value in configurations["projects"].items()
+            },
         }
-    return configurations[project_name]
+    # Read the original project-name mapping; the next save upgrades it atomically.
+    return {
+        "global": defaults,
+        "projects": {name: validate_scan_configuration(value) for name, value in configurations.items()},
+    }
 
 
-def write_scan_configuration(project_name: str, value: object) -> dict:
+def read_scan_configuration(project_name: str | None = None) -> dict:
+    configurations = _read_configurations(_configuration_path())
+    if project_name is None:
+        return configurations["global"]
+    return configurations["projects"].get(project_name, configurations["global"])
+
+
+def write_scan_configuration(project_name: str | None, value: object) -> dict:
     configuration = validate_scan_configuration(value)
     path = _configuration_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +76,10 @@ def write_scan_configuration(project_name: str, value: object) -> dict:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             configurations = _read_configurations(path)
-            configurations[project_name] = configuration
+            if project_name is None:
+                configurations["global"] = configuration
+            else:
+                configurations["projects"][project_name] = configuration
             descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".project-scan-")
             try:
                 with os.fdopen(descriptor, "w") as handle:

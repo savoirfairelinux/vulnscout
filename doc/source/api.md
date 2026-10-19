@@ -75,6 +75,28 @@ Returns the active project and variant based on the `PROJECT_NAME` / `VARIANT_NA
 
 Fields may be `null` if no project or variant exists.
 
+### Global Native-Package Scan Defaults
+
+```
+GET /api/config/native-packages
+PUT /api/config/native-packages
+```
+
+GET returns the global native-package scan defaults. PUT replaces them with:
+
+```json
+{
+  "exclude_native": true,
+  "native_package_exceptions": ["cmake-native", "g++-native", "gcc-native"]
+}
+```
+
+`exclude_native` must be a boolean. The exception list may contain up to 1000 names, each at most 255 characters and ending in `-native`. Names are trimmed, lowercased, deduplicated, and sorted. An empty list excludes all native packages when `exclude_native` is true; false scans all native packages while retaining the exception list.
+
+These defaults apply to projects without saved scan preferences; saved project preferences override them. Values persist in the top-level `global` node of `project-scan.json` under `VULNSCOUT_CACHE_DIR`, alongside a `projects` node keyed by exact project names. Existing flat mappings are upgraded on save without dropping project entries.
+
+**Response:** `200 OK` with the saved preferences; `400` for invalid input; `500` if the configuration cannot be read or saved.
+
 ---
 
 ## Projects

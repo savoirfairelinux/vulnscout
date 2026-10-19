@@ -10,6 +10,9 @@ from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
+from ..helpers.scan_configuration import (
+    read_scan_configuration, validate_scan_configuration, write_scan_configuration,
+)
 
 _CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -65,6 +68,30 @@ def _write_config_key(key: str, value: str | None) -> bool:
 
 
 def init_app(app):
+
+    @app.route('/api/config/native-packages', methods=['GET', 'PUT'])
+    def native_package_configuration():
+        """Read or replace global native-package scan defaults.
+
+        OpenAPI:
+        body JsonObject optional Global exclude_native and native_package_exceptions.
+        response 200 JsonObject Global native-package scan defaults.
+        response 400 Error Invalid scan configuration.
+        response 500 Error Configuration could not be accessed.
+        """
+        configuration = None
+        if request.method == 'PUT':
+            try:
+                configuration = validate_scan_configuration(request.get_json(silent=True))
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+        try:
+            if request.method == 'PUT':
+                return jsonify(write_scan_configuration(None, configuration))
+            return jsonify(read_scan_configuration())
+        except (OSError, ValueError):
+            app.logger.exception("Unable to access global native-package configuration")
+            return jsonify({"error": "Unable to access global native-package configuration"}), 500
 
     @app.route('/api/config', methods=['GET'])
     def get_config():
