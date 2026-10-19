@@ -87,6 +87,27 @@ describe('Projects', () => {
         fetchMock.resetMocks();
     });
 
+    test('saves selected project preferences in one atomic request without SBOM names', async () => {
+        fetchMock.mockResponseOnce('{}');
+        const configuration = {
+            exclude_native: true, native_package_exceptions: ['gcc-native'], native_packages: ['make-native'],
+        };
+        await Projects.saveScanConfigurations({ first: configuration, second: configuration });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/projects/scan-configurations'), expect.objectContaining({
+            method: 'PUT',
+            body: JSON.stringify({
+                first: { exclude_native: true, native_package_exceptions: ['gcc-native'] },
+                second: { exclude_native: true, native_package_exceptions: ['gcc-native'] },
+            }),
+        }));
+    });
+
+    test('reports an atomic save failure for retry', async () => {
+        fetchMock.mockResponseOnce('{}', { status: 500 });
+        await expect(Projects.saveScanConfigurations({})).rejects.toThrow('Please retry');
+    });
+
     test('returns list of valid projects', async () => {
         const mockData = [
             { id: 'p1', name: 'ProjectA' },

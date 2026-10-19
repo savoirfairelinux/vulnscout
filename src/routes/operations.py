@@ -120,7 +120,7 @@ def _plan_scan_job(job: dict) -> List[dict]:
     if not isinstance(native_exceptions, list) or any(
         not isinstance(name, str) or not name.strip().lower().endswith("-native")
         or len(name) > 255 for name in native_exceptions
-    ) or len(native_exceptions) > 1000:
+    ):
         raise _PlanError("native_package_exceptions must be a list of native package names")
     native_exceptions = sorted({name.strip().lower() for name in native_exceptions})
     planned: List[dict] = []

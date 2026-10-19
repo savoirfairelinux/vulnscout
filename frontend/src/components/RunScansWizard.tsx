@@ -17,6 +17,7 @@ type Props = {
     nativeConfigurations: Record<string, ScanConfiguration>;
     configurationLoading?: boolean;
     configurationError?: string | null;
+    launchError?: string | null;
     onNativeConfigurationChange: (projectId: string, configuration: ScanConfiguration) => void;
     onClose: () => void;
     onToggleVariant: (variantId: string) => void;
@@ -56,6 +57,7 @@ export default function RunScansWizard({
     nativeConfigurations,
     configurationLoading = false,
     configurationError = null,
+    launchError = null,
     onNativeConfigurationChange,
     onClose,
     onToggleVariant,
@@ -124,6 +126,7 @@ export default function RunScansWizard({
                 </ol>
             }
         >
+            {launchError && <p role="alert" className="mb-4 text-sm text-red-400">{launchError}</p>}
             {step === 1 && <>
                 <h3 className="text-base font-semibold text-white">Select scans</h3>
                 <p className="mt-1 text-sm text-neutral-400">Choose the vulnerability scanners to run.</p>
@@ -199,9 +202,10 @@ export default function RunScansWizard({
                         const packageNames = [...new Set([
                             "gcc-native", "g++-native", "cmake-native",
                             ...configuration.native_packages, ...configuration.native_package_exceptions,
-                        ])].sort();
+                        ].map(name => name.trim().toLowerCase()))].sort();
+                        const exceptions = new Set(configuration.native_package_exceptions.map(name => name.trim().toLowerCase()));
                         const selectedNames = configuration.exclude_native
-                            ? packageNames.filter(name => configuration.native_package_exceptions.includes(name))
+                            ? packageNames.filter(name => exceptions.has(name))
                             : packageNames;
                         return <fieldset key={projectId} className="mt-4 min-w-0">
                             <legend className="max-w-full break-words text-sm font-medium text-white">{nativeGroups.length > 1 ? projectLabel(projectId) : "Package selection"}</legend>

@@ -80,6 +80,47 @@ describe("RunScansWizard", () => {
         expect(screen.getByRole("checkbox", { name: "gcc-native" })).not.toBeChecked();
     });
 
+    it("normalizes SBOM names and saved exceptions for deduplication and checkbox updates", () => {
+        const onChange = renderNativeWizard({
+            "project-1": {
+                exclude_native: true,
+                native_packages: ["GCC-native", " MAKE-native ", "make-native"],
+                native_package_exceptions: ["gcc-native", " MAKE-NATIVE "],
+            },
+        });
+        expect(screen.getAllByRole("checkbox", { name: "gcc-native" })).toHaveLength(1);
+        expect(screen.getByRole("checkbox", { name: "gcc-native" })).toBeChecked();
+        expect(screen.getByRole("checkbox", { name: "make-native" })).toBeChecked();
+        fireEvent.click(screen.getByRole("checkbox", { name: "gcc-native" }));
+        expect(onChange).toHaveBeenLastCalledWith("project-1", expect.objectContaining({
+            native_package_exceptions: ["make-native"],
+        }));
+    });
+
+    it("supports selecting all but one of more than 1000 native packages", () => {
+        const onChange = renderNativeWizard({
+            "project-1": {
+                exclude_native: false, native_package_exceptions: [],
+                native_packages: Array.from({ length: 1002 }, (_, index) => `tool-${index}-native`),
+            },
+        });
+        fireEvent.click(screen.getByRole("checkbox", { name: "tool-0-native" }));
+        const configuration = onChange.mock.calls[0][1];
+        expect(configuration.exclude_native).toBe(true);
+        expect(configuration.native_package_exceptions).toHaveLength(1004);
+        expect(configuration.native_package_exceptions).not.toContain("tool-0-native");
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+    });
+
+    it("keeps launch failures visible on review and allows retrying", () => {
+        render(<RunScansWizard {...defaultProps} launchError="Preferences could not be saved. Please retry." />);
+        for (let step = 1; step < 5; step++) fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByRole("alert")).toHaveTextContent("Preferences could not be saved. Please retry.");
+        expect(screen.getByRole("button", { name: "Launch scans" })).toBeEnabled();
+        fireEvent.click(screen.getByRole("button", { name: "Launch scans" }));
+        expect(defaultProps.onLaunch).toHaveBeenCalled();
+    });
+
     it("shows one native package per list item", () => {
         renderNativeWizard();
         const list = within(screen.getByRole("list", { name: "Native packages" }));

@@ -15,6 +15,19 @@ export type ScanConfiguration = NativeScanPreferences & {
 };
 
 class Projects {
+    static async saveScanConfigurations(configurations: Record<string, ScanConfiguration>): Promise<void> {
+        const response = await fetch(import.meta.env.VITE_API_URL + "/api/projects/scan-configurations", {
+            mode: "cors",
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(Object.fromEntries(Object.entries(configurations).map(([id, configuration]) => [id, {
+                exclude_native: configuration.exclude_native,
+                native_package_exceptions: configuration.native_package_exceptions,
+            }]))),
+        });
+        if (!response.ok) throw new Error(`Failed to save project scan configurations (${response.status}). Please retry.`);
+    }
+
     static async scanConfiguration(projectId: string, configuration?: ScanConfiguration, signal?: AbortSignal): Promise<ScanConfiguration> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/projects/${encodeURIComponent(projectId)}/scan-configuration`,

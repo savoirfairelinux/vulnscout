@@ -13,7 +13,7 @@ def validate_scan_configuration(value: object) -> dict:
     if not isinstance(value, dict) or not isinstance(value.get("exclude_native"), bool):
         raise ValueError("exclude_native must be a boolean")
     names = value.get("native_package_exceptions")
-    if not isinstance(names, list) or len(names) > 1000 or any(
+    if not isinstance(names, list) or any(
         not isinstance(name, str) or len(name) > 255
         or not name.strip().lower().endswith("-native") for name in names
     ):
@@ -68,7 +68,12 @@ def read_scan_configuration(project_name: str | None = None) -> dict:
 
 
 def write_scan_configuration(project_name: str | None, value: object) -> dict:
-    configuration = validate_scan_configuration(value)
+    return write_scan_configurations({project_name: value})[project_name]
+
+
+def write_scan_configurations(values: dict[str | None, object]) -> dict:
+    """Validate and replace all supplied preferences in one locked atomic write."""
+    updated = {name: validate_scan_configuration(value) for name, value in values.items()}
     path = _configuration_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     # Lock a stable sidecar because atomic replacement changes the JSON file's inode.
@@ -76,10 +81,11 @@ def write_scan_configuration(project_name: str | None, value: object) -> dict:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             configurations = _read_configurations(path)
-            if project_name is None:
-                configurations["global"] = configuration
-            else:
-                configurations["projects"][project_name] = configuration
+            for project_name, configuration in updated.items():
+                if project_name is None:
+                    configurations["global"] = configuration
+                else:
+                    configurations["projects"][project_name] = configuration
             descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".project-scan-")
             try:
                 with os.fdopen(descriptor, "w") as handle:
@@ -93,4 +99,4 @@ def write_scan_configuration(project_name: str | None, value: object) -> dict:
                     os.unlink(temporary)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-    return configuration
+    return updated
