@@ -272,6 +272,29 @@ The **Run Scans** button in the top-right corner of Scan History opens a five-st
 
 Native package selections are saved when launching scans in a single `project-scan.json` file under `VULNSCOUT_CACHE_DIR` (default: `/cache/vulnscout`), keyed by the exact project name rather than its UUID. Each project's entry contains `exclude_native` and `native_package_exceptions`. They are restored the next time the wizard opens, including after browser or server restarts. Renaming a project uses the preferences for its new name, or the defaults if none have been saved for that name. **Select all** disables native exclusion, so even native packages added to the SBOM before launch are scanned. Changing an individual checkbox enables native exclusion and scans only the checked native packages.
 
+#### Global native-package defaults
+
+In **Settings → General → Global native-package exclusions**, choose whether to exclude native packages by default and edit the exceptions under **Native packages to scan by default** (one name per line or comma-separated). Saving applies these defaults to projects without saved selections the next time the wizard opens. Existing project selections take precedence and are not overwritten. Disabling global exclusion scans all native packages by default while retaining the exception list.
+
+The same JSON file now has two top-level nodes:
+
+```json
+{
+  "global": {
+    "exclude_native": true,
+    "native_package_exceptions": ["cmake-native", "g++-native", "gcc-native"]
+  },
+  "projects": {
+    "My Project": {
+      "exclude_native": true,
+      "native_package_exceptions": ["make-native"]
+    }
+  }
+}
+```
+
+Existing flat project-name mappings remain readable and are upgraded to this shape on the next save. Project names, including `global` or `projects`, remain ordinary keys inside `projects`. The global settings API is `GET` / `PUT /api/config/native-packages`; project settings continue to use `GET` / `PUT /api/projects/<project-uuid>/scan-configuration`.
+
 The server queues Grype, NVD, OSV, and sbom-cve-check scans in that order, followed by selected vulnerability-data refreshes. Each source/variant pair has its own operation with live logs and progress in the Operation queue. While any scan is active, **Run Scans** is disabled; opening another tab does not create a second batch.
 
 Every scan and vulnerability-data refresh is also tracked in the **Operation queue** in the navigation bar. A counter shows how many operations have finished out of the total tracked; clicking it opens the Operation queue window, where each running or finished operation has its own progress panel. The window can be closed at any time without interrupting the operations, which keep running in the background.

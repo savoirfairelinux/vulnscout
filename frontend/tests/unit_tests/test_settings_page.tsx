@@ -35,7 +35,7 @@ jest.mock("../../src/handlers/variant", () => ({
 
 jest.mock("../../src/handlers/config", () => ({
   __esModule: true,
-  default: { get: jest.fn(), patch: jest.fn() },
+  default: { get: jest.fn(), patch: jest.fn(), nativePackages: jest.fn() },
 }));
 
 jest.mock("../../src/handlers/nvdApiKey", () => ({
@@ -93,6 +93,9 @@ describe("Settings scoped project and variant views", () => {
       client_name: "",
       contact_email: "",
       grype_memlimit: "",
+    });
+    (Config.nativePackages as jest.Mock).mockResolvedValue({
+      exclude_native: true, native_package_exceptions: ["gcc-native", "g++-native", "cmake-native"],
     });
     nvdApiKeyGet.mockResolvedValue({ has_key: false, masked_key: "" });
     configPatch.mockImplementation(async (data) => ({
