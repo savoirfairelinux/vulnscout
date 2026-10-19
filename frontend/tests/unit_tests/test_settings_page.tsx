@@ -451,6 +451,23 @@ describe("Settings scoped project and variant views", () => {
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(/^\/settings$/));
   });
 
+  test("history navigation closes an open Delete Project confirmation", async () => {
+    projectsList.mockResolvedValue([project, { id: "project-2", name: "Zeus" }]);
+    render(
+      <MemoryRouter initialEntries={["/settings/projects/project-2", "/settings/projects/project-1"]} initialIndex={1}>
+        <Routes>
+          <Route path="/settings/*" element={<><Settings /><LocationProbe /><HistoryControls /></>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Project" }));
+    expect(await screen.findByRole("button", { name: "Yes, delete" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "History back" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/settings/projects/project-2"));
+    expect(screen.queryByRole("button", { name: "Yes, delete" })).not.toBeInTheDocument();
+    expect(projectsDelete).not.toHaveBeenCalled();
+  });
+
   test("openNewProject navigation state opens the New Project input", async () => {
     renderSettings("/settings", {}, { openNewProject: true });
     expect(await screen.findByLabelText("New project name")).toBeInTheDocument();

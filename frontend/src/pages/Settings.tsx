@@ -709,6 +709,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
     setDeleteVariantMsg(null);
     setImportFiles([]);
     setImportMsg(null);
+    setConfirmDeleteProject(false);
     setPendingDeleteVariant(null);
     setOpenAddKey(null);
   }, [route.kind, selectedProjectId, selectedVariantId]);
