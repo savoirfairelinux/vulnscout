@@ -213,17 +213,10 @@ describe('Variants', () => {
         );
     });
 
-    test('returns empty array when response is not ok', async () => {
-        fetchMock.mockImplementationOnce(() =>
-            Promise.resolve({
-                ok: false,
-                json: () => Promise.resolve([]),
-            } as Response)
-        );
+    test('rejects when the variant list request fails', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'unavailable' }), { status: 503 });
 
-        const variants = await Variants.list('p1');
-
-        expect(variants).toEqual([]);
+        await expect(Variants.list('p1')).rejects.toThrow('Failed to load variants (503)');
     });
 
     test('returns empty array when server returns non-array', async () => {
