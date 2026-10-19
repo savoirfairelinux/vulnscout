@@ -3,6 +3,9 @@ import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 
+import fetchMock from 'jest-fetch-mock';
+fetchMock.enableMocks();
+
 import ProjectVariantSelector from '../../src/components/ProjectVariantSelector';
 
 // ---------------------------------------------------------------------------
@@ -677,6 +680,30 @@ describe('ProjectVariantSelector', () => {
             expect(screen.queryByRole('checkbox', { name: 'default' })).not.toBeInTheDocument();
         });
         expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    });
+
+    test('a failed variant list for a newly selected project clears the previous selection', async () => {
+        const actualVariants = jest.requireActual('../../src/handlers/variant').default;
+        mockVariantsList.mockImplementation(projectId => projectId === 'proj-2'
+            ? actualVariants.list(projectId)
+            : Promise.resolve(VARIANTS_PROJ1));
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'unavailable' }), { status: 503 });
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        await openPanel();
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+        await selectProject('proj-1');
+        await waitFor(() => {
+            expect(screen.getByRole('checkbox', { name: 'default' })).toBeChecked();
+        });
+
+        await selectProject('proj-2');
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/projects/proj-2/variants'), expect.anything());
+            expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+        });
     });
 
     // -----------------------------------------------------------------------

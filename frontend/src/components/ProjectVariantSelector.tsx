@@ -140,7 +140,9 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
                 }
             })
             .catch(() => {
-                if (!cancelled) setVariants([]);
+                if (cancelled) return;
+                setVariants([]);
+                setSelectedVariantIds([]);
             });
         return () => { cancelled = true; };
     }, [selectedProjectId]);
