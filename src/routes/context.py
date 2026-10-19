@@ -7,11 +7,10 @@ import logging
 
 from flask import jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
-from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
-from ..helpers.codebase_reference import CodebaseReference, MAX_FILE_BYTES, validate_reference
+from ..helpers.codebase_reference import CodebaseReference, validate_reference
 from ..helpers.context_io import (
     build_export_document,
     collect_entries,
@@ -24,7 +23,6 @@ from ..models.variant_context import VariantContext, ContextFile
 from ..routes._scan_helpers import parse_uuid_or_400
 
 logger = logging.getLogger(__name__)
-MAX_REFERENCE_REQUEST_BYTES = MAX_FILE_BYTES + 64 * 1024
 
 
 def _get_cache_dir() -> str:
@@ -243,15 +241,14 @@ def init_app(app):
     def post_context_file(variant_id):
         """Upload a codebase reference file or ZIP/TAR archive for a variant.
 
-        Files are limited to 10 MB. The multipart payload accepts a required
-        ``file`` field and an optional ``description`` field.
+        The multipart payload accepts a required ``file`` field and an optional
+        ``description`` field.
 
         OpenAPI:
         body multipart required Supplemental file and optional description.
         response 201 JsonObject Uploaded context-file metadata.
-        response 400 Error Invalid identifier, missing file, or oversized file.
+        response 400 Error Invalid identifier or missing file.
         response 404 Error Variant not found.
-        response 413 Error Multipart upload request exceeds its size limit.
         response 500 Error File could not be stored.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
@@ -263,24 +260,13 @@ def init_app(app):
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
 
-        request.max_content_length = MAX_REFERENCE_REQUEST_BYTES
-        try:
-            file = request.files.get('file')
-        except RequestEntityTooLarge:
-            return jsonify(error="Codebase reference upload exceeds the 10 MB limit plus multipart overhead."), 413
+        file = request.files.get('file')
         if file is None:
             return jsonify({"error": "No file provided"}), 400
 
         filename = file.filename
         if not filename:
             return jsonify({"error": "No file provided"}), 400
-
-        file.seek(0, 2)
-        size = file.tell()
-        file.seek(0)
-        if size > MAX_FILE_BYTES:
-            max_mb = MAX_FILE_BYTES // (1024 * 1024)
-            return jsonify({"error": f"File exceeds maximum size of {max_mb} MB"}), 400
 
         description = request.form.get('description')
         if description is not None:

@@ -3,6 +3,8 @@
 
 from flask import Flask, Response, copy_current_request_context, request, make_response, send_file
 from flask.typing import ResponseReturnValue
+from werkzeug.datastructures import FileStorage
+from werkzeug.exceptions import RequestEntityTooLarge
 import atexit
 import io
 import json
@@ -136,10 +138,12 @@ def list_assets() -> List[Dict[str, object]]:
     return assets
 
 
-# Maximum size accepted for an uploaded report image asset. Flask's
-# MAX_CONTENT_LENGTH rejects oversized multipart bodies before parsing; the
-# bounded stream read below is a secondary guard for this per-file limit.
+# Maximum size accepted for an uploaded report template.
+MAX_TEMPLATE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MiB
+
+# Maximum size accepted for an uploaded report image asset.
 MAX_ASSET_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MiB
+
 
 # Raster formats accepted for *uploads*, mapped to the format name Pillow
 # reports back after decoding. SVG is deliberately excluded here: as XML it
@@ -195,6 +199,17 @@ def validate_raster_image(data: bytes, ext: str) -> bool:
             return probe.format == expected_format
     except Exception:
         return False
+
+
+def _read_upload_bytes(
+    uploaded: FileStorage,
+    limit_bytes: int,
+    message: str,
+) -> tuple[bytes | None, tuple[dict[str, str], int] | None]:
+    data = uploaded.stream.read(limit_bytes + 1)
+    if len(data) > limit_bytes:
+        return None, ({"error": message}, 413)
+    return data, None
 
 
 def guess_mime_type(doc_name: Optional[str]) -> Optional[str]:
@@ -418,7 +433,7 @@ class ExportGenerationError(Exception):
 
 
 class _SizeLimitedArchive:
-    def __init__(self, output: BinaryIO, max_bytes: int) -> None:
+    def __init__(self, output: BinaryIO, max_bytes: int | None) -> None:
         self.output = output
         self.max_bytes = max_bytes
         self.size = 0
@@ -426,7 +441,7 @@ class _SizeLimitedArchive:
     def write(self, data: bytes) -> int:
         end = self.tell() + len(data)
         self.size = max(self.size, end)
-        if self.size > self.max_bytes:
+        if self.max_bytes is not None and self.size > self.max_bytes:
             raise ExportGenerationError("Export archive exceeds the maximum allowed size", 413)
         return self.output.write(data)
 
@@ -471,6 +486,8 @@ def _prune_export_archives() -> None:
 
 
 def _reserve_retained_archive(archive_bytes: int) -> bool:
+    if EXPORT_MAX_RETAINED_ARCHIVE_BYTES is None:
+        return True
     retained = _retained_archives()
     retained_bytes = sum(
         os.path.getsize(path)
@@ -579,7 +596,10 @@ def init_app(app: Flask) -> None:
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return {"error": "Expected multipart/form-data with a file upload."}, 400
 
-        uploaded = request.files.get('file')
+        try:
+            uploaded = request.files.get('file')
+        except RequestEntityTooLarge:
+            return {"error": "Template upload exceeds the server request-size limit."}, 413
         if uploaded is None or not uploaded.filename:
             return {"error": "No file uploaded."}, 400
 
@@ -593,7 +613,16 @@ def init_app(app: Flask) -> None:
             return {"error": "No writable templates directory available on the server."}, 500
 
         try:
-            uploaded.save(os.path.join(target_dir, safe_name))
+            max_mib = MAX_TEMPLATE_UPLOAD_BYTES // (1024 * 1024)
+            payload, error = _read_upload_bytes(
+                uploaded,
+                MAX_TEMPLATE_UPLOAD_BYTES,
+                f"Template exceeds the maximum allowed size of {max_mib} MiB.",
+            )
+            if error is not None:
+                return error
+            with open(os.path.join(target_dir, safe_name), "wb") as destination:
+                destination.write(payload or b"")
         except OSError as e:
             print(e, flush=True)
             return {"error": f"Failed to save template: {e}"}, 500
@@ -608,9 +637,9 @@ def init_app(app: Flask) -> None:
         Accepted extensions: png, jpg, jpeg, gif, webp (SVG is not accepted
         through this endpoint, see :data:`UPLOADABLE_ASSET_EXTENSIONS`).
 
-        The upload is capped at :data:`MAX_ASSET_UPLOAD_BYTES` and the decoded
-        content must be a genuine raster image matching the declared
-        extension (see :func:`validate_raster_image`) before it is persisted.
+        The decoded content must be a genuine raster image matching the
+        declared extension (see :func:`validate_raster_image`) before it is
+        persisted.
 
         The file is saved into the first writable
         ``<templates_dir>/assets/`` directory so :func:`~src.views.templates.find_asset`
@@ -619,7 +648,10 @@ def init_app(app: Flask) -> None:
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return {"error": "Expected multipart/form-data with a file upload."}, 400
 
-        uploaded = request.files.get('file')
+        try:
+            uploaded = request.files.get('file')
+        except RequestEntityTooLarge:
+            return {"error": "Image upload exceeds the server request-size limit."}, 413
         if uploaded is None or not uploaded.filename:
             return {"error": "No file uploaded."}, 400
 
@@ -628,15 +660,17 @@ def init_app(app: Flask) -> None:
             allowed = ", ".join(sorted(UPLOADABLE_ASSET_EXTENSIONS))
             return {"error": f"Unsupported image file. Allowed extensions: {allowed}."}, 400
 
-        # MAX_CONTENT_LENGTH bounds multipart parsing and temporary storage.
-        # Keep a per-file bound as a secondary guard for this endpoint.
-        data = uploaded.stream.read(MAX_ASSET_UPLOAD_BYTES + 1)
-        if len(data) > MAX_ASSET_UPLOAD_BYTES:
-            max_mib = MAX_ASSET_UPLOAD_BYTES // (1024 * 1024)
-            return {"error": f"Image exceeds the maximum allowed size of {max_mib} MiB."}, 413
+        max_mib = MAX_ASSET_UPLOAD_BYTES // (1024 * 1024)
+        data, error = _read_upload_bytes(
+            uploaded,
+            MAX_ASSET_UPLOAD_BYTES,
+            f"Image exceeds the maximum allowed size of {max_mib} MiB.",
+        )
+        if error is not None:
+            return error
 
         ext = safe_name.rsplit(".", 1)[-1].lower()
-        if not validate_raster_image(data, ext):
+        if not validate_raster_image(data or b"", ext):
             return {"error": "Uploaded file is not a valid image matching its extension."}, 400
 
         target_dir = writable_assets_dir()
@@ -645,7 +679,7 @@ def init_app(app: Flask) -> None:
 
         try:
             with open(os.path.join(target_dir, safe_name), "wb") as f:
-                f.write(data)
+                f.write(data or b"")
         except OSError as e:
             print(e, flush=True)
             return {"error": f"Failed to save asset: {e}"}, 500

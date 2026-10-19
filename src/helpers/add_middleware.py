@@ -19,7 +19,11 @@ class VulnScoutRequest(Request):
     @property
     def max_content_length(self) -> int | None:
         if self.path == "/api/scans/import":
-            return current_app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"]
+            return current_app.config.get("MAX_SCAN_IMPORT_CONTENT_LENGTH")
+        if self.path == "/api/documents/templates":
+            return current_app.config.get("MAX_TEMPLATE_UPLOAD_CONTENT_LENGTH")
+        if self.path == "/api/documents/assets":
+            return current_app.config.get("MAX_ASSET_UPLOAD_CONTENT_LENGTH")
         return super().max_content_length
 
     @max_content_length.setter

@@ -165,9 +165,9 @@ upload is a complete source tree or only selected files. References are saved
 Uploads and deletion mark older pending AI assessments for that variant outdated.
 The UI asks before uploading when pending assessments exist and always confirms deletion.
 
-Supported archives are **ZIP, TAR, TAR.GZ and TGZ**. Each upload is limited to
-**10 MB**, each member to **10 MB**, expanded archives to **100 MB**, and archives
-to **5,000 entries**. Unsafe paths, duplicate file paths, encrypted ZIP files,
+Supported archives are **ZIP, TAR, TAR.GZ and TGZ**. Archives are limited to
+**5,000 entries**, with a **10 MiB maximum per file** and **100 MiB maximum
+expanded archive size**. Unsafe paths, duplicate file paths, encrypted ZIP files,
 links, sparse files and special entries are rejected. Archives are read without
 extraction or execution. Only UTF-8 text can be read as source; binary files
 may be stored/listed but cannot provide text evidence. Other archive formats

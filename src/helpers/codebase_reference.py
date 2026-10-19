@@ -58,12 +58,14 @@ class CodebaseReference:
         path = _safe_path(name)
         if path in self.entries:
             raise ValueError("Archive contains duplicate file paths.")
-        if size < 0 or size > MAX_FILE_BYTES:
-            raise ValueError("A source file exceeds the maximum size of 10 MB.")
+        if size < 0:
+            raise ValueError("Archive contains an invalid file size.")
+        if member is not None and size > MAX_FILE_BYTES:
+            raise ValueError("Archive contains an invalid file size.")
         self.entries[path] = (size, member)
         self.total_bytes += size
         if self.total_bytes > MAX_EXPANDED_BYTES:
-            raise ValueError("Archive exceeds the maximum expanded size of 100 MB.")
+            raise ValueError("Archive exceeds the maximum expanded size.")
 
     def _index(self) -> None:
         name = self.name.lower()
@@ -92,7 +94,7 @@ class CodebaseReference:
                 while chunk := compressed.read(1024 * 1024):
                     expanded += len(chunk)
                     if expanded > MAX_EXPANDED_BYTES:
-                        raise ValueError("Archive exceeds the maximum expanded size of 100 MB.")
+                        raise ValueError("Archive exceeds the maximum expanded size.")
                     source.write(chunk)
                 source.seek(0)
             tar = self.stack.enter_context(tarfile.open(fileobj=source, mode="r:"))
@@ -117,6 +119,8 @@ class CodebaseReference:
         if path not in self.entries:
             raise LookupError("Source file not found.")
         size, member = self.entries[path]
+        if size > MAX_FILE_BYTES:
+            raise ValueError("Source file exceeds the maximum readable file size.")
         try:
             if isinstance(self.archive, zipfile.ZipFile) and isinstance(member, zipfile.ZipInfo):
                 with self.archive.open(member) as source:

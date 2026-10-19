@@ -1282,6 +1282,36 @@ def test_upload_template_missing_file(client):
     assert json.loads(response.data)["error"]
 
 
+def test_upload_template_rejects_files_over_limit(tmp_path, monkeypatch, client):
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/templates",
+        data={"file": (BytesIO(b"x" * (10 * 1024 * 1024 + 1)), "large.adoc")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 413
+    assert "maximum allowed size" in json.loads(response.data)["error"]
+    assert not (tmp_path / "large.adoc").exists()
+
+
+def test_upload_template_rejects_oversized_multipart_request(tmp_path, monkeypatch, client):
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    client.application.config["MAX_TEMPLATE_UPLOAD_CONTENT_LENGTH"] = 1024
+
+    response = client.post(
+        "/api/documents/templates",
+        data={"file": (BytesIO(b"x" * 2048), "large.adoc")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert "request-size limit" in json.loads(response.data)["error"]
+    assert not (tmp_path / "large.adoc").exists()
+
+
 # ---------------------------------------------------------------------------
 # POST /api/documents/assets
 # ---------------------------------------------------------------------------
@@ -1382,32 +1412,35 @@ def test_upload_asset_rejects_non_image_content(tmp_path, monkeypatch, client):
     assert not (tmp_path / "assets" / "fake.png").exists()
 
 
-def test_upload_asset_rejects_oversized_upload(tmp_path, monkeypatch, client):
-    """POST /api/documents/assets rejects a file bigger than the configured size cap."""
+def test_upload_asset_rejects_large_uploads(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects files larger than the endpoint cap."""
     from io import BytesIO
-    import src.routes.documents as documents_module
+    from PIL import Image
     monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
-    monkeypatch.setattr(documents_module, "MAX_ASSET_UPLOAD_BYTES", 16)
+    side = 1600
+    large_png_buffer = BytesIO()
+    Image.frombytes("RGB", (side, side), os.urandom(side * side * 3)).save(large_png_buffer, format="PNG")
+    large_png = large_png_buffer.getvalue()
+    assert len(large_png) > 5 * 1024 * 1024
 
     response = client.post(
         "/api/documents/assets",
-        data={"file": (BytesIO(_make_png_bytes()), "logo.png")},
+        data={"file": (BytesIO(large_png), "logo.png")},
         content_type="multipart/form-data",
     )
     assert response.status_code == 413
-    assert json.loads(response.data)["error"]
+    assert "maximum allowed size" in json.loads(response.data)["error"]
     assert not (tmp_path / "assets" / "logo.png").exists()
 
 
-def test_upload_asset_rejects_request_larger_than_content_limit(app, client):
-    """Werkzeug rejects oversized multipart bodies before the route parses files."""
-    request_limit = app.config["MAX_CONTENT_LENGTH"]
+def test_upload_asset_without_file_still_returns_400_even_for_large_body(client):
+    """Invalid multipart payloads are rejected by the endpoint validation."""
     response = client.post(
         "/api/documents/assets",
-        data=b"x" * (request_limit + 1),
+        data=b"x" * (2 * 1024 * 1024),
         content_type="multipart/form-data",
     )
-    assert response.status_code == 413
+    assert response.status_code == 400
 
 
 def test_upload_asset_rejects_path_traversal(tmp_path, monkeypatch, client):

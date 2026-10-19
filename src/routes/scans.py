@@ -1011,7 +1011,7 @@ def init_app(app: Flask) -> None:
         response 201 JsonObject Import summary, with one entry per newly imported scan.
         response 400 Error Malformed or unsupported export payload.
         response 404 Error Destination project or variant not found.
-        response 413 Error Request body exceeds the scan import size limit.
+        response 413 Error Request body exceeds an upstream/server size limit.
         """
         try:
             payload = flask_request.get_json(force=True, silent=True)
@@ -1032,10 +1032,12 @@ def init_app(app: Flask) -> None:
             db.session.commit()
         except RequestEntityTooLarge:
             db.session.rollback()
-            limit = _format_byte_size(app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"])
-            return jsonify({
-                "error": f"Scan import exceeds the {limit} size limit",
-            }), 413
+            limit = app.config.get("MAX_SCAN_IMPORT_CONTENT_LENGTH")
+            if isinstance(limit, (int, float)) and limit > 0:
+                return jsonify({
+                    "error": f"Scan import exceeds the {_format_byte_size(limit)} size limit",
+                }), 413
+            return jsonify({"error": "Scan import exceeds the server request-size limit"}), 413
         except FileExistsError as exc:
             db.session.rollback()
             return jsonify({"error": str(exc)}), 409

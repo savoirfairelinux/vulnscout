@@ -86,7 +86,7 @@ class Context {
         );
         if (res.status === 413) {
             throw new Error(
-                "Upload rejected as too large (HTTP 413). Maximum file size is 10 MB; server or proxy request limits may also apply."
+                "Upload rejected as too large (HTTP 413). A server or proxy request-size limit may apply."
             );
         }
         const data = await res.json();
