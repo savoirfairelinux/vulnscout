@@ -272,6 +272,8 @@ The **Run Scans** button in the top-right corner of Scan History opens a five-st
 
 Native package selections are saved when launching scans in a single `project-scan.json` file under `VULNSCOUT_CACHE_DIR` (default: `/cache/vulnscout`), keyed by the exact project name rather than its UUID. Each project's entry contains `exclude_native` and `native_package_exceptions`. They are restored the next time the wizard opens, including after browser or server restarts. Renaming a project uses the preferences for its new name, or the defaults if none have been saved for that name. **Select all** disables native exclusion, so even native packages added to the SBOM before launch are scanned. Changing an individual checkbox enables native exclusion and scans only the checked native packages.
 
+Preferences are loaded only for selected projects, and package names are compared case-insensitively. All selected projects' preferences are saved atomically before scans are queued. If saving fails, no partial preferences are written and the wizard stays open with an error so you can retry. Native selections are not capped at 1000 package names; the normal HTTP request-size limit still applies.
+
 #### Global native-package defaults
 
 In **Settings → General → Global native-package exclusions**, choose whether to exclude native packages by default and edit the exceptions under **Native packages to scan by default** (one name per line or comma-separated). Saving applies these defaults to projects without saved selections the next time the wizard opens. Existing project selections take precedence and are not overwritten. Disabling global exclusion scans all native packages by default while retaining the exception list.

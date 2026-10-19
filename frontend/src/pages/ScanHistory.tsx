@@ -1260,6 +1260,8 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
     const excludeNative = Object.values(nativeConfigurations).every(configuration => configuration.exclude_native);
     const [configurationLoading, setConfigurationLoading] = useState(false);
     const [configurationError, setConfigurationError] = useState<string | null>(null);
+    const [launchError, setLaunchError] = useState<string | null>(null);
+    const loadedConfigurationProjects = useRef(new Set<string>());
     const scanRequestRef = useRef<{ generation: number; controller?: AbortController }>({
         generation: 0,
     });
@@ -1469,18 +1471,30 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
         )
     );
     const variantsReady = loadedVariantScopeKey === variantScopeKey;
+    const configurationProjectIdsKey = JSON.stringify([...new Set(
+        wizardVariants.filter(variant => wizardSelectedVariantIds.has(variant.id)).map(variant => variant.project_id)
+    )].sort());
 
     useEffect(() => {
-        if (!scanWizardOpen || !variantsReady) return;
+        if (!scanWizardOpen) {
+            loadedConfigurationProjects.current.clear();
+            setNativeConfigurations({});
+            setConfigurationError(null);
+            setLaunchError(null);
+            return;
+        }
+        if (!variantsReady) return;
         const controller = new AbortController();
         setConfigurationLoading(true);
         setConfigurationError(null);
-        setNativeConfigurations({});
-        const projectIds = [...new Set(allVariants.map(variant => variant.project_id))];
-        Promise.all(projectIds.map(async id => [id, await Projects.scanConfiguration(id, undefined, controller.signal)] as const))
-            .then(entries => {
-                if (!controller.signal.aborted) setNativeConfigurations(Object.fromEntries(entries));
-            })
+        const projectIds: string[] = JSON.parse(configurationProjectIdsKey);
+        Promise.all(projectIds.filter(id => !loadedConfigurationProjects.current.has(id)).map(async id => {
+            const configuration = await Projects.scanConfiguration(id, undefined, controller.signal);
+            if (!controller.signal.aborted) {
+                loadedConfigurationProjects.current.add(id);
+                setNativeConfigurations(previous => ({ ...previous, [id]: configuration }));
+            }
+        }))
             .catch(error => {
                 if (!controller.signal.aborted) setConfigurationError(error instanceof Error ? error.message : 'Failed to load scan configuration.');
             })
@@ -1488,7 +1502,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
                 if (!controller.signal.aborted) setConfigurationLoading(false);
             });
         return () => controller.abort();
-    }, [scanWizardOpen, variantsReady, allVariants]);
+    }, [scanWizardOpen, variantsReady, configurationProjectIdsKey]);
 
     useEffect(() => {
         const previous = observedScanStatuses.current;
@@ -1583,12 +1597,17 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         const projectIds = [...new Set(variants.map(variant => variant.project_id))];
         setConfigurationLoading(true);
+        setLaunchError(null);
         try {
-            await Promise.all(projectIds.map(async id => {
+            const configurations = Object.fromEntries(projectIds.map(id => {
                 const configuration = nativeConfigurations[id];
                 if (!configuration) throw new Error('Project scan configuration is not loaded.');
-                await Projects.scanConfiguration(id, configuration);
+                return [id, configuration];
             }));
+            await Projects.saveScanConfigurations(configurations);
+        } catch (error) {
+            setLaunchError(error instanceof Error ? error.message : 'Failed to save scan preferences. Please retry.');
+            return;
         } finally {
             setConfigurationLoading(false);
         }
@@ -2108,6 +2127,7 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
                             nativeConfigurations={nativeConfigurations}
                             configurationLoading={configurationLoading}
                             configurationError={configurationError}
+                            launchError={launchError}
                             onNativeConfigurationChange={(id, configuration) => setNativeConfigurations(previous => ({ ...previous, [id]: configuration }))}
                             onClose={() => setScanWizardOpen(false)}
                             onToggleVariant={toggleVariant}

@@ -3,8 +3,10 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from uuid import UUID
 
 import pytest
+from sqlalchemy import event
 
 from src.bin.webapp import create_app
 from src.extensions import db
@@ -52,6 +54,108 @@ def test_defaults_and_available_native_packages(configuration_api):
         "native_package_exceptions": DEFAULT_NATIVE_EXCEPTIONS,
         "native_packages": ["gcc-native", "make-native"],
     }
+
+
+def test_large_native_selection_is_supported(configuration_api):
+    client, project_id, _, _ = configuration_api
+    names = [f"tool-{index}-native" for index in range(1002)]
+    response = client.put(f"/api/projects/{project_id}/scan-configuration", json={
+        "exclude_native": True, "native_package_exceptions": names,
+    })
+    assert response.status_code == 200
+    assert set(response.json["native_package_exceptions"]) == set(names)
+
+
+@pytest.mark.parametrize("variant_count", [1, 8])
+def test_native_names_use_one_project_scoped_query_for_latest_sboms(configuration_api, variant_count):
+    client, project_id, other_id, _ = configuration_api
+    with client.application.app_context():
+        project = db.session.get(Project, UUID(project_id))
+        other = db.session.get(Project, UUID(other_id))
+
+        def add_scan(variant, name, scan_type="sbom"):
+            scan = Scan.create(name, variant.id, scan_type=scan_type)
+            document = SBOMDocument.create(f"/test/{name}.json", "spdx", scan.id)
+            for package_name in (name, "openssl"):
+                package = Package.find_or_create(package_name, "1")
+                SBOMPackage.create(document.id, package.id)
+
+        for index in range(variant_count):
+            variant = Variant.create(f"variant-{index}", project.id)
+            add_scan(variant, f"stale-{index}-native")
+            add_scan(variant, " GCC-Native ")
+            add_scan(variant, f"tool-{index}-native", "tool")
+        add_scan(Variant.create("other", other.id), "other-native")
+        db.session.remove()
+        statements = []
+
+        def record_statement(connection, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(db.engine, "before_cursor_execute", record_statement)
+        try:
+            response = client.get(f"/api/projects/{project_id}/scan-configuration")
+        finally:
+            event.remove(db.engine, "before_cursor_execute", record_statement)
+        assert response.status_code == 200
+        assert response.json["native_packages"] == [" GCC-Native ", "gcc-native", "make-native"]
+        assert len(statements) == 2  # Project lookup and one scalar native-name query.
+        assert not any(isinstance(value, Package) for value in db.session.identity_map.values())
+
+
+def test_batch_save_validates_every_project_before_writing(configuration_api):
+    client, project_id, other_id, cache = configuration_api
+    configuration = {"exclude_native": True, "native_package_exceptions": ["make-native"]}
+    response = client.put("/api/projects/scan-configurations", json={
+        project_id: configuration, other_id: {"exclude_native": "invalid"},
+    })
+    assert response.status_code == 400
+    assert not (cache / "project-scan.json").exists()
+
+
+@pytest.mark.parametrize("value,status", [
+    (None, 400), ([], 400), ({}, 400), ({"invalid": {}}, 400),
+    ({"00000000-0000-0000-0000-000000000001": {}}, 404),
+])
+def test_invalid_batch_does_not_write(configuration_api, value, status):
+    client, _, _, cache = configuration_api
+    response = client.put("/api/projects/scan-configurations", json=value)
+    assert response.status_code == status
+    assert not (cache / "project-scan.json").exists()
+
+
+def test_batch_save_is_atomic_on_replace_failure(configuration_api, monkeypatch):
+    client, project_id, other_id, cache = configuration_api
+    initial = {"exclude_native": False, "native_package_exceptions": []}
+    write_scan_configuration("First", initial)
+    before = (cache / "project-scan.json").read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("Disk unavailable")
+
+    monkeypatch.setattr("src.helpers.scan_configuration.os.replace", fail_replace)
+    response = client.put("/api/projects/scan-configurations", json={
+        project_id: {"exclude_native": True, "native_package_exceptions": ["make-native"]},
+        other_id: initial,
+    })
+    assert response.status_code == 500
+    assert (cache / "project-scan.json").read_bytes() == before
+    assert not list(cache.glob(".project-scan-*"))
+
+
+def test_batch_save_preserves_global_and_unselected_project_preferences(configuration_api):
+    client, project_id, other_id, cache = configuration_api
+    initial = {"exclude_native": False, "native_package_exceptions": []}
+    write_scan_configuration(None, initial)
+    write_scan_configuration("Unselected", initial)
+    first = {"exclude_native": True, "native_package_exceptions": ["make-native"]}
+    response = client.put("/api/projects/scan-configurations", json={project_id: first, other_id: initial})
+    assert response.status_code == 200
+    assert response.json == {project_id: first, other_id: initial}
+    stored = json.loads((cache / "project-scan.json").read_text())
+    assert stored == {"global": initial, "projects": {
+        "First": first, "Second": initial, "Unselected": initial,
+    }}
 
 
 def test_configuration_survives_new_client_and_is_project_scoped(configuration_api):
