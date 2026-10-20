@@ -3,7 +3,10 @@
 
 """Persist proven West JSON-LD components as ordinary packages."""
 
+from bisect import bisect_right
 from collections import Counter, defaultdict
+from datetime import datetime
+from functools import cache
 import logging
 import uuid
 
@@ -68,6 +71,20 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
     if not affected:
         return
     scans = {scan.id: scan for scan in session.scalars(select(Scan))}
+    sboms_by_variant: dict[uuid.UUID, list[tuple[datetime, uuid.UUID]]] = defaultdict(list)
+    for scan in scans.values():
+        if (scan.scan_type or "sbom") == "sbom":
+            sboms_by_variant[scan.variant_id].append((scan.timestamp, scan.id))
+    for history in sboms_by_variant.values():
+        history.sort()
+
+    @cache
+    def preceding_sbom(scan_id: uuid.UUID) -> uuid.UUID | None:
+        scan = scans[scan_id]
+        history = sboms_by_variant.get(scan.variant_id, [])
+        index = bisect_right(history, (scan.timestamp, scan.id)) - 1
+        return history[index][1] if index >= 0 else None
+
     by_variant: dict[tuple, set] = defaultdict(set)
     for link in original_links:
         document = documents[link.sbom_document_id]
@@ -82,11 +99,9 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
             return {mappings[scan_id].get(member, member)}
         if scan_id is not None:
             scan = scans[scan_id]
-            eligible = [other for other in scans.values() if other.variant_id == scan.variant_id
-                        and (other.scan_type or "sbom") == "sbom" and other.timestamp <= scan.timestamp]
-            if eligible:
-                latest = max(eligible, key=lambda other: other.timestamp)
-                return {mappings.get(latest.id, {}).get(member, member)}
+            latest_id = preceding_sbom(scan_id)
+            if latest_id is not None:
+                return {mappings.get(latest_id, {}).get(member, member)}
             variant_id = scan.variant_id
         return by_variant.get((member, variant_id), all_parents[member] or {member})
 
