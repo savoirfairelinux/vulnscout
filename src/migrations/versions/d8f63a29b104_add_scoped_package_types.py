@@ -47,7 +47,7 @@ def upgrade():
         sa.column('type', sa.String(9)),
     )
     documents_by_scan = defaultdict(list)
-    classifications = {}
+    classifications: dict[tuple[uuid.UUID, uuid.UUID], str] = {}
     for document in connection.execute(sa.select(documents)).mappings():
         if document['jsonld_groups'] is None:
             continue
