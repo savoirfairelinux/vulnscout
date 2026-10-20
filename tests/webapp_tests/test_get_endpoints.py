@@ -1417,6 +1417,9 @@ def test_upload_asset_rejects_large_uploads(tmp_path, monkeypatch, client):
     from io import BytesIO
     from PIL import Image
     monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    # Keep the request-level limit above the payload so this test exercises
+    # the endpoint's asset-size validation path.
+    client.application.config["MAX_ASSET_UPLOAD_CONTENT_LENGTH"] = 20 * 1024 * 1024
     side = 1600
     large_png_buffer = BytesIO()
     Image.frombytes("RGB", (side, side), os.urandom(side * side * 3)).save(large_png_buffer, format="PNG")
@@ -1431,6 +1434,22 @@ def test_upload_asset_rejects_large_uploads(tmp_path, monkeypatch, client):
     assert response.status_code == 413
     assert "maximum allowed size" in json.loads(response.data)["error"]
     assert not (tmp_path / "assets" / "logo.png").exists()
+
+
+def test_upload_asset_rejects_oversized_multipart_request(tmp_path, monkeypatch, client):
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    client.application.config["MAX_ASSET_UPLOAD_CONTENT_LENGTH"] = 1024
+
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(b"x" * 2048), "large.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert "request-size limit" in json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "large.png").exists()
 
 
 def test_upload_asset_without_file_still_returns_400_even_for_large_body(client):
