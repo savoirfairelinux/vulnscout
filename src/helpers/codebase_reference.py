@@ -63,9 +63,10 @@ class CodebaseReference:
         if member is not None and size > MAX_FILE_BYTES:
             raise ValueError("Archive contains an invalid file size.")
         self.entries[path] = (size, member)
-        self.total_bytes += size
-        if self.total_bytes > MAX_EXPANDED_BYTES:
-            raise ValueError("Archive exceeds the maximum expanded size.")
+        if member is not None:
+            self.total_bytes += size
+            if self.total_bytes > MAX_EXPANDED_BYTES:
+                raise ValueError("Archive exceeds the maximum expanded size.")
 
     def _index(self) -> None:
         name = self.name.lower()
@@ -149,6 +150,27 @@ class CodebaseReference:
         except UnicodeDecodeError as exc:
             raise ValueError("Source file is not UTF-8 text.") from exc
 
+    def _iter_text_lines(self, path: str):
+        if path not in self.entries:
+            raise LookupError("Source file not found.")
+        _, member = self.entries[path]
+        if member is None and self.archive is None:
+            self.stream.seek(0)
+            reader = io.TextIOWrapper(self.stream, encoding="utf-8-sig", errors="strict", newline="")
+            try:
+                for line in reader:
+                    if "\x00" in line:
+                        raise ValueError("Source file is binary; only UTF-8 text can be read.")
+                    yield line
+            except UnicodeDecodeError as exc:
+                raise ValueError("Source file is not UTF-8 text.") from exc
+            finally:
+                reader.detach()
+                self.stream.seek(0)
+            return
+        for line in io.StringIO(self.text(path)):
+            yield line
+
     def list_files(self, pattern: str = "*", offset: int = 0, limit: int = 200) -> dict:
         paths = sorted(path for path in self.entries if fnmatchcase(path, pattern))
         selected = paths[offset:offset + limit]
@@ -162,7 +184,7 @@ class CodebaseReference:
         length = 0
         total_lines = 0
         byte_limit = False
-        for number, line in enumerate(io.StringIO(self.text(path)), 1):
+        for number, line in enumerate(self._iter_text_lines(path), 1):
             total_lines = number
             if number < start_line or len(selected) >= max_lines or byte_limit:
                 continue
@@ -187,22 +209,17 @@ class CodebaseReference:
         for path in sorted(self.entries):
             if not fnmatchcase(path, pattern):
                 continue
-            content = self.read_bytes(path)
             try:
-                text = content.decode("utf-8-sig")
-            except UnicodeDecodeError:
+                for number, line in enumerate(self._iter_text_lines(path), 1):
+                    if query in line:
+                        if len(matches) == max_results:
+                            return {"matches": matches, "truncated": True,
+                                    "searched_files": searched + 1, "skipped_binary_files": skipped}
+                        matches.append({"path": path, "line": number, "text": line.rstrip("\r\n")[:500]})
+                searched += 1
+            except ValueError:
                 skipped += 1
                 continue
-            if "\x00" in text:
-                skipped += 1
-                continue
-            searched += 1
-            for number, line in enumerate(io.StringIO(text), 1):
-                if query in line:
-                    if len(matches) == max_results:
-                        return {"matches": matches, "truncated": True,
-                                "searched_files": searched, "skipped_binary_files": skipped}
-                    matches.append({"path": path, "line": number, "text": line.rstrip("\r\n")[:500]})
         return {"matches": matches, "truncated": False,
                 "searched_files": searched, "skipped_binary_files": skipped}
 

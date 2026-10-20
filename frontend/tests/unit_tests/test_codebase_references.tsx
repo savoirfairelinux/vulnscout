@@ -85,7 +85,9 @@ test("large files are sent to the backend instead of being blocked client-side",
     Object.defineProperty(large, "size", { value: 10 * 1024 * 1024 + 1 });
     fireEvent.change(screen.getByLabelText("Upload codebase references"), { target: { files: [large] } });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("1 reference(s) uploaded"), "success");
+    await waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(expect.stringContaining("1 reference(s) uploaded"), "success")
+    );
 });
 
 test.each([
