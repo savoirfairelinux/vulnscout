@@ -281,6 +281,7 @@ REFRESH_REMOTE_DELAY=2w
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
+    chmod 600 "$VULNSCOUT_CONFIG_FILE"
     # The sbom-cve-check advisory databases (NVD-FKIE + CVEList) live inside the
     # VulnScout cache directory by default (local_databases sub-folder next to
     # vulnscout.db), so the existing cache mount already covers them and no extra
@@ -293,6 +294,9 @@ EOF
     while IFS='=' read -r key value; do
         [ -z "$key" ] && continue
         [ "${key#\#}" = "$key" ] || continue
+        case "$key" in
+            AI_PROVIDER|AI_AUTH_CREDENTIALS|AI_MODEL|AI_BASE_URL) continue ;;
+        esac
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"
     # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment so the operator can
@@ -537,7 +541,8 @@ parse_and_run() {
             config|--config)
                 config_set "$2" "$3"; shift 3 ;;
             config-list|--config-list)
-                cat "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || echo "No config file found."
+                sed 's/\(API_KEY\|PASSWORD\|SECRET\|AI_AUTH_CREDENTIALS\)=.*/\1=****/' \
+                    "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || echo "No config file found."
                 shift ;;
             config-clear|--config-clear)
                 config_clear "$2"; shift 2 ;;

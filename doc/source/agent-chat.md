@@ -6,6 +6,21 @@ This proof of concept is **localhost-only** (including local host-to-container f
 
 ## Start locally
 
+Without `VULNSCOUT_CONFIG`, standalone Flask stores configuration in
+`$XDG_CONFIG_HOME/vulnscout/config.env` (default `~/.config/vulnscout/config.env`);
+no root access is needed. Set `VULNSCOUT_CONFIG` to use another writable file.
+The container entrypoint explicitly uses `/etc/vulnscout/config.env`, bind-mounted
+from the host cache. Persisted configuration is owner-readable/writable only
+(`0600`); both CLI `--config-list` paths redact `AI_AUTH_CREDENTIALS`.
+AI settings are read from this file on restart, not copied into container
+metadata. When the file exists it is authoritative, even if AI keys are absent,
+so disconnecting cannot resurrect inherited credentials. Environment-only AI
+settings are supported when no config file exists. Values written by the
+dashboard are shell-quoted and control characters are rejected.
+Provider model selections are also persisted; after restarting a provider that
+has no saved model, the toolbar requires an explicit selection rather than
+sending Copilot's `auto` model ID to that provider.
+
 From the demo worktree, with Python 3.11+ and Node.js installed:
 
 ```sh

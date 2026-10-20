@@ -4,6 +4,7 @@
 import os
 import re
 import fcntl
+import shlex
 from flask import jsonify, request
 
 from ..controllers.projects import ProjectController
@@ -14,7 +15,6 @@ from ..helpers.scan_configuration import (
     read_scan_configuration, validate_scan_configuration, write_scan_configuration,
 )
 
-_CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 # Accepts: off | disabled | plain-bytes | <digits><unit>
 # Units: B, KiB/MiB/GiB/TiB/PiB/EiB  and their SI equivalents KB/MB/…
@@ -25,7 +25,12 @@ _GRYPE_MEMLIMIT_RE = re.compile(
 
 
 def _config_file_path() -> str:
-    return os.environ.get('VULNSCOUT_CONFIG', _CONFIG_FILE_DEFAULT)
+    config_home = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+    return os.environ.get('VULNSCOUT_CONFIG', os.path.join(config_home, 'vulnscout', 'config.env'))
+
+
+def _has_control_characters(value: str) -> bool:
+    return any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
 
 
 def _mask_nvd_api_key(key: str) -> str:
@@ -40,23 +45,28 @@ def _write_config_key(key: str, value: str | None) -> bool:
     """Write or remove *key* in the persistent config.env file.
 
     If *value* is ``None`` or an empty string the key is removed; otherwise
-    it is written as ``KEY=value``.
+    it is written as a shell-quoted assignment.
     """
     config_file = _config_file_path()
     try:
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or (
+            value is not None and _has_control_characters(value)
+        ):
+            return False
         dirname = os.path.dirname(config_file)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
-        with open(config_file, 'a+') as fh:
+        with open(config_file, 'a+', opener=lambda path, flags: os.open(path, flags, 0o600)) as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
+                os.fchmod(fh.fileno(), 0o600)
                 fh.seek(0)
                 existing_lines = [ln for ln in fh.readlines() if not ln.startswith(f'{key}=')]
                 fh.seek(0)
                 fh.truncate(0)
                 fh.writelines(existing_lines)
                 if value:
-                    fh.write(f'{key}={value}\n')
+                    fh.write(f'{key}={shlex.quote(value)}\n')
                 fh.flush()
                 os.fsync(fh.fileno())
             finally:
