@@ -96,7 +96,7 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
             if len(candidates) == 1:
                 built = candidates
         if len(built) > 1:
-            continue
+            built = []
         members = [(source, 'source'), (dependency, 'upstream'), *((ref, 'build') for ref in built)]
         entries: list[dict[str, str]] = []
         for ref, role in members:
