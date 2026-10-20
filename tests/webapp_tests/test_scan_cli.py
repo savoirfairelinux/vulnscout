@@ -47,8 +47,11 @@ def _build_db(app):
         _db.session.commit()
 
         doc = SBOMDocument.create("/sbom.json", "sbom.json", scan.id, format="spdx")
-        SBOMPackage.create(doc.id, pkg_cpe.id)
-        SBOMPackage.create(doc.id, pkg_purl.id)
+        for package in (pkg_cpe, pkg_purl):
+            link = SBOMPackage.create(doc.id, package.id)
+            link.cpe = package.cpe
+            link.purl = package.purl
+        _db.session.commit()
 
         from src.models.observation import Observation
         from src.models.vulnerability import Vulnerability
@@ -336,8 +339,9 @@ class TestOsvScanCLI:
         assert "Scan complete" in result.output
         assert "0 unique vulnerabilities" in result.output
 
+    @pytest.mark.parametrize("global_purls", [[], ["pkg:pypi/nopurl-pkg@1.0"]])
     @patch("src.bin.cmd_vuln_scan.OSVClient")
-    def test_osv_scan_no_purl_packages(self, MockOsvClient, app):
+    def test_osv_scan_no_purl_packages(self, MockOsvClient, app, global_purls):
         """OSV scan on a project with no PURL packages fails gracefully."""
         from src.models.project import Project
         from src.models.variant import Variant
@@ -350,7 +354,7 @@ class TestOsvScanCLI:
             project = Project.create("NoPURL")
             variant = Variant.create("NoPURLVar", project.id)
             scan = Scan.create("scan", variant.id, scan_type="sbom")
-            pkg = Package.find_or_create("nopurl-pkg", "1.0", cpe=[], purl=[])
+            pkg = Package.find_or_create("nopurl-pkg", "1.0", cpe=[], purl=global_purls)
             _db.session.commit()
             doc = SBOMDocument.create("/no.json", "no2.json", scan.id)
             SBOMPackage.create(doc.id, pkg.id)
@@ -362,6 +366,7 @@ class TestOsvScanCLI:
         ])
         assert result.exit_code != 0
         assert "PURL" in result.output
+        MockOsvClient.return_value.query_by_purl.assert_not_called()
 
     @patch("src.bin.cmd_vuln_scan.OSVClient")
     def test_osv_scan_default_variant(self, MockOsvClient, app, ids):

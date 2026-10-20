@@ -14,6 +14,8 @@ from ..models.metrics import Metrics as MetricsModel
 from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget
 from ..models.package import Package
+from ..models.sbom_document import SBOMDocument
+from ..models.sbom_package import SBOMPackage
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
@@ -228,8 +230,8 @@ def _nvd_scan_local(variant_uuid, packages) -> None:
 def osv_scan_command(project: str, variant: str | None) -> None:
     """Run an OSV PURL-based vulnerability scan for the given project/variant.
 
-    Queries the OSV.dev API for every PURL found in the variant's active
-    packages and creates findings/observations in a new tool scan.
+    Queries the OSV.dev API for every PURL in the variant's active SBOM
+    associations and creates findings/observations in a new tool scan.
     """
 
     project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
@@ -239,10 +241,18 @@ def osv_scan_command(project: str, variant: str | None) -> None:
 
     packages = _resolve_active_packages(variant_uuid)
 
-    # Collect packages with PURL identifiers
-    purl_to_packages: dict[str, list] = {}
+    document_ids = set(_db.session.scalars(
+        _db.select(SBOMDocument.id).where(
+            SBOMDocument.scan_id.in_(active_sbom_scan_ids_for_variant(variant_uuid)),
+        )
+    ))
+    evidence = SBOMPackage.evidence_for_documents(document_ids)
+    purl_to_packages: dict[str, list[Package]] = {}
     for pkg in packages:
-        for purl in (pkg.purl or []):
+        package_evidence = evidence.get(pkg.id)
+        if package_evidence is None:
+            continue
+        for purl in package_evidence["purl"]:
             purl_str = str(purl).strip()
             if purl_str.startswith("pkg:"):
                 purl_to_packages.setdefault(purl_str, []).append(pkg)

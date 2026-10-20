@@ -517,6 +517,62 @@ def test_legacy_unversioned_build_references_follow_each_release_scan(app, tmp_p
             }
 
 
+def test_tool_observations_use_cached_variant_sbom_predecessors(app, tmp_path, monkeypatch):
+    from bisect import bisect_right
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import Mock
+    from uuid import UUID, uuid4
+
+    from src.helpers.jsonld_storage import consolidate_jsonld_packages
+    from src.models import Observation, Vulnerability
+
+    project = Project.create('tool-predecessors')
+    variant = Variant.create('demo', project.id)
+    first = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    upgraded = json.loads(json.dumps(_grouping_documents('b' * 40)).replace('4.1.1', '4.2.0'))
+    second = _import_legacy_components(tmp_path, variant, upgraded, monkeypatch)
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first.timestamp = base + timedelta(seconds=10)
+    first.scan_type = None
+    second.timestamp = base + timedelta(seconds=30)
+    other = Variant.create('unrelated', project.id)
+    unrelated = Scan.create('Unrelated SBOM', other.id)
+    unrelated.timestamp = base + timedelta(seconds=25)
+    cases = [
+        ('before', 0, uuid4(), {'4.1.1', '4.2.0'}),
+        ('between', 20, uuid4(), {'4.1.1'}),
+        ('after', 40, uuid4(), {'4.2.0'}),
+        ('tie-before', 10, UUID(int=0), {'4.1.1', '4.2.0'}),
+        ('tie-after', 10, UUID(int=(1 << 128) - 1), {'4.1.1'}),
+    ]
+    expected = {}
+    for name, seconds, scan_id, versions in cases:
+        db.session.add(Scan(
+            id=scan_id, description=name, variant_id=variant.id, scan_type='tool', scan_source='osv',
+            timestamp=base + timedelta(seconds=seconds),
+        ))
+        expected[scan_id] = versions
+    db.session.commit()
+    for vuln_id in ('CVE-2026-1240', 'CVE-2026-1241'):
+        vulnerability = Vulnerability.create_record(id=vuln_id)
+        finding = Finding.get_or_create(Package.get_by_string_id('mbedtls@').id, vulnerability.id)
+        for scan_id in expected:
+            Observation.create(finding_id=finding.id, scan_id=scan_id)
+    lookup = Mock(wraps=bisect_right)
+    monkeypatch.setattr('src.helpers.jsonld_storage.bisect_right', lookup)
+    assert consolidate_jsonld_packages(db.session())
+    db.session.commit()
+    assert lookup.call_count == len(expected)
+    observations = {(observation.scan_id, observation.finding.vulnerability_id, observation.finding.package.version)
+                    for observation in db.session.query(Observation)}
+    assert observations == {
+        (scan_id, vuln_id, version)
+        for scan_id, versions in expected.items()
+        for vuln_id in ('CVE-2026-1240', 'CVE-2026-1241')
+        for version in versions
+    }
+
+
 def test_unambiguous_existing_finding_keeps_its_uuid_when_moved_to_parent(app, tmp_path, monkeypatch):
     from src.helpers.jsonld_storage import consolidate_jsonld_packages
     from src.models import Observation, Vulnerability
@@ -808,6 +864,49 @@ def test_cli_osv_queries_all_parent_identifiers_and_persists_one_finding(app, tm
     findings = [finding for finding in Finding.get_all() if finding.vulnerability_id == 'CVE-2026-1002']
     assert len(findings) == 1
     assert findings[0].package_id == component.id
+
+
+@pytest.mark.parametrize('selected', ['first', 'second'])
+def test_cli_osv_uses_only_active_variant_identifiers(app, tmp_path, monkeypatch, selected):
+    from unittest.mock import Mock
+    from src.models import Observation
+    from src.models.assessment_target import AssessmentTarget
+
+    project = Project.create('scoped-osv')
+    variants = {name: Variant.create(name, project.id) for name in ('first', 'second')}
+    _import_grouping_documents(tmp_path, variants['first'], _grouping_documents())
+    purls = {'first': 'pkg:pypi/mbedtls@4.1.1', 'second': 'pkg:generic/mbedtls@4.1.1'}
+    for name, revision in (('first', 'b' * 40), ('second', 'c' * 40)):
+        documents = _grouping_documents(revision)
+        documents['upstream']['@graph'][-1]['externalIdentifier'][0]['identifier'] = purls[name]
+        _import_grouping_documents(tmp_path, variants[name], documents)
+    component = Package.get_by_string_id('mbedtls@4.1.1')
+    component.purl = [*component.purl, 'pkg:npm/mbedtls@4.1.1']
+    db.session.commit()
+    assert set(component.purl) > set(purls.values())
+    revision = ('b' if selected == 'first' else 'c') * 40
+    expected_purls = {
+        purls[selected], 'pkg:generic/mbedtls',
+        f'pkg:generic/mbedtls-deps@{revision}', f'pkg:generic/mbedtls-sources@{revision}',
+    }
+    client = Mock()
+    client.query_by_purl.side_effect = lambda purl: [
+        {'id': 'CVE-2026-2001' if purl in expected_purls else 'CVE-2026-2002'},
+    ]
+    monkeypatch.setattr('src.bin.cmd_vuln_scan.OSVClient', lambda: client)
+    result = app.test_cli_runner().invoke(args=[
+        'osv-scan', '--project', project.name, '--variant', variants[selected].name,
+    ])
+    assert result.exit_code == 0, result.output
+    assert {call.args[0] for call in client.query_by_purl.call_args_list} == expected_purls
+    assert client.query_by_purl.call_count == len(expected_purls)
+    assert {(finding.package_id, finding.vulnerability_id) for finding in Finding.get_all()} == {
+        (component.id, 'CVE-2026-2001'),
+    }
+    assert {(observation.scan.variant_id, observation.finding.package_id)
+            for observation in db.session.query(Observation)} == {(variants[selected].id, component.id)}
+    assert {(target.variant_id, target.finding.package_id)
+            for target in db.session.query(AssessmentTarget)} == {(variants[selected].id, component.id)}
 
 
 def test_reimporting_companions_reuses_one_real_parent_uuid(app, tmp_path):
