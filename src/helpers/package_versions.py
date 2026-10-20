@@ -54,6 +54,12 @@ def _purl_release_key(purl: PackageURL) -> str:
         match = re.fullmatch(r"hostap_(\d+(?:_\d+)+)", version)
         if match:
             return match.group(1).replace("_", ".")
+    if (purl.type == "generic" and not purl.namespace and purl.name == "trusted-firmware-m"
+            and (purl.qualifiers or {}).get("vcs_url")
+            == "git+https://review.trustedfirmware.org/TF-M/trusted-firmware-m"):
+        match = re.fullmatch(r"TF-Mv(\d+\.\d+\.\d+)", version)
+        if match:
+            return match.group(1)
     return _release_key(version)
 
 
@@ -91,9 +97,9 @@ def package_version_info(version: str | None, purls: list[str], cpes: list[str],
     """Derive display metadata using only explicit, persisted SBOM identifiers.
 
     Git-style ``v`` prefixes on numeric versions are equivalent. CPE values are
-    case-insensitive and concrete CPE updates are part of the release. Hostap's
-    numeric upstream tags are normalized only when its PURL identifies the
-    upstream repository. Other tag aliases and commit-to-release lookups are
+    case-insensitive and concrete CPE updates are part of the release. Hostap and
+    Trusted Firmware-M numeric tags are normalized only when their PURL identifies
+    the upstream repository. Other tag aliases and commit-to-release lookups are
     not inferred. Original identifier and tag spellings remain in the evidence.
     """
     evidence: list[VersionEvidence] = []

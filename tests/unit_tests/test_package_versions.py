@@ -137,6 +137,49 @@ def test_hostap_tag_normalization_does_not_hide_mismatched_releases():
     assert info["version_conflict"]
 
 
+@pytest.mark.parametrize("reported", [REVISION, "TF-Mv2.3.1", "2.3.1"])
+def test_trusted_firmware_m_tags_match_release_identifiers_without_changing_evidence(reported):
+    purl = ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1"
+            "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m")
+    cpe = "cpe:2.3:o:arm:trusted_firmware-m:2.3.1:-:*:*:*:*:*:*"
+    info = package_version_info(reported, [purl], [cpe])
+    assert info["release_version"] == "2.3.1"
+    assert not info["version_conflict"]
+    assert {"version": "TF-Mv2.3.1", "source": "purl", "identifier": purl} in info["version_evidence"]
+    assert info["version_evidence"][0]["version"] == reported
+
+
+@pytest.mark.parametrize("purl", [
+    "pkg:generic/trusted-firmware-m@TF-Mv2.3.1",
+    ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1"
+     "?vcs_url=git%2Bhttps://example.org/TF-M/trusted-firmware-m"),
+    ("pkg:generic/other@TF-Mv2.3.1"
+     "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m"),
+    ("pkg:generic/other/trusted-firmware-m@TF-Mv2.3.1"
+     "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m"),
+    ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1-custom"
+     "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m"),
+])
+def test_trusted_firmware_m_aliases_require_the_exact_upstream_package_repository_and_tag(purl):
+    info = package_version_info(REVISION, [purl], [
+        "cpe:2.3:o:arm:trusted_firmware-m:2.3.1:-:*:*:*:*:*:*",
+    ])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+@pytest.mark.parametrize("cpe", [
+    "cpe:2.3:o:arm:trusted_firmware-m:2.3.2:-:*:*:*:*:*:*",
+    "cpe:2.3:o:arm:trusted_firmware-m:2.3.1:rc1:*:*:*:*:*:*",
+])
+def test_trusted_firmware_m_normalization_preserves_real_release_conflicts(cpe):
+    purl = ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1"
+            "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m")
+    info = package_version_info(REVISION, [purl], [cpe])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
 @pytest.mark.parametrize("cpe", [
     "cpe:2.3:o:zephyrproject:zephyr:4.5.0:rc2:*:*:*:*:*:*",
     "cpe:/o:zephyrproject:zephyr:4.5.0:rc2",

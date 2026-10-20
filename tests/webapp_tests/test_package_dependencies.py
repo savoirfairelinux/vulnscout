@@ -601,6 +601,10 @@ def test_conflicting_legacy_analyst_records_abort_without_data_loss(app, tmp_pat
     ('zephyr', '4.5.0-rc2', None, 'cpe:2.3:o:zephyrproject:zephyr:4.5.0:rc2:*:*:*:*:*:*', '4.5.0-rc2'),
     ('hostap', 'a' * 40, 'pkg:generic/hostap@hostap_2_11?vcs_url=git://w1.fi/hostap.git',
      'cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*', '2.11'),
+    ('trusted-firmware-m', 'a' * 40,
+     'pkg:generic/trusted-firmware-m@TF-Mv2.3.1'
+     '?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m',
+     'cpe:2.3:o:arm:trusted_firmware-m:2.3.1:-:*:*:*:*:*:*', '2.3.1'),
 ])
 def test_equivalent_zephyr_version_spellings_agree_in_stored_packages_and_graphs(
         app, tmp_path, name, version, purl, cpe, release):

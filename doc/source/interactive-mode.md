@@ -88,7 +88,9 @@ A release version and a commit hash describe separate fields, not a conflict.
 CPE update fields are included in the release: version `4.5.0` with update
 `rc2` represents `4.5.0-rc2`, not the final `4.5.0` release. Hostap tags such as
 `hostap_2_11` are displayed as `2.11` when the PURL explicitly identifies the
-upstream Hostap Git repository. Original tag spellings and identifiers remain
+upstream Hostap Git repository. Similarly, Trusted Firmware-M tags such as
+`TF-Mv2.3.1` are displayed as `2.3.1` only when the PURL identifies the upstream
+Trusted Firmware-M repository. Original tag spellings and identifiers remain
 visible in the evidence; unrelated tags and genuinely different releases still
 produce a conflict.
 
