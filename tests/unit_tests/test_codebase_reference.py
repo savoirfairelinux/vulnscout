@@ -178,13 +178,18 @@ def test_archive_entry_member_and_expansion_limits(monkeypatch):
     monkeypatch.setattr(module, "MAX_ENTRIES", 5000)
 
 
-def test_large_plain_files_are_accepted_but_not_readable():
-    source = BytesIO(b"x" * (10 * 1024 * 1024 + 1))
+def test_large_plain_files_remain_readable_without_archive_limits(monkeypatch):
+    import src.helpers.codebase_reference as module
+    monkeypatch.setattr(module, "MAX_FILE_BYTES", 8)
+    monkeypatch.setattr(module, "MAX_EXPANDED_BYTES", 12)
+    source = BytesIO(b"first line\nneedle line\n")
     validate_reference(source, "over-limit.c")
     source.seek(0)
     with CodebaseReference(source, "over-limit.c") as ref:
-        with pytest.raises(ValueError, match="maximum readable file size"):
-            ref.read_bytes("over-limit.c")
+        assert ref.read_lines("over-limit.c", 2, 1)["content"] == "needle line\n"
+        assert ref.search("needle")["matches"] == [
+            {"path": "over-limit.c", "line": 2, "text": "needle line"},
+        ]
 
 
 def test_large_archive_members_are_rejected():
