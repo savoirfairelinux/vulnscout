@@ -14,6 +14,7 @@ from ..models.metrics import Metrics as MetricsModel
 from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget
 from ..models.package import Package
+from ..models.sbom_package import SBOMReimportRequiredError
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
@@ -36,7 +37,10 @@ def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
     if not latest_ids:
         raise click.ClickException("No scans found for variant")
-    packages = package_snapshots_for_sbom_scans(latest_ids)
+    try:
+        packages = package_snapshots_for_sbom_scans(latest_ids)
+    except SBOMReimportRequiredError as exc:
+        raise click.ClickException(str(exc)) from exc
     if not packages:
         raise click.ClickException("No packages found for variant")
     return filter_scannable_packages(packages)

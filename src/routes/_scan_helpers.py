@@ -12,6 +12,7 @@ from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_sna
 from ..helpers.scan_filters import filter_scannable_packages
 from ..models.observation import Observation
 from ..models.package import Package
+from ..models.sbom_package import SBOMReimportRequiredError
 from ..models.finding import Finding
 from ..models.scan import Scan
 from ..extensions import db
@@ -68,7 +69,10 @@ def resolve_active_packages(
     if not latest_ids:
         return [], "No SBOM scan found for variant"
 
-    packages = package_snapshots_for_sbom_scans(latest_ids)
+    try:
+        packages = package_snapshots_for_sbom_scans(latest_ids)
+    except SBOMReimportRequiredError as exc:
+        return [], str(exc)
     if not packages:
         return [], "No packages found for variant"
 

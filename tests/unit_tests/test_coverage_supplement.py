@@ -879,6 +879,7 @@ class TestResolveActivePackagesExcludeKernelFalse:
     """Cover the ``return packages, None`` branch when exclude_kernel=False."""
 
     def test_returns_all_packages_when_exclude_kernel_false(self, app):
+        from src.extensions import db as _db
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.scan import Scan
@@ -894,8 +895,11 @@ class TestResolveActivePackagesExcludeKernelFalse:
             doc = SBOMDocument.create("/kernel/test.spdx", "spdx", scan.id)
             pkg = Package.create("libfoo", "1.0.0")
             native_pkg = Package.create("cmake-native", "3.28")
-            SBOMPackage.create(doc.id, pkg.id)
-            SBOMPackage.create(doc.id, native_pkg.id)
+            for package in (pkg, native_pkg):
+                link = SBOMPackage.create(doc.id, package.id)
+                link.cpe = []
+                link.purl = []
+            _db.session.commit()
 
             packages, err = resolve_active_packages(var.id, exclude_kernel=False)
             filtered_packages, filtered_err = resolve_active_packages(
@@ -905,4 +909,3 @@ class TestResolveActivePackagesExcludeKernelFalse:
         assert {package.name for package in packages} == {"libfoo", "cmake-native"}
         assert filtered_err is None
         assert [package.name for package in filtered_packages] == ["libfoo"]
-

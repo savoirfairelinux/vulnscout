@@ -26,7 +26,7 @@ from ..models.finding import Finding
 from ..models.package import Package
 from ..models.project import Project
 from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
+from ..models.sbom_package import SBOMPackage, SBOM_REIMPORT_REQUIRED
 from ..models.scan import Scan
 from ..models.variant import Variant
 from ..routes._scan_helpers import (
@@ -82,6 +82,7 @@ def _active_packages(ctx: JobContext) -> Sequence[Package]:
         safe_errors = {
             "No SBOM scan found for variant",
             "No packages found for variant",
+            SBOM_REIMPORT_REQUIRED,
         }
         raise OperationError(
             error if error in safe_errors else "Unable to resolve active packages"

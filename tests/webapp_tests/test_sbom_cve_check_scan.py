@@ -80,7 +80,9 @@ def _build_db(app):
         _db.session.commit()
 
         sbom = SBOMDocument.create("/test/sbom.json", "spdx", scan.id)
-        SBOMPackage.create(sbom.id, pkg.id)
+        link = SBOMPackage.create(sbom.id, pkg.id)
+        link.cpe = pkg.cpe
+        link.purl = pkg.purl
         _db.session.commit()
 
         return {

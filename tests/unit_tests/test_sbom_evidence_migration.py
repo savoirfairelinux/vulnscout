@@ -3,6 +3,7 @@
 
 """Exercise the consolidated evidence migration through real Alembic upgrades."""
 
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -72,19 +73,19 @@ def test_fresh_database_reaches_the_evidence_schema_and_can_use_its_links(app):
     assert db.session.get(Package, package_id)._legacy_source_urls is None
 
 
-def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(app):
+def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(app, tmp_path, monkeypatch):
     _upgrade(app, "cc5359c88dd2")
     project = Project.create("old-schema")
     variant = Variant.create("default", project.id)
     scan = Scan.create("SBOM", variant.id)
-    scan_id = scan.id
+    scan_id, variant_id = scan.id, variant.id
     document_id, package_id = uuid4(), uuid4()
     cpe = "cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*"
     purl = "pkg:generic/lib@1.0"
     db.session.remove()
     documents = table(
         "sbom_documents", column("id", Uuid), column("path", String),
-        column("source_name", String), column("scan_id", Uuid),
+        column("source_name", String), column("scan_id", Uuid), column("format", String),
     )
     packages = table(
         "packages", column("id", Uuid), column("name", String), column("version", String),
@@ -93,9 +94,10 @@ def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(
     links = table(
         "sbom_packages", column("sbom_document_id", Uuid), column("package_id", Uuid),
     )
+    original = tmp_path / "lib.cdx.json"
     with db.engine.begin() as connection:
         connection.execute(documents.insert().values(
-            id=document_id, path="lib.json", source_name="lib", scan_id=scan_id,
+            id=document_id, path=str(original), source_name="lib", scan_id=scan_id, format="cdx",
         ))
         connection.execute(packages.insert().values(
             id=package_id, name="lib", version="1.0", supplier="", licences="", cpe=[cpe], purl=[purl],
@@ -116,6 +118,46 @@ def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(
     assert SBOMPackage.evidence_for_documents({document_id})[package_id] == {
         "cpe": [], "purl": [], "source_urls": [],
     }
+    from unittest.mock import Mock
+    from src.bin.cmd_process import read_inputs
+    from src.bin.cmd_vuln_scan import _resolve_active_packages
+    from src.controllers import ControllersCache
+    from src.controllers.job_context import JobContext, OperationError
+    from src.controllers.scan_jobs import _active_packages
+
+    engine = Mock()
+    nvd = Mock()
+    osv = Mock()
+    monkeypatch.setattr("src.bin.cmd_vuln_scan.get_engine", engine)
+    monkeypatch.setattr("src.controllers.scc_engine.get_engine", engine)
+    monkeypatch.setattr("src.bin.cmd_vuln_scan.NVD_DB", nvd)
+    monkeypatch.setattr("src.bin.cmd_vuln_scan.OSVClient", lambda: osv)
+    for command in (
+        ["nvd-scan", "--mode", "api"], ["nvd-scan"], ["osv-scan"], ["sbom-cve-check-scan"],
+    ):
+        result = app.test_cli_runner().invoke(args=[*command, "--project", "old-schema", "--variant", "default"])
+        assert result.exit_code != 0
+        assert "Reimport the variant's original SBOM files before scanning" in result.output
+    engine.assert_not_called()
+    nvd.assert_not_called()
+    osv.query_by_purl.assert_not_called()
+    with pytest.raises(OperationError, match="Reimport"):
+        _active_packages(JobContext("legacy-scan", {"variant_id": str(variant_id)}))
+    assert len(Scan.get_all()) == 1
+
+    original.write_text(json.dumps({
+        "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+        "components": [{"type": "library", "name": "lib", "version": "1.0", "purl": purl, "cpe": cpe}],
+    }))
+    read_inputs(ControllersCache(), scan_id)
+    for snapshots in (
+        _resolve_active_packages(variant_id),
+        _active_packages(JobContext("reimported-scan", {"variant_id": str(variant_id)})),
+    ):
+        assert len(snapshots) == 1
+        assert snapshots[0].id == package_id
+        assert purl in snapshots[0].purl
+        assert cpe in snapshots[0].cpe
 
 
 def test_empty_evidence_schema_can_downgrade_to_an_older_schema_and_upgrade_again(app):
