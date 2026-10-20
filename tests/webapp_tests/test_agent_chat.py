@@ -2,9 +2,11 @@ import json
 import os
 import queue
 import socket
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -334,6 +336,144 @@ def test_provider_credentials_do_not_require_a_model():
         "provider": "local", "base_url": "http://127.0.0.1:11434/v1",
     })
     assert connection.model == ""
+
+
+def test_provider_config_is_shell_safe_on_restart(client):
+    config_file = Path(os.environ["VULNSCOUT_CONFIG"])
+    model = "literal 'quoted' $(printf unsafe) `printf unsafe` $HOME"
+    response = client.post("/api/agent/provider", json={
+        "provider": "openai", "model": model, "api_key": "private'key$HOME",
+    })
+    assert response.status_code == 200
+    restarted = subprocess.run(
+        ["bash", "-ec", '. "$1"; printf "%s\\n%s" "$AI_MODEL" "$AI_AUTH_CREDENTIALS"',
+         "restart", str(config_file)],
+        env={key: value for key, value in os.environ.items() if not key.startswith("AI_")},
+        check=True, capture_output=True, text=True,
+    )
+    assert restarted.stdout == model + "\nprivate'key$HOME"
+    assert config_file.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("field", ["model", "api_key", "base_url"])
+@pytest.mark.parametrize("control", ["\n", "\r", "\x00", "\x1b", "\x7f"])
+def test_provider_rejects_control_characters(client, field, control):
+    payload = {"provider": "openai", "model": "model", "api_key": "key"}
+    payload[field] = ("https://example.org/" if field == "base_url" else "value") + control
+    assert client.post("/api/agent/provider", json=payload).status_code == 400
+
+
+def test_local_runtime_uses_writable_user_config(client, monkeypatch, tmp_path):
+    monkeypatch.delenv("VULNSCOUT_CONFIG")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user-config"))
+    response = client.post("/api/agent/provider", json={
+        "provider": "openai", "model": "gpt-4o", "api_key": "local-key",
+    })
+    assert response.status_code == 200
+    config_file = tmp_path / "user-config" / "vulnscout" / "config.env"
+    assert "AI_PROVIDER=openai" in config_file.read_text()
+    assert client.delete("/api/agent/provider").status_code == 200
+    assert "AI_AUTH_CREDENTIALS" not in config_file.read_text()
+
+
+def test_local_github_sign_in_uses_writable_user_config(client, monkeypatch, tmp_path):
+    from src.routes import agent
+
+    monkeypatch.delenv("VULNSCOUT_CONFIG")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user-config"))
+    monkeypatch.setattr(agent, "_github_form", lambda *args: {
+        "device_code": "device", "user_code": "user", "access_token": "github-key",
+    })
+
+    async def token_status(token):
+        return {"authenticated": True, "login": "test-user"}
+
+    monkeypatch.setattr(agent, "_token_status", token_status)
+    assert client.post("/api/agent/auth").status_code == 200
+    assert client.post("/api/agent/auth/poll").status_code == 200
+    config = tmp_path / "user-config" / "vulnscout" / "config.env"
+    assert "AI_PROVIDER=github" in config.read_text()
+    assert client.delete("/api/agent/auth").status_code == 200
+    assert "AI_AUTH_CREDENTIALS" not in config.read_text()
+
+
+def test_sign_out_survives_fresh_process_with_stale_environment(client, monkeypatch):
+    from src.routes import agent
+
+    assert client.post("/api/agent/provider", json={
+        "provider": "openai", "model": "gpt-4o", "api_key": "old-key",
+    }).status_code == 200
+    assert client.delete("/api/agent/auth").status_code == 200
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "old-key")
+    monkeypatch.setenv("AI_MODEL", "gpt-4o")
+    fresh = agent.Conversation()
+    assert agent._load_env_credentials(fresh) is None
+    assert fresh.credentials.provider is None
+    assert fresh.credentials.token is None
+
+
+def test_connect_select_restart_send(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "gpt-4o"}]}))
+    assert client.post("/api/agent/provider", json={
+        "provider": "openai", "api_key": "key",
+    }).get_json()["model"] == ""
+    assert client.post("/api/agent/model", json={"model": "gpt-4o"}).status_code == 200
+    for key in ("AI_PROVIDER", "AI_AUTH_CREDENTIALS", "AI_MODEL", "AI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    agent._conversations.clear()
+    assert client.get("/api/agent").get_json()["model"] == "gpt-4o"
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+
+    async def reply(conversation, prompt, path, model, scope, publish=None):
+        assert model in {entry["id"] for entry in conversation.credentials.provider.models}
+        return "Restarted successfully", conversation.usage
+
+    monkeypatch.setattr(agent, "_reply", reply)
+    response = client.post("/api/agent/messages", json={"message": "Hello"})
+    assert response.status_code == 200
+    assert response.get_json()["reply"] == "Restarted successfully"
+
+
+def test_provider_restart_without_model_requires_selection(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "gpt-4o"}]}))
+    assert client.post("/api/agent/provider", json={
+        "provider": "openai", "api_key": "key",
+    }).status_code == 200
+    fresh = agent.Conversation()
+    assert agent._load_env_credentials(fresh) is None
+    assert fresh.model == ""
+    assert fresh.credentials.provider.models == [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+
+@pytest.mark.parametrize("configured_provider", ["invalid-provider", "openai"])
+@pytest.mark.parametrize("method,path", [
+    ("post", "/api/agent/provider"), ("delete", "/api/agent/provider"),
+    ("post", "/api/agent/auth"), ("delete", "/api/agent/auth"),
+])
+def test_broken_provider_can_be_replaced_or_removed(client, monkeypatch, method, path, configured_provider):
+    from src.routes import agent
+
+    monkeypatch.setenv("AI_PROVIDER", configured_provider)
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "broken-key")
+
+    def unavailable(*args):
+        raise ValueError("Could not reach the provider endpoint.")
+
+    monkeypatch.setattr(agent, "_fetch_provider_models", unavailable)
+    monkeypatch.setattr(agent, "_github_form", lambda *args: {
+        "device_code": "device", "user_code": "user", "expires_in": 900,
+    })
+    response = getattr(client, method)(path, json={
+        "provider": "openai", "model": "gpt-4o", "api_key": "replacement",
+    })
+    assert response.status_code == 200
 
 
 def test_agent_loads_github_credentials_from_env(client, monkeypatch):

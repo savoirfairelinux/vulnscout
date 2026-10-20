@@ -6,6 +6,7 @@ set -euo pipefail # Enable error checking
 set -m # enable job control to allow `fg` command
 
 CONFIG_FILE="${VULNSCOUT_CONFIG:-/etc/vulnscout/config.env}"
+export VULNSCOUT_CONFIG="$CONFIG_FILE"
 readonly BASE_DIR="${VULNSCOUT_BASE_DIR:-/scan}"
 INPUTS_DIR="${VULNSCOUT_INPUTS_DIR:-$BASE_DIR/inputs}"
 PROJECT_NAME="default"
@@ -18,8 +19,10 @@ DEV_MODE="${DEV_MODE:-false}"
 
 # Load config file if present
 if [ -f "$CONFIG_FILE" ]; then
+    unset AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
+    export AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
 fi
 
 # The sbom-cve-check advisory databases live inside the VulnScout cache directory
@@ -738,7 +741,7 @@ cmd_import_context() {
 cmd_config_list() {
     if [ -f "$CONFIG_FILE" ]; then
         echo "Config ($CONFIG_FILE):"
-        sed 's/\(API_KEY\|PASSWORD\|SECRET\)=.*/\1=****/' "$CONFIG_FILE"
+        sed 's/\(API_KEY\|PASSWORD\|SECRET\|AI_AUTH_CREDENTIALS\)=.*/\1=****/' "$CONFIG_FILE"
     else
         echo "No config file found at $CONFIG_FILE"
     fi

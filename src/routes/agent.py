@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import secrets
+import shlex
 import socket
 import sys
 import threading
@@ -19,7 +20,7 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
-from .config import persist_env_keys
+from .config import _config_file_path, _has_control_characters, persist_env_keys
 from ..models.project import Project
 from ..models.variant import Variant
 
@@ -41,6 +42,7 @@ MAX_PROMPT_VARIANTS = 50
 INVALID_PROVIDER_URL = "Invalid provider URL."
 BUSY_AGENT_ERROR = "The agent is already responding."
 ENV_PROVIDER_CHOICES = ("openai", "azure", "anthropic", "local")
+AGENT_ENV_KEYS = ("AI_PROVIDER", "AI_AUTH_CREDENTIALS", "AI_MODEL", "AI_BASE_URL")
 GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 GITHUB_DEVICE_URL = "https://github.com/login/device/code"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -268,13 +270,16 @@ def _provider_connection(data):
     kind = data["provider"]
     model = data.get("model", "")
     api_key = data.get("api_key", "")
-    if not isinstance(model, str) or len(model) > 100:
+    if not isinstance(model, str) or len(model) > 100 or _has_control_characters(model):
         raise ValueError("Invalid model name (at most 100 characters).")
-    if not isinstance(api_key, str) or len(api_key) > 4096 or "\n" in api_key or "\r" in api_key:
+    if not isinstance(api_key, str) or len(api_key) > 4096 or _has_control_characters(api_key):
         raise ValueError("Invalid API key.")
+    base_url = data.get("base_url", "")
+    if isinstance(base_url, str) and _has_control_characters(base_url):
+        raise ValueError(INVALID_PROVIDER_URL)
     if kind != "local" and not api_key.strip():
         raise ValueError("An API key is required for this provider.")
-    return ProviderConnection(kind, model.strip(), api_key, _provider_url(kind, data.get("base_url", "")))
+    return ProviderConnection(kind, model.strip(), api_key, _provider_url(kind, base_url))
 
 
 def _persist_agent_credentials(token: str | None = None, provider: ProviderConnection | None = None):
@@ -297,13 +302,33 @@ def _persist_agent_credentials(token: str | None = None, provider: ProviderConne
         raise RuntimeError(f"Failed to persist '{failed}' to config.env.")
 
 
+def _agent_environment():
+    path = Path(_config_file_path())
+    if not path.is_file():
+        return {key: os.getenv(key, "") for key in AGENT_ENV_KEYS}
+    # The mounted file is authoritative, including absent keys after sign-out.
+    values = {}
+    for line in path.read_text().splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in AGENT_ENV_KEYS:
+            parsed = shlex.split(value, comments=True)
+            if len(parsed) > 1:
+                raise ValueError(f"Invalid config.env assignment for {key}.")
+            values[key] = parsed[0] if parsed else ""
+    return values
+
+
 def _load_env_credentials(root):
     if root.credentials.token or root.credentials.provider:
         return None
-    provider = os.getenv("AI_PROVIDER", "").strip().lower()
+    try:
+        environment = _agent_environment()
+    except (OSError, ValueError):
+        return "Could not read AI provider configuration from config.env."
+    provider = environment.get("AI_PROVIDER", "").strip().lower()
     if not provider:
         return None
-    credentials = os.getenv("AI_AUTH_CREDENTIALS", "")
+    credentials = environment.get("AI_AUTH_CREDENTIALS", "")
     if provider == "github":
         if not credentials.strip():
             return "AI_AUTH_CREDENTIALS is required when AI_PROVIDER is github."
@@ -315,17 +340,16 @@ def _load_env_credentials(root):
     try:
         connection = _provider_connection({
             "provider": provider,
-            "model": os.getenv("AI_MODEL", ""),
+            "model": environment.get("AI_MODEL", ""),
             "api_key": credentials,
-            "base_url": os.getenv("AI_BASE_URL", ""),
+            "base_url": environment.get("AI_BASE_URL", ""),
         })
         connection.models = _provider_models(connection)
     except ValueError as exc:
         return str(exc)
     root.credentials.token = None
     root.credentials.provider = connection
-    if connection.model:
-        root.model = connection.model
+    root.model = connection.model
     return None
 
 
@@ -698,9 +722,7 @@ def agent_provider():
         return error
     key, conversation = _conversation()
     root = conversation.root or conversation
-    config_error = _load_env_credentials_nonblocking(root)
-    if config_error:
-        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
+    _load_env_credentials_nonblocking(root)
     if request.method == "POST":
         try:
             connection = _provider_connection(request.get_json(silent=True))
@@ -750,9 +772,7 @@ def agent_auth():
         return error
     key, conversation = _conversation()
     root = conversation.root or conversation
-    config_error = _load_env_credentials_nonblocking(root)
-    if config_error:
-        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
+    _load_env_credentials_nonblocking(root)
     if request.method == "DELETE":
         return _sign_out(root, key)
     client_id = os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID
@@ -853,7 +873,8 @@ def agent_model():
     if config_error:
         return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
     data = request.get_json(silent=True)
-    if not isinstance(data, dict) or not isinstance(data.get("model"), str) or len(data["model"]) > 100:
+    if (not isinstance(data, dict) or not isinstance(data.get("model"), str)
+            or len(data["model"]) > 100 or _has_control_characters(data["model"])):
         return _response({"error": "Invalid model selection."}, key, 400)
     if not conversation.lock.acquire(blocking=False):
         return _response({"error": BUSY_AGENT_ERROR}, key, 409)
@@ -868,6 +889,10 @@ def agent_model():
                 return _response({"error": "Unable to verify this Copilot model."}, key, 503)
         if data["model"] not in {choice["id"] for choice in choices}:
             return _response({"error": "Selected model is not available for this account."}, key, 400)
+        if conversation.credentials.provider:
+            ok, _ = persist_env_keys({"AI_MODEL": data["model"]})
+            if not ok:
+                return _response({"error": "Failed to persist model to config.env."}, key, 500)
         conversation.model = data["model"]
         return _response({"model": conversation.model}, key)
     finally:
