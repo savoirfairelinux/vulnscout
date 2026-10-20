@@ -32,6 +32,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from ._common import DEFAULT_VARIANT_NAME, resolve_project, resolve_project_variant
 from ..controllers.projects import ProjectController
 from ..helpers.export_scope import compute_export_scope
+from ..helpers.jsonld_groups import is_zephyr_jsonld, record_jsonld_groups
 
 if TYPE_CHECKING:
     from ..controllers.packages import PackagesController
@@ -195,6 +196,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
 
     pkgCtrl: PackagesController = controllers.packages
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
+    jsonld_documents = []
 
     for doc in docs:
         document_path = doc.path
@@ -216,6 +218,13 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             ):
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
+                    if is_zephyr_jsonld(data):
+                        jsonld_documents.append(
+                            (doc, data, dict(fastspdx3._document_refs),
+                             fastspdx3._namespace_map(data.get('@graph', [])))
+                        )
+                    else:
+                        doc.jsonld_groups = None
                 elif use_fastspdx:
                     fastspdx.parse_from_dict(data)
                 else:
@@ -263,6 +272,45 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             pkgCtrl.current_sbom_document = None
     pkgCtrl.flush_spdx_dependencies()
     pkgCtrl.flush_spdx_sources()
+    # Companion documents resolve only inside their own scan.
+    for current_scan_id in {document.scan_id for document, *_ in jsonld_documents}:
+        record_jsonld_groups(
+            [entry for entry in jsonld_documents if entry[0].scan_id == current_scan_id], pkgCtrl,
+        )
+    from ..helpers.jsonld_storage import consolidate_jsonld_packages
+
+    with _db.session.begin_nested():
+        consolidated = consolidate_jsonld_packages(_db.session())
+    if consolidated:
+        pkgCtrl._cache.clear()
+        pkgCtrl._db_id_cache.clear()
+        pkgCtrl._finding_cache.clear()
+        original_ids = {
+            member["id"] for document, *_ in jsonld_documents
+            for group in document.jsonld_groups or [] if group.get("canonical_package_id")
+            for member in group["members"]
+        }
+        from ..models import Assessment, Vulnerability
+
+        vulnCtrl = controllers.vulnerabilities
+        assessCtrl = controllers.assessments
+        for vulnerability in vulnCtrl.vulnerabilities.values():
+            if original_ids.intersection(vulnerability.packages):
+                record = _db.session.get(Vulnerability, vulnerability.id)
+                if record is not None:
+                    vulnerability.packages = sorted({finding.package.string_id for finding in record.findings})
+                    vulnerability._persisted_packages = set(vulnerability.packages)
+                    record.packages = list(vulnerability.packages)
+        assessCtrl._by_vuln_pkg.clear()
+        assessCtrl._db_queried_vuln_pkg.clear()
+        assessCtrl._db_queried_pkgs.clear()
+        for key, assessment in assessCtrl.assessments.items():
+            if original_ids.intersection(assessment.packages):
+                stored = _db.session.get(Assessment, assessment.id)
+                if stored is not None:
+                    assessment.packages = stored.packages
+            for package_id in assessment.packages:
+                assessCtrl._by_vuln_pkg.setdefault((assessment.vuln_id, package_id), []).append(key)
     _db.session.commit()
 
     return {

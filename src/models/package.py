@@ -18,6 +18,7 @@ from ..helpers.package_versions import PackageVersionInfo, git_revision_from_url
 
 if typing.TYPE_CHECKING:
     from ..models import SBOMObservation, SBOMPackage, Finding
+    from .sbom_package import PackageType
 
 
 def _normalize_supplier(value: str | None) -> str:
@@ -72,6 +73,7 @@ class Package(Base):
     # TODO: Spin-off CPE and PURL into separate tables
     cpe: Mapped[list | None] = mapped_column(JSON)
     purl: Mapped[list | None] = mapped_column(JSON)
+    source_revisions: Mapped[list | None] = mapped_column(JSON)
     licences: Mapped[str | None]
     supplier: Mapped[str] = mapped_column(default="")
     # Pre-scope evidence cannot be attributed safely; retained only for recovery.
@@ -108,6 +110,8 @@ class Package(Base):
         licences: str = "",
         supplier: str = "",
         source_urls: Optional[list[str]] = None,
+        source_revisions: Optional[list[str]] = None,
+        component_types: Optional[list["PackageType"]] = None,
         **kwargs: Any,
     ):
         version = str(version).strip().split("+git")[0]
@@ -129,6 +133,8 @@ class Package(Base):
         self.licences = licences or ""
         self.supplier = _normalize_supplier(supplier)
         self.source_urls = []
+        self.source_revisions = list(source_revisions or [])
+        self._component_types = list(component_types or ["normal"])
         for url in source_urls or []:
             self.add_source_url(url)
         for c in cpes:
@@ -183,12 +189,26 @@ class Package(Base):
     def source_urls(self, values: list[str]) -> None:
         self._source_urls = list(values)
 
+    @property
+    def component_types(self) -> list["PackageType"]:
+        """Classifications from selected SBOM associations, never a global package attribute."""
+        return getattr(self, "_component_types", ["normal"])
+
     def with_sbom_evidence(self, cpe: list[str] | None = None, purl: list[str] | None = None,
-                           source_urls: list[str] | None = None) -> "Package":
+                           source_urls: list[str] | None = None,
+                           source_revisions: list[str] | None = None,
+                           component_types: list["PackageType"] | None = None) -> "Package":
         """Build a detached display/export snapshot without mutating the shared DB row."""
+        selected_purls = list(dict.fromkeys(
+            [value for value in self.purl or [] if value in (purl or [])] + list(purl or []),
+        ))
+        selected_cpes = list(dict.fromkeys(
+            [value for value in self.cpe or [] if value in (cpe or [])] + list(cpe or []),
+        ))
         return Package(
-            self.name or "", self.version or "", cpe or [], purl or [],
-            self.licences or "", self.supplier, source_urls=source_urls, id=self.id,
+            self.name or "", self.version or "", selected_cpes, selected_purls,
+            self.licences or "", self.supplier, source_urls=source_urls,
+            source_revisions=source_revisions, component_types=component_types, id=self.id,
         )
 
     def generate_generic_cpe(self) -> str:
@@ -220,6 +240,7 @@ class Package(Base):
                 self.add_purl(p)
             for url in other.source_urls or []:
                 self.add_source_url(url)
+            self.source_revisions = sorted(set(self.source_revisions or []) | set(other.source_revisions or []))
             return True
         return False
 
@@ -302,7 +323,7 @@ class Package(Base):
     @property
     def version_info(self) -> PackageVersionInfo:
         return package_version_info(self.version, list(self.purl or []), list(self.cpe or []),
-                                    list(self.source_urls or []))
+                                    list(self.source_urls or []), list(self.source_revisions or []))
 
     def to_dict(self) -> dict:
         return {
@@ -315,6 +336,8 @@ class Package(Base):
             "licences": self.licences or "",
             "supplier": self.supplier,
             "source_urls": list(self.source_urls or []),
+            "source_revisions": list(self.source_revisions or []),
+            "component_types": list(self.component_types),
             **self.version_info,
         }
 
@@ -328,6 +351,8 @@ class Package(Base):
             licences=data.get("licences", ""),
             supplier=data.get("supplier", ""),
             source_urls=data.get("source_urls", []),
+            source_revisions=data.get("source_revisions", []),
+            component_types=data.get("component_types"),
         )
 
     # ------------------------------------------------------------------

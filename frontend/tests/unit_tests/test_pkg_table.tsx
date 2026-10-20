@@ -5,7 +5,7 @@ import { describe, test, expect, jest } from '@jest/globals';
 import matchers from '@testing-library/jest-dom/matchers';
 expect.extend(matchers);
 
-import type { Package } from "../../src/handlers/packages";
+import Packages, { type Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
 import Vulnerabilities from '../../src/handlers/vulnerabilities';
 
@@ -121,6 +121,49 @@ describe('Packages Table', () => {
     Element.prototype.getBoundingClientRect = function () {
         return getDOMRect(500, 500)
     }
+
+    test('shows scoped built and workspace badges while ordinary packages remain unlabelled', async () => {
+        render(<TablePackages packages={[
+            { ...packages[0], component_types: ['built'] },
+            { ...packages[1], component_types: ['workspace'] },
+            { ...packages[2], component_types: ['normal'] },
+        ]} />);
+        const built = await screen.findByRole('cell', { name: 'aaabbbccc Built component' });
+        const workspace = screen.getByRole('cell', { name: 'xxxyyyzzz Workspace component' });
+        expect(within(built).getByText('Built component').getAttribute('title')).toContain(
+            'does not prove inclusion in the final firmware'
+        );
+        expect(within(workspace).getByText('Workspace component').getAttribute('title')).toContain(
+            'without a proven compiled target'
+        );
+        expect(screen.getByRole('cell', { name: 'dddeeefff' })).toBeTruthy();
+        expect(screen.queryByText('Normal component')).toBeNull();
+    });
+
+    test('mixed scopes show both badges on one canonical package row', async () => {
+        render(<TablePackages packages={[{
+            ...packages[0], component_types: ['built', 'normal', 'workspace'],
+        }]} />);
+        const cell = await screen.findByRole('cell', { name: 'aaabbbccc Built component Workspace component' });
+        expect(within(cell).getByText('Built component')).toBeTruthy();
+        expect(within(cell).getByText('Workspace component')).toBeTruthy();
+        expect(screen.getByText('Total: 1')).toBeTruthy();
+        expect(screen.queryByText('Original JSON-LD entries')).toBeNull();
+    });
+
+    test('package API parsing preserves the scoped component types', async () => {
+        const fetch = jest.spyOn(global, 'fetch').mockResolvedValue({
+            json: async () => [{ ...packages[0], component_types: ['built', 'workspace'] }],
+        } as Response);
+        try {
+            const result = await Packages.list();
+            expect(result).toHaveLength(1);
+            expect(result[0].id).toBe(packages[0].id);
+            expect(result[0].component_types).toEqual(['built', 'workspace']);
+        } finally {
+            fetch.mockRestore();
+        }
+    });
 
     test('render headers with empty array', async () => {
         // ARRANGE

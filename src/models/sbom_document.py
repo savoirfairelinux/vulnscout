@@ -5,7 +5,7 @@ import typing
 import uuid
 
 from sqlalchemy.orm import Mapped, relationship, mapped_column
-from sqlalchemy import Text, ForeignKey, false
+from sqlalchemy import JSON, Text, ForeignKey, false
 
 from ..extensions import db, Base
 from . import Variant, Scan
@@ -26,6 +26,7 @@ class SBOMDocument(Base):
     scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scans.id"), index=True)
     # False until parsed with dependency support, so missing relationships are not reported as zero.
     dependencies_recorded: Mapped[bool] = mapped_column(default=False, server_default=false())
+    jsonld_groups: Mapped[list[dict] | None] = mapped_column(JSON)
 
     scan: Mapped["Scan"] = relationship("Scan", back_populates="sbom_documents")
     sbom_packages: Mapped[list["SBOMPackage"]] = relationship(

@@ -257,3 +257,98 @@ def test_grype_failure_does_not_stage_partial_results(tmp_path):
     if not shutil.which("grype"):
         assert result.returncode != 0
     assert not (tmp_path / "inputs" / "grype" / "grype_from_db.grype.json").exists()
+
+
+@pytest.mark.parametrize("scan_types", ["all", "grype", "nvd,osv,sbom-cve-check"])
+def test_new_inputs_are_processed_before_scanners(tmp_path, scan_types):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    flask = fake_bin / "flask"
+    flask.write_text(
+        '#!/bin/bash\n'
+        'step="$3"\n'
+        'printf "%s\\n" "$step" >> "$TEST_FLASK_LOG"\n'
+        'case "$step" in\n'
+        '  merge) touch "$TEST_PENDING";;\n'
+        '  process)\n'
+        '    if [[ -f "$TEST_PENDING" && -n "$MATCH_CONDITION" ]]; then exit 20; fi\n'
+        '    rm -f "$TEST_PENDING";;\n'
+        '  export)\n'
+        '    [[ ! -f "$TEST_PENDING" ]] || exit 17\n'
+        '    [[ " $* " == *" --project demo --variant native "* ]] || exit 18\n'
+        '    while [[ $# -gt 0 ]]; do\n'
+        '      if [[ "$1" == "--output-dir" ]]; then\n'
+        '        printf "{}" > "$2/sbom_cyclonedx_v1_6.cdx.json"; break\n'
+        '      fi\n'
+        '      shift\n'
+        '    done;;\n'
+        '  *-scan) [[ ! -f "$TEST_PENDING" ]] || exit 19;;\n'
+        'esac\n'
+    )
+    flask.chmod(0o755)
+    grype = fake_bin / "grype"
+    grype.write_text('#!/bin/bash\nprintf \'{"matches": []}\\n\'\n')
+    grype.chmod(0o755)
+    inputs = tmp_path / "inputs" / "spdx"
+    inputs.mkdir(parents=True)
+    sbom = inputs / "test.spdx.json"
+    sbom.write_text("{}")
+    log = tmp_path / "flask.log"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "VULNSCOUT_CONFIG": str(tmp_path / "absent.env"),
+        "VULNSCOUT_BASE_DIR": str(tmp_path),
+        "VULNSCOUT_INPUTS_DIR": str(inputs.parent),
+        "SBOM_CVE_CHECK_DATABASES_DIR": str(tmp_path / "local_databases"),
+        "TEST_FLASK_LOG": str(log),
+        "TEST_PENDING": str(tmp_path / "pending"),
+    }
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "demo", "--variant", "native",
+         "--perform-scans", scan_types, "--match-condition", "affected"],
+        env=env, capture_output=True, text=True, timeout=10,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = ["db", "merge", "process"]
+    if scan_types in ("all", "grype"):
+        expected.extend(["export", "merge", "process"])
+    if scan_types != "grype":
+        expected.extend(["nvd-scan", "osv-scan", "sbom-cve-check-scan"])
+    expected.append("process")
+    assert log.read_text().splitlines() == expected
+    assert not sbom.exists()
+
+
+def test_initial_processing_failure_prevents_scanning(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    flask = fake_bin / "flask"
+    flask.write_text(
+        '#!/bin/bash\n'
+        'printf "%s\\n" "$3" >> "$TEST_FLASK_LOG"\n'
+        'if [[ "$3" == "process" ]]; then exit 9; fi\n'
+    )
+    flask.chmod(0o755)
+    inputs = tmp_path / "inputs" / "spdx"
+    inputs.mkdir(parents=True)
+    sbom = inputs / "test.spdx.json"
+    sbom.write_text("{}")
+    log = tmp_path / "flask.log"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "VULNSCOUT_CONFIG": str(tmp_path / "absent.env"),
+        "VULNSCOUT_BASE_DIR": str(tmp_path),
+        "VULNSCOUT_INPUTS_DIR": str(inputs.parent),
+        "SBOM_CVE_CHECK_DATABASES_DIR": str(tmp_path / "local_databases"),
+        "TEST_FLASK_LOG": str(log),
+    }
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--perform-scans", "all"],
+        env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 9, result.stdout + result.stderr
+    assert log.read_text().splitlines() == ["db", "merge", "process"]
+    assert sbom.exists()
