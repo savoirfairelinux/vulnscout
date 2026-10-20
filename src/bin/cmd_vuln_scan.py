@@ -14,11 +14,9 @@ from ..models.metrics import Metrics as MetricsModel
 from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget
 from ..models.package import Package
-from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
-from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
+from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
 from ..helpers.scan_filters import filter_scannable_packages
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
@@ -32,18 +30,15 @@ from flask.cli import with_appcontext
 # Shared helpers for vuln scan commands
 # ---------------------------------------------------------------------------
 
-def _resolve_active_packages(variant_uuid):
-    """Resolve active packages for a variant, raising on failure."""
+def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
+    """Resolve active SBOM-scoped package snapshots for a variant, raising on failure."""
     click.echo("Resolving active packages…")
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
     if not latest_ids:
         raise click.ClickException("No scans found for variant")
-    all_pkg_ids = active_package_ids_for_scans(latest_ids)
-    if not all_pkg_ids:
+    packages = package_snapshots_for_sbom_scans(latest_ids)
+    if not packages:
         raise click.ClickException("No packages found for variant")
-    packages = _db.session.execute(
-        _db.select(Package).where(Package.id.in_(all_pkg_ids))
-    ).scalars().all()
     return filter_scannable_packages(packages)
 
 
@@ -241,18 +236,9 @@ def osv_scan_command(project: str, variant: str | None) -> None:
 
     packages = _resolve_active_packages(variant_uuid)
 
-    document_ids = set(_db.session.scalars(
-        _db.select(SBOMDocument.id).where(
-            SBOMDocument.scan_id.in_(active_sbom_scan_ids_for_variant(variant_uuid)),
-        )
-    ))
-    evidence = SBOMPackage.evidence_for_documents(document_ids)
     purl_to_packages: dict[str, list[Package]] = {}
     for pkg in packages:
-        package_evidence = evidence.get(pkg.id)
-        if package_evidence is None:
-            continue
-        for purl in package_evidence["purl"]:
+        for purl in pkg.purl or []:
             purl_str = str(purl).strip()
             if purl_str.startswith("pkg:"):
                 purl_to_packages.setdefault(purl_str, []).append(pkg)

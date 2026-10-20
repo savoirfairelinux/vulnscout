@@ -863,7 +863,7 @@ def test_cli_and_queued_scanners_use_the_actual_stored_parent(app, tmp_path):
 
     project = Project.create('logical-scans')
     variant = Variant.create('demo', project.id)
-    _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    scan = _import_grouping_documents(tmp_path, variant, _grouping_documents())
     assert len(Package.get_all()) == 1
     component = Package.get_by_string_id('mbedtls@4.1.1')
     assert component.name == 'mbedtls'
@@ -874,8 +874,9 @@ def test_cli_and_queued_scanners_use_the_actual_stored_parent(app, tmp_path):
     assert 'pkg:github/mbed-tls/mbedtls@v4.1.1' in component.purl
     queued, error = resolve_active_packages(variant.id)
     assert error is None
-    assert [package.to_dict() for package in queued] == [component.to_dict()]
-    assert [package.to_dict() for package in _resolve_active_packages(variant.id)] == [component.to_dict()]
+    expected = _package_in_scan(scan.id, 'mbedtls@4.1.1').to_dict()
+    assert [package.to_dict() for package in queued] == [expected]
+    assert [package.to_dict() for package in _resolve_active_packages(variant.id)] == [expected]
     assert _variant_sbom_packages(variant.id) == {('mbedtls', '4.1.1')}
     db.session.expire_all()
     assert len(Package.get_all()) == 1
@@ -1008,39 +1009,97 @@ def test_cli_osv_queries_all_parent_identifiers_and_persists_one_finding(app, tm
 
 
 @pytest.mark.parametrize('selected', ['first', 'second'])
-def test_cli_osv_uses_only_active_variant_identifiers(app, tmp_path, monkeypatch, selected):
+@pytest.mark.parametrize('scanner', ['osv', 'nvd-api', 'nvd-local', 'scc'])
+def test_cli_scanners_use_only_active_variant_identifiers(app, tmp_path, monkeypatch, selected, scanner):
+    from types import SimpleNamespace
     from unittest.mock import Mock
+    from src.controllers.nvd_db import NVD_DB
+    from src.routes._scan_helpers import resolve_active_packages
     from src.models import Observation
     from src.models.assessment_target import AssessmentTarget
 
-    project = Project.create('scoped-osv')
+    project = Project.create('scoped-scanners')
     variants = {name: Variant.create(name, project.id) for name in ('first', 'second')}
     _import_grouping_documents(tmp_path, variants['first'], _grouping_documents())
     purls = {'first': 'pkg:pypi/mbedtls@4.1.1', 'second': 'pkg:generic/mbedtls@4.1.1'}
+    cpes = {name: f'cpe:2.3:a:{name}:mbed_tls:4.1.1:*:*:*:*:*:*:*' for name in variants}
     for name, revision in (('first', 'b' * 40), ('second', 'c' * 40)):
         documents = _grouping_documents(revision)
         documents['upstream']['@graph'][-1]['externalIdentifier'][0]['identifier'] = purls[name]
+        documents['upstream']['@graph'][-1]['externalIdentifier'][1]['identifier'] = cpes[name]
         _import_grouping_documents(tmp_path, variants[name], documents)
     component = Package.get_by_string_id('mbedtls@4.1.1')
     component.purl = [*component.purl, 'pkg:npm/mbedtls@4.1.1']
+    component.cpe = [*component.cpe, 'cpe:2.3:a:global:mbed_tls:4.1.1:*:*:*:*:*:*:*']
     db.session.commit()
     assert set(component.purl) > set(purls.values())
+    global_purls, global_cpes = set(component.purl), set(component.cpe)
     revision = ('b' if selected == 'first' else 'c') * 40
     expected_purls = {
         purls[selected], 'pkg:generic/mbedtls',
         f'pkg:generic/mbedtls-deps@{revision}', f'pkg:generic/mbedtls-sources@{revision}',
     }
+    expected_cpes = {
+        cpes[selected], 'cpe:2.3:a:*:mbedtls:*:*:*:*:*:*:*:*',
+        f'cpe:2.3:a:*:mbedtls-deps:{revision}:*:*:*:*:*:*:*',
+        f'cpe:2.3:a:*:mbedtls-sources:{revision}:*:*:*:*:*:*:*',
+    }
+    queued, error = resolve_active_packages(variants[selected].id)
+    assert error is None
+    assert len(queued) == 1
+    assert queued[0] is not component
+    assert queued[0].id == component.id
+    assert set(queued[0].purl) == expected_purls
+    assert set(queued[0].cpe) == expected_cpes
     client = Mock()
     client.query_by_purl.side_effect = lambda purl: [
         {'id': 'CVE-2026-2001' if purl in expected_purls else 'CVE-2026-2002'},
     ]
     monkeypatch.setattr('src.bin.cmd_vuln_scan.OSVClient', lambda: client)
+    nvd = Mock()
+    nvd.api_get_cves_by_cpe.side_effect = lambda cpe, **kwargs: [
+        {'cve': {'id': 'CVE-2026-2001' if cpe in expected_cpes else 'CVE-2026-2002'}},
+    ]
+    nvd_factory = Mock(return_value=nvd)
+    nvd_factory.extract_cve_details = NVD_DB.extract_cve_details
+    monkeypatch.setattr('src.bin.cmd_vuln_scan.NVD_DB', nvd_factory)
+
+    def match_package(package):
+        matches_scope = set(package.purl) == expected_purls and set(package.cpe) == expected_cpes
+        return [(SimpleNamespace(
+            identifier='CVE-2026-2001' if matches_scope else 'CVE-2026-2002',
+            description='Scoped match', date_published=None, date_modified=None,
+            external_refs=[], cvss_metrics=[],
+        ), 'affected')]
+
+    engine = Mock()
+    engine.applicable_vulns.side_effect = match_package
+    monkeypatch.setattr('src.bin.cmd_vuln_scan.get_engine', lambda **kwargs: engine)
+    monkeypatch.setattr('src.controllers.scc_engine.get_engine', lambda **kwargs: engine)
+    args = {
+        'osv': ['osv-scan'], 'nvd-api': ['nvd-scan', '--mode', 'api'],
+        'nvd-local': ['nvd-scan'], 'scc': ['sbom-cve-check-scan'],
+    }[scanner]
     result = app.test_cli_runner().invoke(args=[
-        'osv-scan', '--project', project.name, '--variant', variants[selected].name,
+        *args, '--project', project.name, '--variant', variants[selected].name,
     ])
     assert result.exit_code == 0, result.output
-    assert {call.args[0] for call in client.query_by_purl.call_args_list} == expected_purls
-    assert client.query_by_purl.call_count == len(expected_purls)
+    if scanner == 'osv':
+        assert {call.args[0] for call in client.query_by_purl.call_args_list} == expected_purls
+        assert client.query_by_purl.call_count == len(expected_purls)
+    elif scanner == 'nvd-api':
+        assert {call.args[0] for call in nvd.api_get_cves_by_cpe.call_args_list} == expected_cpes
+        assert nvd.api_get_cves_by_cpe.call_count == len(expected_cpes)
+    else:
+        engine.applicable_vulns.assert_called_once()
+        snapshot = engine.applicable_vulns.call_args.args[0]
+        assert snapshot is not component
+        assert snapshot.id == component.id
+        assert set(snapshot.cpe) == expected_cpes
+        assert set(snapshot.purl) == expected_purls
+    db.session.expire_all()
+    assert set(component.purl) == global_purls
+    assert set(component.cpe) == global_cpes
     assert {(finding.package_id, finding.vulnerability_id) for finding in Finding.get_all()} == {
         (component.id, 'CVE-2026-2001'),
     }

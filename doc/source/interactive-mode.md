@@ -310,9 +310,14 @@ The Scan History page provides a chronological record of every SBOM import and v
 
 An SBOM lists the packages that make up your system, but a single vulnerability source rarely provides complete coverage. Different databases track different ecosystems, use different matching strategies, and update at different speeds. VulnScout cross-references your SBOM against several scanners to offer a wider set of information:
 
-- **NVD** correlates packages with NIST's National Vulnerability Database using CPE identifiers. It queries every CPE attached to each package, ensuring broad coverage across many ecosystems.
+- **NVD** correlates packages with NIST's National Vulnerability Database using CPE identifiers. It uses the CPEs recorded in the selected variant's active SBOM associations.
 - **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages.
 - **OSV** queries the open-source OSV database, which aggregates advisories from language-specific ecosystems (PyPI, npm, Go, Rust, etc.) and Linux distributions. It queries every PURL recorded in the selected variant's active SBOM associations, excluding identifiers found only in other variants or older SBOMs.
+
+CLI and queued NVD API/local scans and sbom-cve-check receive package snapshots
+with only the selected variant's active SBOM evidence. Sharing a canonical
+package with another variant does not add that variant's identifiers to these
+scans.
 
 By combining these sources, VulnScout reduces the chance of missing a relevant CVE while giving you the **Sources** column and filter to trace exactly where each finding originated. If a vulnerability is reported by multiple scanners, you can have higher confidence that it genuinely applies; if only one scanner flags it, that context helps you prioritise your triage effort.
 

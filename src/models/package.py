@@ -198,7 +198,7 @@ class Package(Base):
                            source_urls: list[str] | None = None,
                            source_revisions: list[str] | None = None,
                            component_types: list["PackageType"] | None = None) -> "Package":
-        """Build a detached display/export snapshot without mutating the shared DB row."""
+        """Build a detached display/scan/export snapshot without mutating the shared DB row."""
         selected_purls = list(dict.fromkeys(
             [value for value in self.purl or [] if value in (purl or [])] + list(purl or []),
         ))

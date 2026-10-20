@@ -56,9 +56,10 @@ def _build_nvd_osv_db(app):
         _db.session.commit()
 
         sbom = SBOMDocument.create("/test/base.json", "spdx", scan.id)
-        SBOMPackage.create(sbom.id, pkg_cpe.id)
-        SBOMPackage.create(sbom.id, pkg_purl.id)
-        SBOMPackage.create(sbom.id, pkg_neither.id)
+        for package in (pkg_cpe, pkg_purl, pkg_neither):
+            link = SBOMPackage.create(sbom.id, package.id)
+            link.cpe = package.cpe
+            link.purl = package.purl
         _db.session.commit()
 
         # Also create an empty variant (no scans) for error-path tests
