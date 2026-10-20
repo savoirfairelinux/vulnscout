@@ -8,7 +8,7 @@ import uuid as uuid_module
 from flask import jsonify, Response
 from typing import Optional, Sequence, Set, Tuple, Union
 
-from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
+from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
 from ..helpers.scan_filters import filter_scannable_packages
 from ..models.observation import Observation
 from ..models.package import Package
@@ -46,10 +46,10 @@ def resolve_active_packages(
     exclude_native: bool = False,
     native_package_exceptions: Sequence[str] = (),
 ) -> Tuple[Sequence[Package], Optional[str]]:
-    """Return the active ``Package`` list for *variant_uuid*.
+    """Return active SBOM-scoped ``Package`` snapshots for *variant_uuid*.
 
     Looks at the latest **SBOM** scan for the variant, resolves its
-    package set and loads the ``Package`` objects.  Tool scans are
+    package set and loads snapshots with that SBOM's evidence. Tool scans are
     intentionally excluded because they may contain packages from other
     variants (e.g. the Grype export is global).
 
@@ -68,14 +68,9 @@ def resolve_active_packages(
     if not latest_ids:
         return [], "No SBOM scan found for variant"
 
-    all_pkg_ids = active_package_ids_for_scans(latest_ids)
-
-    if not all_pkg_ids:
+    packages = package_snapshots_for_sbom_scans(latest_ids)
+    if not packages:
         return [], "No packages found for variant"
-
-    packages = db.session.execute(
-        db.select(Package).where(Package.id.in_(all_pkg_ids))
-    ).scalars().all()
 
     return filter_scannable_packages(
         packages,

@@ -105,23 +105,32 @@ class SBOMPackage(Base):
         """Aggregate only selected document evidence, never global matching identifiers."""
         if not document_ids:
             return {}
-        evidence: dict[uuid.UUID, PackageEvidence] = {}
+        evidence_sets: dict[uuid.UUID, dict[str, set[str]]] = {}
         component_types: dict[uuid.UUID, set[PackageType]] = {}
         for package_id, cpe, purl, source_urls, revisions, package_type in db.session.execute(
             db.select(SBOMPackage.package_id, SBOMPackage.cpe, SBOMPackage.purl,
                       SBOMPackage.source_urls, SBOMPackage.source_revisions, SBOMPackage.type)
             .where(SBOMPackage.sbom_document_id.in_(document_ids))
         ):
-            item = evidence.setdefault(package_id, PackageEvidence(cpe=[], purl=[], source_urls=[]))
-            item["cpe"] = sorted(set(item["cpe"]) | set(cpe or []))
-            item["purl"] = sorted(set(item["purl"]) | set(purl or []))
-            item["source_urls"] = sorted(set(item["source_urls"]) | set(source_urls or []))
-            if revisions:
-                item["source_revisions"] = sorted(set(item.get("source_revisions", [])) | set(revisions))
+            item = evidence_sets.setdefault(package_id, {
+                "cpe": set(), "purl": set(), "source_urls": set(), "source_revisions": set(),
+            })
+            item["cpe"].update(cpe or [])
+            item["purl"].update(purl or [])
+            item["source_urls"].update(source_urls or [])
+            item["source_revisions"].update(revisions or [])
             component_types.setdefault(package_id, set()).add(package_type)
-        for package_id, types in component_types.items():
+        evidence: dict[uuid.UUID, PackageEvidence] = {}
+        for package_id, values in evidence_sets.items():
+            result = PackageEvidence(
+                cpe=sorted(values["cpe"]), purl=sorted(values["purl"]), source_urls=sorted(values["source_urls"]),
+            )
+            if values["source_revisions"]:
+                result["source_revisions"] = sorted(values["source_revisions"])
+            types = component_types[package_id]
             if types != {"normal"}:
-                evidence[package_id]["component_types"] = sorted(types)
+                result["component_types"] = sorted(types)
+            evidence[package_id] = result
         return evidence
 
     def delete(self) -> None:

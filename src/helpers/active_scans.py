@@ -39,6 +39,7 @@ from ..models.scan import Scan
 from ..models.variant import Variant
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage
+from ..models.package import Package
 
 
 # ------------------------------------------------------------------
@@ -131,6 +132,18 @@ def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]
 # ------------------------------------------------------------------
 # Active package IDs (from SBOM scans only)
 # ------------------------------------------------------------------
+
+def package_snapshots_for_sbom_scans(scan_ids: list[uuid.UUID]) -> list[Package]:
+    """Load package snapshots using only evidence from the selected SBOM scans."""
+    document_ids = set(db.session.scalars(
+        db.select(SBOMDocument.id).where(SBOMDocument.scan_id.in_(scan_ids))
+    ))
+    evidence = SBOMPackage.evidence_for_documents(document_ids)
+    if not evidence:
+        return []
+    packages = db.session.scalars(db.select(Package).where(Package.id.in_(evidence.keys())))
+    return [package.with_sbom_evidence(**evidence[package.id]) for package in packages]
+
 
 def active_package_ids_for_scans(
     scan_ids: list[uuid.UUID],
