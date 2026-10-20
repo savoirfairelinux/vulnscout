@@ -944,7 +944,7 @@ def test_grype_results_use_the_stored_parent_without_alias_translation(app, tmp_
     }]}
     results_path = tmp_path / 'grype.json'
     results_path.write_text(json.dumps(grype_data))
-    _filter_grype_matches(Mock(), str(results_path), {('mbedtls', '4.1.1')})
+    _filter_grype_matches(Mock(options={}), str(results_path), {('mbedtls', '4.1.1')})
     assert json.loads(results_path.read_text()) == grype_data
     GrypeVulns(controllers).load_from_dict(grype_data)
     db.session.commit()
