@@ -44,8 +44,7 @@ def _metadata(group: dict, packages: dict, links: list[SBOMPackage]) -> dict | N
     if not members.issubset(packages):
         return None
     evidence = {
-        field: sorted({value for link in links if link.package_id in members
-                       for value in getattr(link, field) or []})
+        field: sorted({value for link in links for value in getattr(link, field) or []})
         for field in ("cpe", "purl", "source_urls", "source_revisions")
     }
     infos = [package_version_info(packages[member].version, evidence["purl"], evidence["cpe"],
@@ -208,25 +207,33 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
 def consolidate_jsonld_packages(session: Session) -> bool:
     """Consolidate recorded, unprocessed groups in the caller's transaction."""
     documents = {document.id: document for document in session.scalars(select(SBOMDocument))}
-    pending_scans = {document.scan_id for document in documents.values()
-                     for group in document.jsonld_groups or [] if not group.get("canonical_package_id")}
+    groups_by_scan: dict[uuid.UUID, list[dict]] = defaultdict(list)
+    documents_by_scan: dict[uuid.UUID, list[SBOMDocument]] = defaultdict(list)
+    for document in documents.values():
+        documents_by_scan[document.scan_id].append(document)
+        groups_by_scan[document.scan_id].extend(
+            group for group in document.jsonld_groups or [] if not group.get("canonical_package_id")
+        )
+    pending_scans = {scan_id for scan_id, groups in groups_by_scan.items() if groups}
     if not pending_scans:
         return False
-    links = list(session.scalars(select(SBOMPackage)))
+    links = list(session.scalars(
+        select(SBOMPackage).join(SBOMDocument).where(SBOMDocument.scan_id.in_(pending_scans)),
+    ))
     by_scan: dict[uuid.UUID, list[SBOMPackage]] = defaultdict(list)
-    by_member: dict[uuid.UUID, list[SBOMPackage]] = defaultdict(list)
+    by_scan_member: dict[tuple[uuid.UUID, uuid.UUID], list[SBOMPackage]] = defaultdict(list)
     for link in links:
-        by_scan[documents[link.sbom_document_id].scan_id].append(link)
-        by_member[link.package_id].append(link)
+        scan_id = documents[link.sbom_document_id].scan_id
+        by_scan[scan_id].append(link)
+        by_scan_member[scan_id, link.package_id].append(link)
+    member_ids = {uuid.UUID(member["package_id"])
+                  for scan_id in pending_scans for group in groups_by_scan[scan_id] for member in group["members"]}
     packages = {package.id: package for package in session.scalars(
-        select(Package).where(Package.id.in_({
-            link.package_id for scan_id in pending_scans for link in by_scan[scan_id]
-        })),
+        select(Package).where(Package.id.in_(member_ids)),
     )}
     plans = []
     for scan_id in pending_scans:
-        groups = [group for document in documents.values() if document.scan_id == scan_id
-                  for group in document.jsonld_groups or [] if not group.get("canonical_package_id")]
+        groups = groups_by_scan[scan_id]
         occurrences = Counter(member["package_id"] for group in groups for member in group["members"])
         excluded = {link.package_id for link in by_scan[scan_id]
                     if documents[link.sbom_document_id].jsonld_groups is None}
@@ -234,7 +241,9 @@ def consolidate_jsonld_packages(session: Session) -> bool:
             if any(occurrences[member["package_id"]] > 1 or uuid.UUID(member["package_id"]) in excluded
                    for member in group["members"]):
                 continue
-            metadata = _metadata(group, packages, by_scan[scan_id])
+            member_links = [link for member in group["members"]
+                            for link in by_scan_member[scan_id, uuid.UUID(member["package_id"])]]
+            metadata = _metadata(group, packages, member_links)
             if metadata is not None:
                 members = sorted(group["members"], key=lambda item: item["role"] != "build")
                 supplier = next((packages[uuid.UUID(member["package_id"])].supplier
@@ -242,6 +251,16 @@ def consolidate_jsonld_packages(session: Session) -> bool:
                 plans.append((scan_id, group, metadata, supplier))
     if not plans:
         return False
+    planned_member_ids = {uuid.UUID(member["package_id"]) for _, group, _, _ in plans for member in group["members"]}
+    original_links = [link for link in links if link.package_id in planned_member_ids]
+    original_links.extend(session.scalars(
+        select(SBOMPackage).join(SBOMDocument).where(
+            SBOMPackage.package_id.in_(planned_member_ids), SBOMDocument.scan_id.not_in(pending_scans),
+        ),
+    ))
+    by_member: dict[uuid.UUID, list[SBOMPackage]] = defaultdict(list)
+    for link in original_links:
+        by_member[link.package_id].append(link)
     destinations: dict[tuple, set] = defaultdict(set)
     for scan_id, group, metadata, supplier in plans:
         key = metadata["name"], metadata["version"], supplier
@@ -284,15 +303,19 @@ def consolidate_jsonld_packages(session: Session) -> bool:
                                     not in {None, "", "NOASSERTION", "NONE"}), "")
         session.flush()
         canonical_ids.add(parent.id)
+        previous = metadata_by_parent.get((scan_id, parent.id))
+        if previous is not None:
+            for field in ("cpe", "purl", "source_urls", "source_revisions"):
+                metadata[field] = list(dict.fromkeys([*previous[field], *metadata[field]]))
         metadata["type"] = (
-            "built" if group["built"] or metadata_by_parent.get((scan_id, parent.id), {}).get("type") == "built"
+            "built" if group["built"] or (previous is not None and previous["type"] == "built")
             else "workspace"
         )
         metadata_by_parent[scan_id, parent.id] = metadata
         for member in group["members"]:
             mappings[scan_id][uuid.UUID(member["package_id"])] = parent.id
-        for document in documents.values():
-            if document.scan_id == scan_id and group in (document.jsonld_groups or []):
+        for document in documents_by_scan[scan_id]:
+            if group in (document.jsonld_groups or []):
                 document.jsonld_groups = [
                     {**entry, "canonical_package_id": str(parent.id)} if entry == group else entry
                     for entry in document.jsonld_groups or []
@@ -340,7 +363,7 @@ def consolidate_jsonld_packages(session: Session) -> bool:
             {"sbom_document_id": doc, "package_id": source, "dependency_id": dependency}
             for doc, source, dependency in edges
         ])
-    _merge_finding_references(session, mappings, documents, links)
+    _merge_finding_references(session, mappings, documents, original_links)
     for observation in session.scalars(select(SBOMObservation).where(
         SBOMObservation.sbom_document_id.in_(document_ids),
     )):

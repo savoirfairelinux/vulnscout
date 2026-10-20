@@ -275,6 +275,147 @@ def test_module_target_with_zephyr_glue_requires_its_own_upstream_source(app, tm
         assert by_name[target_name]['component_types'] == ['normal']
 
 
+@pytest.mark.parametrize('target_name', ['mbedtls', 'modules__mbedtls'])
+def test_ambiguous_named_targets_preserve_the_workspace_pair(app, tmp_path, target_name):
+    documents = _grouping_documents()
+    prefix = 'https://example.org/zephyr/'
+    documents['build']['@graph'][3]['name'] = target_name
+    documents['build']['@graph'].extend([
+        {'type': 'software_Package', 'spdxId': prefix + 'other-target',
+         'name': target_name, 'software_packageVersion': 'other'},
+        {'type': 'Relationship', 'relationshipType': 'contains',
+         'from': prefix + 'other-target', 'to': [prefix + 'library']},
+    ])
+    project = Project.create('ambiguous-named-targets')
+    variant = Variant.create('demo', project.id)
+    scan = _import_grouping_documents(tmp_path, variant, documents)
+    rows = app.test_client().get(f'/api/packages?variant_id={variant.id}').json
+    assert len(rows) == len(Package.get_all()) == 3
+    parent = next(row for row in rows if row['id'] == 'mbedtls@4.1.1')
+    assert parent['component_types'] == ['workspace']
+    assert parent['source_revision'] == 'a' * 40
+    assert {row['id'] for row in rows if row is not parent} == {
+        f'{target_name}@', f'{target_name}@other',
+    }
+    assert all(row['component_types'] == ['normal'] for row in rows if row is not parent)
+    groups = [group for document in SBOMDocument.get_by_scan(scan.id) for group in document.jsonld_groups or []]
+    assert len(groups) == 1
+    assert not groups[0]['built']
+    assert {member['role'] for member in groups[0]['members']} == {'source', 'upstream'}
+
+
+@pytest.mark.parametrize('built_first', [False, True])
+def test_same_release_groups_union_scoped_evidence_and_retain_revision_conflicts(
+        app, tmp_path, monkeypatch, built_first):
+    from unittest.mock import Mock
+    from src.helpers.export_scope import compute_export_scope
+
+    project = Project.create('multiple-checkouts')
+    variant = Variant.create('demo', project.id)
+    documents = {}
+    purls = ['pkg:github/mbed-tls/mbedtls@v4.1.1', 'pkg:generic/mbedtls@4.1.1?arch=arm64']
+    cpes = [f'cpe:2.3:a:{vendor}:mbed_tls:4.1.1:*:*:*:*:*:*:*' for vendor in ('trustedfirmware', 'example')]
+    urls = [f'git+https://example.org/mbedtls@{revision * 40}' for revision in ('a', 'b')]
+    for index, revision in enumerate(('a' * 40, 'b' * 40)):
+        group = _grouping_documents(revision)
+        if bool(index) == built_first:
+            group.pop('build')
+        upstream = group['upstream']['@graph'][-1]
+        upstream['externalIdentifier'][0]['identifier'] = purls[index]
+        upstream['externalIdentifier'][1]['identifier'] = cpes[index]
+        upstream['software_downloadLocation'] = urls[index]
+        group = json.loads(json.dumps(group).replace(
+            'https://example.org/zephyr/', f'https://example.org/checkout-{index}/',
+        ))
+        documents.update({f'{index}-{name}': data for name, data in group.items()})
+    scan = _import_grouping_documents(tmp_path, variant, documents)
+    assert len(Package.get_all()) == 1
+    parent = Package.get_by_string_id('mbedtls@4.1.1')
+    for link in db.session.query(SBOMPackage):
+        assert link.package_id == parent.id
+        assert set(link.source_revisions) == {'a' * 40, 'b' * 40}
+        assert set(link.purl) >= set(purls)
+        assert set(link.cpe) >= set(cpes)
+        assert set(link.source_urls) == set(urls)
+        assert link.type == 'built'
+    client = app.test_client()
+    row = client.get(f'/api/packages?variant_id={variant.id}').json[0]
+    assert row['revision_conflict']
+    assert set(row['source_revisions']) == {'a' * 40, 'b' * 40}
+    assert set(row['purl']) >= set(purls)
+    graphs = client.get(f'/api/package-dependencies?variant_id={variant.id}').json['documents']
+    assert len(graphs) == len(SBOMDocument.get_by_scan(scan.id))
+    assert all(document['packages'][0]['revision_conflict'] for document in graphs)
+    controllers = ControllersCache(scope=compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    exported = list(controllers.packages)
+    assert len(exported) == 1
+    assert exported[0].version_info['revision_conflict']
+    assert set(exported[0].source_revisions) == {'a' * 40, 'b' * 40}
+    assert set(exported[0].purl) >= set(purls)
+    osv = Mock()
+    osv.query_by_purl.return_value = []
+    monkeypatch.setattr('src.bin.cmd_vuln_scan.OSVClient', lambda: osv)
+    result = app.test_cli_runner().invoke(args=[
+        'osv-scan', '--project', project.name, '--variant', variant.name,
+    ])
+    assert result.exit_code == 0, result.output
+    assert {call.args[0] for call in osv.query_by_purl.call_args_list} >= set(purls)
+
+
+def test_consolidation_loads_only_pending_links_and_member_history(app, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from src.helpers import jsonld_storage
+
+    project = Project.create('bounded-consolidation')
+    variant = Variant.create('incoming', project.id)
+    documents = {}
+    for index in range(10):
+        group = json.loads(json.dumps(_grouping_documents()).replace(
+            'https://example.org/zephyr/', f'https://example.org/group-{index}/',
+        ).replace('mbedtls', f'lib{index}'))
+        documents.update({f'{index}-{name}': data for name, data in group.items()})
+    scan = _import_legacy_components(tmp_path, variant, documents, monkeypatch)
+    member_ids = {link.package_id for document in SBOMDocument.get_by_scan(scan.id)
+                  for link in SBOMPackage.get_by_document(document.id)}
+    history = Variant.create('history', project.id)
+    old_scan = Scan.create('Historical SBOM', history.id)
+    old_document = SBOMDocument.create('historical.json', 'historical', old_scan.id)
+    source = Package.get_by_string_id('lib0-sources@' + 'a' * 40)
+    source_id, old_document_id = source.id, old_document.id
+    SBOMPackage.create(old_document_id, source_id)
+    for index in range(50):
+        package = Package.find_or_create(f'unrelated-{index}', '1')
+        db.session.add(SBOMPackage(sbom_document_id=old_document_id, package_id=package.id))
+    db.session.commit()
+    db.session.remove()
+    loaded = set()
+
+    def record_loaded(link, context):
+        loaded.add((link.sbom_document_id, link.package_id))
+
+    original_metadata = jsonld_storage._metadata
+
+    def metadata_for_members(group, packages, links):
+        assert {str(link.package_id) for link in links} == {member['package_id'] for member in group['members']}
+        assert len(links) == 3
+        return original_metadata(group, packages, links)
+
+    metadata = Mock(side_effect=metadata_for_members)
+    monkeypatch.setattr(jsonld_storage, '_metadata', metadata)
+    event.listen(SBOMPackage, 'load', record_loaded)
+    try:
+        assert jsonld_storage.consolidate_jsonld_packages(db.session())
+        db.session.commit()
+    finally:
+        event.remove(SBOMPackage, 'load', record_loaded)
+    assert {package_id for _, package_id in loaded} <= member_ids
+    assert (old_document_id, source_id) in loaded
+    assert metadata.call_count == 10
+    assert SBOMPackage.get(old_document_id, source_id) is not None
+    assert len(SBOMPackage.get_by_document(old_document_id)) == 51
+
+
 def test_package_types_are_scoped_without_duplicating_the_parent(app, tmp_path):
     project = Project.create('scoped-component-types')
     built = Variant.create('built', project.id)

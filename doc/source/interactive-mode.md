@@ -105,6 +105,10 @@ when explicit provenance connects them. For example, `mbedtls-deps`,
 The checkout revision is additional package metadata, not another package
 identity. CPEs, PURLs and dependencies are combined and deduplicated; internal
 dependency edges are omitted.
+When several independently proven groups identify the same release in one
+scan, their identifiers and checkout revisions are retained together. Multiple
+checkout revisions remain visible as a revision conflict rather than being
+replaced by the last group's evidence.
 
 The package name carries a **Built component** badge when explicit provenance
 connects it to a compiled target, or **Workspace component** when only its
@@ -131,7 +135,9 @@ Other generated target names require exactly one candidate target whose inputs
 belong exclusively to that source component.
 Upstream/source records can still enrich a package without a proven
 compiled target. This does not establish that a package is included in firmware.
-Ambiguous or contradictory evidence remains separate. Yocto and other producers
+Ambiguous compiled targets remain separate while the proven upstream/source
+pair becomes a workspace component. Contradictory metadata within a group
+prevents its consolidation. Yocto and other producers
 and formats are unchanged, and revisions remain scoped to their source documents.
 For imports predating recorded provenance, reimport all companion documents
 together after upgrading.
