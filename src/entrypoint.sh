@@ -446,24 +446,38 @@ cmd_scan() {
 
     local has_condition=false
     local _cmd_scan_exit=0
+    local scanners_requested=false
     [[ -n "${MATCH_CONDITION:-}" ]]       && has_condition=true
 
-    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
+    if [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ||
+          "${NVD_SCAN_REQUESTED:-false}" == "true" ||
+          "${OSV_SCAN_REQUESTED:-false}" == "true" ||
+          "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
+        scanners_requested=true
+    fi
+
+    if [[ "$has_inputs" == "true" || "$has_condition" == "true" || "$scanners_requested" == "true" ]]; then
         if [[ "$has_inputs" == "true" ]]; then
             if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
                 set_status "1" "Merging inputs and processing vulnerabilities"
             fi
             (cd "$BASE_DIR" && flask --app src.bin.webapp merge "${INIT_APP_ARGS[@]}") || return $?
+            if [[ "$scanners_requested" == "true" ]]; then
+                # Merge registers files; process must persist packages before scanning.
+                (cd "$BASE_DIR" && MATCH_CONDITION="" flask --app src.bin.webapp process) || return $?
+            fi
         fi
 
-        # If a Grype scan was requested, export the current DB as SPDX (which
+        # If a Grype scan was requested, export the current DB as CycloneDX (which
         # already contains any just-merged inputs), run grype on it, then merge
         # the Grype results back in before running process.
         if [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]]; then
             local grype_tmp
             grype_tmp=$(mktemp -d)
             echo "Exporting current project as CycloneDX for Grype scan..."
-            (cd "$BASE_DIR" && flask --app src.bin.webapp export --format cdx16 --output-dir "$grype_tmp") || {
+            (cd "$BASE_DIR" && flask --app src.bin.webapp export --format cdx16 \
+                --project "$PROJECT_NAME" --variant "${VARIANT_NAME:-default}" \
+                --output-dir "$grype_tmp") || {
                 rm -rf "$grype_tmp"; return 1
             }
             local exported_cdx="$grype_tmp/sbom_cyclonedx_v1_6.cdx.json"
@@ -485,6 +499,10 @@ cmd_scan() {
                 echo "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
                     --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --grype "$grype_out") || {
+                    rm -rf "$grype_tmp"; return 1
+                }
+                # A later scanner creates a newer scan; ingest Grype while it is latest.
+                (cd "$BASE_DIR" && MATCH_CONDITION="" flask --app src.bin.webapp process) || {
                     rm -rf "$grype_tmp"; return 1
                 }
                 has_inputs=true

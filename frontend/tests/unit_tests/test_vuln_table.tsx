@@ -1159,6 +1159,20 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('affected packages display and filter the persisted parent release', async () => {
+        const packageIds = ['mbedtls@4.1.1'];
+        render(<TableVulnerabilities
+            vulnerabilities={[{ ...vulnerabilities[0], packages: packageIds, packages_current: packageIds }]}
+            appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}}
+            filterLabel="Package" filterValue="mbedtls@4.1.1" />);
+        const cell = await screen.findByRole('cell', { name: 'mbedtls@4.1.1' });
+        expect(cell).toHaveTextContent(/^mbedtls@4.1.1$/);
+        const input = screen.getByRole('searchbox');
+        fireEvent.change(input, { target: { value: 'mbedtls@4.1.1' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
+        expect(await screen.findByRole('cell', { name: 'mbedtls@4.1.1' })).toBeInTheDocument();
+    });
+
     test('package filter jump clears a stale severity filter', async () => {
         // ARRANGE - seed a leftover severity filter from a previous visit
         window.localStorage.setItem(

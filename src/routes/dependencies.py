@@ -175,7 +175,7 @@ def init_app(app: Flask) -> None:
             result[document_id]['packages'].append({
                 'id': package.string_id, 'name': package.name, 'version': package.version,
                 **package_version_info(package.version, list(link.purl or []), list(link.cpe or []),
-                                       list(link.source_urls or [])),
+                                       list(link.source_urls or []), list(link.source_revisions or [])),
             })
         for document_id, package_id, dependency_id in edges:
             if package_id in members[document_id] and dependency_id in scan_packages[scan_of[document_id]]:

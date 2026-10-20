@@ -107,6 +107,55 @@ def test_non_numeric_tag_aliases_are_not_guessed():
     assert info["version_conflict"]
 
 
+@pytest.mark.parametrize("reported", [REVISION, "hostap_2_11", "2.11"])
+def test_hostap_upstream_tags_match_release_identifiers_without_changing_evidence(reported):
+    purl = "pkg:generic/hostap@hostap_2_11?vcs_url=git://w1.fi/hostap.git"
+    cpe = "cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*"
+    info = package_version_info(reported, [purl], [cpe])
+    assert info["release_version"] == "2.11"
+    assert not info["version_conflict"]
+    assert {"version": "hostap_2_11", "source": "purl", "identifier": purl} in info["version_evidence"]
+    assert info["version_evidence"][0]["version"] == reported
+
+
+@pytest.mark.parametrize("purl", [
+    "pkg:generic/hostap@hostap_2_11?vcs_url=git://example.org/hostap.git",
+    "pkg:generic/other@hostap_2_11?vcs_url=git://w1.fi/hostap.git",
+    "pkg:generic/other/hostap@hostap_2_11?vcs_url=git://w1.fi/hostap.git",
+    "pkg:generic/hostap@release_2_11?vcs_url=git://w1.fi/hostap.git",
+])
+def test_hostap_aliases_are_not_applied_to_other_repositories_packages_or_tags(purl):
+    info = package_version_info(REVISION, [purl], ["cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*"])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+def test_hostap_tag_normalization_does_not_hide_mismatched_releases():
+    purl = "pkg:generic/hostap@hostap_2_10?vcs_url=git://w1.fi/hostap.git"
+    info = package_version_info(REVISION, [purl], ["cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*"])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+@pytest.mark.parametrize("cpe", [
+    "cpe:2.3:o:zephyrproject:zephyr:4.5.0:rc2:*:*:*:*:*:*",
+    "cpe:/o:zephyrproject:zephyr:4.5.0:rc2",
+])
+def test_cpe_update_is_part_of_the_release_version(cpe):
+    info = package_version_info("4.5.0-rc2", [], [cpe])
+    assert info["release_version"] == "4.5.0-rc2"
+    assert not info["version_conflict"]
+    assert {"version": "4.5.0-rc2", "source": "cpe", "identifier": cpe} in info["version_evidence"]
+    assert package_version_info(REVISION, [], [cpe])["release_version"] == "4.5.0-rc2"
+
+
+@pytest.mark.parametrize("reported", ["4.5.0", "4.5.0-rc1", "4.5.0-rc3"])
+def test_cpe_update_normalization_preserves_real_release_conflicts(reported):
+    info = package_version_info(reported, [], ["cpe:2.3:o:zephyrproject:zephyr:4.5.0:rc2:*:*:*:*:*:*"])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
 @pytest.mark.parametrize("cpe,version", [
     ("cpe:2.3:a:vendor:lib:1.2:*:*:*:*:*:*:*", "1.2"),
     (r"cpe:2.3:a:ven\:dor:lib:1.2\:beta:*:*:*:*:*:*:*", "1.2:beta"),
@@ -116,6 +165,15 @@ def test_non_numeric_tag_aliases_are_not_guessed():
     ("cpe:2.3:a:vendor:lib:1.*:*:*:*:*:*:*:*", None),
     ("cpe:2.3:a:vendor:lib:1.?0:*:*:*:*:*:*:*", None),
     ("cpe:/a:vendor:lib:1.*", None),
+    ("cpe:2.3:a:vendor:lib:1.2:sp1:*:*:*:*:*:*", "1.2-sp1"),
+    (r"cpe:2.3:a:vendor:lib:1.2:rc\:2:*:*:*:*:*:*", "1.2-rc:2"),
+    ("cpe:/a:vendor:lib:1.2:sp1", "1.2-sp1"),
+    ("cpe:/a:vendor:lib:1.2:rc%3A2", "1.2-rc:2"),
+    ("cpe:2.3:a:vendor:lib:1.2:rc*:*:*:*:*:*:*", None),
+    ("cpe:2.3:a:vendor:lib:1.2:rc?:*:*:*:*:*:*", None),
+    ("cpe:/a:vendor:lib:1.2:rc*", None),
+    ("cpe:/a:vendor:lib:-:rc2", None),
+    ("cpe:/a:vendor:lib::rc2", None),
 ])
 def test_cpe_only_versions_and_wildcards(cpe, version):
     info = package_version_info(REVISION, [], [cpe])

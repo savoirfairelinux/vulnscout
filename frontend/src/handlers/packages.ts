@@ -3,6 +3,7 @@ import { asVersionEvidence } from '../helpers/packageVersions';
 
 type VulnCounts = { [key: string]: number }
 type Severities = { [key: string]: {label: string, index: number} }
+type ComponentType = 'normal' | 'workspace' | 'built';
 type Package = PackageVersionMetadata & {
     id: string;
     name: string;
@@ -18,6 +19,7 @@ type Package = PackageVersionMetadata & {
     outdated?: boolean;
     findingIds?: string[];
     findingVulnerabilityIds?: string[];
+    component_types?: ComponentType[];
 };
 
 export type { Package, VulnCounts, Severities };
@@ -50,6 +52,9 @@ const asPackage = (data: any): Package | [] => {
         outdated: data?.outdated === true,
         findingIds: asStringArray(data?.finding_ids),
         findingVulnerabilityIds: asStringArray(data?.vulnerability_ids),
+        component_types: asStringArray(data?.component_types).filter(
+            (value): value is ComponentType => value === 'normal' || value === 'workspace' || value === 'built'
+        ),
     };
     if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
     if (Array.isArray(data?.cpe)) {

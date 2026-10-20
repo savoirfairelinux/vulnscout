@@ -240,25 +240,22 @@ def osv_scan_command(project: str, variant: str | None) -> None:
     packages = _resolve_active_packages(variant_uuid)
 
     # Collect packages with PURL identifiers
-    pkg_purl_list: list[tuple] = []
-    seen_purls: set = set()
+    purl_to_packages: dict[str, list] = {}
     for pkg in packages:
         for purl in (pkg.purl or []):
             purl_str = str(purl).strip()
-            if purl_str and purl_str.startswith("pkg:") and purl_str not in seen_purls:
-                seen_purls.add(purl_str)
-                pkg_purl_list.append((purl_str, pkg))
-                break
+            if purl_str.startswith("pkg:"):
+                purl_to_packages.setdefault(purl_str, []).append(pkg)
 
-    if not pkg_purl_list:
+    if not purl_to_packages:
         raise click.ClickException(
             "No packages with valid PURL identifiers"
         )
 
-    total_pkgs = len(pkg_purl_list)
+    total_pkgs = len(purl_to_packages)
     click.echo(
         f"Found {len(packages)} packages, "
-        f"{total_pkgs} with PURL identifiers to query"
+        f"{total_pkgs} unique PURL identifiers to query"
     )
 
     scan = _create_tool_scan(variant_uuid, "osv")
@@ -266,8 +263,8 @@ def osv_scan_command(project: str, variant: str | None) -> None:
     observation_pairs: set = set()
     assessed_findings: set = set()
 
-    for idx, (purl_str, pkg) in enumerate(pkg_purl_list, 1):
-        pkg_label = f"{pkg.name}@{pkg.version}" if pkg.name else purl_str
+    for idx, (purl_str, matched_packages) in enumerate(purl_to_packages.items(), 1):
+        pkg_label = purl_str
         click.echo(f"[{idx}/{total_pkgs}] Querying {pkg_label}…")
         try:
             osv_vulns = osv.query_by_purl(purl_str)
@@ -313,13 +310,14 @@ def osv_scan_command(project: str, variant: str | None) -> None:
                             description=osv_desc, commit=False,
                         )
 
-                _persist_finding(pkg.id, vid, scan.id, variant_uuid, "osv",
-                                 observation_pairs, assessed_findings)
+                for pkg in matched_packages:
+                    _persist_finding(pkg.id, vid, scan.id, variant_uuid, "osv",
+                                     observation_pairs, assessed_findings)
 
     _db.session.commit()
     click.echo(
         f"✓ Scan complete — found {len(vulns_found)} unique vulnerabilities "
-        f"across {total_pkgs} packages"
+        f"across {len(packages)} packages"
     )
 
 

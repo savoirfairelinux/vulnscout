@@ -46,6 +46,17 @@ def _release_key(value: str) -> str:
     return re.sub(r"^[vV](?=\d)", "", value)
 
 
+def _purl_release_key(purl: PackageURL) -> str:
+    version = purl.version or ""
+    # Hostap's upstream repository uses hostap_2_11 tags for the 2.11 release.
+    if (purl.type == "generic" and not purl.namespace and purl.name == "hostap"
+            and (purl.qualifiers or {}).get("vcs_url") == "git://w1.fi/hostap.git"):
+        match = re.fullmatch(r"hostap_(\d+(?:_\d+)+)", version)
+        if match:
+            return match.group(1).replace("_", ".")
+    return _release_key(version)
+
+
 def _cpe_version(identifier: str) -> str | None:
     # An escaped colon belongs to its component, not to the CPE delimiter.
     parts = re.findall(r"(?:\\.|[^:\\])*(?::|$)", identifier)
@@ -54,24 +65,39 @@ def _cpe_version(identifier: str) -> str | None:
         version = fields[5]
         if not version or version == "-" or any(token in {"*", "?"} for token in re.findall(r"\\.|.", version)):
             return None
+        update = fields[6]
+        if update not in {"", "*", "-"}:
+            if any(token in {"*", "?"} for token in re.findall(r"\\.|.", update)):
+                return None
+            version += "-" + update
         return re.sub(r"\\(.)", r"\1", version)
     if "".join(parts) == identifier and identifier.startswith("cpe:/") and 5 <= len(fields) <= 8:
-        if "*" in fields[4] or "?" in fields[4]:
+        if fields[4] in {"", "-"} or "*" in fields[4] or "?" in fields[4]:
             return None
-        return unquote(fields[4])
+        version = unquote(fields[4])
+        update = fields[5] if len(fields) > 5 else ""
+        if update not in {"", "*", "-"}:
+            if "*" in update or "?" in update:
+                return None
+            version += "-" + unquote(update)
+        return version
     logger.warning("Cannot extract a version from invalid CPE: %s", identifier)
     return None
 
 
 def package_version_info(version: str | None, purls: list[str], cpes: list[str],
-                         source_urls: list[str] | None = None) -> PackageVersionInfo:
+                         source_urls: list[str] | None = None,
+                         source_revisions: list[str] | None = None) -> PackageVersionInfo:
     """Derive display metadata using only explicit, persisted SBOM identifiers.
 
     Git-style ``v`` prefixes on numeric versions are equivalent. CPE values are
-    case-insensitive, but distinct PURL tag spellings remain distinct. No tag
-    aliasing (such as ``hostap_2_11`` to ``2.11``) or commit-to-release lookup occurs.
+    case-insensitive and concrete CPE updates are part of the release. Hostap's
+    numeric upstream tags are normalized only when its PURL identifies the
+    upstream repository. Other tag aliases and commit-to-release lookups are
+    not inferred. Original identifier and tag spellings remain in the evidence.
     """
     evidence: list[VersionEvidence] = []
+    tag_aliases: dict[str, str] = {}
 
     def add(value: str | None, source: Literal["sbom", "purl", "cpe", "download"], identifier: str) -> None:
         if value is None:
@@ -83,6 +109,8 @@ def package_version_info(version: str | None, purls: list[str], cpes: list[str],
                 evidence.append(item)
 
     add(version, "sbom", version or "")
+    for revision in source_revisions or []:
+        add(revision, "sbom", revision)
     for purl in purls:
         try:
             parsed = PackageURL.from_string(purl)
@@ -90,13 +118,20 @@ def package_version_info(version: str | None, purls: list[str], cpes: list[str],
             logger.warning("Cannot extract a version from invalid PURL: %s", purl)
             continue
         add(parsed.version, "purl", purl)
+        if parsed.version:
+            key = _purl_release_key(parsed)
+            if key != _release_key(parsed.version):
+                tag_aliases[parsed.version] = key
     for cpe in cpes:
         add(_cpe_version(cpe), "cpe", cpe)
     for url in source_urls or []:
         add(git_revision_from_url(url), "download", url)
 
     releases = [item for item in evidence if not is_source_revision(item["version"])]
-    release_keys = {_release_key(item["version"]) for item in releases if item["source"] != "cpe"}
+    release_keys = {
+        tag_aliases.get(item["version"], _release_key(item["version"]))
+        for item in releases if item["source"] != "cpe"
+    }
     for item in releases:
         if item["source"] == "cpe":
             key = _release_key(item["version"])

@@ -128,6 +128,812 @@ def _zephyr_spdx3(elements, namespace='https://example.org/zephyr/', prefix='zep
     ]}
 
 
+def _grouping_documents(revision='a' * 40):
+    prefix = 'https://example.org/zephyr/'
+    def ref(name):
+        return prefix + name
+
+    def relation(kind, source, *targets):
+        return {'type': 'Relationship', 'relationshipType': kind,
+                'from': ref(source), 'to': [ref(target) for target in targets]}
+    return {
+        'build': _zephyr_spdx3([
+            {'type': 'software_Package', 'spdxId': ref('mbedtls'), 'name': 'mbedtls'},
+            {'type': 'build_Build', 'spdxId': ref('build')},
+            relation('contains', 'mbedtls', 'library'),
+            relation('hasOutput', 'build', 'library'),
+            relation('hasInput', 'build', 'file'),
+        ]),
+        'sources': _zephyr_spdx3([
+            {'type': 'software_Package', 'spdxId': ref('source'), 'name': 'mbedtls-sources',
+             'software_primaryPurpose': 'source', 'software_packageVersion': revision},
+            relation('contains', 'source', 'file'),
+            relation('hasVariant', 'upstream', 'source'),
+        ]),
+        'upstream': _zephyr_spdx3([
+            {'type': 'software_Package', 'spdxId': ref('upstream'), 'name': 'mbedtls-deps',
+             'software_packageVersion': revision, 'externalIdentifier': [
+                 {'externalIdentifierType': 'packageUrl', 'identifier': 'pkg:github/Mbed-TLS/mbedtls@v4.1.1'},
+                 {'externalIdentifierType': 'cpe23',
+                  'identifier': 'cpe:2.3:a:trustedfirmware:mbed_tls:4.1.1:*:*:*:*:*:*:*'},
+             ]},
+        ]),
+    }
+
+
+def _import_grouping_documents(tmp_path, variant, documents):
+    scan = Scan.create('JSON-LD', variant.id)
+    directory = tmp_path / str(scan.id)
+    directory.mkdir()
+    for name, document in documents.items():
+        path = directory / f'{name}.jsonld'
+        path.write_text(json.dumps(document))
+        SBOMDocument.create(str(path), path.name, scan.id, format='spdx')
+    read_inputs(ControllersCache(), scan.id)
+    return scan
+
+
+def _import_legacy_components(tmp_path, variant, documents, monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr('src.helpers.jsonld_storage.consolidate_jsonld_packages', lambda session: False)
+        return _import_grouping_documents(tmp_path, variant, documents)
+
+
+def test_canonical_package_keeps_an_unknown_release_separate_from_its_revision(app, tmp_path):
+    documents = _grouping_documents()
+    documents['upstream']['@graph'][-1]['externalIdentifier'] = []
+    project = Project.create('unknown-release')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    assert len(Package.get_all()) == 1
+    parent = Package.get_by_string_id('mbedtls@')
+    assert parent.source_revisions == ['a' * 40]
+    row = app.test_client().get(f'/api/packages?variant_id={variant.id}').json[0]
+    assert row['release_version'] is None
+    assert row['source_revision'] == 'a' * 40
+    assert row['id'] == 'mbedtls@'
+
+
+@pytest.mark.parametrize('ownership', ['unique', 'shared', 'multiple-targets'])
+def test_generated_build_target_requires_unique_exclusive_source_ownership(app, tmp_path, ownership):
+    documents = _grouping_documents()
+    target_name = '..__modules__lib__mbedtls__zephyr'
+    for node in documents['build']['@graph']:
+        if node.get('name') == 'mbedtls':
+            node['name'] = target_name
+    prefix = 'https://example.org/zephyr/'
+    if ownership == 'shared':
+        documents['sources']['@graph'].extend([
+            {'type': 'software_Package', 'spdxId': prefix + 'other-source',
+             'name': 'other-sources', 'software_primaryPurpose': 'source'},
+            {'type': 'Relationship', 'relationshipType': 'contains',
+             'from': prefix + 'other-source', 'to': [prefix + 'file']},
+        ])
+    elif ownership == 'multiple-targets':
+        documents['build']['@graph'].extend([
+            {'type': 'software_Package', 'spdxId': prefix + 'other-target', 'name': 'other-target'},
+            {'type': 'Relationship', 'relationshipType': 'contains',
+             'from': prefix + 'other-target', 'to': [prefix + 'other-library']},
+            {'type': 'Relationship', 'relationshipType': 'hasOutput',
+             'from': prefix + 'build', 'to': [prefix + 'other-library']},
+        ])
+    project = Project.create('generated-build-target')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    rows = app.test_client().get(f'/api/packages?variant_id={variant.id}').json
+    by_name = {row['name']: row for row in rows}
+    parent = by_name['mbedtls']
+    assert parent['id'] == 'mbedtls@4.1.1'
+    if ownership == 'unique':
+        assert len(Package.get_all()) == len(rows) == 1
+        assert parent['component_types'] == ['built']
+        assert target_name not in by_name
+    else:
+        assert len(Package.get_all()) == len(rows) == 3
+        assert parent['component_types'] == ['workspace']
+        assert by_name[target_name]['component_types'] == ['normal']
+
+
+@pytest.mark.parametrize('owns_source', [False, True])
+def test_module_target_with_zephyr_glue_requires_its_own_upstream_source(app, tmp_path, owns_source):
+    documents = _grouping_documents()
+    target_name = 'modules__mbedtls'
+    prefix = 'https://example.org/zephyr/'
+    for node in documents['build']['@graph']:
+        if node.get('name') == 'mbedtls':
+            node['name'] = target_name
+    if not owns_source:
+        documents['sources']['@graph'] = [
+            node for node in documents['sources']['@graph']
+            if node.get('relationshipType') != 'contains'
+        ]
+    documents['sources']['@graph'].extend([
+        {'type': 'software_Package', 'spdxId': prefix + 'zephyr-source',
+         'name': 'zephyr-sources', 'software_primaryPurpose': 'source'},
+        {'type': 'Relationship', 'relationshipType': 'contains',
+         'from': prefix + 'zephyr-source', 'to': [prefix + 'wrapper-file']},
+    ])
+    documents['build']['@graph'].append({
+        'type': 'Relationship', 'relationshipType': 'hasInput',
+        'from': prefix + 'build', 'to': [prefix + 'wrapper-file'],
+    })
+    project = Project.create('module-with-zephyr-glue')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    rows = app.test_client().get(f'/api/packages?variant_id={variant.id}').json
+    by_name = {row['name']: row for row in rows}
+    parent = by_name['mbedtls']
+    assert parent['id'] == 'mbedtls@4.1.1'
+    assert by_name['zephyr-sources']['component_types'] == ['normal']
+    if owns_source:
+        assert len(Package.get_all()) == len(rows) == 2
+        assert parent['component_types'] == ['built']
+        assert target_name not in by_name
+    else:
+        assert len(Package.get_all()) == len(rows) == 3
+        assert parent['component_types'] == ['workspace']
+        assert by_name[target_name]['component_types'] == ['normal']
+
+
+def test_package_types_are_scoped_without_duplicating_the_parent(app, tmp_path):
+    project = Project.create('scoped-component-types')
+    built = Variant.create('built', project.id)
+    built_scan = _import_grouping_documents(tmp_path, built, _grouping_documents())
+    workspace = Variant.create('workspace', project.id)
+    documents = _grouping_documents()
+    documents.pop('build')
+    workspace_scan = _import_grouping_documents(tmp_path, workspace, documents)
+    ordinary = Variant.create('ordinary', project.id)
+    ordinary_scan = Scan.create('Ordinary SBOM', ordinary.id)
+    ordinary_document = SBOMDocument.create('ordinary.json', 'ordinary', ordinary_scan.id, format='cdx')
+    parent = Package.get_by_string_id('mbedtls@4.1.1')
+    parent_id = parent.id
+    link = SBOMPackage.create(ordinary_document.id, parent.id)
+    assert link.type == 'normal'
+    client = app.test_client()
+    for variant, expected in ((built, 'built'), (workspace, 'workspace'), (ordinary, 'normal')):
+        rows = client.get(f'/api/packages?variant_id={variant.id}').json
+        assert len(rows) == 1
+        assert rows[0]['package_id'] == str(parent_id)
+        assert rows[0]['component_types'] == [expected]
+    rows = client.get(f'/api/packages?project_id={project.id}').json
+    assert len(rows) == len(Package.get_all()) == 1
+    assert rows[0]['component_types'] == ['built', 'normal', 'workspace']
+    for scan, expected in ((built_scan, 'built'), (workspace_scan, 'workspace'), (ordinary_scan, 'normal')):
+        links = db.session.query(SBOMPackage).join(SBOMDocument).filter(SBOMDocument.scan_id == scan.id).all()
+        assert {link.type for link in links} == {expected}
+    assert 'type' not in {column['name'] for column in inspect(db.engine).get_columns('packages')}
+
+
+def test_type_migration_backfills_canonical_groups_without_input_files_or_new_packages(app, tmp_path):
+    from importlib import import_module
+    from alembic import op
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import IntegrityError
+
+    project = Project.create('component-type-migration')
+    built = Variant.create('built', project.id)
+    built_scan = _import_grouping_documents(tmp_path, built, _grouping_documents())
+    workspace = Variant.create('workspace', project.id)
+    documents = _grouping_documents()
+    documents.pop('build')
+    workspace_scan = _import_grouping_documents(tmp_path, workspace, documents)
+    parent = Package.get_by_string_id('mbedtls@4.1.1')
+    ordinary_document = SBOMDocument.create('ordinary.json', 'ordinary', built_scan.id, format='cdx')
+    SBOMPackage.create(ordinary_document.id, parent.id)
+    expected = {document.id: 'built' for document in SBOMDocument.get_by_scan(built_scan.id)
+                if document.id != ordinary_document.id}
+    expected.update({document.id: 'workspace' for document in SBOMDocument.get_by_scan(workspace_scan.id)})
+    expected[ordinary_document.id] = 'normal'
+    parent_id = parent.id
+    for document in SBOMDocument.get_all():
+        path = Path(document.path)
+        if path.exists():
+            path.unlink()
+    db.session.remove()
+    migration = import_module('src.migrations.versions.d8f63a29b104_add_scoped_package_types')
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            # Preserve existing grouping provenance while exercising type backfill.
+            with op.batch_alter_table('sbom_packages') as batch_op:
+                batch_op.drop_constraint('ck_sbom_packages_type', type_='check')
+                batch_op.drop_column('type')
+            assert 'type' not in {column['name'] for column in inspect(connection).get_columns('sbom_packages')}
+            migration.upgrade()
+        assert connection.execute(text('SELECT count(*) FROM packages')).scalar() == 1
+        with pytest.raises(IntegrityError):
+            with connection.begin_nested():
+                connection.execute(text("UPDATE sbom_packages SET type = 'unexpected'"))
+    assert Package.get_by_string_id('mbedtls@4.1.1').id == parent_id
+    assert {link.sbom_document_id: link.type for link in db.session.query(SBOMPackage)} == expected
+    assert all(link.package_id == parent_id for link in db.session.query(SBOMPackage))
+
+
+def test_jsonld_storage_migration_preserves_findings_assessments_and_evidence(app, tmp_path, monkeypatch):
+    from importlib import import_module
+    from alembic import op
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from src.models import Assessment, Observation, SBOMObservation, Vulnerability
+    from src.models.assessment_review import AssessmentReview
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.time_estimate import TimeEstimate
+
+    project = Project.create('legacy-component-storage')
+    variant = Variant.create('demo', project.id)
+    scan = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    assert len(Package.get_all()) == 3
+    parent = Package.get_by_string_id('mbedtls@')
+    parent_id, variant_id = parent.id, variant.id
+    vulnerability = Vulnerability.create_record(id='CVE-2026-1234')
+    findings = [Finding.get_or_create(package.id, vulnerability.id) for package in Package.get_all()]
+    for finding in findings:
+        Observation.create(finding_id=finding.id, scan_id=scan.id)
+    assessment = Assessment.create(
+        source='custom', origin='custom', status='affected', simplified_status='Exploitable',
+        status_notes='Original analyst judgment',
+        targets=[(variant.id, finding.id) for finding in findings],
+    )
+    assessment_id = assessment.id
+    for finding in findings:
+        TimeEstimate.create(finding_id=finding.id, variant_id=variant.id, optimistic=1, likely=2, pessimistic=3)
+    db.session.add(AssessmentReview(
+        assessment_id=assessment.id, variant_id=variant.id, finding_id=findings[1].id,
+        status='affected', rationale='Original review rationale', reviewed_fingerprint='original-fingerprint',
+    ))
+    source = Package.get_by_string_id('mbedtls-sources@' + 'a' * 40)
+    source_document = SBOMPackage.get_by_package(source.id)[0].sbom_document_id
+    observation = SBOMObservation.create(
+        vulnerability.id, source_document, 'original-evidence', 'Original SBOM evidence', package_id=source.id,
+    )
+    observation_id = observation.id
+    crypto = Package.find_or_create('crypto', '1')
+    SBOMPackage.create(source_document, crypto.id)
+    db.session.add_all([
+        PackageDependency(sbom_document_id=source_document, package_id=source.id, dependency_id=parent.id),
+        PackageDependency(sbom_document_id=source_document, package_id=source.id, dependency_id=crypto.id),
+    ])
+    db.session.commit()
+    db.session.remove()
+    migration = import_module('src.migrations.versions.d8f63a29b104_add_scoped_package_types')
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            # Keep recorded groups to exercise consolidation of legacy package rows.
+            with op.batch_alter_table('sbom_packages') as batch_op:
+                batch_op.drop_constraint('ck_sbom_packages_type', type_='check')
+                batch_op.drop_column('type')
+                batch_op.drop_column('source_revisions')
+            with op.batch_alter_table('packages') as batch_op:
+                batch_op.drop_column('source_revisions')
+            assert 'source_revisions' not in {column['name'] for column in inspect(connection).get_columns('packages')}
+            migration.upgrade()
+        assert connection.execute(text('SELECT count(*) FROM packages')).scalar() == 2
+    parent = Package.get_by_string_id('mbedtls@4.1.1')
+    assert parent.id == parent_id
+    assert parent.source_revisions == ['a' * 40]
+    assert {link.type for link in SBOMPackage.get_by_package(parent.id)} == {'built'}
+    assert len(Finding.get_all()) == 1
+    finding = Finding.get_all()[0]
+    assert finding.package_id == parent.id
+    assert db.session.query(Observation).count() == 1
+    assert db.session.query(Assessment).count() == 1
+    assessment = db.session.get(Assessment, assessment_id)
+    assert assessment.status_notes == 'Original analyst judgment'
+    assert assessment.packages == ['mbedtls@4.1.1']
+    assert assessment.targets == [(variant_id, finding.id)]
+    assert db.session.query(AssessmentTarget).count() == 1
+    assert db.session.query(TimeEstimate).count() == 1
+    estimate = db.session.query(TimeEstimate).one()
+    assert (estimate.finding_id, estimate.optimistic, estimate.likely, estimate.pessimistic) == (finding.id, 1, 2, 3)
+    review = db.session.query(AssessmentReview).one()
+    assert review.finding_id == finding.id
+    assert review.rationale == 'Original review rationale'
+    assert review.reviewed_fingerprint == 'original-fingerprint'
+    observation = db.session.get(SBOMObservation, observation_id)
+    assert observation.package_id == parent.id
+    assert observation.description == 'Original SBOM evidence'
+    edges = db.session.query(PackageDependency).all()
+    assert len(edges) == 1
+    assert edges[0].package_id == parent.id
+    assert edges[0].dependency_id == Package.get_by_string_id('crypto@1').id
+    response = app.test_client().post('/api/vulnerabilities/CVE-2026-1234/assessments', json={
+        'status': 'not_affected', 'justification': 'vulnerable_code_not_present',
+        'status_notes': 'Assessment of the actual parent', 'packages': ['mbedtls@4.1.1'],
+        'variant_id': str(variant_id),
+    })
+    assert response.status_code == 200, response.json
+    assert response.json['assessment']['packages'] == ['mbedtls@4.1.1']
+    assert {target.finding.package_id for target in db.session.query(AssessmentTarget).all()} == {parent_id}
+
+
+def test_consolidation_keeps_unrelated_non_zephyr_findings_and_targets(app, tmp_path, monkeypatch):
+    from src.helpers.jsonld_storage import consolidate_jsonld_packages
+    from src.models import Assessment, Observation, Vulnerability
+    from src.models.assessment_target import AssessmentTarget
+
+    project = Project.create('mixed-storage')
+    variant = Variant.create('west', project.id)
+    scan = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    other = Variant.create('yocto', project.id)
+    other_scan = Scan.create('Unrelated SBOM', other.id)
+    other_document = SBOMDocument.create('yocto.json', 'yocto', other_scan.id, format='yocto_cve_check')
+    source = Package.get_by_string_id('mbedtls-sources@' + 'a' * 40)
+    source_id = source.id
+    SBOMPackage.create(other_document.id, source.id)
+    vulnerability = Vulnerability.create_record(id='CVE-2026-1235')
+    finding = Finding.get_or_create(source.id, vulnerability.id)
+    for context in (scan, other_scan):
+        Observation.create(finding_id=finding.id, scan_id=context.id)
+    assessment = Assessment.create(
+        source='custom', origin='custom', status='affected', simplified_status='Exploitable',
+        targets=[(context.id, finding.id) for context in (variant, other)],
+    )
+    assessment_id = assessment.id
+    db.session.execute(text('PRAGMA foreign_keys=ON'))
+    assert db.session.execute(text('PRAGMA foreign_keys')).scalar() == 1
+    assert consolidate_jsonld_packages(db.session())
+    db.session.commit()
+    parent = Package.get_by_string_id('mbedtls@4.1.1')
+    assert Package.get_by_string_id('mbedtls-sources@' + 'a' * 40).id == source_id
+    pairs = {(target.variant_id, target.finding.package_id)
+             for target in db.session.query(AssessmentTarget).filter_by(assessment_id=assessment_id)}
+    assert pairs == {(variant.id, parent.id), (other.id, source_id)}
+    observations = {(observation.scan_id, observation.finding.package_id)
+                    for observation in db.session.query(Observation)}
+    assert observations == {(scan.id, parent.id), (other_scan.id, source_id)}
+    assert db.session.execute(text('PRAGMA foreign_key_check')).all() == []
+
+
+def test_legacy_unversioned_build_references_follow_each_release_scan(app, tmp_path, monkeypatch):
+    from src.helpers.jsonld_storage import consolidate_jsonld_packages
+    from src.models import Assessment, Observation, Vulnerability
+    from src.models.assessment_target import AssessmentTarget
+
+    project = Project.create('legacy-releases')
+    variant = Variant.create('demo', project.id)
+    first = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    upgraded = json.loads(json.dumps(_grouping_documents('b' * 40)).replace('4.1.1', '4.2.0'))
+    second = _import_legacy_components(tmp_path, variant, upgraded, monkeypatch)
+    vulnerability = Vulnerability.create_record(id='CVE-2026-1236')
+    finding = Finding.get_or_create(Package.get_by_string_id('mbedtls@').id, vulnerability.id)
+    for scan in (first, second):
+        Observation.create(finding_id=finding.id, scan_id=scan.id)
+    assessment = Assessment.create(
+        source='custom', origin='custom', status='affected', simplified_status='Exploitable',
+        targets=[(variant.id, finding.id)],
+    )
+    assessment_id = assessment.id
+    assert consolidate_jsonld_packages(db.session())
+    db.session.commit()
+    assert len(Package.get_all()) == 2
+    assert Package.get_by_string_id('mbedtls@') is None
+    observations = {(observation.scan_id, observation.finding.package.string_id)
+                    for observation in db.session.query(Observation)}
+    assert observations == {(first.id, 'mbedtls@4.1.1'), (second.id, 'mbedtls@4.2.0')}
+    assert {target.finding.package.string_id for target in
+            db.session.query(AssessmentTarget).filter_by(assessment_id=assessment_id)} == {
+                'mbedtls@4.1.1', 'mbedtls@4.2.0',
+            }
+
+
+def test_unambiguous_existing_finding_keeps_its_uuid_when_moved_to_parent(app, tmp_path, monkeypatch):
+    from src.helpers.jsonld_storage import consolidate_jsonld_packages
+    from src.models import Observation, Vulnerability
+
+    project = Project.create('stable-finding')
+    variant = Variant.create('demo', project.id)
+    scan = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    vulnerability = Vulnerability.create_record(id='CVE-2026-1238')
+    source = Package.get_by_string_id('mbedtls-sources@' + 'a' * 40)
+    finding = Finding.get_or_create(source.id, vulnerability.id)
+    observation = Observation.create(finding_id=finding.id, scan_id=scan.id)
+    finding_id, observation_id = finding.id, observation.id
+    assert consolidate_jsonld_packages(db.session())
+    db.session.commit()
+    assert len(Finding.get_all()) == 1
+    assert Finding.get_all()[0].id == finding_id
+    assert Finding.get_all()[0].package_id == Package.get_by_string_id('mbedtls@4.1.1').id
+    assert db.session.get(Observation, observation_id).finding_id == finding_id
+
+
+def test_ingestion_refreshes_cached_vulnerabilities_and_assessments_to_the_parent(app, tmp_path, monkeypatch):
+    from src.models import Assessment, Vulnerability
+
+    project = Project.create('canonical-import-caches')
+    variant = Variant.create('demo', project.id)
+    scan = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    source = Package.get_by_string_id('mbedtls-sources@' + 'a' * 40)
+    original_id = source.string_id
+    vulnerability = Vulnerability.create_record(id='CVE-2026-1239')
+    Finding.get_or_create(source.id, vulnerability.id)
+    controllers = ControllersCache()
+    assert controllers.vulnerabilities.get(vulnerability.id).packages == [original_id]
+    controllers.assessments.current_variant_id = variant.id
+    assessment = Assessment.new_dto(vulnerability.id, [original_id])
+    controllers.assessments.add(assessment)
+    db.session.commit()
+    read_inputs(controllers, scan.id)
+    assert controllers.vulnerabilities.get(vulnerability.id).packages == ['mbedtls@4.1.1']
+    assert controllers.assessments.get_by_id(assessment.id).packages == ['mbedtls@4.1.1']
+    assert (vulnerability.id, original_id) not in controllers.assessments._by_vuln_pkg
+    assert (vulnerability.id, 'mbedtls@4.1.1') in controllers.assessments._by_vuln_pkg
+    assert len(list(controllers.packages)) == 1
+
+
+@pytest.mark.parametrize('conflict', ['review', 'estimate'])
+def test_conflicting_legacy_analyst_records_abort_without_data_loss(app, tmp_path, monkeypatch, conflict):
+    from src.helpers.jsonld_storage import consolidate_jsonld_packages
+    from src.models import Assessment, Vulnerability
+    from src.models.assessment_review import AssessmentReview
+    from src.models.time_estimate import TimeEstimate
+
+    project = Project.create('legacy-conflicts')
+    variant = Variant.create('demo', project.id)
+    _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    vulnerability = Vulnerability.create_record(id='CVE-2026-1237')
+    findings = [Finding.get_or_create(package.id, vulnerability.id) for package in Package.get_all()]
+    assessment = Assessment.create(
+        source='custom', origin='custom', status='affected', simplified_status='Exploitable',
+        targets=[(variant.id, finding.id) for finding in findings],
+    )
+    for index, finding in enumerate(findings):
+        if conflict == 'estimate':
+            TimeEstimate.create(finding_id=finding.id, variant_id=variant.id,
+                                optimistic=index + 1, likely=2, pessimistic=3)
+        else:
+            db.session.add(AssessmentReview(
+                assessment_id=assessment.id, variant_id=variant.id, finding_id=finding.id,
+                status='affected', rationale=f'Independent analyst rationale {index}',
+            ))
+    db.session.commit()
+    with pytest.raises(ValueError, match='Resolve the duplicate records before retrying'):
+        with db.session.begin_nested():
+            consolidate_jsonld_packages(db.session())
+    db.session.expire_all()
+    assert len(Package.get_all()) == len(Finding.get_all()) == 3
+    assert Package.get_by_string_id('mbedtls@') is not None
+    assert Package.get_by_string_id('mbedtls@4.1.1') is None
+    assert db.session.query(AssessmentReview if conflict == 'review' else TimeEstimate).count() == 3
+
+
+@pytest.mark.parametrize('name,version,purl,cpe,release', [
+    ('zephyr', '4.5.0-rc2', None, 'cpe:2.3:o:zephyrproject:zephyr:4.5.0:rc2:*:*:*:*:*:*', '4.5.0-rc2'),
+    ('hostap', 'a' * 40, 'pkg:generic/hostap@hostap_2_11?vcs_url=git://w1.fi/hostap.git',
+     'cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*', '2.11'),
+])
+def test_equivalent_zephyr_version_spellings_agree_in_stored_packages_and_graphs(
+        app, tmp_path, name, version, purl, cpe, release):
+    revision = 'a' * 40
+    namespace = 'https://example.org/zephyr/'
+    upstream_ref = namespace + name + '-deps'
+    source_ref = namespace + name + '-sources'
+    document = _zephyr_spdx3([
+        {'type': 'software_Package', 'spdxId': upstream_ref, 'name': name + '-deps',
+         'software_packageVersion': version,
+         'software_downloadLocation': f'git+https://example.org/{name}@{revision}',
+         'externalIdentifier': [
+             {'externalIdentifierType': 'cpe23', 'identifier': cpe},
+             *([{'externalIdentifierType': 'packageUrl', 'identifier': purl}] if purl else []),
+         ]},
+        {'type': 'software_Package', 'spdxId': source_ref, 'name': name + '-sources',
+         'software_packageVersion': revision, 'software_primaryPurpose': 'source'},
+        {'type': 'Relationship', 'relationshipType': 'hasVariant', 'from': upstream_ref, 'to': [source_ref]},
+    ])
+    variant_id, _ = _scan(app, tmp_path, name, document)
+    client = app.test_client()
+    rows = client.get(f'/api/packages?variant_id={variant_id}').json
+    assert len(rows) == len(Package.get_all()) == 1
+    upstream = rows[0]
+    assert upstream['release_version'] == release
+    assert upstream['source_revision'] == revision
+    assert not upstream['version_conflict']
+    assert upstream['version'] == release
+    assert upstream['id'] == f'{name}@{release}'
+    assert 'jsonld_group' not in upstream
+    graph_packages = client.get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]['packages']
+    graph_upstream = next(package for package in graph_packages if package['id'] == upstream['id'])
+    assert graph_upstream['release_version'] == release
+    assert graph_upstream['version_evidence'] == upstream['version_evidence']
+    assert graph_upstream['source_revision'] == revision
+    assert not graph_upstream['version_conflict']
+
+
+def test_jsonld_components_are_one_stored_package_and_survive_input_cleanup(app, tmp_path):
+    project = Project.create('grouping')
+    variant = Variant.create('demo', project.id)
+    scan = _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    rows = app.test_client().get(f'/api/packages?variant_id={variant.id}').json
+    assert len(rows) == len(Package.get_all()) == 1
+    assert rows[0]['id'] == 'mbedtls@4.1.1'
+    assert rows[0]['source_revision'] == 'a' * 40
+    assert rows[0]['source_revisions'] == ['a' * 40]
+    assert 'jsonld_group' not in rows[0]
+    for document in SBOMDocument.get_by_scan(scan.id):
+        Path(document.path).unlink()
+    assert app.test_client().get(f'/api/packages?variant_id={variant.id}').json == rows
+    assert len(Package.get_all()) == 1
+
+
+def test_cli_and_queued_scanners_use_the_actual_stored_parent(app, tmp_path):
+    from src.bin.cmd_vuln_scan import _resolve_active_packages
+    from src.controllers.scan_jobs import _variant_sbom_packages
+    from src.routes._scan_helpers import resolve_active_packages
+
+    project = Project.create('logical-scans')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    assert len(Package.get_all()) == 1
+    component = Package.get_by_string_id('mbedtls@4.1.1')
+    assert component.name == 'mbedtls'
+    assert component.version == '4.1.1'
+    assert Package.get_by_string_id('mbedtls-deps@' + 'a' * 40) is None
+    assert Package.get_by_string_id('mbedtls-sources@' + 'a' * 40) is None
+    assert component.cpe[0] == 'cpe:2.3:a:trustedfirmware:mbed_tls:4.1.1:*:*:*:*:*:*:*'
+    assert 'pkg:github/mbed-tls/mbedtls@v4.1.1' in component.purl
+    queued, error = resolve_active_packages(variant.id)
+    assert error is None
+    assert [package.to_dict() for package in queued] == [component.to_dict()]
+    assert [package.to_dict() for package in _resolve_active_packages(variant.id)] == [component.to_dict()]
+    assert _variant_sbom_packages(variant.id) == {('mbedtls', '4.1.1')}
+    db.session.expire_all()
+    assert len(Package.get_all()) == 1
+
+
+def test_ordinary_export_uses_stored_parent_and_canonical_dependencies(app, tmp_path):
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.cyclonedx import CycloneDx
+
+    documents = _grouping_documents()
+    documents['upstream']['@graph'].extend([
+        {'type': 'software_Package', 'spdxId': 'https://example.org/zephyr/crypto',
+         'name': 'crypto', 'software_packageVersion': '1'},
+        {'type': 'Relationship', 'relationshipType': 'dependsOn',
+         'from': 'https://example.org/zephyr/source', 'to': ['https://example.org/zephyr/crypto']},
+        {'type': 'Relationship', 'relationshipType': 'dependsOn',
+         'from': 'https://example.org/zephyr/upstream', 'to': ['https://example.org/zephyr/source']},
+    ])
+    project = Project.create('logical-export')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    controllers = ControllersCache(scope=compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    assert len(controllers.packages) == 2
+    assert controllers.packages.get('mbedtls@4.1.1').string_id == 'mbedtls@4.1.1'
+    assert controllers.packages.get('mbedtls-sources@' + 'a' * 40) is None
+    assert controllers.packages.dependency_edges() == {('mbedtls@4.1.1', 'crypto@1')}
+    exported = json.loads(CycloneDx(controllers).output_as_json(6))
+    assert {(component['name'], component['version']) for component in exported['components']} == {
+        ('mbedtls', '4.1.1'), ('crypto', '1'),
+    }
+    exported_component = next(component for component in exported['components'] if component['name'] == 'mbedtls')
+    assert exported_component['purl'] == 'pkg:github/mbed-tls/mbedtls@v4.1.1'
+    refs = {component['bom-ref'] for component in exported['components']}
+    assert all(dependency['ref'] in refs and set(dependency.get('dependsOn', [])).issubset(refs)
+               for dependency in exported['dependencies'])
+
+
+@pytest.mark.parametrize('artifact_purl', [
+    'pkg:github/mbed-tls/mbedtls@v4.1.1', 'pkg:generic/mbedtls@4.1.1',
+])
+def test_grype_results_use_the_stored_parent_without_alias_translation(app, tmp_path, artifact_purl):
+    from unittest.mock import Mock
+    from src.models import Observation, Vulnerability
+    from src.views.grype_vulns import GrypeVulns
+    from src.controllers.scan_jobs import _filter_grype_matches
+    from src.routes._scan_diff import _global_result_full, _serialize_list_with_diff
+
+    project = Project.create('logical-grype')
+    variant = Variant.create('demo', project.id)
+    sbom = _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    parent = Package.get_by_string_id('mbedtls@4.1.1')
+    legacy = Vulnerability.create_record(id='CVE-2026-1000')
+    finding = Finding.get_or_create(parent.id, legacy.id)
+    Observation.create(finding_id=finding.id, scan_id=sbom.id)
+    tool = Scan.create('Grype', variant.id, scan_type='tool', scan_source='grype')
+    controllers = ControllersCache()
+    controllers.assessments.current_variant_id = variant.id
+    controllers.vulnerabilities.current_variant_id = variant.id
+    controllers.packages.current_sbom_document = SBOMDocument.create('grype.json', 'grype', tool.id, format='grype')
+    grype_data = {'matches': [{
+        'artifact': {'name': 'trustedfirmware/mbedtls', 'version': '4.1.1',
+                     'purl': artifact_purl},
+        'vulnerability': {'id': 'CVE-2026-1001'},
+    }]}
+    results_path = tmp_path / 'grype.json'
+    results_path.write_text(json.dumps(grype_data))
+    _filter_grype_matches(Mock(), str(results_path), {('mbedtls', '4.1.1')})
+    assert json.loads(results_path.read_text()) == grype_data
+    GrypeVulns(controllers).load_from_dict(grype_data)
+    db.session.commit()
+    grype_finding = next(finding for finding in Finding.get_all() if finding.vulnerability_id == 'CVE-2026-1001')
+    assert grype_finding.package_id == parent.id
+    Observation.create(finding_id=grype_finding.id, scan_id=tool.id)
+    assert len(Package.get_all()) == 1
+    scans = Scan.get_all()
+    history = _serialize_list_with_diff(scans)
+    assert history[0]['package_count'] == 1
+    assert history[1]['global_package_count'] == 1
+    assert history[1]['branch_package_count'] == 1
+    result = _global_result_full(tool, scans)
+    assert result['package_count'] == len(result['packages']) == 1
+    assert result['packages'][0]['package_name'] == 'mbedtls'
+    assert result['packages'][0]['package_version'] == '4.1.1'
+    assert {entry['vulnerability_id'] for entry in result['findings']} == {'CVE-2026-1000', 'CVE-2026-1001'}
+    assert app.test_client().get(f'/api/scans/{sbom.id}/diff').json['package_count'] == 1
+
+
+def test_logical_scan_history_compares_components_not_each_original_entry(app, tmp_path):
+    from src.routes._scan_diff import _serialize_list_with_diff
+
+    project = Project.create('logical-history')
+    variant = Variant.create('demo', project.id)
+    first = _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    second = _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    upgraded_documents = json.loads(json.dumps(_grouping_documents('b' * 40)).replace('4.1.1', '4.2.0'))
+    third = _import_grouping_documents(tmp_path, variant, upgraded_documents)
+    history = _serialize_list_with_diff([first, second, third])
+    assert [entry['package_count'] for entry in history] == [1, 1, 1]
+    assert history[1]['packages_unchanged'] == 1
+    assert history[2]['packages_upgraded'] == 1
+    assert history[2]['packages_added'] == history[2]['packages_removed'] == 0
+    client = app.test_client()
+    unchanged = client.get(f'/api/scans/{second.id}/diff').json
+    assert unchanged['packages_unchanged'][0]['package_version'] == '4.1.1'
+    upgraded = client.get(f'/api/scans/{third.id}/diff').json
+    assert upgraded['package_count'] == 1
+    assert len(upgraded['packages_upgraded']) == 1
+    assert upgraded['packages_upgraded'][0]['package_name'] == 'mbedtls'
+    assert upgraded['packages_upgraded'][0]['old_version'] == '4.1.1'
+    assert upgraded['packages_upgraded'][0]['new_version'] == '4.2.0'
+
+
+def test_cli_osv_queries_all_parent_identifiers_and_persists_one_finding(app, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    project = Project.create('logical-osv')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    component = Package.get_by_string_id('mbedtls@4.1.1')
+    client = Mock()
+    client.query_by_purl.return_value = [{'id': 'CVE-2026-1002'}]
+    monkeypatch.setattr('src.bin.cmd_vuln_scan.OSVClient', lambda: client)
+    result = app.test_cli_runner().invoke(args=['osv-scan', '--project', project.name, '--variant', variant.name])
+    assert result.exit_code == 0, result.output
+    assert {call.args[0] for call in client.query_by_purl.call_args_list} == set(component.purl)
+    findings = [finding for finding in Finding.get_all() if finding.vulnerability_id == 'CVE-2026-1002']
+    assert len(findings) == 1
+    assert findings[0].package_id == component.id
+
+
+def test_reimporting_companions_reuses_one_real_parent_uuid(app, tmp_path):
+    project = Project.create('batched-history')
+    variant = Variant.create('demo', project.id)
+    scans = [_import_grouping_documents(tmp_path, variant, _grouping_documents()) for _ in range(5)]
+    assert len(Package.get_all()) == 1
+    parent = Package.get_by_string_id('mbedtls@4.1.1')
+    assert {link.package_id for link in db.session.query(SBOMPackage).all()} == {parent.id}
+    assert len({link.sbom_document_id for link in db.session.query(SBOMPackage).all()}) == len(scans) * 3
+
+
+@pytest.mark.parametrize('collision', ['another-group', 'ordinary-package'])
+def test_same_parent_identity_is_reused_across_documents_and_variants(app, tmp_path, collision):
+    from src.helpers.export_scope import compute_export_scope
+
+    project = Project.create('ambiguous-components')
+    variant = Variant.create('first', project.id)
+    documents = _grouping_documents()
+    documents.pop('build')
+    first = _import_grouping_documents(tmp_path, variant, documents)
+    if collision == 'another-group':
+        second_variant = Variant.create('second', project.id)
+        documents = _grouping_documents('b' * 40)
+        documents.pop('build')
+        second = _import_grouping_documents(tmp_path, second_variant, documents)
+    else:
+        document = SBOMDocument.create('ordinary.json', 'ordinary', first.id, format='cdx')
+        SBOMPackage.create(document.id, Package.find_or_create('mbedtls', '4.1.1').id)
+    assert len(Package.get_all()) == 1
+    rows = app.test_client().get(f'/api/packages?project_id={project.id}').json
+    assert all('jsonld_group' not in row for row in rows)
+    controllers = ControllersCache(scope=compute_export_scope(project_id=project.id))
+    controllers.packages._preload_cache()
+    assert len(controllers.packages) == 1
+
+
+@pytest.mark.parametrize('change', ['no-relationship', 'other-producer', 'conflicting-revision', 'conflicting-release'])
+def test_jsonld_groups_require_provenance_and_consistent_versions(app, tmp_path, change):
+    documents = _grouping_documents()
+    if change == 'no-relationship':
+        documents['sources']['@graph'] = [
+            item for item in documents['sources']['@graph'] if item.get('relationshipType') != 'hasVariant'
+        ]
+    elif change == 'other-producer':
+        for document in documents.values():
+            for item in document['@graph']:
+                if item.get('type') == 'SoftwareAgent':
+                    item['name'] = 'Another generator'
+    elif change == 'conflicting-revision':
+        documents['upstream']['@graph'][-1]['software_packageVersion'] = 'b' * 40
+    else:
+        documents['upstream']['@graph'][-1]['externalIdentifier'][0]['identifier'] = 'pkg:github/Mbed-TLS/mbedtls@v5.0.0'
+    project = Project.create('not-grouped')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    rows = app.test_client().get(f'/api/packages?variant_id={variant.id}').json
+    assert all('jsonld_group' not in row for row in rows)
+    assert len(rows) == len(Package.get_all()) == (2 if change == 'other-producer' else 3)
+
+
+def test_jsonld_sources_without_build_provenance_do_not_absorb_a_same_named_target(app, tmp_path):
+    documents = _grouping_documents()
+    documents['build']['@graph'] = [item for item in documents['build']['@graph']
+                                   if item.get('relationshipType') != 'hasInput']
+    project = Project.create('workspace-only')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    rows = app.test_client().get(f'/api/packages?variant_id={variant.id}').json
+    assert len(rows) == len(Package.get_all()) == 2
+    target = next(row for row in rows if row['id'] == 'mbedtls@')
+    assert 'jsonld_group' not in target
+    parent = next(row for row in rows if row['id'] == 'mbedtls@4.1.1')
+    assert parent['source_revision'] == 'a' * 40
+
+
+def test_jsonld_ambiguous_build_ownership_keeps_original_records(app, tmp_path):
+    documents = _grouping_documents()
+    documents['build']['@graph'].extend([
+        {'type': 'software_Package', 'spdxId': 'https://example.org/zephyr/other-target', 'name': 'mbedtls',
+         'software_packageVersion': 'other'},
+        {'type': 'Relationship', 'relationshipType': 'contains',
+         'from': 'https://example.org/zephyr/other-target', 'to': ['https://example.org/zephyr/library']},
+    ])
+    project = Project.create('ambiguous-build')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    rows = app.test_client().get(f'/api/packages?variant_id={variant.id}').json
+    assert all('jsonld_group' not in row for row in rows)
+
+
+def test_jsonld_parent_revisions_remain_scoped_and_yocto_is_not_rewritten(app, tmp_path):
+    project = Project.create('mixed')
+    first = Variant.create('one', project.id)
+    _import_grouping_documents(tmp_path, first, _grouping_documents())
+    second = Variant.create('two', project.id)
+    _import_grouping_documents(tmp_path, second, _grouping_documents('b' * 40))
+    client = app.test_client()
+    assert all('jsonld_group' not in row for row in client.get(f'/api/packages?project_id={project.id}').json)
+    assert client.get(f'/api/packages?variant_id={first.id}').json[0]['source_revision'] == 'a' * 40
+    assert client.get(f'/api/packages?variant_id={second.id}').json[0]['source_revision'] == 'b' * 40
+    scan = Scan.get_by_variant_id(first.id)[-1]
+    document = SBOMDocument.create('yocto.json', 'yocto.json', scan.id, format='yocto_cve_check')
+    package = Package.find_or_create('mbedtls-sources', 'ordinary-yocto-version')
+    SBOMPackage.create(document.id, package.id)
+    assert all('jsonld_group' not in row for row in client.get(f'/api/packages?variant_id={first.id}').json)
+    assert Package.get_by_string_id('mbedtls-sources@ordinary-yocto-version') is not None
+
+
+def test_jsonld_group_migration_preserves_existing_documents_without_guessing(app, tmp_path):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    project = Project.create('legacy-grouping')
+    variant = Variant.create('demo', project.id)
+    _import_grouping_documents(tmp_path, variant, _grouping_documents())
+    variant_id = variant.id
+    db.session.remove()
+    migration = import_module('src.migrations.versions.d8f63a29b104_add_scoped_package_types')
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            assert 'jsonld_groups' not in {column['name'] for column in inspect(connection).get_columns('sbom_documents')}
+            migration.upgrade()
+        assert list(connection.execute(text('SELECT jsonld_groups FROM sbom_documents')).scalars()) == [None] * 3
+    rows = app.test_client().get(f'/api/packages?variant_id={variant_id}').json
+    assert all('jsonld_group' not in row for row in rows)
+
+
 def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app, tmp_path):
     revision = 'a' * 40
     release_purl = 'pkg:github/Mbed-TLS/mbedtls@v4.1.1'
@@ -184,13 +990,14 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
             path.write_text(json.dumps(document))
             SBOMDocument.create(str(path), path.name, scan.id, format='spdx')
         read_inputs(ControllersCache(), scan.id)
-        assert len(Package.get_all()) == 7
-        module = Package.get_by_string_id(f'mbedtls-deps@{revision}')
-        assert module.version == revision
+        assert len(Package.get_all()) == 6
+        module = Package.get_by_string_id('mbedtls@4.1.1')
+        assert module.version == '4.1.1'
         assert 'pkg:github/mbed-tls/mbedtls@v4.1.1' in module.purl
         assert release_cpe in module.cpe
         assert Package.get_by_string_id('mbedtls@').version == ''
-        assert Package.get_by_string_id(f'mbedtls-sources@{revision}') is not None
+        assert Package.get_by_string_id(f'mbedtls-sources@{revision}') is None
+        assert Package.get_by_string_id(f'mbedtls-deps@{revision}') is None
 
     client = app.test_client()
     response = client.get(f'/api/package-dependencies?variant_id={variant_id}')
@@ -204,23 +1011,24 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
         {'package_id': 'mbedtls@', 'dependency_id': 'tfpsacrypto@'},
     ]
     assert graphs['modules-deps.jsonld']['edges'] == [
-        {'package_id': f'zephyr-deps@{revision}', 'dependency_id': f'mbedtls-deps@{revision}'},
+        {'package_id': f'zephyr-deps@{revision}', 'dependency_id': 'mbedtls@4.1.1'},
     ]
     module_graph = next(package for package in graphs['modules-deps.jsonld']['packages']
-                        if package['name'] == 'mbedtls-deps')
-    assert module_graph['version'] == module_graph['source_revision'] == revision
+                        if package['name'] == 'mbedtls')
+    assert module_graph['version'] == '4.1.1'
+    assert module_graph['source_revision'] == revision
     assert module_graph['release_version'] == '4.1.1'
     package_response = client.get(f'/api/packages?variant_id={variant_id}&format=list')
     assert package_response.status_code == 200
-    module_api = next(package for package in package_response.json if package['name'] == 'mbedtls-deps')
+    module_api = next(package for package in package_response.json if package['id'] == 'mbedtls@4.1.1')
     assert module_api['release_version'] == '4.1.1'
     assert module_api['source_revision'] == revision
-    assert module_api['id'] == f'mbedtls-deps@{revision}'
+    assert module_api['id'] == 'mbedtls@4.1.1'
     assert {item['source'] for item in module_api['version_evidence']} == {'sbom', 'purl', 'cpe'}
     assert graphs['app.jsonld']['edges'] == graphs['zephyr.jsonld']['edges'] == []
     assert client.get(f'/api/package-dependencies?variant_id={variant_id}&counts=1').json['counts'] == {
         'app@': {'in': 1, 'out': 0}, 'mbedtls@': {'in': 1, 'out': 1}, 'tfpsacrypto@': {'in': 0, 'out': 1},
-        f'zephyr-deps@{revision}': {'in': 1, 'out': 0}, f'mbedtls-deps@{revision}': {'in': 0, 'out': 1},
+        f'zephyr-deps@{revision}': {'in': 1, 'out': 0}, 'mbedtls@4.1.1': {'in': 0, 'out': 1},
     }
     with app.app_context():
         read_inputs(ControllersCache(), scan_id)

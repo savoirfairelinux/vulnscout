@@ -85,8 +85,54 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 value to inspect its source information and the full revision. Missing values
 are shown as **—**; contradictory values are flagged as **Conflicting metadata**.
 A release version and a commit hash describe separate fields, not a conflict.
+CPE update fields are included in the release: version `4.5.0` with update
+`rc2` represents `4.5.0-rc2`, not the final `4.5.0` release. Hostap tags such as
+`hostap_2_11` are displayed as `2.11` when the PURL explicitly identifies the
+upstream Hostap Git repository. Original tag spellings and identifiers remain
+visible in the evidence; unrelated tags and genuinely different releases still
+produce a conflict.
 
 Reimport older SBOMs to populate source revisions from the original files.
+
+### Zephyr JSON-LD components
+
+For SPDX 3 JSON-LD produced by **West SPDX Generator**, VulnScout stores the
+upstream dependency, source checkout and proven compiled target as **one package**
+when explicit provenance connects them. For example, `mbedtls-deps`,
+`mbedtls-sources` and `mbedtls` become `mbedtls@4.1.1` in the `packages` table.
+The checkout revision is additional package metadata, not another package
+identity. CPEs, PURLs and dependencies are combined and deduplicated; internal
+dependency edges are omitted.
+
+The package name carries a **Built component** badge when explicit provenance
+connects it to a compiled target, or **Workspace component** when only its
+upstream/source component is established. Ordinary packages use the default
+`normal` type and have no badge. These types are stored on `sbom_packages`, not
+globally on `packages`: the same package can be built in one variant and
+workspace-only in another. Selecting several scopes can show both badges on
+one package row. Upgrading backfills types from the preserved JSON-LD provenance
+without adding packages or changing assessment identities.
+
+Scanners, exports, findings and assessments use this ordinary persisted package
+directly. Provenance facets are metadata, not separate assessment targets.
+Upgrading the database consolidates previously recorded groups and moves their
+findings and assessment targets to the parent. Conflicting duplicate reviews
+or time estimates stop consolidation
+with an explicit error rather than silently discarding analyst data.
+
+Consolidation requires explicit upstream/source variant relationships, not just
+matching name suffixes. Compiled targets join only through build input/output
+ownership. West CMake `modules__<name>` targets can match the module name when
+build provenance also connects them to that module's source component, even
+if they include Zephyr adapter code. A matching target name alone is insufficient.
+Other generated target names require exactly one candidate target whose inputs
+belong exclusively to that source component.
+Upstream/source records can still enrich a package without a proven
+compiled target. This does not establish that a package is included in firmware.
+Ambiguous or contradictory evidence remains separate. Yocto and other producers
+and formats are unchanged, and revisions remain scoped to their source documents.
+For imports predating recorded provenance, reimport all companion documents
+together after upgrading.
 
 ### Filters
 
