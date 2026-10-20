@@ -19,6 +19,7 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
+from .config import persist_env_keys
 from ..models.project import Project
 from ..models.variant import Variant
 
@@ -39,6 +40,7 @@ MAX_SCOPE_VARIANTS = 1000
 MAX_PROMPT_VARIANTS = 50
 INVALID_PROVIDER_URL = "Invalid provider URL."
 BUSY_AGENT_ERROR = "The agent is already responding."
+ENV_PROVIDER_CHOICES = ("openai", "azure", "anthropic", "local")
 GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 GITHUB_DEVICE_URL = "https://github.com/login/device/code"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -273,6 +275,67 @@ def _provider_connection(data):
     if kind != "local" and not api_key.strip():
         raise ValueError("An API key is required for this provider.")
     return ProviderConnection(kind, model.strip(), api_key, _provider_url(kind, data.get("base_url", "")))
+
+
+def _persist_agent_credentials(token: str | None = None, provider: ProviderConnection | None = None):
+    updates: dict[str, str | None] = {
+        "AI_PROVIDER": None,
+        "AI_AUTH_CREDENTIALS": None,
+        "AI_MODEL": None,
+        "AI_BASE_URL": None,
+    }
+    if provider:
+        updates["AI_PROVIDER"] = provider.kind
+        updates["AI_AUTH_CREDENTIALS"] = provider.api_key.strip() if provider.api_key.strip() else None
+        updates["AI_MODEL"] = provider.model or None
+        updates["AI_BASE_URL"] = provider.base_url or None
+    elif token:
+        updates["AI_PROVIDER"] = "github"
+        updates["AI_AUTH_CREDENTIALS"] = token.strip()
+    ok, failed = persist_env_keys(updates)
+    if not ok:
+        raise RuntimeError(f"Failed to persist '{failed}' to config.env.")
+
+
+def _load_env_credentials(root):
+    if root.credentials.token or root.credentials.provider:
+        return None
+    provider = os.getenv("AI_PROVIDER", "").strip().lower()
+    if not provider:
+        return None
+    credentials = os.getenv("AI_AUTH_CREDENTIALS", "")
+    if provider == "github":
+        if not credentials.strip():
+            return "AI_AUTH_CREDENTIALS is required when AI_PROVIDER is github."
+        root.credentials.token = credentials.strip()
+        root.credentials.provider = None
+        return None
+    if provider not in ENV_PROVIDER_CHOICES:
+        return ("Unsupported AI_PROVIDER value. Use one of: github, openai, azure, anthropic, local.")
+    try:
+        connection = _provider_connection({
+            "provider": provider,
+            "model": os.getenv("AI_MODEL", ""),
+            "api_key": credentials,
+            "base_url": os.getenv("AI_BASE_URL", ""),
+        })
+        connection.models = _provider_models(connection)
+    except ValueError as exc:
+        return str(exc)
+    root.credentials.token = None
+    root.credentials.provider = connection
+    if connection.model:
+        root.model = connection.model
+    return None
+
+
+def _load_env_credentials_nonblocking(root):
+    if not root.lock.acquire(blocking=False):
+        return None
+    try:
+        return _load_env_credentials(root)
+    finally:
+        root.lock.release()
 
 
 class _NoProviderRedirect(urllib.request.HTTPRedirectHandler):
@@ -609,6 +672,8 @@ def agent_status():
     if error := _access_error():
         return error
     key, conversation = _conversation()
+    root = conversation.root or conversation
+    config_error = _load_env_credentials_nonblocking(root)
     path = _mcp_path()
     configured = path is not None and path.is_file()
     if conversation.credentials.provider:
@@ -622,6 +687,7 @@ def agent_status():
                       "device_login": True,
                       "token_connected": conversation.credentials.token is not None,
                       "provider": conversation.credentials.provider.kind if conversation.credentials.provider else None,
+                      "config_error": config_error,
                       "messages": conversation.messages,
                       "model": conversation.model, "usage": conversation.usage}, key)
 
@@ -631,6 +697,10 @@ def agent_provider():
     if error := _access_error():
         return error
     key, conversation = _conversation()
+    root = conversation.root or conversation
+    config_error = _load_env_credentials_nonblocking(root)
+    if config_error:
+        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
     if request.method == "POST":
         try:
             connection = _provider_connection(request.get_json(silent=True))
@@ -639,12 +709,15 @@ def agent_provider():
             return _response({"error": str(exc)}, key, 400)
     else:
         connection = None
-    root = conversation.root or conversation
     if not root.lock.acquire(blocking=False):
         return _response({"error": BUSY_AGENT_ERROR}, key, 409)
     try:
         if _delete_threads(root):
             return _response({"error": "Could not clear the previous conversation."}, key, 503)
+        try:
+            _persist_agent_credentials(provider=connection)
+        except RuntimeError as exc:
+            return _response({"error": str(exc)}, key, 500)
         _clear_threads(root, connection.model if connection else "auto")
         root.credentials.provider = connection
         if connection:
@@ -656,6 +729,10 @@ def agent_provider():
 
 def _sign_out(root, key):
     with root.lock:
+        try:
+            _persist_agent_credentials()
+        except RuntimeError as exc:
+            return _response({"error": str(exc)}, key, 500)
         cleanup_error = ("Could not delete the stored conversation on the Copilot server."
                          if _delete_threads(root) else None)
         _clear_threads(root, "auto")
@@ -673,6 +750,9 @@ def agent_auth():
         return error
     key, conversation = _conversation()
     root = conversation.root or conversation
+    config_error = _load_env_credentials_nonblocking(root)
+    if config_error:
+        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
     if request.method == "DELETE":
         return _sign_out(root, key)
     client_id = os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID
@@ -734,6 +814,10 @@ def agent_auth_poll():
             return _response({"error": "Could not verify Copilot access."}, key, 503)
         if not auth["authenticated"]:
             return _response({"error": "This GitHub account does not have Copilot access."}, key, 401)
+        try:
+            _persist_agent_credentials(token=token)
+        except RuntimeError as exc:
+            return _response({"error": str(exc)}, key, 500)
         _clear_threads(root, "auto")
         root.credentials.token = token
         root.credentials.provider = None
@@ -745,6 +829,10 @@ def agent_models():
     if error := _access_error():
         return error
     key, conversation = _conversation()
+    root = conversation.root or conversation
+    config_error = _load_env_credentials_nonblocking(root)
+    if config_error:
+        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
     if conversation.credentials.provider:
         return _response({"models": conversation.credentials.provider.models}, key)
     try:
@@ -760,6 +848,10 @@ def agent_model():
     if error := _access_error():
         return error
     key, conversation = _conversation()
+    root = conversation.root or conversation
+    config_error = _load_env_credentials_nonblocking(root)
+    if config_error:
+        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not isinstance(data.get("model"), str) or len(data["model"]) > 100:
         return _response({"error": "Invalid model selection."}, key, 400)
@@ -810,6 +902,10 @@ def agent_message():
     if error := _access_error():
         return error
     key, conversation = _conversation()
+    root = conversation.root or conversation
+    config_error = _load_env_credentials_nonblocking(root)
+    if config_error:
+        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         return _response({"error": "Expected a JSON object."}, key, 400)

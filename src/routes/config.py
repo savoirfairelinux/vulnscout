@@ -67,6 +67,31 @@ def _write_config_key(key: str, value: str | None) -> bool:
         return False
 
 
+def persist_env_keys(updates: dict[str, str | None]) -> tuple[bool, str | None]:
+    """Persist environment updates to config.env and os.environ atomically."""
+    snapshot: dict[str, str | None] = {
+        env_key: os.environ.get(env_key)
+        for env_key in updates
+    }
+    written_env_keys: list[str] = []
+    for env_key, persisted_value in updates.items():
+        if not _write_config_key(env_key, persisted_value):
+            for prev_env_key in written_env_keys:
+                prev_val = snapshot[prev_env_key]
+                _write_config_key(prev_env_key, prev_val if prev_val else None)
+                if prev_val is None:
+                    os.environ.pop(prev_env_key, None)
+                else:
+                    os.environ[prev_env_key] = prev_val
+            return False, env_key
+        if persisted_value is None:
+            os.environ.pop(env_key, None)
+        else:
+            os.environ[env_key] = persisted_value
+        written_env_keys.append(env_key)
+    return True, None
+
+
 def init_app(app):
 
     @app.route('/api/config/native-packages', methods=['GET', 'PUT'])
@@ -122,7 +147,6 @@ def init_app(app):
             project = all_projects[0] if all_projects else None
 
         grype_memlimit = os.environ.get('GRYPE_MEMLIMIT', '')
-
         return jsonify({
             "project": ProjectController.serialize(project) if project else None,
             "variant": VariantController.serialize(variant) if variant else None,
@@ -182,33 +206,16 @@ def init_app(app):
                                  "Use a Go memory string (e.g. 4GiB, 512MiB, 1073741824) "
                                  "or 'off' / 'disabled' to remove the cap."
                     }), 400
-
             validated[key] = (env_key, normalized_value if normalized_value else None)
 
-        # Snapshot current env values so we can roll back on partial write failure.
-        snapshot: dict[str, str | None] = {
-            env_key: os.environ.get(env_key)
-            for _, (env_key, _) in validated.items()
+        updates = {
+            env_key: persisted_value
+            for _, (env_key, persisted_value) in validated.items()
         }
-
-        # Second pass: write all validated keys; roll back already-written keys on failure.
-        written_env_keys: list[str] = []
-        for key, (env_key, persisted_value) in validated.items():
-            if not _write_config_key(env_key, persisted_value):
-                for prev_env_key in written_env_keys:
-                    prev_val = snapshot[prev_env_key]
-                    _write_config_key(prev_env_key, prev_val if prev_val else None)
-                    if prev_val is None:
-                        os.environ.pop(prev_env_key, None)
-                    else:
-                        os.environ[prev_env_key] = prev_val
-                return jsonify({"error": f"Failed to persist '{key}' to config.env."}), 500
-
-            if persisted_value is None:
-                os.environ.pop(env_key, None)
-            else:
-                os.environ[env_key] = persisted_value
-            written_env_keys.append(env_key)
+        ok, failed_key = persist_env_keys(updates)
+        if not ok:
+            key = next((cfg_key for cfg_key, env_key in allowed_keys.items() if env_key == failed_key), failed_key)
+            return jsonify({"error": f"Failed to persist '{key}' to config.env."}), 500
 
         return get_config()
 

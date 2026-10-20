@@ -15,6 +15,11 @@ import pytest
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
     monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", str(tmp_path / "missing_server.py"))
+    monkeypatch.setenv("VULNSCOUT_CONFIG", str(tmp_path / "config.env"))
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.delenv("AI_AUTH_CREDENTIALS", raising=False)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.delenv("AI_BASE_URL", raising=False)
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
     from src.bin.webapp import create_app
@@ -329,6 +334,36 @@ def test_provider_credentials_do_not_require_a_model():
         "provider": "local", "base_url": "http://127.0.0.1:11434/v1",
     })
     assert connection.model == ""
+
+
+def test_agent_loads_github_credentials_from_env(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setenv("AI_PROVIDER", "github")
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "ghu_env_test_token")
+
+    async def _fake_auth_status(token):
+        assert token == "ghu_env_test_token"
+        return {"authenticated": True, "login": "env-user"}
+
+    monkeypatch.setattr(agent, "_auth_status", _fake_auth_status)
+    status = client.get("/api/agent").get_json()
+    assert status["authenticated"] is True
+    assert status["token_connected"] is True
+    assert status["provider"] is None
+    assert status["config_error"] is None
+
+
+def test_agent_rejects_invalid_env_provider_configuration(client, monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "invalid-provider")
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "unused")
+
+    status = client.get("/api/agent").get_json()
+    assert "Unsupported AI_PROVIDER value" in status["config_error"]
+
+    models = client.get("/api/agent/models")
+    assert models.status_code == 400
+    assert "Invalid AI provider configuration" in models.get_json()["error"]
 
 
 def test_provider_enrollment_requires_a_reachable_model_endpoint(client):
