@@ -133,7 +133,9 @@ def test_native_package_filter_applies_to_queued_scans(app, ids):
     with app.app_context():
         native = Package.find_or_create("cmake-native", "3.29")
         sbom = _db.session.execute(_db.select(SBOMDocument)).scalar_one()
-        SBOMPackage.create(sbom.id, native.id)
+        link = SBOMPackage.create(sbom.id, native.id)
+        link.cpe = []
+        link.purl = []
         _db.session.commit()
 
         for source in ("nvd", "osv", "scc"):
@@ -385,7 +387,9 @@ class TestNvdScanNoCpes:
                 )
                 _db.session.commit()
                 sbom = SBOMDocument.create("/t/sbom.json", "spdx", scan.id)
-                SBOMPackage.create(sbom.id, pkg.id)
+                link = SBOMPackage.create(sbom.id, pkg.id)
+                link.cpe = pkg.cpe
+                link.purl = pkg.purl
                 _db.session.commit()
                 application._test_ids = {"variant_id": str(variant.id)}
             yield application
@@ -432,7 +436,9 @@ class TestOsvScanNoPurls:
                 pkg = Package.find_or_create("bare-pkg", "0.0.1", purl=[])
                 _db.session.commit()
                 sbom = SBOMDocument.create("/t/sbom.json", "spdx", scan.id)
-                SBOMPackage.create(sbom.id, pkg.id)
+                link = SBOMPackage.create(sbom.id, pkg.id)
+                link.cpe = []
+                link.purl = []
                 _db.session.commit()
                 application._test_ids = {"variant_id": str(variant.id)}
             yield application

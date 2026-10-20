@@ -13,6 +13,14 @@ if typing.TYPE_CHECKING:
     from ..models import SBOMDocument, Package
 
 PackageType = typing.Literal["normal", "workspace", "built"]
+SBOM_REIMPORT_REQUIRED = (
+    "Scoped SBOM identifier evidence is not populated. "
+    "Reimport the variant's original SBOM files before scanning."
+)
+
+
+class SBOMReimportRequiredError(ValueError):
+    """A scan cannot safely use unpopulated document-scoped identifiers."""
 
 
 class PackageEvidence(typing.TypedDict):
@@ -101,7 +109,9 @@ class SBOMPackage(Base):
             return SBOMPackage.get(sbom_document_id, package_id)  # type: ignore[return-value]
 
     @staticmethod
-    def evidence_for_documents(document_ids: set[uuid.UUID]) -> dict[uuid.UUID, PackageEvidence]:
+    def evidence_for_documents(
+        document_ids: set[uuid.UUID], *, require_recorded_identifiers: bool = False,
+    ) -> dict[uuid.UUID, PackageEvidence]:
         """Aggregate only selected document evidence, never global matching identifiers."""
         if not document_ids:
             return {}
@@ -112,6 +122,8 @@ class SBOMPackage(Base):
                       SBOMPackage.source_urls, SBOMPackage.source_revisions, SBOMPackage.type)
             .where(SBOMPackage.sbom_document_id.in_(document_ids))
         ):
+            if require_recorded_identifiers and (cpe is None or purl is None):
+                raise SBOMReimportRequiredError(SBOM_REIMPORT_REQUIRED)
             item = evidence_sets.setdefault(package_id, {
                 "cpe": set(), "purl": set(), "source_urls": set(), "source_revisions": set(),
             })

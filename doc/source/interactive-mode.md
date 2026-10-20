@@ -319,6 +319,14 @@ with only the selected variant's active SBOM evidence. Sharing a canonical
 package with another variant does not add that variant's identifiers to these
 scans.
 
+After upgrading a database that predates scoped identifier evidence, these scans
+stop with a reimport-required error until the selected variant's original SBOMs
+are reimported. Upload the original files for that project and variant, including
+all companion documents for West JSON-LD, then run the scan again. Missing
+evidence is never filled from globally merged package identifiers. A recorded
+empty identifier list remains valid; an unpopulated (`NULL`) list requires
+reimport.
+
 By combining these sources, VulnScout reduces the chance of missing a relevant CVE while giving you the **Sources** column and filter to trace exactly where each finding originated. If a vulnerability is reported by multiple scanners, you can have higher confidence that it genuinely applies; if only one scanner flags it, that context helps you prioritise your triage effort.
 
 ### Running Scans

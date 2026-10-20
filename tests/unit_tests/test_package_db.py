@@ -85,6 +85,32 @@ def test_document_evidence_sorts_once_per_package_field(app, monkeypatch):
     }
 
 
+@pytest.mark.parametrize("cpe,purl", [(None, None), (None, []), ([], None), ([], [])])
+def test_scanner_snapshots_require_recorded_identifiers_not_global_fallback(app, cpe, purl):
+    from src.helpers.active_scans import package_snapshots_for_sbom_scans
+    from src.models import SBOMDocument, SBOMPackage
+    from src.models.sbom_package import SBOMReimportRequiredError
+
+    project = Project.create("recorded-evidence")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    document = SBOMDocument.create("lib.json", "lib", scan.id)
+    package = Package.create("lib", "1.0", purl=["pkg:generic/lib@1.0"])
+    _db.session.add(SBOMPackage(
+        sbom_document_id=document.id, package_id=package.id, cpe=cpe, purl=purl,
+    ))
+    _db.session.commit()
+    if cpe is None or purl is None:
+        with pytest.raises(SBOMReimportRequiredError, match="Reimport"):
+            package_snapshots_for_sbom_scans([scan.id])
+    else:
+        snapshots = package_snapshots_for_sbom_scans([scan.id])
+        assert len(snapshots) == 1
+        assert snapshots[0].id == package.id
+        assert snapshots[0].cpe == snapshots[0].purl == []
+    assert package.purl == ["pkg:generic/lib@1.0"]
+
+
 def test_find_or_create_same_supplier_returns_same_row(app):
     pkg_a = Package.find_or_create("foo", "1.0", supplier="Organization: Acme Corp")
     _db.session.flush()

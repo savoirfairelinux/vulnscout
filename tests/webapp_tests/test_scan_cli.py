@@ -218,7 +218,9 @@ class TestNvdScanCLI:
             pkg = Package.find_or_create("nocpe-pkg", "1.0", cpe=[], purl=[])
             _db.session.commit()
             doc = SBOMDocument.create("/no.json", "no.json", scan.id)
-            SBOMPackage.create(doc.id, pkg.id)
+            link = SBOMPackage.create(doc.id, pkg.id)
+            link.cpe = []
+            link.purl = []
             _db.session.commit()
 
         runner = app.test_cli_runner()
@@ -357,7 +359,9 @@ class TestOsvScanCLI:
             pkg = Package.find_or_create("nopurl-pkg", "1.0", cpe=[], purl=global_purls)
             _db.session.commit()
             doc = SBOMDocument.create("/no.json", "no2.json", scan.id)
-            SBOMPackage.create(doc.id, pkg.id)
+            link = SBOMPackage.create(doc.id, pkg.id)
+            link.cpe = []
+            link.purl = []
             _db.session.commit()
 
         runner = app.test_cli_runner()
