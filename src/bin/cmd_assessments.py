@@ -131,37 +131,42 @@ def import_custom_vulnscout_data_command(
               help="Directory where the exported file is written.")
 @click.option("--project", "-p", default="default", show_default=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
-              help="Variant name to export. If empty, all project variants are exported.")
+              help="Variant name to export. If empty, each project variant is exported to its own file.")
 @click.option("--amend", is_flag=True,
               help="Update the existing output file while preserving stable review ordering.")
 @with_appcontext
 def export_custom_openvex_assessments_command(
     output_dir: str, project: str, variant: str | None, amend: bool,
 ) -> None:
-    """Export custom assessments for one or all project variants as an OpenVEX JSON file."""
+    """Export custom assessments as OpenVEX JSON, one file per variant."""
     if variant:
         _, variant_obj = resolve_project_variant(project, variant, create=False)
-        variant_ids = [variant_obj.id]
-        filename_label = sanitize_variant_name(variant_obj.name)
+        variants = [variant_obj]
     else:
-        project_obj = resolve_project(project)
-        variant_ids = [project_variant.id for project_variant in DBVariant.get_by_project(project_obj.id)]
-        filename_label = "all"
-    # get_by_origin([]) means "no filter"; an empty project must export nothing.
-    handmade = DBAssessment.get_by_origin(variant_ids) if variant_ids else []
-    if not handmade:
-        raise click.ClickException("No custom assessments to export.")
+        variants = list(DBVariant.get_by_project(resolve_project(project).id))
 
     author = get_default_author()
-    document = build_openvex_doc(
-        handmade, author, _dt.now(_tz.utc).isoformat(), variant_ids=variant_ids)
+    now_iso = _dt.now(_tz.utc).isoformat()
+    # An OpenVEX product carries no variant identity, so each variant gets its own document;
+    # merging them would mix conflicting statements for the same package and CVE.
+    exports = []
+    for variant_obj in variants:
+        handmade = DBAssessment.get_by_origin([variant_obj.id])
+        if handmade:
+            exports.append((variant_obj, handmade))
+    if not exports:
+        raise click.ClickException("No custom assessments to export.")
+
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"custom_openvex_{filename_label}{_JSON_SUFFIX}")
-    if amend:
-        document = reconcile_review_export(_load_json_file(output_path), document)
-    with open(output_path, "w") as file:
-        _json.dump(document, file, indent=2)
-    click.echo(f"Custom OpenVEX assessments exported: {output_path}")
+    for variant_obj, handmade in exports:
+        document = build_openvex_doc(handmade, author, now_iso, variant_ids=[variant_obj.id])
+        output_path = os.path.join(
+            output_dir, f"custom_openvex_{sanitize_variant_name(variant_obj.name)}{_JSON_SUFFIX}")
+        if amend:
+            document = reconcile_review_export(_load_json_file(output_path), document)
+        with open(output_path, "w") as file:
+            _json.dump(document, file, indent=2)
+        click.echo(f"Custom OpenVEX assessments exported: {output_path}")
 
 
 @click.command("import-custom-openvex-assessments")

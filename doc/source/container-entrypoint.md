@@ -102,7 +102,7 @@ These flags change the behaviour of other commands in the same invocation. The h
 | Flag | Applies to | Effect |
 |------|------------|--------|
 | `--dry-run` | `--delete-scan`, `--delete-outdated`, `--delete-empty-scans`, `--delete-orphaned-vulns` | Print what would be removed without deleting. Must come before the delete flag. |
-| `--all-variants` | `--export-custom-openvex-assessments`, `--import-custom-openvex-assessments` | Do not default the variant to `default`: export every project variant, or import into the project's only variant. |
+| `--all-variants` | `--export-custom-openvex-assessments`, `--import-custom-openvex-assessments` | Do not default the variant to `default`: export each project variant to its own file, or import into the project's only variant. |
 | `--retarget-context` | `--import-context` | Forward `--project` (and `--variant`, if set) so entries are imported into that scope instead of the scope named in the file. |
 | `--report-format <pdf\|html>` | `--report` | Override the output format implied by the template extension. |
 
