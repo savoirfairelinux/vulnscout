@@ -461,6 +461,18 @@ The columns include:
 
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state. A **Reset Filters** button clears everything back to defaults. See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
 
+Select rows in **Assessments**, then click **Review selected with AI** to queue
+an independent review of each selected custom assessment. The bulk review chat
+uses the same workflow as **Review with AI** in the vulnerability modal: it
+retrieves each complete assessment and writes one review per target, including
+targets outside the current project or variant view, without changing the
+assessment. Scan-imported assessments and pending AI suggestions are not eligible.
+Selection is preserved; already queued or running assessments are not queued
+again. Use **AI review chat** to hide or reopen the conversation without stopping
+it, or remove pending requests from its queue. Connection setup, errors and retry
+are handled in the chat. Leaving the Review page or changing project/variant
+discards this conversation and its remaining queue; reviews already saved remain.
+
 ### Import and Export
 
 Two buttons in the toolbar handle review portability:

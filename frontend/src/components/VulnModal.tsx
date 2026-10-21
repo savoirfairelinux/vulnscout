@@ -34,6 +34,7 @@ import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
 import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
 import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
+import { assessmentReviewKey, buildAssessmentReviewAction } from "../helpers/aiAssessmentReview";
 
 type Props = {
     vuln: Vulnerability;
@@ -266,17 +267,8 @@ type VariantScopedSnapshot = {
         }
     };
 
-    const reviewKey = (assessmentId: string) => `review:${assessmentId}`;
-
     const reviewWithAi = (assessment: Assessment) => {
-        openAssessmentChat([{
-            key: reviewKey(assessment.id), kind: 'review',
-            text: `Review the user assessment ${assessment.id} for ${vuln.id}. Retrieve it with get_custom_assessment, ` +
-                `independently re-derive the verdict for each of its targets using VulnScout MCP data, and record one ` +
-                `review per target with write_assessment_review. Do not modify the assessment itself.`,
-            title: `assessment ${assessment.id.slice(0, 8)}`,
-            detail: [vuln.id, ...assessment.packages].join(' · '),
-        }]);
+        openAssessmentChat([buildAssessmentReviewAction(assessment)]);
     };
 
     const assessmentAgentContext: AgentContext = {
@@ -2212,7 +2204,7 @@ type VariantScopedSnapshot = {
                                                     </span>
                                                 )}
                                                 {!readOnly && row.origin === "custom" && (() => {
-                                                    const reviewState = agentActionState(reviewKey(row.id));
+                                                    const reviewState = agentActionState(assessmentReviewKey(row.id));
                                                     const stateLabel = reviewState?.status === 'running' ? ' (running)'
                                                         : reviewState ? ` (queued, position ${reviewState.position})` : '';
                                                     return (
