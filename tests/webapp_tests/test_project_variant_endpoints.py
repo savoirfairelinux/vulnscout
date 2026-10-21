@@ -9,6 +9,7 @@ filtering on packages, vulnerabilities and assessments endpoints."""
 import uuid
 import json
 import os
+import shlex
 import pytest
 from datetime import datetime, timezone
 
@@ -382,10 +383,12 @@ class TestConfigEndpoint:
 
         with open(os.environ["VULNSCOUT_CONFIG"], "r", encoding="utf-8") as fh:
             saved = fh.read()
-        assert "PRODUCT_NAME=Product X" in saved
-        assert "AUTHOR_NAME=Alice" in saved
-        assert "CLIENT_NAME=Client Y" in saved
-        assert "CONTACT_EMAIL=alice@example.com" in saved
+        assert shlex.split(saved) == [
+            "PRODUCT_NAME=Product X",
+            "AUTHOR_NAME=Alice",
+            "CLIENT_NAME=Client Y",
+            "CONTACT_EMAIL=alice@example.com",
+        ]
 
     def test_patch_config_rejects_non_string_value(self, client):
         response = client.patch("/api/config", json={"author_name": 123})

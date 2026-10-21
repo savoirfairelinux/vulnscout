@@ -292,6 +292,57 @@ def test_selected_model_persists_without_sending(client):
     assert client.get("/api/agent").get_json()["model"] == "auto"
 
 
+@pytest.mark.parametrize("token_connected", [True, False])
+def test_github_chatbox_model_survives_restart(client, monkeypatch, token_connected):
+    from src.routes import agent
+
+    async def auth_status(token):
+        assert token == ("github-key" if token_connected else None)
+        return {"authenticated": True, "login": "test-user"}
+
+    async def models(token):
+        return [{"id": "auto", "name": "Auto"}, {"id": "gpt-4o", "name": "GPT-4o"}]
+
+    monkeypatch.setattr(agent, "_auth_status", auth_status)
+    monkeypatch.setattr(agent, "_models", models)
+    if token_connected:
+        agent._persist_agent_credentials(token="github-key")
+    assert client.get("/api/agent").get_json()["model"] == "auto"
+    assert client.post("/api/agent/model", json={"model": "gpt-4o"}).status_code == 200
+    assert "AI_MODEL=gpt-4o" in Path(os.environ["VULNSCOUT_CONFIG"]).read_text()
+    agent._conversations.clear()
+    status = client.get("/api/agent").get_json()
+    assert status["model"] == "gpt-4o"
+    assert status["token_connected"] is token_connected
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+
+    async def reply(conversation, prompt, path, model, scope, publish=None):
+        assert model == "gpt-4o"
+        return "Restarted successfully", conversation.usage
+
+    monkeypatch.setattr(agent, "_reply", reply)
+    response = client.post("/api/agent/messages", json={"message": "Hello"})
+    assert response.status_code == 200
+    assert response.get_json()["reply"] == "Restarted successfully"
+
+
+def test_github_model_write_failure_keeps_previous_selection(client, monkeypatch):
+    from src.routes import agent
+
+    async def models(token):
+        return [{"id": "gpt-4o", "name": "GPT-4o"}]
+
+    agent._persist_agent_credentials(token="github-key")
+    monkeypatch.setattr(agent, "_models", models)
+    monkeypatch.setattr(agent, "persist_env_keys", lambda updates: (False, "AI_MODEL"))
+    response = client.post("/api/agent/model", json={"model": "gpt-4o"})
+    assert response.status_code == 500
+    assert response.get_json()["error"] == "Failed to persist model to config.env."
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    assert root.model == "auto"
+    assert "AI_MODEL" not in Path(os.environ["VULNSCOUT_CONFIG"]).read_text()
+
+
 @pytest.mark.parametrize("provider,model,base_url", [
     ("openai", "gpt-4o", ""),
     ("azure", "my-deployment", "https://resource.openai.azure.com/openai/v1"),

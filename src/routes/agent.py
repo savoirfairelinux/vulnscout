@@ -326,6 +326,8 @@ def _load_env_credentials(root):
     except (OSError, ValueError):
         return "Could not read AI provider configuration from config.env."
     provider = environment.get("AI_PROVIDER", "").strip().lower()
+    if provider in ("", "github"):
+        root.model = environment.get("AI_MODEL") or "auto"
     if not provider:
         return None
     credentials = environment.get("AI_AUTH_CREDENTIALS", "")
@@ -889,10 +891,9 @@ def agent_model():
                 return _response({"error": "Unable to verify this Copilot model."}, key, 503)
         if data["model"] not in {choice["id"] for choice in choices}:
             return _response({"error": "Selected model is not available for this account."}, key, 400)
-        if conversation.credentials.provider:
-            ok, _ = persist_env_keys({"AI_MODEL": data["model"]})
-            if not ok:
-                return _response({"error": "Failed to persist model to config.env."}, key, 500)
+        ok, _ = persist_env_keys({"AI_MODEL": data["model"]})
+        if not ok:
+            return _response({"error": "Failed to persist model to config.env."}, key, 500)
         conversation.model = data["model"]
         return _response({"model": conversation.model}, key)
     finally:
