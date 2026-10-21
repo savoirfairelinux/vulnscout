@@ -17,6 +17,14 @@ metadata. When the file exists it is authoritative, even if AI keys are absent,
 so disconnecting cannot resurrect inherited credentials. Environment-only AI
 settings are supported when no config file exists. Values written by the
 dashboard are shell-quoted and control characters are rejected.
+Selecting a model from an environment-only setup saves all current AI settings
+with it, so the new authoritative file preserves the connection after restart.
+Manually written AI assignments must be literal shell words: unquoted values
+(including embedded `#`), single-quoted values, and simple double-quoted values
+are supported, with optional whitespace-separated trailing comments.
+Shell expansions, commands, and escaped dollar signs/backticks inside double
+quotes are rejected rather than evaluated or silently treated as literals;
+use single quotes for literal dollar signs and backticks.
 Model selections made in the agent chatbox selector are also persisted as
 `AI_MODEL`, including GitHub Copilot (device sign-in or an existing CLI identity),
 and restored on restart. After restarting a non-GitHub provider that has no saved

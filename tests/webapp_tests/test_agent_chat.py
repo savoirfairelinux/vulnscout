@@ -489,6 +489,100 @@ def test_connect_select_restart_send(client, monkeypatch):
     assert response.get_json()["reply"] == "Restarted successfully"
 
 
+@pytest.mark.parametrize("provider", ["github", "openai", "local"])
+def test_environment_only_model_selection_preserves_connection(client, monkeypatch, provider):
+    from src.routes import agent
+
+    environment = {
+        "AI_PROVIDER": provider,
+        "AI_AUTH_CREDENTIALS": "environment-key",
+        "AI_BASE_URL": "http://127.0.0.1:11434/v1" if provider == "local" else "",
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+
+    async def models(token):
+        return [{"id": "selected-model", "name": "Selected model"}]
+
+    monkeypatch.setattr(agent, "_models", models)
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "selected-model"}]}))
+    response = client.post("/api/agent/model", json={"model": "selected-model"})
+    assert response.status_code == 200
+    for key in agent.AGENT_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    expected = {key: value for key, value in environment.items() if value}
+    assert agent._agent_environment() == {**expected, "AI_MODEL": "selected-model"}
+    fresh = agent.Conversation()
+    assert agent._load_env_credentials(fresh) is None
+    assert fresh.model == "selected-model"
+    if provider == "github":
+        assert fresh.credentials.token == "environment-key"
+    else:
+        assert fresh.credentials.provider.kind == provider
+        assert fresh.credentials.provider.api_key == "environment-key"
+        assert fresh.credentials.provider.base_url == environment["AI_BASE_URL"]
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("openai", "gpt-4o"), ("openai", ""), ("github", "gpt-4o"),
+])
+def test_first_thread_request_restores_saved_model(client, monkeypatch, provider, model):
+    from src.routes import agent
+
+    Path(os.environ["VULNSCOUT_CONFIG"]).write_text(
+        f"AI_PROVIDER={provider}\nAI_AUTH_CREDENTIALS=saved-key\nAI_MODEL={model}\n"
+    )
+    agent._conversations.clear()
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "gpt-4o"}]}))
+
+    async def auth_status(token):
+        return {"authenticated": True, "login": "test-user"}
+
+    monkeypatch.setattr(agent, "_auth_status", auth_status)
+    response = client.get("/api/agent", headers={"X-Agent-Thread": str(uuid4())})
+    assert response.status_code == 200
+    assert response.get_json()["model"] == model
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("abc#def", "abc#def"),
+    ("#initial", "#initial"),
+    ("org/model#revision # trailing comment", "org/model#revision"),
+    ("'literal $HOME `command` # value'", "literal $HOME `command` # value"),
+    (r"escaped\ value#suffix", "escaped value#suffix"),
+    (r"escaped\ #suffix", "escaped #suffix"),
+    (r"escaped\$literal", "escaped$literal"),
+    ('"quoted#value" # trailing comment', "quoted#value"),
+])
+def test_direct_config_literals_match_shell_assignments(client, value, expected):
+    from src.routes import agent
+
+    config_file = Path(os.environ["VULNSCOUT_CONFIG"])
+    config_file.write_text(
+        f"AI_AUTH_CREDENTIALS={value}\nAI_MODEL={value}\n"
+    )
+    shell_value = subprocess.run(
+        ["bash", "-ec", '. "$1"; printf "%s" "$AI_MODEL"', "config", str(config_file)],
+        check=True, capture_output=True, text=True,
+    )
+    assert shell_value.stdout == expected
+    assert agent._agent_environment() == {"AI_AUTH_CREDENTIALS": expected, "AI_MODEL": expected}
+
+
+@pytest.mark.parametrize("value", [
+    "$HOME", '"${MODEL}"', "`command`", "$(command)", "~", "model; command",
+    r'"\$HOME"', r'"\`command\`"',
+])
+def test_direct_config_rejects_unsupported_shell_syntax(client, value):
+    from src.routes import agent
+
+    Path(os.environ["VULNSCOUT_CONFIG"]).write_text(f"AI_MODEL={value}\n")
+    with pytest.raises(ValueError):
+        agent._agent_environment()
+
+
 def test_provider_restart_without_model_requires_selection(client, monkeypatch):
     from src.routes import agent
 
