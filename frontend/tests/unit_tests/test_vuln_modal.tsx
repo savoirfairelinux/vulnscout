@@ -4254,6 +4254,50 @@ describe("VulnModal AI review block", () => {
         expect(await screen.findByText(/responses: update, will_not_fix/i)).toBeInTheDocument();
     });
 
+    test("keeps a failed AI review deduplicated until its explicit retry saves the review", async () => {
+        mockReviews({});
+        await renderModalWithAssessment({
+            id: 'assess-1', origin: 'custom', targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
+        });
+        const serveModal = fetchMock.getMockImplementation()!;
+        const json = (data: unknown, ok = true) => ({
+            ok, headers: { get: () => 'application/json' }, json: async () => data,
+        }) as unknown as Response;
+        let attempts = 0;
+        fetchMock.mockImplementation((input, init) => {
+            const path = String(input);
+            if (path.endsWith('/api/agent/models')) return Promise.resolve(json({ models: [{ id: 'auto', name: 'Auto' }] }));
+            if (path.endsWith('/api/agent/messages')) {
+                attempts++;
+                return Promise.resolve(attempts === 1 ? json({ error: 'Review provider unavailable' }, false)
+                    : json({ reply: 'Review saved', model: 'auto', usage: {} }));
+            }
+            if (path.startsWith('/api/agent')) return Promise.resolve(json({
+                authenticated: true, configured: true, messages: [], model: 'auto', usage: {},
+            }));
+            if (path.endsWith('/api/assessments/assess-1/reviews')) return Promise.resolve(json({
+                reviews: attempts >= 2 ? [review] : [],
+            }));
+            if (path.endsWith('/api/assessments/assess-1')) return Promise.resolve(json({
+                id: 'assess-1', vuln_id: baseVulnerability.id, origin: 'custom', status: 'affected',
+                timestamp: '2026-08-06T09:00:00Z', targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
+            }));
+            return serveModal(input, init);
+        });
+        await userEvent.click(screen.getByRole('button', { name: /Review assessment assess-1 with AI/ }));
+        await screen.findByText('Review provider unavailable');
+        const reviewButton = screen.getByRole('button', { name: /Review assessment assess-1 with AI/ });
+        expect(reviewButton).toBeDisabled();
+        expect(screen.getByText(/Batch paused/)).toBeInTheDocument();
+        await userEvent.click(reviewButton);
+        expect(attempts).toBe(1);
+        await userEvent.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        await waitFor(() => expect(reviewButton).toBeEnabled());
+        expect(attempts).toBe(2);
+        expect(screen.queryByText(/Batch paused/)).not.toBeInTheDocument();
+        expect(screen.queryByText('Review provider unavailable')).not.toBeInTheDocument();
+    });
+
     test("labels the sole reviewed target of a multi-target assessment", async () => {
         mockReviews({"assess-1": [review]});
 
