@@ -86,6 +86,28 @@ export async function loadAiAssessmentTargets(
         ? [scope.variantId, ...(scope.compareOperation === 'intersection' && scope.baseVariantId ? [scope.baseVariantId] : [])]
         : scope.variantIds;
     const packages = new Set(vulnerability.packages_current.length ? vulnerability.packages_current : vulnerability.packages);
+    let basePackages: Set<string> | undefined;
+    if (scope.compareOperation === 'intersection' && scope.variantId && scope.baseVariantId
+        && scope.baseVariantId !== scope.variantId) {
+        const baseUrl = new URL(
+            import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}`,
+            window.location.href,
+        );
+        baseUrl.searchParams.set('variant_id', scope.baseVariantId);
+        baseUrl.searchParams.set('agent_scoped', '1');
+        try {
+            const baseResponse = await fetch(baseUrl.toString(), { mode: 'cors', signal });
+            if (!baseResponse.ok) throw new Error();
+            const base = await baseResponse.json();
+            const current = base?.packages_current_by_variant?.[scope.baseVariantId];
+            if (base?.id !== vulnerability.id || !Array.isArray(current) || !current.length
+                || !current.every((item: unknown) => typeof item === 'string')) throw new Error();
+            basePackages = new Set(current);
+        } catch (error) {
+            if (signal.aborted) throw error;
+            throw new Error(`Unable to load active base-variant targets for ${vulnerability.id}. Refresh the table and try again.`);
+        }
+    }
     const targets = new Map<string, AssessmentTargetPair>();
     for (const entry of data) {
         if (typeof entry?.variant_id !== 'string' || !Array.isArray(entry.findings)) {
@@ -93,16 +115,16 @@ export async function loadAiAssessmentTargets(
         }
         const variantId: string = entry.variant_id;
         if (variantIds?.length && !variantIds.includes(variantId)) continue;
-        // Comparison lists contain the compared variant's packages only. In
-        // intersection mode, resolve the base variant's own packages as well.
-        const comparisonBase = scope.compareOperation === 'intersection'
-            && Boolean(scope.variantId) && scope.baseVariantId === variantId && scope.variantId !== variantId;
+        // The comparison table omits the base variant's packages. Its scoped
+        // payload requires active CVE observations, not just an installed package.
+        const comparisonBase = basePackages !== undefined && scope.baseVariantId === variantId;
         const currentPackages = vulnerability.packages_current_by_variant?.[variantId];
         for (const finding of entry.findings) {
             if (typeof finding?.package !== 'string' || typeof finding.outdated !== 'boolean') {
                 throw new Error(`Invalid target compatibility response for ${vulnerability.id}. Try again.`);
             }
             if (finding.outdated) continue;
+            if (comparisonBase && !basePackages?.has(finding.package)) continue;
             if (!comparisonBase && !packages.has(finding.package)) continue;
             if (!comparisonBase && vulnerability.packages_current_by_variant && !currentPackages?.includes(finding.package)) continue;
             targets.set(`${variantId}|${finding.package}`, { variant_id: variantId, package: finding.package });

@@ -21,6 +21,9 @@ const compatibility = [
 ];
 const targets = (scope: Partial<AgentContext> = {}, vuln = vulnerability) =>
     loadAiAssessmentTargets(vuln, { page: 'vulnerabilities', ...scope }, new AbortController().signal);
+const basePayload = {
+    id: vulnerability.id, packages_current_by_variant: { v1: ['pkg@1::supplier'] },
+};
 
 beforeEach(() => fetchMock.resetMocks());
 
@@ -45,6 +48,9 @@ describe('AI assessment targets', () => {
         [{ variantIds: ['v1', 'v3'], multiOperation: 'intersection' }, ['v1', 'v3']],
     ])('honors table scope %j', async (scope, expected) => {
         fetchMock.mockResponseOnce(JSON.stringify(compatibility));
+        if ('compareOperation' in scope && scope.compareOperation === 'intersection') {
+            fetchMock.mockResponseOnce(JSON.stringify(basePayload));
+        }
         expect((await targets(scope)).map(target => target.variant_id)).toEqual(expected);
     });
 
@@ -56,7 +62,14 @@ describe('AI assessment targets', () => {
     });
 
     test('resolves base packages independently of the compare-only table payload in intersection mode', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify(compatibility));
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { variant_id: 'v1', findings: [
+                { package: 'pkg@1::supplier', outdated: false },
+                // Still installed, but this CVE was only observed in an older scan.
+                { package: 'historical@1', outdated: false },
+            ] },
+            ...compatibility.slice(1),
+        ])).mockResponseOnce(JSON.stringify(basePayload));
         expect(await targets({
             variantId: 'v2', baseVariantId: 'v1', compareOperation: 'intersection',
         }, {
@@ -66,6 +79,26 @@ describe('AI assessment targets', () => {
             { variant_id: 'v1', package: 'pkg@1::supplier' },
             { variant_id: 'v2', package: 'pkg@2' },
         ]);
+        const baseRequest = new URL(String(fetchMock.mock.calls[1][0]));
+        expect(baseRequest.pathname).toBe(`/api/vulnerabilities/${vulnerability.id}`);
+        expect(baseRequest.searchParams.get('variant_id')).toBe('v1');
+        expect(baseRequest.searchParams.get('agent_scoped')).toBe('1');
+        expect(fetchMock.mock.calls[1][1]?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    test.each([
+        ['HTTP failure', 'failure', 503],
+        ['inactive base finding', '{}', 404],
+        ['invalid JSON', 'not JSON', 200],
+        ['missing scoped packages', JSON.stringify({ id: vulnerability.id, packages_current: ['historical@1'] }), 200],
+        ['invalid packages', JSON.stringify({ ...basePayload, packages_current_by_variant: { v1: [42] } }), 200],
+        ['empty packages', JSON.stringify({ ...basePayload, packages_current_by_variant: { v1: [] } }), 200],
+        ['wrong vulnerability', JSON.stringify({ ...basePayload, id: 'CVE-other' }), 200],
+    ])('fails closed for %s in the active base payload', async (_name, body, status) => {
+        fetchMock.mockResponseOnce(JSON.stringify(compatibility)).mockResponseOnce(body, { status });
+        await expect(targets({
+            variantId: 'v2', baseVariantId: 'v1', compareOperation: 'intersection',
+        })).rejects.toThrow(`Unable to load active base-variant targets for ${vulnerability.id}`);
     });
 
     test('does not invent targets for active packages without a finding in that variant', async () => {
