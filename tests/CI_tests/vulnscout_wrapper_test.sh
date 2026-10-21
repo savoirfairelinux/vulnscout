@@ -369,6 +369,12 @@ run_ok -p list-scans refresh
 assert_log "/scan/src/entrypoint.sh --project list-scans --refresh-vulnerability-data"
 refute_stderr "deprecated:"
 
+# A value equal to a legacy flag is an argument of the new grammar, never a legacy action.
+run_ok config set MY_VALUE --stop
+refute_stderr "deprecated:"
+grep -qx 'MY_VALUE=--stop' "$VULNSCOUT_BUILD_DIR/cache/config.env"
+refute_log "rm"
+
 expect_fail "'refresh' does not accept option --epss." refresh --epss
 
 # --- asset add ---
