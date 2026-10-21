@@ -394,10 +394,11 @@ Current version 2 exports identify assessment targets by variant name and packag
 
 OpenVEX custom-assessment transfers operate on one JSON document. With `-v`,
 `export custom-openvex` writes that variant; without it, it writes one document
-for every variant of the project (`custom_openvex_all.json`). `import
+per variant that has custom assessments (`custom_openvex_<variant>.json`), and
+removes the file of a variant that no longer has any. `import
 custom-openvex` imports into `-v`, or into the project's only variant when `-v`
 is omitted. If the project has several variants, it exits with code 1 and lists
-them.
+them; import each per-variant file with its own `-v`.
 
 [source,shell]
 ----
