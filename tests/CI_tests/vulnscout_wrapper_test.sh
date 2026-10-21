@@ -203,10 +203,10 @@ printf '{}\n' > "$DATA"
 
 # --- Legacy grammar: deprecation warnings ---
 run_ok --refresh-vulnerability-data
-assert_stderr "deprecated: --refresh-vulnerability-data (removed in v0.26); use 'vulnscout refresh'"
+assert_stderr "deprecated: --refresh-vulnerability-data (removed in v0.25); use 'vulnscout refresh'"
 
 run_ok --add-spdx "$SBOM" --add-spdx "$SBOM"
-assert_stderr "deprecated: --add-spdx (removed in v0.26); use 'vulnscout add --spdx <path>'"
+assert_stderr "deprecated: --add-spdx (removed in v0.25); use 'vulnscout add --spdx <path>'"
 if [ "$(grep -c 'deprecated: --add-spdx' "$TEST_DIR/stderr")" -ne 1 ]; then
     echo "A repeated legacy token must warn once." >&2
     exit 1
@@ -218,11 +218,11 @@ unset VULNSCOUT_NO_DEPRECATION_WARNING
 refute_stderr "deprecated:"
 
 run_ok --import-custom-vulnscout-data "$DATA" --use-current-timestamps
-assert_stderr "deprecated: --use-current-timestamps (removed in v0.26); use 'vulnscout import <kind> <path> --timestamps current'"
+assert_stderr "deprecated: --use-current-timestamps (removed in v0.25); use 'vulnscout import <kind> <path> --timestamps current'"
 assert_log "--project default --import-custom-vulnscout-data /tmp/vulnscout_stage_data.json --use-current-timestamps"
 
 run_ok config LEGACY_KEY legacy-value
-assert_stderr "deprecated: config (removed in v0.26); use 'vulnscout config set <key> <value>'"
+assert_stderr "deprecated: config (removed in v0.25); use 'vulnscout config set <key> <value>'"
 grep -qx 'LEGACY_KEY=legacy-value' "$VULNSCOUT_BUILD_DIR/cache/config.env"
 
 # Review focus 1 (legacy side): a -p value equal to a legacy token is a value, not a token.
@@ -262,7 +262,7 @@ done
 run_ok --help
 assert_stdout "Run vulnerability scans"
 refute_stdout "Examples:"
-assert_stdout "still works until v0.26"
+assert_stdout "still works until v0.25"
 refute_stderr "deprecated:"
 
 run_ok

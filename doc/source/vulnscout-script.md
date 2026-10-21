@@ -8,7 +8,7 @@ It manages the container lifecycle (Docker or Podman) and forwards commands to t
 ./vulnscout <command> --help
 ```
 
-Releases before v0.24 used flags instead of commands. They still work until v0.26 and print a deprecation warning; see [Migrating from the flag syntax](#migrating-from-the-flag-syntax).
+Releases before v0.24 used flags instead of commands. They still work until v0.25 and print a deprecation warning; see [Migrating from the flag syntax](#migrating-from-the-flag-syntax).
 
 ---
 
@@ -624,10 +624,10 @@ export HTTP_PROXY=http://proxy.example.com:8080
 
 ## Migrating from the flag syntax
 
-Releases before v0.24 used flags for every action, and one call could chain several of them. The flag syntax still works until **v0.26**. Each legacy flag prints one warning on stderr naming its replacement:
+Releases before v0.24 used flags for every action, and one call could chain several of them. The flag syntax still works until **v0.25**. Each legacy flag prints one warning on stderr naming its replacement:
 
 ```
-deprecated: --add-spdx (removed in v0.26); use 'vulnscout add --spdx <path>'
+deprecated: --add-spdx (removed in v0.25); use 'vulnscout add --spdx <path>'
 ```
 
 Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in CI logs. A call uses one syntax or the other: flags and commands cannot be mixed in the same call.
