@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ## [Unreleased]
 
 ### Added
-- CLI: add `./vulnscout` subcommands (`add`, `scan`, `refresh`, `check`, `report`, `export`, `import`, `delete`, `list`, `config`, `serve`, `start`, `stop`, `restart`, `update`, `version`, `asset add`, `help`) with per-command `--help` and scope validation.
+- CLI: add `./vulnscout` subcommands (`add`, `scan`, `refresh`, `match-condition`, `report`, `export`, `import`, `delete`, `list`, `config`, `serve`, `start`, `stop`, `restart`, `update`, `version`, `asset add`) with per-command `--help` and scope validation.
 - CLI: add `-p`/`-v` short forms for `--project`/`--variant`, `config get`, masked `config list`, `report --format` and `report --condition`, and `import context` retargeting with `-p`/`-v`.
 - CLI: add `delete --dry-run`, and a confirmation prompt when `delete` runs on a terminal (`--yes` skips it).
 - Container: add the `--dry-run`, `--all-variants`, `--retarget-context` and `--report-format` entrypoint flags.

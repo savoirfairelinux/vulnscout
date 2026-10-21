@@ -216,25 +216,25 @@ The web interface includes a *Settings* tab that provides:
 
 === Run VulnScout in non-interactive mode
 
-If you want to use the non-interactive mode, without the web interface, you can use `check`:
+If you want to use the non-interactive mode, without the web interface, you can use `match-condition`:
 
 [source,shell]
 ----
-./vulnscout -p demo check "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
+./vulnscout -p demo match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ----
 
 The command exits with code `2` if any vulnerability matches the condition, enabling use in CI pipelines.
 
-Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `check` when the condition must use current enrichment data.
+Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `match-condition` when the condition must use current enrichment data.
 
 See the link:doc/source/ci_conditions.md[match conditions documentation] for the full condition syntax and token reference.
 
-In CI, import the inputs and then run `check` last:
+In CI, import the inputs and then run `match-condition` last:
 
 [source,shell]
 ----
 ./vulnscout -p demo add --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
-./vulnscout -p demo check "((cvss >= 9.0) and (pending or affected))"
+./vulnscout -p demo match-condition "((cvss >= 9.0) and (pending or affected))"
 ----
 
 ===  Refreshing Vulnerability Data
@@ -317,7 +317,7 @@ Use `-p` to select the report scope; when omitted, the `default` project is used
 ./vulnscout -p demo report /path/to/my-custom-report.adoc
 ----
 
-`--condition` fills the report's list of matching vulnerabilities. A match does not fail `report`; use `check` to fail a CI job. `--format pdf` or `--format html` overrides the format implied by the template extension.
+`--condition` fills the report's list of matching vulnerabilities. A match does not fail `report`; use `match-condition` to fail a CI job. `--format pdf` or `--format html` overrides the format implied by the template extension.
 
 Multiple reports can be generated in one command:
 

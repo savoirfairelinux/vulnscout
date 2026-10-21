@@ -19,7 +19,7 @@ Releases before v0.24 used flags instead of commands. They still work until v0.2
 | `add --spdx\|--cdx\|--cve-check\|--yocto-vex\|--openvex\|--grype <path>` | Import input files. Options repeat and mix; one call is processed as one import. | default `default` | default `default` |
 | `scan [grype\|nvd\|osv\|sbom-cve-check\|all]` | Run scanners on the current data. No type means `all`. | default `default` | default `default` |
 | `refresh` | Refresh EPSS, NVD, ENISA EUVD and GitHub Advisory data. | optional; all data when omitted | optional; needs `-p` |
-| `check <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional |
+| `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional |
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
 | `export <kind>... [--amend]` | Write `spdx`, `cdx`, `openvex`, `custom-data`, `custom-openvex` or `context` to the outputs directory. `--amend` applies to `custom-*` only. | default `default` | optional; all variants when omitted |
 | `import custom-data <path> [--timestamps original\|current]` | Import custom VulnScout JSON data. | default `default` | rejected (the file names its variants) |
@@ -31,19 +31,16 @@ Releases before v0.24 used flags instead of commands. They still work until v0.2
 | `serve` | Start the web UI on port 7275. | rejected | rejected |
 | `start`, `stop`, `restart`, `update`, `version` | Manage the container. | rejected | rejected |
 | `asset add <path>...` | Stage report images (`png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`). | rejected | rejected |
-| `help [<command>]` | Show help. | rejected | rejected |
 
 Global options can appear before or after the command:
 
 | Option | Meaning |
 |---|---|
-| `-p, --project <name>` | Project scope. |
-| `-v, --variant <name>` | Variant scope. |
 | `--dev` | Mount the local `src/` and `vulnscout_mcp/` (commands that start the container). |
 | `-h, --help` | Help for the command, or the overview. |
 | `--version` | Same as `version`. |
 
-A command that does not use a scope exits with code 1 when given `-p` or `-v`.
+`-p, --project <name>` and `-v, --variant <name>` are options of the commands marked in the `-p` and `-v` columns above; see `<command> --help`. A command that does not use a scope exits with code 1 when given `-p` or `-v`.
 
 ---
 
@@ -360,16 +357,16 @@ To scan newly added files, run `add` first:
 
 ## Non-Interactive Mode (CI / Automation)
 
-For CI pipelines or automated scans, import the inputs and then use `check` instead of the web UI:
+For CI pipelines or automated scans, import the inputs and then use `match-condition` instead of the web UI:
 
 ```bash
 ./vulnscout -p demo add --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
-./vulnscout -p demo check "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
+./vulnscout -p demo match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ```
 
-If vulnerabilities match the condition, `check` exits with **code 2**, allowing CI systems to fail the pipeline. Run `check` last: a shell running with `set -e` stops at the first non-zero exit, so commands after `check` would not run.
+If vulnerabilities match the condition, `match-condition` exits with **code 2**, allowing CI systems to fail the pipeline. Run `match-condition` last: a shell running with `set -e` stops at the first non-zero exit, so commands after `match-condition` would not run.
 
-Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `check` when the condition must use current enrichment data.
+Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `match-condition` when the condition must use current enrichment data.
 
 When `-p demo` is supplied without `-v`, the condition is evaluated across all variants in `demo`. Supplying both options limits evaluation to one variant. Omitting both options evaluates `default/default`; supplying only `-v` selects that variant from the `default` project. Unknown names exit with **code 1**.
 
@@ -399,7 +396,7 @@ Use `-p` to select the report scope; when omitted, the `default` project is used
 ./vulnscout -p demo report summary.adoc --format pdf
 ```
 
-`--condition` fills the report's list of matching vulnerabilities. A match does not fail `report`; use `check` to fail a CI job. `--format pdf` or `--format html` overrides the format implied by the template extension.
+`--condition` fills the report's list of matching vulnerabilities. A match does not fail `report`; use `match-condition` to fail a CI job. `--format pdf` or `--format html` overrides the format implied by the template extension.
 
 Multiple reports can be generated in one command:
 
@@ -639,9 +636,9 @@ Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in
 | `--perform-scans <types>` | `scan <types>` |
 | `--perform-grype-scan`, `--perform-nvd-scan`, `--perform-osv-scan`, `--perform-sbom-cve-check-scan` | `scan grype`, `scan nvd`, `scan osv`, `scan sbom-cve-check` |
 | `--refresh-vulnerability-data` | `refresh` |
-| `--match-condition <expr>` | `check <expr>` |
+| `--match-condition <expr>` | `match-condition <expr>` |
 | `--report <template>` | `report <template>` |
-| `--match-condition <expr> --report <template>` | `report <template> --condition <expr>`, then `check <expr>` |
+| `--match-condition <expr> --report <template>` | `report <template> --condition <expr>`, then `match-condition <expr>` |
 | `--export-spdx`, `--export-cdx`, `--export-openvex` | `export spdx`, `export cdx`, `export openvex` |
 | `--export-custom-vulnscout-data` | `export custom-data` |
 | `--export-custom-openvex-assessments` | `export custom-openvex` |
@@ -664,8 +661,8 @@ Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in
 
 ### Behaviour changes
 
-- **One command per call.** Split a chained call into one call per command, in this order: `add`, `scan`, `refresh`, `import`, `export`, `report`, `check`.
-- **Put `check` last.** A chained legacy call still wrote its reports and exports when the condition matched. With separate calls, a script running with `set -e` stops at the first non-zero exit, so run `check` last or handle its exit code explicitly.
+- **One command per call.** Split a chained call into one call per command, in this order: `add`, `scan`, `refresh`, `import`, `export`, `report`, `match-condition`.
+- **Put `match-condition` last.** A chained legacy call still wrote its reports and exports when the condition matched. With separate calls, a script running with `set -e` stops at the first non-zero exit, so run `match-condition` last or handle its exit code explicitly.
 - **`refresh` uses its own scope.** It refreshes the selected project or variant (every vulnerability without `-p`), not only the vulnerabilities imported by the previous `add`.
 - **Custom OpenVEX without `-v`.** `export custom-openvex` writes every project variant, and `import custom-openvex` targets the project's only variant. The legacy flags still default to the `default` variant.
 - **Scope is validated.** `-p` or `-v` on a command that does not use them exits with code 1 instead of being ignored.
@@ -687,5 +684,5 @@ Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in
 ./vulnscout -p demo -v x86 refresh
 ./vulnscout -p demo -v x86 report summary.adoc --condition "cvss >= 9.0"
 ./vulnscout -p demo -v x86 export cdx
-./vulnscout -p demo -v x86 check "cvss >= 9.0"   # last: exit 2 fails the job
+./vulnscout -p demo -v x86 match-condition "cvss >= 9.0"   # last: exit 2 fails the job
 ```
