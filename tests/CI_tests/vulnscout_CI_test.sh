@@ -5,10 +5,10 @@ set -euo pipefail
 BASE_DIR=$(readlink -f "$PWD/../../")
 cd "$BASE_DIR"
 
-SPDX3="$(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json"
-CVE3="$(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json"
-SPDX2="$(pwd)/example/spdx2/example.rootfs.spdx.tar.zst"
-CVE2="$(pwd)/example/spdx2/example.rootfs.json"
+SPDX3="$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json"
+CVE3="$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
+SPDX2="$(pwd)/example/yocto-scarthgap-spdx2/core-image-minimal-stm32mp25-eval.spdx.tar.zst"
+CVE2="$(pwd)/example/yocto-scarthgap-spdx2/core-image-minimal-stm32mp25-eval.scouted.json"
 
 # Shared helper: fresh DB in a temp dir, merge files, then run process and return its exit code
 run_scan() {

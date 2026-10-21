@@ -7,6 +7,7 @@ VulnScout Documentation
 
    introduction
    getting-started
+   examples
    vulnscout-script
    container-entrypoint
    interactive-mode
