@@ -1,5 +1,18 @@
 # VulnScout Skills
 
+## SBOM Dependencies and Lifecycle Skill
+
+[`sbom-dependencies/SKILL.md`](./sbom-dependencies/SKILL.md) answers questions such
+as “Which libraries does demo use on this board?” and “Are any SBOM packages EOL
+or candidates for LTS?”. It discovers active variant-scoped SBOM packages and
+traverses direct/transitive dependencies through the MCP server. Lifecycle
+analysis requires dated upstream/vendor evidence and distinguishes unknowns,
+downstream backports and SBOM declarations from actual runtime usage.
+
+Copy or symlink `sbom-dependencies/` into the same agent skills folder described
+below. Invoke it with the project and board/variant names; no package or
+assessment changes are made.
+
 ## Vulnerability Assessment Skill
 
 An AI agent skill for assessing the impact of a CVE (or GHSA advisory) on a software
