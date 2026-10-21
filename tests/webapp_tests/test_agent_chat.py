@@ -830,6 +830,71 @@ def test_ai_context_scope_uses_its_own_selection(client):
         assert json.loads(_scope_for_context(context)) == {"project_ids": [], "variant_ids": []}
 
 
+@pytest.mark.parametrize("target_count", [1, 2])
+def test_bulk_review_message_preserves_full_assessment_scope(client, monkeypatch, target_count):
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+    from src.routes import agent
+    from vulnscout_mcp.client import ScopedVulnScoutClient
+
+    with client.application.app_context():
+        project = Project.create("Selected project")
+        other = Project.create("Other project")
+        first = Variant.create("Visible variant", project.id)
+        second = Variant.create("Hidden target", project.id)
+        excluded = Variant.create("Not a target", other.id)
+        Vulnerability.create_record(id="CVE-2024-1234", description="Description")
+        package = Package.find_or_create("example", "1.0", [], [], "")
+        db.session.commit()
+        finding = Finding.get_or_create(package.id, "CVE-2024-1234")
+        assessment = Assessment.create(status="affected", origin="custom", targets=[
+            (first.id, finding.id), (second.id, finding.id),
+        ][:target_count])
+        assessment_id = str(assessment.id)
+        first_id = str(first.id)
+        variant_ids = sorted([str(first.id), str(second.id)][:target_count])
+        project_id = str(project.id)
+        excluded_id = str(excluded.id)
+
+    # The detail endpoint, unlike the visible table, returns the complete target set.
+    full = client.get(f"/api/assessments/{assessment_id}").get_json()
+    assert sorted(target["variant_id"] for target in full["targets"]) == variant_ids
+    captured = []
+
+    async def reply(conversation, message, path, model, scope, publish=None):
+        scoped = json.loads(scope)
+        assert scoped["variant_ids"] == variant_ids
+        assert scoped["project_ids"] == [project_id]
+        assert excluded_id not in scoped["variant_ids"]
+        result = ScopedVulnScoutClient("http://localhost", scoped)._assessment(full)
+        assert result["targets"] == full["targets"]
+        captured.append(scoped)
+        return "Reviewed every target", {"cost": None, "input_tokens": None, "output_tokens": None}
+
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+    monkeypatch.setattr(agent, "_reply", reply)
+    headers = {"X-Agent-Thread": str(uuid4())}
+    client.delete("/api/agent/conversation", headers=headers)
+    invalid = client.post("/api/agent/messages", json={
+        "message": "Review", "context": {"page": "review", "variantId": first_id},
+    }, headers=headers)
+    assert invalid.status_code == 400
+    assert "do not belong" in invalid.get_json()["error"]
+    context = {"page": "review", "projectId": project_id,
+               "variantIds": variant_ids, "view": {"section": "assessments"}}
+    response = client.post("/api/agent/messages", json={
+        "message": f"Review the user assessment {assessment_id}", "context": context,
+    }, headers=headers)
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json()["reply"] == "Reviewed every target"
+    assert len(captured) == 1
+
+
 def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypatch, tmp_path):
     from io import BytesIO
     from werkzeug.serving import make_server

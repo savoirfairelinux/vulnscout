@@ -30,7 +30,7 @@ import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
 import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
 import AgentChat, { type QueuedAgentMessage } from '../components/AgentChat';
-import { assessmentReviewKey, buildAssessmentReviewAction } from '../helpers/aiAssessmentReview';
+import { assessmentReviewKey, resolveAssessmentReviewAction } from '../helpers/aiAssessmentReview';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -274,17 +274,24 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [reviewThreadId, setReviewThreadId] = useState<string>();
     const reviewThreadRef = useRef<string>();
     const reviewContextRef = useRef<AgentContext>({ page: 'review' });
+    const reviewScopeVersion = useRef(0);
+    const reviewPreparingRef = useRef(false);
+    const [reviewPreparing, setReviewPreparing] = useState(false);
     const [reviewActions, setReviewActions] = useState<{
         queue: QueuedAgentMessage[];
         running: QueuedAgentMessage | null;
-    }>({ queue: [], running: null });
+        failed: QueuedAgentMessage | null;
+    }>({ queue: [], running: null, failed: null });
 
     // Keep a hidden chat alive, but never reuse a conversation across scopes.
     useEffect(() => {
         setReviewChatOpen(false);
         setReviewThreadId(undefined);
-        setReviewActions({ queue: [], running: null });
+        setReviewActions({ queue: [], running: null, failed: null });
+        reviewPreparingRef.current = false;
+        setReviewPreparing(false);
         return () => {
+            reviewScopeVersion.current += 1;
             const threadId = reviewThreadRef.current;
             reviewThreadRef.current = undefined;
             if (threadId) void fetch('/api/agent/conversation', {
@@ -936,29 +943,44 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const pendingReviewKeys = new Set([
         ...reviewActions.queue.map(action => action.key),
         ...(reviewActions.running ? [reviewActions.running.key] : []),
+        ...(reviewActions.failed ? [reviewActions.failed.key] : []),
     ]);
     const reviewableRows = selectedReviewRows.filter(row => !pendingReviewKeys.has(assessmentReviewKey(row.id)));
     const selectedReviewRunning = selectedReviewRows.some(row => reviewActions.running?.key === assessmentReviewKey(row.id));
 
-    const reviewSelectedWithAi = () => {
-        const actions = reviewableRows.map(buildAssessmentReviewAction);
-        if (!actions.length) return;
-        if (actions.some(action => action.text.length > AGENT_MESSAGE_MAX_LENGTH)) {
-            showMessage('An assessment review request exceeds the AI message limit. Check the selected assessment identifiers.', 'error');
-            return;
+    const reviewSelectedWithAi = async () => {
+        if (reviewPreparingRef.current || !reviewableRows.length) return;
+        const version = reviewScopeVersion.current;
+        reviewPreparingRef.current = true;
+        setReviewPreparing(true);
+        try {
+            const variants = await Variants.listAll();
+            const actions = await Promise.all(reviewableRows.map(row => resolveAssessmentReviewAction(row.id, variants)));
+            if (version !== reviewScopeVersion.current) return;
+            if (actions.some(action => action.text.length > AGENT_MESSAGE_MAX_LENGTH)) {
+                showMessage('An assessment review request exceeds the AI message limit. Check the selected assessment identifiers.', 'error');
+                return;
+            }
+            if (!reviewThreadRef.current) {
+                reviewContextRef.current = actions[0].context!;
+                reviewThreadRef.current = crypto.randomUUID();
+                setReviewThreadId(reviewThreadRef.current);
+            }
+            setReviewChatOpen(true);
+            setReviewActions(previous => {
+                const keys = new Set([...previous.queue.map(action => action.key), previous.running?.key, previous.failed?.key]);
+                return { ...previous, queue: [...previous.queue, ...actions
+                    .filter(action => !keys.has(action.key))
+                    .map(action => ({ ...action, id: crypto.randomUUID() }))] };
+            });
+        } catch (error) {
+            if (version === reviewScopeVersion.current) showMessage(`Unable to queue AI reviews: ${String(error)}`, 'error');
+        } finally {
+            if (version === reviewScopeVersion.current) {
+                reviewPreparingRef.current = false;
+                setReviewPreparing(false);
+            }
         }
-        if (!reviewThreadRef.current) {
-            reviewContextRef.current = { page: 'review', projectId, variantId, view: { section: 'assessments' } };
-            reviewThreadRef.current = crypto.randomUUID();
-            setReviewThreadId(reviewThreadRef.current);
-        }
-        setReviewChatOpen(true);
-        setReviewActions(previous => {
-            const keys = new Set([...previous.queue.map(action => action.key), previous.running?.key]);
-            return { ...previous, queue: [...previous.queue, ...actions
-                .filter(action => !keys.has(action.key))
-                .map(action => ({ ...action, id: crypto.randomUUID() }))] };
-        });
     };
 
     const clearSelectedRows = useCallback((tab: ReviewTab) => {
@@ -1772,14 +1794,15 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         <button
                             type="button"
                             onClick={reviewSelectedWithAi}
-                            disabled={reviewableRows.length === 0}
+                            disabled={reviewPreparing || reviewableRows.length === 0}
                             className="bg-cyan-700 hover:bg-cyan-600 px-3 py-1 rounded text-white border border-cyan-500 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                             title={reviewableRows.length > 0 ? "Review selected custom assessments with AI"
                                 : selectedReviewRunning ? "AI review in progress" : "AI reviews queued in the review chat"}
                         >
                             <FontAwesomeIcon icon={reviewableRows.length > 0 ? faRobot : selectedReviewRunning ? faCircleNotch : faClock}
                                 spin={reviewableRows.length === 0 && selectedReviewRunning} />
-                            {reviewableRows.length > 0 ? `Review selected with AI (${reviewableRows.length})`
+                            {reviewPreparing ? 'Preparing AI reviews…' : reviewableRows.length > 0 ? `Review selected with AI (${reviewableRows.length})`
+                                : reviewActions.failed ? 'AI review paused — retry in chat'
                                 : selectedReviewRunning ? 'AI review running…' : 'AI reviews queued'}
                         </button>
                     )}
@@ -1836,11 +1859,14 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         context={reviewContextRef.current}
                         onClose={() => setReviewChatOpen(false)} queue={reviewActions.queue}
                         onQueuedMessageSent={id => setReviewActions(previous => ({
+                            ...previous,
                             queue: previous.queue.filter(action => action.id !== id),
-                            running: previous.queue.find(action => action.id === id) ?? previous.running,
+                            running: previous.queue.find(action => action.id === id) ?? previous.failed ?? previous.running,
+                            failed: null,
                         }))}
-                        onQueuedMessageDone={id => setReviewActions(previous => ({
+                        onQueuedMessageDone={(id, success) => setReviewActions(previous => ({
                             ...previous, running: previous.running?.id === id ? null : previous.running,
+                            failed: previous.running?.id === id && !success ? previous.running : null,
                         }))}
                         onQueueRemove={id => setReviewActions(previous => ({
                             ...previous, queue: previous.queue.filter(action => action.id !== id),
