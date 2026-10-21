@@ -103,6 +103,25 @@ Each message includes the active page and project/variant selection, including c
 
 Expand **Conversation usage** below the composer to see cumulative input/output tokens when supplied by the SDK and the sum of `assistant.usage.cost` across the current conversation. It does not infer a currency or a token price; when no cost is reported, it says **Cost not reported**. Each assistant response has a copy action. Sending keeps the user message visible while a response is pending; failures restore the draft for retry.
 
+In the **Vulnerabilities** tab, select one or more rows and choose **Assess with AI**
+in the selection bar. VulnScout resolves the active variant/package findings for
+each selected vulnerability within the current project and variant selection
+(including comparison and multi-variant modes), then queues the same assessment
+workflow used by the vulnerability modal. Historical/outdated packages and
+unselected vulnerabilities are not assessed. Every variant's packages stay
+together, and large requests are batched within the agent message limit. If
+targets cannot be loaded, no partial selection is queued; the error banner
+explains what to retry.
+
+The bulk assessment chat has its own conversation. Hiding it or resetting the
+row selection preserves queued and running work; **Open assessment chat** brings
+it back. A queued or running vulnerability cannot be queued again; selecting
+additional rows queues only the new vulnerabilities. Clear or remove pending
+items in **Up next**, or retry after an action finishes. Changing the project or
+variant scope, or leaving the tab, discards the bulk conversation and its pending
+queue. AI suggestions follow the normal approval workflow in **Review**; the
+selection bar does not directly create user assessments.
+
 Responses stream as text arrives. Expand **Activity** to see tool names and running, completed, or failed status. This log does not expose internal reasoning, tool arguments, or raw tool results, and is retained only until the page reloads. Closing the global panel keeps the stream running; closing a vulnerability assessment chat discards that chat. If the connection is interrupted, the backend may still finish the turn; reload to check the stored reply before retrying a write.
 
 The messages endpoint supports `Accept: application/x-ndjson` for status, text delta, tool activity, heartbeat, and terminal `done` or `error` records. Existing clients without this header still receive a single JSON response. Validation errors remain JSON HTTP errors. Proxies must not buffer streamed responses.

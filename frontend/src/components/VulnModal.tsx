@@ -32,7 +32,8 @@ import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
-import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
+import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
+import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
 
 type Props = {
     vuln: Vulnerability;
@@ -255,58 +256,14 @@ type VariantScopedSnapshot = {
         else openAssessmentChat();
     };
 
-    const assessmentKey = (targets: AssessmentTargetPair[]) =>
-        `assess:${targets.map(target => `${target.variant_id}|${target.package}`).sort().join(',')}`;
-
     const assessWithAiState = (targets: AssessmentTargetPair[]) => agentActionState(assessmentKey(targets));
 
     const assessWithAi = (targets: AssessmentTargetPair[]) => {
-        const variantName = (id?: string | null) => availableVariants.find(v => v.id === id)?.name;
-        const variantLabel = (id?: string | null) => {
-            const name = variantName(id);
-            return name ? `"${name}" (variant_id ${id})` : `variant_id ${id}`;
-        };
-        // One line per variant; a variant is kept whole within one batch so
-        // the agent assesses all of its selected packages together.
-        const groupMap = new Map<string, AssessmentTargetPair[]>();
-        targets.forEach(target => {
-            const id = target.variant_id ?? '';
-            groupMap.set(id, [...(groupMap.get(id) ?? []), target]);
-        });
-        const groups = [...groupMap.values()];
-        const lines = groups.map(group =>
-            `- variant ${variantLabel(group[0].variant_id)}: ${group.map(target => target.package).join(', ')}`);
-        const prompt = (batchLines: string[], batch = '') =>
-            `Assess ${vuln.id}${batch} for exactly these targets (packages listed per variant):\n${batchLines.join('\n')}\n` +
-            `Retrieve the vulnerability details and each variant's merged context with VulnScout MCP first, ` +
-            `then record the result with write_assessment for these targets only.`;
-        // Split large selections into batches of whole variants that fit the
-        // agent message limit, reserving room for the " (batch N of M)" label.
-        const budget = AGENT_MESSAGE_MAX_LENGTH - ' (batch 9999 of 9999)'.length;
-        const oversized = groups.filter((_, index) => prompt([lines[index]]).length > budget);
-        if (oversized.length) {
-            const names = oversized.map(group => variantName(group[0].variant_id) ?? group[0].variant_id).join(', ');
-            showMessage(`Too many packages selected for variant ${names} to assess with AI in one request. Select fewer packages for that variant.`, 'error');
-            return;
+        try {
+            openAssessmentChat(buildAiAssessmentMessages(vuln.id, targets, availableVariants));
+        } catch (error) {
+            showMessage(error instanceof Error ? error.message : 'Unable to prepare AI assessment.', 'error');
         }
-        const batches: number[][] = [];
-        lines.forEach((line, index) => {
-            const current = batches[batches.length - 1];
-            if (current && prompt([...current.map(i => lines[i]), line]).length <= budget) current.push(index);
-            else batches.push([index]);
-        });
-        const key = assessmentKey(targets);
-        openAssessmentChat(batches.map((indexes, index) => {
-            const batchTargets = indexes.flatMap(i => groups[i]);
-            const unique = (values: string[]) => [...new Set(values)].join(', ');
-            const batchLabel = batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '';
-            return {
-                key, kind: 'assess',
-                text: prompt(indexes.map(i => lines[i]), batchLabel),
-                title: `${batchTargets.length} target${batchTargets.length === 1 ? '' : 's'}${batches.length > 1 ? ` · batch ${index + 1} of ${batches.length}` : ''}`,
-                detail: `${unique(batchTargets.map(target => variantName(target.variant_id) ?? target.variant_id ?? ''))} · ${unique(batchTargets.map(target => target.package))}`,
-            };
-        }));
     };
 
     const reviewKey = (assessmentId: string) => `review:${assessmentId}`;
