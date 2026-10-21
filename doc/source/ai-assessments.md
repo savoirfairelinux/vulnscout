@@ -27,6 +27,16 @@ Four pieces work together:
 - **assessment-review skill** — an agent skill under
   `.github/skills/assessment-review/` that independently reviews existing
   user-authored assessments, without changing them.
+- **sbom-dependencies skill** — a read-only skill under
+  `.github/skills/sbom-dependencies/` for application dependency discovery and
+  evidence-based LTS/EOL/vendor-support analysis. It uses the active SBOM graph
+  for each board/variant, not inferred runtime usage. See the
+  [MCP dependency workflow](../../vulnscout_mcp/README.md#sbom-discovery-and-lifecycle-analysis)
+  for tools, pagination, provenance and limitations. This workflow does not
+  create VEX assessments. The embedded Agent exposes these dependency tools but
+  does not load host skills or browse the web; current lifecycle claims require
+  supplied authoritative evidence, otherwise it reports unknown. Use the external
+  skill with a web-capable client for live support-policy research.
 
 ```
 CVE / GHSA id
