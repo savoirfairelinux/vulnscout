@@ -259,9 +259,6 @@ refute_stderr "deprecated:"
 run_ok
 assert_stdout "Usage: vulnscout [global options] <command>"
 
-run_ok help scan
-assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]"
-
 run_ok scan --help
 assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]"
 if [ -s "$VULNSCOUT_TEST_LOG" ]; then
@@ -292,9 +289,10 @@ run_ok serve
 assert_log "exec vulnscout pkill -f"
 assert_log "/scan/src/entrypoint.sh --serve"
 
-expect_fail "missing command. Run 'vulnscout help' for usage." -p cli
+expect_fail "missing command. Run 'vulnscout --help' for usage." -p cli
 expect_fail "Unknown command: frobnicate" frobnicate
 expect_fail "Unknown command: frobnicate" frobnicate --help
+expect_fail "Unknown command: help" help
 expect_fail "'start' does not accept --project or --variant." -p cli start
 expect_fail "'serve' does not accept --project or --variant." serve -v x86
 expect_fail "'stop' does not accept argument 'now'." stop now
@@ -337,26 +335,26 @@ expect_fail "unknown scan type 'x'" scan x
 expect_fail "scan requires scan types" scan nvd,
 expect_fail "'scan' does not accept option --all." scan --all
 
-# --- check ---
-run_ok check affected
+# --- match-condition ---
+run_ok match-condition affected
 assert_log "/scan/src/entrypoint.sh --match-condition affected"
 refute_log "--project"
 
-run_ok -p demo check affected
+run_ok -p demo match-condition affected
 assert_log "/scan/src/entrypoint.sh --project demo --match-condition affected"
 
 export VULNSCOUT_TEST_EXEC_EXIT=2
 status=0
-"$ROOT_DIR/vulnscout" check affected < /dev/null > /dev/null 2>&1 || status=$?
+"$ROOT_DIR/vulnscout" match-condition affected < /dev/null > /dev/null 2>&1 || status=$?
 unset VULNSCOUT_TEST_EXEC_EXIT
 if [ "$status" -ne 2 ]; then
-    echo "check must exit 2 when the condition matches, got $status." >&2
+    echo "match-condition must exit 2 when the condition matches, got $status." >&2
     exit 1
 fi
 
-expect_fail "'check' needs exactly one condition expression" check
-expect_fail "'check' needs exactly one condition expression" check a b
-expect_fail "check requires a non-empty condition" check ""
+expect_fail "'match-condition' needs exactly one condition expression" match-condition
+expect_fail "'match-condition' needs exactly one condition expression" match-condition a b
+expect_fail "match-condition requires a non-empty condition" match-condition ""
 
 # --- refresh ---
 run_ok refresh

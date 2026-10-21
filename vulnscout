@@ -49,24 +49,21 @@ show_help() {
 VulnScout - Vulnerability Scanner
 Usage: vulnscout [global options] <command> [arguments] [options]
        vulnscout <command> --help
-       vulnscout help [<command>]
 
 Global options (before or after the command):
-    -p, --project <name>    Project (default: "default" for commands that use a project)
-    -v, --variant <name>    Variant of the project
     --dev                   Mount local src/ and vulnscout_mcp/; start, restart and serve
                             also run the frontend dev server
     -h, --help              Show help for a command, or this overview
     --version               Show the VulnScout version
 
-Data commands (accept --project and --variant):
+Data commands (also accept --project and --variant; see '<command> --help'):
     add <input options>     Add files to the project/variant and process them:
                             --spdx, --cdx, --cve-check, --yocto-vex, --openvex, --grype <path>
                             (each repeatable)
     scan [types|all]        Run grype, nvd, osv, sbom-cve-check scans (default: all)
-    check <expr>            Test stored vulnerabilities; exit 2 when the condition matches
+    match-condition <expr>  Test stored vulnerabilities; exit 2 when the condition matches
     report <template|path>... [--format pdf|html] [--condition <expr>]
-                            Generate reports into VULNSCOUT_OUTPUTS_DIR
+                            Generate reports into the outputs directory
     export <kind>... [--amend]
                             Export spdx, cdx, openvex, custom-data, custom-openvex, context
     import <kind> <path> [--timestamps original|current]
@@ -89,30 +86,15 @@ Container commands:
     update                  Pull the image and restart if a new version is available
     version                 Show the VulnScout version
     serve                   Start the web UI on port 7275
-    help [<command>]        Show help
-
-Environment variables:
-    VULNSCOUT_CONTAINER     Container name (default: vulnscout)
-    VULNSCOUT_IMAGE         Container image (default: docker.io/sflinux/vulnscout:v0.23)
-    VULNSCOUT_BUILD_DIR     Build base dir (default: ./.vulnscout)
-    VULNSCOUT_CACHE_DIR     Cache dir (default: VULNSCOUT_BUILD_DIR/cache)
-    VULNSCOUT_OUTPUTS_DIR   Output directory (default: VULNSCOUT_BUILD_DIR/outputs)
-    VULNSCOUT_NO_DEPRECATION_WARNING=1
-                            Hide warnings about the legacy flag syntax
 
 Examples:
     vulnscout -p demo -v x86 add --spdx sbom.spdx.json --cve-check cve.json
     vulnscout -p demo -v x86 scan nvd,osv
     vulnscout -p demo report summary.adoc --condition "cvss >= 9.0"
     vulnscout -p demo export cdx custom-openvex
-    vulnscout -p demo check "cvss >= 9.0"
+    vulnscout -p demo match-condition "cvss >= 9.0"
     vulnscout config set NVD_API_KEY abc123
     vulnscout serve
-
-Exit codes:
-    0   Success
-    1   Error
-    2   check matched the condition
 
 The legacy flag syntax (for example --add-spdx, --perform-scans, --report)
 still works until v0.26 and prints a deprecation warning. See doc/source/vulnscout-script.md for the mapping.
@@ -132,7 +114,9 @@ Input options (repeatable, types can be mixed; all files form one scan):
     --yocto-vex <path>      Yocto VEX JSON file
     --openvex <path>        OpenVEX JSON file
     --grype <path>          Grype results file
-Without --project/--variant, the "default" project and variant are used.
+Options:
+    -p, --project <name>    Project (default: "default")
+    -v, --variant <name>    Variant (default: "default")
 EOF
             ;;
         scan) cat <<'EOF'
@@ -140,25 +124,37 @@ Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]
 
 Run vulnerability scans. Types: grype, nvd, osv, sbom-cve-check, all (default: all).
 Separate several types with commas or spaces: scan nvd,osv or scan nvd osv.
+Options:
+    -p, --project <name>    Project (default: "default")
+    -v, --variant <name>    Variant (default: "default")
 EOF
             ;;
-        check) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] check <expr>
+        match-condition) cat <<'EOF'
+Usage: vulnscout [-p <project>] [-v <variant>] match-condition <expr>
 
-Test stored vulnerability data against a condition, e.g. check "cvss >= 9.0".
-Exit 0 = no match, 1 = error, 2 = match. Run 'vulnscout refresh' first for current EPSS.
-Without scope, the default project/variant is tested; --project alone tests every variant.
+Test stored vulnerability data against a condition, e.g. match-condition "cvss >= 9.0".
+Run 'vulnscout refresh' first for current EPSS.
+Options:
+    -p, --project <name>    Project; without it, the "default" project. Alone, tests
+                            every variant of the project.
+    -v, --variant <name>    Variant; requires --project
+Exit codes:
+    0   No vulnerability matches
+    1   Error
+    2   At least one vulnerability matches
 EOF
             ;;
         report) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] report <template|path>... [options]
 
-Generate one or more reports into VULNSCOUT_OUTPUTS_DIR. A template is a built-in name
+Generate one or more reports into the outputs directory. A template is a built-in name
 (e.g. summary.adoc) or a local file. --project alone reports on every variant.
 Options:
+    -p, --project <name>    Project (default: "default")
+    -v, --variant <name>    Variant; without it, every variant of the project
     --format pdf|html       Output format
     --condition <expr>      Fill the matched-vulnerabilities section; a match does not
-                            fail the call (use 'vulnscout check' as the gate)
+                            fail the call (use 'vulnscout match-condition' as the gate)
 EOF
             ;;
         export) cat <<'EOF'
@@ -172,6 +168,8 @@ Kinds:
     custom-openvex          Custom OpenVEX assessments (all variants without --variant)
     context                 AI assessment context (context-export.json)
 Options:
+    -p, --project <name>    Project (default: "default")
+    -v, --variant <name>    Variant; without it, every variant of the project
     --amend                 Update the existing custom-* output file, keeping review order
 EOF
             ;;
@@ -187,6 +185,8 @@ Kinds:
                             -p P: every entry goes to project P. -p P -v V: the file must
                             hold one entry, imported into P/V.
 Options:
+    -p, --project <name>    Project (default: "default"; see each kind above)
+    -v, --variant <name>    Variant (see each kind above)
     --timestamps original|current
                             custom-* only. Defaults: custom-data = current,
                             custom-openvex = original.
@@ -196,7 +196,10 @@ EOF
         refresh) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] refresh
 
-Refresh stored vulnerability data, including EPSS. Without scope, all projects are refreshed.
+Refresh stored vulnerability data, including EPSS.
+Options:
+    -p, --project <name>    Project; without it, all projects are refreshed
+    -v, --variant <name>    Variant; requires --project
 EOF
             ;;
         delete) cat <<'EOF'
@@ -226,7 +229,7 @@ Usage: vulnscout config get <key>
        vulnscout config unset <key>
        vulnscout config list
 
-Read or change the host config file (VULNSCOUT_CACHE_DIR/config.env). 'list' masks values
+Read or change the host config file (.vulnscout/cache/config.env). 'list' masks values
 of keys containing API_KEY, PASSWORD or SECRET. Setting VULNSCOUT_CACHE_DIR restarts a
 running container.
 EOF
@@ -237,15 +240,15 @@ Usage: vulnscout asset add <path>...
 Stage image assets (png, jpg, jpeg, gif, svg, webp) for report templates.
 EOF
             ;;
-        start|stop|restart|update|version|serve|help) cat <<EOF
+        start|stop|restart|update|version|serve) cat <<EOF
 Usage: vulnscout $1
 
-See 'vulnscout help' for a description.
+See 'vulnscout --help' for a description.
 EOF
             ;;
         *)
             echo "Unknown command: $1" >&2
-            echo "Run 'vulnscout help' for usage." >&2
+            echo "Run 'vulnscout --help' for usage." >&2
             return 1 ;;
     esac
 }
@@ -374,7 +377,7 @@ legacy_replacement() {
         --perform-nvd-scan) echo "scan nvd" ;;
         --perform-osv-scan) echo "scan osv" ;;
         --perform-sbom-cve-check-scan) echo "scan sbom-cve-check" ;;
-        --match-condition) echo "check <expr>" ;;
+        --match-condition) echo "match-condition <expr>" ;;
         --refresh-vulnerability-data) echo "refresh" ;;
         --export-spdx|export-spdx) echo "export spdx" ;;
         --export-cdx|export-cdx) echo "export cdx" ;;
@@ -741,18 +744,6 @@ verb_version() {
     do_version
 }
 
-verb_help() {
-    reject_scope help
-    if [ $# -gt 1 ]; then
-        reject_option help "$2"
-    fi
-    if [ $# -eq 1 ]; then
-        show_verb_help "$1"
-    else
-        show_help
-    fi
-}
-
 verb_serve() {
     reject_scope serve
     require_no_args serve "$@"
@@ -809,12 +800,12 @@ verb_scan() {
     exec_container "${SCOPE_ARGS[@]}" --perform-scans "$selection"
 }
 
-verb_check() {
+verb_match_condition() {
     if [ $# -ne 1 ]; then
-        die "'check' needs exactly one condition expression, e.g. vulnscout check \"cvss >= 9.0\"."
+        die "'match-condition' needs exactly one condition expression, e.g. vulnscout match-condition \"cvss >= 9.0\"."
     fi
     if [ -z "$1" ]; then
-        die "check requires a non-empty condition"
+        die "match-condition requires a non-empty condition"
     fi
     ensure_running
     set_explicit_scope_args
@@ -900,7 +891,7 @@ verb_report() {
         report_args+=(--report-format "$format")
     fi
     exec_container "${SCOPE_ARGS[@]}" "${report_args[@]}" || status=$?
-    # 'check' is the gate: with --condition, a match (exit 2) still means the report was written.
+    # 'match-condition' is the gate: with --condition, a match (exit 2) still means the report was written.
     if [ "$status" -eq 2 ] && [ -n "$condition" ]; then
         return 0
     fi
@@ -1176,7 +1167,7 @@ parse_new() {
             show_help
             return 0
         fi
-        die "missing command. Run 'vulnscout help' for usage."
+        die "missing command. Run 'vulnscout --help' for usage."
     fi
     verb="${rest[0]}"
     rest=("${rest[@]:1}")
@@ -1190,11 +1181,10 @@ parse_new() {
         restart) verb_restart "${rest[@]}" ;;
         update) verb_update "${rest[@]}" ;;
         version) verb_version "${rest[@]}" ;;
-        help) verb_help "${rest[@]}" ;;
         serve) verb_serve "${rest[@]}" ;;
         add) verb_add "${rest[@]}" ;;
         scan) verb_scan "${rest[@]}" ;;
-        check) verb_check "${rest[@]}" ;;
+        match-condition) verb_match_condition "${rest[@]}" ;;
         refresh) verb_refresh "${rest[@]}" ;;
         asset) verb_asset "${rest[@]}" ;;
         report) verb_report "${rest[@]}" ;;
@@ -1205,7 +1195,7 @@ parse_new() {
         config) verb_config "${rest[@]}" ;;
         *)
             echo "Unknown command: $verb" >&2
-            echo "Run 'vulnscout help' for usage." >&2
+            echo "Run 'vulnscout --help' for usage." >&2
             return 1 ;;
     esac
 }
@@ -1354,7 +1344,7 @@ parse_legacy() {
                 do_update; shift ;;
             *)
                 echo "Unknown command: $1" >&2
-                echo "Run 'vulnscout help' for usage." >&2
+                echo "Run 'vulnscout --help' for usage." >&2
                 exit 1 ;;
         esac
     done

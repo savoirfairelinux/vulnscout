@@ -5,14 +5,14 @@ Evaluate and enforce conditions on vulnerabilities within a project.
 ## Synopsis
 
 ```
-./vulnscout [-p PROJECT] [-v VARIANT] check CONDITION
+./vulnscout [-p PROJECT] [-v VARIANT] match-condition CONDITION
 ```
 
 ## Description
 
-`vulnscout check CONDITION` exits with code **2** if the specified condition is met by any vulnerability in scope.
+`vulnscout match-condition CONDITION` exits with code **2** if the specified condition is met by any vulnerability in scope.
 
-The condition uses vulnerability data already stored by VulnScout. It does not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `check` when the condition must use current enrichment data.
+The condition uses vulnerability data already stored by VulnScout. It does not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `match-condition` when the condition must use current enrichment data.
 
 The scope is selected as follows:
 
@@ -23,11 +23,11 @@ The scope is selected as follows:
 
 The `CONDITION` is a boolean expression that is evaluated against each vulnerability identified. If the condition is met, the IDs of the matching vulnerabilities are displayed in the output. A vulnerability shared by multiple variants is displayed once for a project-wide evaluation. The command returns an exit code of **2** if at least one vulnerability meets the condition.
 
-In CI, import the inputs first and run `check` last, so that a match does not stop the steps that follow:
+In CI, import the inputs first and run `match-condition` last, so that a match does not stop the steps that follow:
 
 ```bash
 ./vulnscout -p demo add --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
-./vulnscout -p demo check "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
+./vulnscout -p demo match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ```
 
 To list the matching vulnerabilities in a report without failing the call, use `report <template> --condition CONDITION`.
@@ -45,7 +45,7 @@ If the `CONDITION` is invalid, the configuration is not found, or an error occur
 ## Examples
 
 ```sh
-./vulnscout -p demo check "cvss >= 7.0"
+./vulnscout -p demo match-condition "cvss >= 7.0"
 ```
 
 This example evaluates every variant in `demo` and exits with code **2** if any vulnerability has a CVSS score of 7.0 or higher. Add `-v NAME` to limit evaluation to one variant. An unknown project or variant exits with code **1**.
