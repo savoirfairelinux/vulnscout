@@ -26,7 +26,7 @@ jest.mock('../../src/components/AgentChat', () => ({
                 setSentId(id);
                 props.onQueuedMessageSent(id);
             }}>send-review-head</button>
-            <button onClick={() => props.onQueuedMessageDone(sentId)}>finish-review</button>
+            <button onClick={() => props.onQueuedMessageDone(sentId, true)}>finish-review</button>
             <button onClick={() => props.onQueueRemove(props.queue[0].id)}>remove-review-head</button>
             <button onClick={props.onQueueClear}>clear-review-queue</button>
         </div>;
@@ -320,6 +320,7 @@ type NetworkOpts = {
     vulnOk?: boolean;
     /** Keyed by assessment id — served from the AI-review-verdict endpoint. */
     reviews?: Record<string, unknown>;
+    assessmentDetails?: Record<string, unknown>;
 };
 
 /**
@@ -343,6 +344,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         vulnDetail = { id: 'CVE-2020-1111', version: '4.0', base_score: 5 },
         vulnOk = true,
         reviews = {},
+        assessmentDetails = {},
     } = opts;
 
     fetchMock.resetMocks();
@@ -371,6 +373,13 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
             if (url.includes('/api/assessment-reviews')) return JSON.stringify(reviews);
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
+            const assessmentId = /\/api\/assessments\/([^/]+)$/.exec(url)?.[1];
+            if (assessmentId) {
+                if (assessmentId in assessmentDetails) return JSON.stringify(assessmentDetails[assessmentId]);
+                const assessment = toAssessments([...reviewList, ...aiReviewList], {})
+                    .find(item => item.id === decodeURIComponent(assessmentId));
+                return JSON.stringify(assessment ?? {});
+            }
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
             if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) {
                 if (variantsGate) await variantsGate;
@@ -444,7 +453,7 @@ describe('Review — bulk AI reviews', () => {
         { projectId: 'proj1' },
         { variantId: 'v1' },
         {},
-    ])('queues only selected custom IDs with the original scope %j and complete target semantics', async scope => {
+    ])('resolves complete target scope instead of copying the displayed scope %j', async scope => {
         const multi = makeMultiTargetAssessment('multi', 'CVE-MULTI', [
             { variantId: 'v1', pkg: 'pkgA@1' },
             { variantId: 'v2', pkg: 'pkgB@2' },
@@ -472,7 +481,10 @@ describe('Review — bulk AI reviews', () => {
         expect(actions[0].text).toContain('write_assessment_review. Do not modify the assessment itself.');
         expect(actions[0].text.length).toBeLessThanOrEqual(AGENT_MESSAGE_MAX_LENGTH);
         expect(JSON.parse(screen.getByTestId('review-agent-chat').getAttribute('data-context')!))
-            .toEqual({ page: 'review', ...scope, view: { section: 'assessments' } });
+            .toEqual({ page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'], view: { section: 'assessments' } });
+        expect(actions[0]).toMatchObject({
+            context: { page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'] },
+        });
         expect(screen.getByText('Delete selected (3)')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'AI reviews queued' })).toBeDisabled();
     });
@@ -494,6 +506,48 @@ describe('Review — bulk AI reviews', () => {
         await user.click(screen.getByText('finish-review'));
         await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
         expect(queue().map(action => action.key)).toEqual(['review:a2', 'review:a1']);
+    });
+
+    test('retrieves targets hidden by the table scope from the full assessment detail', async () => {
+        const full = makeMultiTargetAssessment('a1', 'CVE-MULTI', [
+            { variantId: 'v1', pkg: 'pkgA@1' }, { variantId: 'v2', pkg: 'pkgB@2' },
+        ]);
+        mockNetwork([makeAssessment('a1', 'v1')], {
+            assessmentDetails: { a1: full },
+        });
+        render(<Review variantId="v1" />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        await screen.findByTestId('review-agent-chat');
+        expect(queue()[0]).toMatchObject({
+            context: { page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'] },
+        });
+        expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/assessments/a1'))).toBe(true);
+    });
+
+    test.each([
+        {},
+        { ...makeAssessment('a2', 'v1'), origin: 'ai' },
+        { ...makeAssessment('a2', 'v1'), targets: [{ variant_id: 'missing', package: 'pkg@1' }] },
+        { ...makeAssessment('a2', 'v1'), targets: [{ variant_id: null, package: 'pkg@1' }] },
+        makeMultiTargetAssessment('a2', 'CVE-MULTI', [
+            { variantId: 'v1', pkg: 'pkgA@1' }, { variantId: 'v3', pkg: 'pkgB@2' },
+        ]),
+    ])('does not open a chat or enqueue a partial batch when full scope is invalid: %j', async detail => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1')], {
+            assessmentDetails: { a2: detail },
+            variants: [...VARIANTS, { id: 'v3', name: 'Other project', project_id: 'proj2' }],
+        });
+        render(<Review variantId="v1" />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        expect(await screen.findByText(/Unable to queue AI reviews/)).toBeInTheDocument();
+        expect(screen.queryByTestId('review-agent-chat')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Review selected with AI (2)' })).toBeEnabled();
+        expect(screen.getByText('Delete selected (2)')).toBeInTheDocument();
     });
 
     test('removing or clearing queued requests re-enables them without altering selection', async () => {
@@ -593,7 +647,12 @@ describe('Review — bulk AI reviews', () => {
 
     test('real chat sends selected reviews sequentially with thread and scope, and exposes failures for retry', async () => {
         mockRealAgentChat = true;
-        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1')]);
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                { variantId: 'v1', pkg: 'pkgA@1' }, { variantId: 'v2', pkg: 'pkgB@2' },
+            ]),
+            makeAssessment('a2', 'v1'), makeAssessment('a3', 'v3'),
+        ], { variants: [...VARIANTS, { id: 'v3', name: 'Other project', project_id: 'proj2' }] });
         const serveReview = fetchMock.getMockImplementation()!;
         const sent: Array<{ message: string; context: unknown; thread: string }> = [];
         const json = (data: unknown, ok = true) => ({
@@ -607,7 +666,11 @@ describe('Review — bulk AI reviews', () => {
             if (path.endsWith('/messages')) {
                 sent.push({ ...JSON.parse(String(init?.body)), thread: (init?.headers as Record<string, string>)['X-Agent-Thread'] });
                 return sent.length === 1 ? new Promise(resolve => { finishFirst = resolve; })
-                    : Promise.resolve(json({ error: 'Review provider unavailable' }, false));
+                    : sent.length <= 3 ? Promise.resolve(json({ error: 'Review provider unavailable' }, false))
+                        : Promise.resolve(json({
+                            reply: 'Review recorded', model: 'auto',
+                            usage: { cost: null, input_tokens: null, output_tokens: null },
+                        }));
             }
             return Promise.resolve(json({
                 authenticated: true, configured: true, provider: 'local', login: null, messages: [],
@@ -618,12 +681,12 @@ describe('Review — bulk AI reviews', () => {
         const user = userEvent.setup();
         await screen.findAllByTitle('Select');
         await user.click(screen.getByTitle('Select all'));
-        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (3)' }));
         await waitFor(() => expect(sent).toHaveLength(1));
         expect(screen.getByRole('button', { name: 'AI review running…' })).toBeDisabled();
         expect(sent[0]).toMatchObject({
             message: buildAssessmentReviewAction({ ...makeAssessment('a1', 'v1'), vuln_id: 'CVE-2020-1111' }).text,
-            context: { page: 'review', variantId: 'v1' },
+            context: { page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'] },
         });
         expect(sent[0].thread).toBeTruthy();
         await act(async () => finishFirst(json({
@@ -635,8 +698,24 @@ describe('Review — bulk AI reviews', () => {
         expect(sent[1].thread).toBe(sent[0].thread);
         expect(await screen.findByText('Review provider unavailable')).toBeInTheDocument();
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
-        expect(screen.getByRole('button', { name: 'Review selected with AI (2)' })).toBeEnabled();
-        expect(screen.getByText('Delete selected (2)')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Review selected with AI (1)' })).toBeEnabled();
+        expect(screen.getByText('Delete selected (3)')).toBeInTheDocument();
+        expect(screen.getByText(/Batch paused/)).toBeInTheDocument();
+        expect(sent).toHaveLength(2);
+        await user.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        await waitFor(() => expect(sent).toHaveLength(3));
+        expect(sent[2]).toEqual(sent[1]);
+        expect(await screen.findByText('Review provider unavailable')).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
+        expect(sent).toHaveLength(3);
+        await user.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        await waitFor(() => expect(sent).toHaveLength(5));
+        expect(sent[3]).toEqual(sent[1]);
+        expect(sent[4]).toMatchObject({
+            message: expect.stringContaining('Review the user assessment a3'),
+            context: { projectId: 'proj2', variantIds: ['v3'] },
+        });
+        await waitFor(() => expect(screen.queryByText(/Batch paused/)).not.toBeInTheDocument());
     });
 });
 

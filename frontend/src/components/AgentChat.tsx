@@ -99,6 +99,7 @@ export type QueuedAgentMessage = {
     kind: 'assess' | 'review';
     title: string;
     detail?: string;
+    context?: AgentContext;
 };
 
 const queuedKindLabel: Record<QueuedAgentMessage['kind'], string> = { assess: 'Assess', review: 'Review' };
@@ -369,7 +370,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         }
     }
 
-    async function send(event?: FormEvent, actionMessage?: string) {
+    async function send(event?: FormEvent, actionMessage?: string, actionContext = context): Promise<boolean> {
         event?.preventDefault();
         const message = (actionMessage ?? draft).trim();
         if (!message || busy || modelBusy || !ready || failedQueuedId) return false;
@@ -384,6 +385,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         let turnActivity: Activity[] = [];
         followMessages.current = true;
         setAwayFromBottom(false);
+        const context = actionContext;
         try {
             const visibleIds = context.view?.visibleVulnerabilityIds;
             const packageIds = context.view?.visiblePackageIds;
@@ -462,7 +464,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         const { id, text } = nextQueued;
         sentQueuedMessageId.current = id;
         onQueuedMessageSent?.(id);
-        void send(undefined, text).then(success => {
+        void send(undefined, text, nextQueued.context ?? context).then(success => {
             if (!success) setFailedQueuedId(id);
             onQueuedMessageDone?.(id, success);
         });
