@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - CLI: `export custom-openvex` without `--variant` exports every project variant, and `import custom-openvex` without `--variant` targets the project's only variant. The legacy flags keep defaulting to the `default` variant.
 
 ### Deprecated
-- CLI: the flag syntax of `./vulnscout` (`--add-*`, `--perform-scans`, `--perform-*-scan`, `--refresh-vulnerability-data`, `--match-condition`, `--report`, `--export-*`, `--import-*`, `--use-*-timestamps`, `--delete-*`, `--list-*`, `config KEY VALUE`, `config-list`, `config-clear`, `--serve`, `--start`, `--stop`, `--restart`, `--update`, `--add-asset`) prints a warning and will be removed in v0.26. Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence it.
+- CLI: the flag syntax of `./vulnscout` (`--add-*`, `--perform-scans`, `--perform-*-scan`, `--refresh-vulnerability-data`, `--match-condition`, `--report`, `--export-*`, `--import-*`, `--use-*-timestamps`, `--delete-*`, `--list-*`, `config KEY VALUE`, `config-list`, `config-clear`, `--serve`, `--start`, `--stop`, `--restart`, `--update`, `--add-asset`) prints a warning and will be removed in v0.25. Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence it.
 
 ### Removed
 - CLI: drop the undocumented `perform-grype-scan`, `perform-nvd-scan`, `perform-osv-scan`, `perform-sbom-cve-check-scan`, `sbom-cve-check-scan` and `--sbom-cve-check-scan` spellings, and the wrapper's `--perform-scans` capability probe.

@@ -40,7 +40,7 @@ MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false
 
-VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.26"
+VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.25"
 LEGACY_TOKENS=()
 SCOPE_ARGS=()
 
@@ -80,7 +80,7 @@ Container commands:
     serve                   Start the web UI on port 7275
 
 The legacy flag syntax (for example --add-spdx, --perform-scans, --report)
-still works until v0.26 and prints a deprecation warning. See doc/source/vulnscout-script.md for the mapping.
+still works until v0.25 and prints a deprecation warning. See doc/source/vulnscout-script.md for the mapping.
 EOF
 }
 

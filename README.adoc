@@ -137,7 +137,7 @@ The `vulnscout` script manages the container lifecycle. The container runs in th
 ./vulnscout restart
 ----
 
-NOTE: Releases before v0.24 used flags instead of commands. They still work until v0.26 and print a deprecation warning. See link:doc/source/vulnscout-script.md#migrating-from-the-flag-syntax[Migrating from the flag syntax].
+NOTE: Releases before v0.24 used flags instead of commands. They still work until v0.25 and print a deprecation warning. See link:doc/source/vulnscout-script.md#migrating-from-the-flag-syntax[Migrating from the flag syntax].
 
 ===  Projects and Variants
 
