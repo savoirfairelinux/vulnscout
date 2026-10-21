@@ -449,6 +449,62 @@ class TestExportCustomOpenVexAllVariants:
             document = json.loads((tmp_path / f"custom_openvex_{label}.json").read_text())
             assert {s["vulnerability"]["name"] for s in document["statements"]} == {cve}
 
+    def test_export_removes_stale_file_of_variant_without_assessments(self, app, tmp_path):
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            _seed_custom_assessment("StaleProj", "v1", "CVE-2099-0004")
+            v2 = _seed_custom_assessment("StaleProj", "v2", "CVE-2099-0005")
+            v2_id = v2.id
+        invoke = lambda: app.test_cli_runner().invoke(args=[  # noqa: E731
+            "export-custom-openvex-assessments", "--project", "StaleProj", "--output-dir", str(tmp_path),
+        ])
+        assert invoke().exit_code == 0
+        assert (tmp_path / "custom_openvex_v2.json").exists()
+
+        with app.app_context():
+            for assessment in Assessment.get_by_origin([v2_id]):
+                _db.session.delete(assessment)
+            _db.session.commit()
+
+        result = invoke()
+
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "custom_openvex_v1.json").exists()
+        assert not (tmp_path / "custom_openvex_v2.json").exists()
+
+    def test_export_keeps_stale_looking_file_of_another_project(self, app, tmp_path):
+        with app.app_context():
+            _seed_custom_assessment("ProjA", "v2", "CVE-2099-0008")
+            _seed_custom_assessment("ProjB", "v1", "CVE-2099-0009")
+            from src.models.project import Project
+            from src.models.variant import Variant
+            Variant.create("v2", Project.get_by_name("ProjB").id)
+            _db.session.commit()
+        invoke = lambda name: app.test_cli_runner().invoke(args=[  # noqa: E731
+            "export-custom-openvex-assessments", "--project", name, "--output-dir", str(tmp_path),
+        ])
+        assert invoke("ProjA").exit_code == 0
+
+        result = invoke("ProjB")
+
+        assert result.exit_code == 0, result.output
+        document = json.loads((tmp_path / "custom_openvex_v2.json").read_text())
+        assert {s["vulnerability"]["name"] for s in document["statements"]} == {"CVE-2099-0008"}
+
+    def test_export_rejects_variant_names_sharing_a_file_name(self, app, tmp_path):
+        with app.app_context():
+            _seed_custom_assessment("CollideProj", "a/b", "CVE-2099-0006")
+            _seed_custom_assessment("CollideProj", "a_b", "CVE-2099-0007")
+
+        result = app.test_cli_runner().invoke(args=[
+            "export-custom-openvex-assessments", "--project", "CollideProj", "--output-dir", str(tmp_path),
+        ])
+
+        assert result.exit_code != 0
+        assert "same output file name" in result.output
+        assert not list(tmp_path.glob("custom_openvex_*"))
+
     def test_export_without_variant_ignores_other_projects(self, app, tmp_path):
         from src.models.project import Project
 
