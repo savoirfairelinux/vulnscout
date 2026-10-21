@@ -833,6 +833,7 @@ describe('Vulnerability Table', () => {
     test('select using ctrl+click and reset selection', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
 
         const user = userEvent.setup();
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
@@ -847,6 +848,7 @@ describe('Vulnerability Table', () => {
 
         const bulkeditbar = await screen.getByText(/selected vulnerabilities/i);
         expect(bulkeditbar).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeEnabled();
 
         const reset_btn = await screen.getByRole('button', {name: /reset selection/i});
         expect(reset_btn).toBeInTheDocument();
@@ -854,6 +856,7 @@ describe('Vulnerability Table', () => {
 
         const selecteds = await screen.queryAllByTitle(/unselect/i);
         expect(selecteds.length).toBe(0);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
     })
 
     test('select and change status', async () => {

@@ -1973,6 +1973,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
+            variantIds={variantIds}
+            multiOperation={multiOperation}
         />
 
         <TableGeneric
