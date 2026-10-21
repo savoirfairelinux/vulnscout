@@ -13,7 +13,7 @@ import VulnModal from '../../src/components/VulnModal';
 type QueueItem = { id: string; text: string; key: string; kind: string; title: string; detail?: string };
 type ChatProps = {
     threadId?: string; active?: boolean; queue?: QueueItem[];
-    onQueuedMessageSent?: (id: string) => void; onQueuedMessageDone?: (id: string) => void;
+    onQueuedMessageSent?: (id: string) => void; onQueuedMessageDone?: (id: string, success: boolean) => void;
     onQueueRemove?: (id: string) => void; onQueueClear?: () => void;
 };
 const chatProps: ChatProps[] = [];
@@ -31,7 +31,8 @@ jest.mock('../../src/components/AgentChat', () => ({
             <span data-testid="queued-message">{props.queue?.[0]?.text ?? ''}</span>
             <button type="button" onClick={props.onClose}>Close chat</button>
             <button type="button" onClick={() => { const head = props.queue?.[0]; if (head) { lastSentId = head.id; props.onQueuedMessageSent?.(head.id); } }}>Accept queued</button>
-            <button type="button" onClick={() => lastSentId && props.onQueuedMessageDone?.(lastSentId)}>Finish running</button>
+            <button type="button" onClick={() => lastSentId && props.onQueuedMessageDone?.(lastSentId, true)}>Finish running</button>
+            <button type="button" onClick={() => lastSentId && props.onQueuedMessageDone?.(lastSentId, false)}>Fail running</button>
             <button type="button" onClick={() => props.onQueueClear?.()}>Clear queue</button>
         </div>;
     },
@@ -173,6 +174,7 @@ describe('VulnModal AI actions', () => {
         while (lastQueue().length) {
             messages.push(lastQueue()[0].text);
             await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+            await user.click(screen.getByRole('button', { name: 'Finish running' }));
         }
         expect(messages.length).toBeGreaterThan(1);
         messages.forEach((message, index) => {
@@ -229,7 +231,7 @@ describe('VulnModal AI actions', () => {
         const runningButton = screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (running)' });
         expect(runningButton).toBeDisabled();
         expect(runningButton).toHaveTextContent('Running…');
-        expect(lastQueue()).toHaveLength(0);
+        expect(lastQueue()).toHaveLength(1);
 
         // Once finished the same review can be requested again.
         await user.click(screen.getByRole('button', { name: 'Finish running' }));
@@ -257,10 +259,26 @@ describe('VulnModal AI actions', () => {
         expect(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (queued, position 1)' })).toBeDisabled();
 
         await user.click(screen.getByRole('button', { name: 'Clear queue' }));
-        expect(lastQueue()).toHaveLength(0);
+        expect(lastQueue()).toHaveLength(1);
         expect(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' })).toBeEnabled();
         await user.click(screen.getByRole('button', { name: 'Finish running' }));
         expect(screen.getByTestId('assess-state')).toHaveTextContent('null');
+    });
+
+    test('keeps a failed action queued and retryable without losing subsequent actions', async () => {
+        const user = userEvent.setup();
+        renderModal({ isEditing: true });
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+        await user.click(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' }));
+        const firstId = lastQueue()[0].id;
+        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+        await user.click(screen.getByRole('button', { name: 'Fail running' }));
+        expect(lastQueue()).toHaveLength(2);
+        expect(lastQueue()[0].id).toBe(firstId);
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('{"status":"queued","position":1}');
+        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+        await user.click(screen.getByRole('button', { name: 'Finish running' }));
+        expect(lastQueue().map(item => item.kind)).toEqual(['review']);
     });
 
     const deleteCalls = () => fetchMock.mock.calls.filter(([req, init]) =>

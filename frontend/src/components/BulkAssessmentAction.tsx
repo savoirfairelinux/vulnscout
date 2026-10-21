@@ -109,10 +109,6 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
             <FontAwesomeIcon icon={preparing || selectionRunning ? faCircleNotch : faWandMagicSparkles} spin={preparing || Boolean(selectionRunning)} />
             {preparing ? 'Preparing AI assessments…' : selectionRunning ? 'Assess with AI · Running…' : selectionActive ? 'Assess with AI · Queued' : 'Assess with AI'}
         </button>
-        {mounted && <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} aria-controls="bulk-assessment-agent-panel"
-            className="rounded-lg px-3 py-1.5 text-sm font-medium text-cyan-50 hover:bg-white/20">
-            {open ? 'Hide assessment chat' : 'Open assessment chat'}
-        </button>}
         {mounted && <aside id="bulk-assessment-agent-panel" hidden={!open} aria-label="Bulk AI assessment chat"
             className="fixed inset-y-0 right-0 z-50 w-full border-l border-neutral-700 bg-white shadow-2xl sm:w-[min(480px,100%)]">
             <AgentChat threadId={threadId} active={open}
@@ -121,11 +117,13 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                 onQueuedMessageSent={id => {
                     const sent = queue.find(item => item.id === id);
                     if (sent) setRunning(sent);
-                    setQueue(current => current.filter(item => item.id !== id));
                 }}
-                onQueuedMessageDone={id => setRunning(current => current?.id === id ? null : current)}
+                onQueuedMessageDone={(id, success) => {
+                    setRunning(current => current?.id === id ? null : current);
+                    if (success) setQueue(current => current.filter(item => item.id !== id));
+                }}
                 onQueueRemove={id => setQueue(current => current.filter(item => item.id !== id))}
-                onQueueClear={() => setQueue([])}
+                onQueueClear={() => setQueue(current => current.filter(item => item.id === running?.id))}
             />
         </aside>}
     </>;

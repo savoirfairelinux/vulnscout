@@ -222,7 +222,7 @@ type VariantScopedSnapshot = {
 
     const agentActionState = (key: string): AgentActionState | undefined => {
         if (runningAgentAction?.key === key) return { status: 'running' };
-        const index = agentMessageQueue.findIndex(item => item.key === key);
+        const index = agentMessageQueue.filter(item => item.id !== runningAgentAction?.id).findIndex(item => item.key === key);
         return index >= 0 ? { status: 'queued', position: index + 1 } : undefined;
     };
 
@@ -244,11 +244,11 @@ type VariantScopedSnapshot = {
     const onQueuedAgentMessageSent = (id: string) => {
         const sent = agentMessageQueue.find(item => item.id === id);
         if (sent) setRunningAgentAction(sent);
-        setAgentMessageQueue(queue => queue.filter(item => item.id !== id));
     };
 
-    const onQueuedAgentMessageDone = (id: string) => {
+    const onQueuedAgentMessageDone = (id: string, success: boolean) => {
         setRunningAgentAction(running => running?.id === id ? null : running);
+        if (success) setAgentMessageQueue(queue => queue.filter(item => item.id !== id));
     };
 
     const toggleAssessmentChat = () => {
@@ -2396,7 +2396,7 @@ type VariantScopedSnapshot = {
 
                     </div>
                     {assessmentChatMounted && <aside id="assessment-agent-panel" hidden={!assessmentChatOpen} role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
-                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queue={agentMessageQueue} onQueuedMessageSent={onQueuedAgentMessageSent} onQueuedMessageDone={onQueuedAgentMessageDone} onQueueRemove={id => setAgentMessageQueue(queue => queue.filter(item => item.id !== id))} onQueueClear={() => setAgentMessageQueue([])} />
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queue={agentMessageQueue} onQueuedMessageSent={onQueuedAgentMessageSent} onQueuedMessageDone={onQueuedAgentMessageDone} onQueueRemove={id => setAgentMessageQueue(queue => queue.filter(item => item.id !== id))} onQueueClear={() => setAgentMessageQueue(queue => queue.filter(item => item.id === runningAgentAction?.id))} />
                     </aside>}
         </ModalShell>
 

@@ -107,7 +107,7 @@ type QueueProps = {
     /** Pending AI actions, oldest first; the head is sent once the chat is idle. */
     queue?: QueuedAgentMessage[];
     onQueuedMessageSent?: (id: string) => void;
-    onQueuedMessageDone?: (id: string) => void;
+    onQueuedMessageDone?: (id: string, success: boolean) => void;
     onQueueRemove?: (id: string) => void;
     onQueueClear?: () => void;
 };
@@ -146,6 +146,8 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     const composer = useRef<HTMLTextAreaElement>(null);
     const followMessages = useRef(true);
     const sentQueuedMessageId = useRef<string | null>(null);
+    const [failedQueuedId, setFailedQueuedId] = useState<string | null>(null);
+    const pendingQueue = queue.filter(item => !busy || item.id !== sentQueuedMessageId.current);
     const nextQueued = queue[0];
     const ready = Boolean(state?.authenticated && state.configured && models.length && selectedModel && !showConnections);
     const pageLabel = pageLabels[context.page] ?? context.page;
@@ -370,7 +372,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     async function send(event?: FormEvent, actionMessage?: string) {
         event?.preventDefault();
         const message = (actionMessage ?? draft).trim();
-        if (!message || busy || modelBusy || !ready) return;
+        if (!message || busy || modelBusy || !ready || failedQueuedId) return false;
         setBusy(true);
         setError('');
         setDraft('');
@@ -436,9 +438,11 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                 ...previous.messages, { role: 'user', content: message },
                 { role: 'assistant', content: result.reply, activity: turnActivity },
             ], model: result.model, usage: result.usage });
+            return true;
         } catch (reason) {
             setDraft(message);
             setError(errorMessage(reason));
+            return false;
         } finally {
             setPendingMessage('');
             setBusy(false);
@@ -446,13 +450,24 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     }
 
     useEffect(() => {
+        if (failedQueuedId) {
+            if (!queue.some(item => item.id === failedQueuedId)) {
+                setFailedQueuedId(null);
+                setDraft('');
+                setError('');
+            }
+            return;
+        }
         if (!nextQueued || sentQueuedMessageId.current === nextQueued.id || !ready || busy || modelBusy) return;
         const { id, text } = nextQueued;
         sentQueuedMessageId.current = id;
         onQueuedMessageSent?.(id);
-        void send(undefined, text).finally(() => onQueuedMessageDone?.(id));
+        void send(undefined, text).then(success => {
+            if (!success) setFailedQueuedId(id);
+            onQueuedMessageDone?.(id, success);
+        });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [nextQueued, ready, busy, modelBusy]);
+    }, [nextQueued, ready, busy, modelBusy, failedQueuedId, queue]);
 
     function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -606,7 +621,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             {ready && state?.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
                 <h3 className="text-lg font-semibold leading-snug">What needs your attention?</h3>
                 <div className="space-y-3">
-                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || (largeVulnerabilityView && index === 0)} onClick={() => void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
+                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || (largeVulnerabilityView && index === 0)} onClick={() => void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
                     {largeVulnerabilityView && <p className="text-xs text-neutral-500 dark:text-neutral-400">Filter to 100 or fewer vulnerabilities to summarize the displayed rows.</p>}
                 </div>
             </div>}
@@ -646,18 +661,23 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
 
         {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model in the toolbar to start chatting.</p>}
 
-        {queue.length > 0 && <section aria-label="Queued AI actions" className="mx-4 mb-3 shrink-0 overflow-hidden rounded-lg border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900">
+        {pendingQueue.length > 0 && <section aria-label="Queued AI actions" className="mx-4 mb-3 shrink-0 overflow-hidden rounded-lg border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900">
+            {failedQueuedId && <p role="status" className="px-3 py-2 text-sm">Queue paused. Retry or remove the failed action to continue.</p>}
             <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-                <span className="flex items-center gap-2 font-semibold text-neutral-700 dark:text-neutral-300"><FontAwesomeIcon icon={faClock} />Up next · {queue.length} queued</span>
+                <span className="flex items-center gap-2 font-semibold text-neutral-700 dark:text-neutral-300"><FontAwesomeIcon icon={faClock} />Up next · {pendingQueue.length} queued</span>
                 {onQueueClear && <button type="button" onClick={onQueueClear} className="text-neutral-500 hover:text-cyan-700 dark:text-neutral-400 dark:hover:text-cyan-400">Clear all</button>}
             </div>
             <ol className="scrollbar-minimal max-h-40 overflow-y-auto">
-                {queue.map((item, index) => <li key={item.id} className="flex items-center gap-3 border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">
+                {pendingQueue.map((item, index) => <li key={item.id} className="flex items-center gap-3 border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">
                     <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[11px] tabular-nums text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">{index + 1}</span>
                     <div className="min-w-0 flex-1">
                         <p className="truncate text-sm" title={`${queuedKindLabel[item.kind]} ${item.title}`}><span className="font-semibold text-cyan-700 dark:text-cyan-300">{queuedKindLabel[item.kind]}</span> {item.title}</p>
                         {item.detail && <p className="truncate text-xs text-neutral-500" title={item.detail}>{item.detail}</p>}
                     </div>
+                    {failedQueuedId === item.id && <button type="button" disabled={!ready || busy || modelBusy} onClick={() => {
+                        sentQueuedMessageId.current = null;
+                        setFailedQueuedId(null);
+                    }} className="text-sm font-semibold text-cyan-700 dark:text-cyan-400">Retry failed action</button>}
                     {onQueueRemove && <button type="button" aria-label={`Remove ${queuedKindLabel[item.kind].toLowerCase()} ${item.title} from queue`} title="Remove from queue" onClick={() => onQueueRemove(item.id)} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>}
                 </li>)}
             </ol>
@@ -670,7 +690,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                 {context.view?.visibleVulnerabilityIds && <span className="ml-auto shrink-0 tabular-nums">{context.view.visibleVulnerabilityIds.length} displayed</span>}
             </div>
             {(context.view?.openVulnerabilityId || (context.page === 'vulnerabilities' && Boolean(context.view?.visibleVulnerabilityIds?.length))) && <div className="flex flex-wrap gap-3 text-xs">
-                {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready} onClick={() => void send(undefined, prompts[0].message)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
+                {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} onClick={() => void send(undefined, prompts[0].message)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
                 {context.page === 'vulnerabilities' && !!context.view?.visibleVulnerabilityIds?.length && <button type="button" onClick={() => {
                     if ((context.view?.visibleVulnerabilityIds?.length ?? 0) > 100) {
                         setError('Narrow the table to 100 vulnerabilities or fewer before assessing every displayed row.');
@@ -678,13 +698,13 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                         setError('');
                         void send(undefined, 'Assess every vulnerability currently displayed in this filtered table. Use the attached list of IDs and current project/variant scope; report the result for each.');
                     }
-                }} disabled={busy || modelBusy || !ready} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess displayed</button>}
+                }} disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess displayed</button>}
             </div>}
             <label htmlFor="agent-prompt" className="sr-only">Message the agent</label>
             <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">
-                <textarea ref={composer} id="agent-prompt" rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
+                <textarea ref={composer} id="agent-prompt" rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || Boolean(failedQueuedId)} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
                 <div className="mt-2 flex justify-end">
-                    <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
+                    <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || Boolean(failedQueuedId)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
                 </div>
             </div>
             {state.messages.length > 0 && <details className="text-xs text-neutral-500 dark:text-neutral-400"><summary className="w-fit cursor-pointer">Conversation usage</summary><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 tabular-nums"><span>{state.usage.cost == null ? 'Cost not reported' : `SDK cost ${state.usage.cost.toFixed(4)}`}</span><span>{state.usage.input_tokens?.toLocaleString() ?? '—'} input tokens</span><span>{state.usage.output_tokens?.toLocaleString() ?? '—'} output tokens</span></div></details>}
