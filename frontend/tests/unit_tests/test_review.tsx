@@ -655,16 +655,27 @@ describe('Review — bulk AI reviews', () => {
         ], { variants: [...VARIANTS, { id: 'v3', name: 'Other project', project_id: 'proj2' }] });
         const serveReview = fetchMock.getMockImplementation()!;
         const sent: Array<{ message: string; context: unknown; thread: string }> = [];
+        const savedReviews: Record<string, unknown[]> = {};
+        const saveReviews = (id: string) => {
+            const targets = id === 'a1' ? [{ variant_id: 'v1', package: 'pkgA@1' }, { variant_id: 'v2', package: 'pkgB@2' }]
+                : [{ variant_id: id === 'a2' ? 'v1' : 'v3', package: 'pkgA@1.0.0' }];
+            savedReviews[id] = targets.map((target, index) => ({
+                ...target, id: `${id}-${index}`, assessment_id: id, is_stale: false, timestamp: '2026-10-21T12:00:00Z',
+            }));
+        };
         const json = (data: unknown, ok = true) => ({
             ok, headers: { get: () => 'application/json' }, json: async () => data,
         }) as unknown as Response;
         let finishFirst: (response: Response) => void = () => {};
         fetchMock.mockImplementation((input, init) => {
             const path = String(input);
+            const reviewMatch = path.match(/\/api\/assessments\/(a\d)\/reviews$/);
+            if (reviewMatch) return Promise.resolve(json({ reviews: savedReviews[reviewMatch[1]] ?? [] }));
             if (!path.startsWith('/api/agent')) return serveReview(input, init);
             if (path.endsWith('/models')) return Promise.resolve(json({ models: [{ id: 'auto', name: 'Auto' }] }));
             if (path.endsWith('/messages')) {
                 sent.push({ ...JSON.parse(String(init?.body)), thread: (init?.headers as Record<string, string>)['X-Agent-Thread'] });
+                if (sent.length >= 4) saveReviews(sent[sent.length - 1].message.includes('assessment a2') ? 'a2' : 'a3');
                 return sent.length === 1 ? new Promise(resolve => { finishFirst = resolve; })
                     : sent.length <= 3 ? Promise.resolve(json({ error: 'Review provider unavailable' }, false))
                         : Promise.resolve(json({
@@ -689,6 +700,7 @@ describe('Review — bulk AI reviews', () => {
             context: { page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'] },
         });
         expect(sent[0].thread).toBeTruthy();
+        saveReviews('a1');
         await act(async () => finishFirst(json({
             reply: 'Review recorded', model: 'auto',
             usage: { cost: null, input_tokens: null, output_tokens: null },

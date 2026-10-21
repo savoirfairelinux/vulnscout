@@ -6,7 +6,8 @@ import { useState } from 'react';
 // @ts-expect-error TS6133
 import React from 'react';
 
-import AgentChat from '../../src/components/AgentChat';
+import AgentChat, { type QueuedAgentMessage } from '../../src/components/AgentChat';
+import { buildAssessmentReviewAction } from '../../src/helpers/aiAssessmentReview';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type { AgentContext } from '../../src/types/agent';
 
@@ -443,11 +444,69 @@ test('sends a queued message once when ready and again only for a new queued id'
     await act(async () => { await Promise.resolve(); });
     expect(sent).toEqual(['Assess the selected targets']);
 
-    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q2', text: 'Review assessment', key: 'review:x', kind: 'review', title: 'assessment x' }]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
+    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q2', text: 'Review assessment', key: 'assess:x', kind: 'assess', title: 'assessment x' }]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
     await screen.findByText('Reply 2');
     expect(sent).toEqual(['Assess the selected targets', 'Review assessment']);
     expect(accepted).toEqual(['q1', 'q2']);
 });
+
+test.each(['missing', 'partial', 'unchanged', 'stale', 'read failure', 'changed targets'])(
+    'pauses a review after an HTTP success with %s saved reviews, then verifies all targets on retry',
+    async failure => {
+        let attempts = 0;
+        let finishedTurn = false;
+        const targets = [{ variant_id: 'variant', package: 'pkg@1' }, { variant_id: 'other', package: 'pkg@2' }];
+        const assessment = { id: 'assessment', vuln_id: 'CVE-2024-1234', origin: 'custom', status: 'affected',
+            timestamp: '2026-10-21T10:00:00Z', targets, packages: ['pkg@1', 'pkg@2'] };
+        const reviews = (timestamp: string) => targets.map((target, index) => ({
+            ...target, id: `review-${index}`, assessment_id: assessment.id, timestamp, is_stale: false,
+        }));
+        global.fetch = async input => {
+            const path = String(input);
+            if (path.endsWith('/models')) return jsonResponse(models);
+            if (path.endsWith('/messages')) {
+                attempts++;
+                finishedTurn = true;
+                return jsonResponse({ reply: 'Finished', model: 'auto', usage });
+            }
+            if (path.endsWith('/assessment/reviews')) {
+                if (finishedTurn && attempts === 1 && failure === 'read failure') throw new TypeError('unavailable');
+                if (!finishedTurn || failure === 'unchanged' && attempts === 1) {
+                    return jsonResponse({ reviews: failure === 'unchanged' ? reviews('2026-10-21T11:00:00Z') : [] });
+                }
+                const saved = reviews(`2026-10-21T12:00:0${attempts}Z`);
+                return jsonResponse({ reviews: attempts !== 1 ? saved
+                    : failure === 'missing' ? [] : failure === 'partial' ? saved.slice(0, 1)
+                        : failure === 'stale' ? saved.map(item => ({ ...item, is_stale: true })) : saved });
+            }
+            if (path.endsWith('/assessments/assessment')) return jsonResponse({
+                ...assessment, targets: finishedTurn && attempts === 1 && failure === 'changed targets' ? targets.slice(0, 1) : targets,
+            });
+            return jsonResponse(signedIn);
+        };
+        const done = jest.fn(() => { finishedTurn = false; });
+        const first = { ...buildAssessmentReviewAction(assessment), id: 'first' };
+        function QueueHarness() {
+            const [queue, setQueue] = useState<QueuedAgentMessage[]>([first, {
+                id: 'second', key: 'assess:next', kind: 'assess', text: 'Next assessment', title: 'next',
+            }]);
+            return <AgentChat context={context} onClose={() => undefined} queue={queue}
+                onQueuedMessageSent={id => setQueue(items => items.filter(item => item.id !== id))}
+                onQueuedMessageDone={done} />;
+        }
+        render(<QueueHarness />);
+        await waitFor(() => expect(done).toHaveBeenCalledWith('first', false));
+        expect(attempts).toBe(1);
+        expect(screen.getByText(/Batch paused/)).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(first.text);
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        await waitFor(() => expect(done).toHaveBeenCalledWith('first', true));
+        await waitFor(() => expect(done).toHaveBeenCalledWith('second', true));
+        expect(attempts).toBe(3);
+        expect(screen.queryByText(/Batch paused/)).not.toBeInTheDocument();
+    },
+);
 
 test('does not send a queued message while signed out', async () => {
     const sent: string[] = [];

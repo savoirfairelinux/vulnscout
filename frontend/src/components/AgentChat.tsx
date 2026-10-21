@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext } from '../types/agent';
 import { providerIcons } from '../assets/providers';
+import { prepareAssessmentReviewVerification } from '../helpers/aiAssessmentReview';
 
 type Activity = { id: string; name: string; status: 'running' | 'done' | 'failed' };
 type Message = { role: 'user' | 'assistant'; content: string; activity?: Activity[] };
@@ -100,6 +101,7 @@ export type QueuedAgentMessage = {
     title: string;
     detail?: string;
     context?: AgentContext;
+    assessmentId?: string;
 };
 
 const queuedKindLabel: Record<QueuedAgentMessage['kind'], string> = { assess: 'Assess', review: 'Review' };
@@ -370,7 +372,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         }
     }
 
-    async function send(event?: FormEvent, actionMessage?: string, actionContext = context): Promise<boolean> {
+    async function send(event?: FormEvent, actionMessage?: string, actionContext = context, action?: QueuedAgentMessage): Promise<boolean> {
         event?.preventDefault();
         const message = (actionMessage ?? draft).trim();
         if (!message || busy || modelBusy || !ready || failedQueuedId) return false;
@@ -387,6 +389,9 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         setAwayFromBottom(false);
         const context = actionContext;
         try {
+            if (action?.kind === 'review' && !action.assessmentId) throw new Error('Missing assessment ID for review verification.');
+            const verifyReview = action?.kind === 'review'
+                ? await prepareAssessmentReviewVerification(action.assessmentId!) : undefined;
             const visibleIds = context.view?.visibleVulnerabilityIds;
             const packageIds = context.view?.visiblePackageIds;
             const scanIds = context.view?.visibleScanIds;
@@ -440,6 +445,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                 ...previous.messages, { role: 'user', content: message },
                 { role: 'assistant', content: result.reply, activity: turnActivity },
             ], model: result.model, usage: result.usage });
+            await verifyReview?.();
             return true;
         } catch (reason) {
             setDraft(message);
@@ -464,7 +470,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         const { id, text } = nextQueued;
         sentQueuedMessageId.current = id;
         onQueuedMessageSent?.(id);
-        void send(undefined, text, nextQueued.context ?? context).then(success => {
+        void send(undefined, text, nextQueued.context ?? context, nextQueued).then(success => {
             if (!success) setFailedQueuedId(id);
             onQueuedMessageDone?.(id, success);
         });

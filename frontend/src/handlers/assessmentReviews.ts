@@ -101,6 +101,19 @@ const describeReviewSummary = (summary: ReviewSummary): string => {
 };
 
 class AssessmentReviews {
+    /** Fetch all targets strictly: verification must not hide a failed read. */
+    static async fetchForAssessment(assessmentId: string): Promise<AssessmentReview[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reviews`,
+            window.location.href,
+        );
+        const response = await fetch(url.toString(), { mode: "cors", cache: "no-store" });
+        if (!response.ok) throw new Error("Unable to verify saved assessment reviews. Retry the request.");
+        const data = await response.json();
+        if (!Array.isArray(data.reviews)) throw new Error("Invalid assessment reviews response.");
+        return data.reviews;
+    }
+
     /**
      * Fetch every review in a variant or project scope, grouped by assessment
      * ID (an assessment may hold several, one per target). Returns an empty
