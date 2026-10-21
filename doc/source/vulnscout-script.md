@@ -483,10 +483,11 @@ unsupported future versions are rejected explicitly.
 OpenVEX products carry no variant identity, so each document belongs to one
 variant. With `-v`, `export custom-openvex` writes `custom_openvex_<variant>.json`;
 without it, it writes one such file per project variant that has custom
-assessments. `import
+assessments, and removes the file of a variant that no longer has any. `import
 custom-openvex` imports into `-v`, or into the project's only variant when `-v`
 is omitted. If the project has several variants, it exits with code 1 and lists
-them.
+them; import each per-variant file with its own `-v`. Export fails, writing nothing,
+when two variant names map to the same file name; export them one at a time with `-v`.
 
 ```bash
 # Export a variant

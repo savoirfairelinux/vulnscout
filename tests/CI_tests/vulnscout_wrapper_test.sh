@@ -303,6 +303,10 @@ expect_fail "missing command. Run 'vulnscout --help' for usage." -p cli
 expect_fail "Unknown command: frobnicate" frobnicate
 expect_fail "Unknown command: frobnicate" frobnicate --help
 expect_fail "Unknown command: help" help
+expect_fail "'refresh' --variant requires --project." -v x86 refresh
+refute_log "exec vulnscout"
+expect_fail "'match-condition' --variant requires --project." -v x86 match-condition "cvss >= 9.0"
+refute_log "exec vulnscout"
 expect_fail "'start' does not accept --project or --variant." -p cli start
 expect_fail "'serve' does not accept --project or --variant." serve -v x86
 expect_fail "'stop' does not accept argument 'now'." stop now

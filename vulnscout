@@ -869,6 +869,9 @@ verb_match_condition() {
     if [ -z "$1" ]; then
         die "match-condition requires a non-empty condition"
     fi
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'match-condition' --variant requires --project."
+    fi
     ensure_running
     set_explicit_scope_args
     # Exit 2 (condition matched) propagates as the wrapper's exit code.
@@ -877,6 +880,9 @@ verb_match_condition() {
 
 verb_refresh() {
     require_no_args refresh "$@"
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'refresh' --variant requires --project."
+    fi
     ensure_running
     set_explicit_scope_args
     exec_container "${SCOPE_ARGS[@]}" --refresh-vulnerability-data
