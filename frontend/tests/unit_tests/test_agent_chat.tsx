@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import '@testing-library/jest-dom';
 import { ReadableStream, TextDecoderStream } from 'node:stream/web';
 import { TextEncoder } from 'node:util';
+import { useState } from 'react';
 // @ts-expect-error TS6133
 import React from 'react';
 
@@ -461,6 +462,94 @@ test('does not send a queued message while signed out', async () => {
     await screen.findByText('Step 1 of 3');
     expect(sent).toEqual([]);
     expect(onQueuedMessageSent).not.toHaveBeenCalled();
+});
+
+test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action queue on %s failure and retries the same item', async failure => {
+    const sent: string[] = [];
+    const done = jest.fn();
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) {
+            const { message } = JSON.parse(String(options?.body));
+            sent.push(message);
+            if (sent.length <= 2) {
+                if (failure === 'stream') return streamResponse(['{"type":"error","error":"Provider unavailable"}\n']);
+                if (failure === 'interrupted stream') return streamResponse(['{"type":"delta","message_id":"m1","text":"Partial"}\n']);
+                return { ...jsonResponse({ error: 'Provider unavailable' }), ok: false } as Response;
+            }
+            return streamResponse([`{"type":"done","reply":"Reply ${sent.length}","model":"auto","usage":${JSON.stringify(usage)}}\n`]);
+        }
+        return jsonResponse(signedIn);
+    };
+    function QueueChat() {
+        const [queue, setQueue] = useState([
+            { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess' as const, title: 'CVE-1' },
+            { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess' as const, title: 'CVE-2' },
+        ]);
+        return <AgentChat onClose={() => undefined} context={context} queue={queue}
+            onQueuedMessageDone={(id, success) => {
+                done(id, success);
+                if (success) setQueue(current => current.filter(item => item.id !== id));
+            }} />;
+    }
+
+    render(<QueueChat />);
+    await screen.findByText('Queue paused. Retry or remove the failed action to continue.');
+    expect(done).toHaveBeenLastCalledWith('q1', false);
+    expect(sent).toEqual(['Assess CVE-1']);
+    expect(screen.getByLabelText('Message the agent')).toHaveValue('Assess CVE-1');
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Assess displayed' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(failure === 'interrupted stream' ? 'Response interrupted' : 'Provider unavailable');
+    expect(screen.getByRole('region', { name: 'Queued AI actions' })).toHaveTextContent('Up next · 2 queued');
+    await act(async () => { await Promise.resolve(); });
+    expect(sent).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
+    await waitFor(() => expect(done).toHaveBeenCalledTimes(2));
+    expect(sent).toEqual(['Assess CVE-1', 'Assess CVE-1']);
+    expect(screen.getByLabelText('Message the agent')).toHaveValue('Assess CVE-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
+    await screen.findByText('Reply 4');
+    expect(sent).toEqual(['Assess CVE-1', 'Assess CVE-1', 'Assess CVE-1', 'Assess CVE-2']);
+    expect(done.mock.calls).toEqual([['q1', false], ['q1', false], ['q1', true], ['q2', true]]);
+    expect(screen.queryByRole('region', { name: 'Queued AI actions' })).not.toBeInTheDocument();
+});
+
+test.each(['remove', 'clear'])('%s releases a failed action without retrying it', async action => {
+    const sent: string[] = [];
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) {
+            sent.push(JSON.parse(String(options?.body)).message);
+            if (sent.length === 1) throw new TypeError('Failed to fetch');
+            return jsonResponse({ reply: 'Second done', model: 'auto', usage });
+        }
+        return jsonResponse(signedIn);
+    };
+    function QueueChat() {
+        const [queue, setQueue] = useState([
+            { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess' as const, title: 'CVE-1' },
+            { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess' as const, title: 'CVE-2' },
+        ]);
+        return <AgentChat onClose={() => undefined} context={context} queue={queue}
+            onQueuedMessageDone={(id, success) => {
+                if (success) setQueue(current => current.filter(item => item.id !== id));
+            }}
+            onQueueRemove={id => setQueue(current => current.filter(item => item.id !== id))}
+            onQueueClear={() => setQueue([])} />;
+    }
+    render(<QueueChat />);
+    await screen.findByText('Queue paused. Retry or remove the failed action to continue.');
+    expect(sent).toEqual(['Assess CVE-1']);
+    fireEvent.click(screen.getByRole('button', { name: action === 'remove' ? 'Remove assess CVE-1 from queue' : 'Clear all' }));
+    if (action === 'remove') await screen.findByText('Second done');
+    else await waitFor(() => expect(screen.queryByRole('region', { name: 'Queued AI actions' })).not.toBeInTheDocument());
+    expect(sent).toEqual(action === 'remove' ? ['Assess CVE-1', 'Assess CVE-2'] : ['Assess CVE-1']);
+    expect(screen.getByLabelText('Message the agent')).toHaveValue('');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
 
 test('lists queued actions with remove and clear controls', async () => {

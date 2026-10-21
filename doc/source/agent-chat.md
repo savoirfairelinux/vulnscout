@@ -113,11 +113,18 @@ together, and large requests are batched within the agent message limit. If
 targets cannot be loaded, no partial selection is queued; the error banner
 explains what to retry.
 
-The bulk assessment chat has its own conversation. Hiding it or resetting the
-row selection preserves queued and running work; **Open assessment chat** brings
-it back. A queued or running vulnerability cannot be queued again; selecting
+The bulk assessment chat has its own conversation and opens automatically when
+assessments are queued. Closing it with the chat's close button or resetting the
+row selection preserves queued and running work; queuing another assessment
+opens it again. A queued or running vulnerability cannot be queued again; selecting
 additional rows queues only the new vulnerabilities. Clear or remove pending
-items in **Up next**, or retry after an action finishes. Changing the project or
+items in **Up next**, or retry after an action finishes. If a provider or stream
+request fails, its action stays in **Up next** and the queue pauses, preserving
+the error and draft instead of starting the next vulnerability. Choose
+**Retry failed action**, remove that action, or clear the queue to continue.
+In two-variant intersections, base-variant packages are checked against active
+vulnerability observations, not just packages still installed in its SBOM.
+Changing the project or
 variant scope, or leaving the tab, discards the bulk conversation and its pending
 queue. AI suggestions follow the normal approval workflow in **Review**; the
 selection bar does not directly create user assessments.

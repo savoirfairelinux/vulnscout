@@ -24,7 +24,8 @@ jest.mock('../../src/components/AgentChat', () => ({
                 runningId = props.queue?.[0]?.id;
                 if (runningId) props.onQueuedMessageSent?.(runningId);
             }}>Start queued</button>
-            <button onClick={() => runningId && props.onQueuedMessageDone?.(runningId)}>Finish running</button>
+            <button onClick={() => runningId && props.onQueuedMessageDone?.(runningId, true)}>Finish running</button>
+            <button onClick={() => runningId && props.onQueuedMessageDone?.(runningId, false)}>Fail running</button>
             <button onClick={() => props.onQueueClear?.()}>Clear queue</button>
             <button onClick={() => {
                 const id = props.queue?.[0]?.id;
@@ -104,9 +105,12 @@ test('keeps the conversation and captured targets when hidden or selection chang
     const { rerender } = render(bar({ selectedVulns: ['CVE-1'] }));
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(1));
+    expect(screen.getByTestId('agent-chat')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /(?:Open|Hide) assessment chat/i })).not.toBeInTheDocument();
     const threadId = chatProps?.threadId;
     fireEvent.click(screen.getByRole('button', { name: 'Close chat' }));
     expect(screen.getByTestId('agent-chat')).not.toBeVisible();
+    expect(screen.queryByRole('button', { name: /(?:Open|Hide) assessment chat/i })).not.toBeInTheDocument();
     rerender(bar({ selectedVulns: [] }));
     expect(queue()).toHaveLength(1);
     rerender(bar({ selectedVulns: ['CVE-1', 'CVE-2'] }));
@@ -146,6 +150,22 @@ test('reports lookup failures atomically without launching a partial queue, and 
     expect(assessButton()).toBeEnabled();
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(2));
+});
+
+test('retains a failed assessment and later CVEs until it succeeds or is removed', async () => {
+    render(bar({ selectedVulns: ['CVE-1', 'CVE-2'] }));
+    fireEvent.click(assessButton());
+    await waitFor(() => expect(queue()).toHaveLength(2));
+    const firstId = queue()[0].id;
+    fireEvent.click(screen.getByRole('button', { name: 'Start queued' }));
+    expect(queue()[0].id).toBe(firstId);
+    fireEvent.click(screen.getByRole('button', { name: 'Fail running' }));
+    expect(queue()).toHaveLength(2);
+    expect(queue()[0].id).toBe(firstId);
+    expect(assessButton()).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start queued' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Finish running' }));
+    expect(queue().map(item => item.title.split(' · ')[0])).toEqual(['CVE-2']);
 });
 
 test('disables during preparation and cancels stale preparation when selection changes', async () => {
