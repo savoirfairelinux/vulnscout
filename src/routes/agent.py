@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import queue
+import re
 import secrets
 import shlex
 import socket
@@ -124,6 +125,11 @@ def _conversation():
             key = secrets.token_urlsafe(32)
             _conversations[key] = Conversation()
         root = _conversations[key]
+        root.last_used = time.monotonic()
+    if thread_id:
+        # Restore the root model before a child snapshots its initial selection.
+        _load_env_credentials_nonblocking(root)
+    with _store_lock:
         if thread_id:
             thread_id = str(UUID(thread_id))
             if thread_id not in root.threads:
@@ -135,7 +141,6 @@ def _conversation():
             conversation = root.threads[thread_id]
         else:
             conversation = root
-        root.last_used = time.monotonic()
         conversation.last_used = time.monotonic()
     return key, conversation
 
@@ -302,6 +307,20 @@ def _persist_agent_credentials(token: str | None = None, provider: ProviderConne
         raise RuntimeError(f"Failed to persist '{failed}' to config.env.")
 
 
+def _config_literal(value):
+    # Accept literal shell words, not expansions or commands. A '#' within a
+    # word is literal; only whitespace can introduce a trailing shell comment.
+    match = re.fullmatch(
+        r"""((?:[^\s'"\\$`;&|<>()~]|\\[^\r\n]|'[^']*'|"(?:[^"\\$`]|\\["\\])*")*)"""
+        r"(?:[ \t]+(?:#.*)?)?",
+        value,
+    )
+    if match is None:
+        raise ValueError("AI configuration must contain literal shell assignments without expansions.")
+    parsed = shlex.split(match[1], comments=False)
+    return parsed[0] if parsed else ""
+
+
 def _agent_environment():
     path = Path(_config_file_path())
     if not path.is_file():
@@ -311,10 +330,7 @@ def _agent_environment():
     for line in path.read_text().splitlines():
         key, separator, value = line.partition("=")
         if separator and key in AGENT_ENV_KEYS:
-            parsed = shlex.split(value, comments=True)
-            if len(parsed) > 1:
-                raise ValueError(f"Invalid config.env assignment for {key}.")
-            values[key] = parsed[0] if parsed else ""
+            values[key] = _config_literal(value)
     return values
 
 
@@ -891,7 +907,10 @@ def agent_model():
                 return _response({"error": "Unable to verify this Copilot model."}, key, 503)
         if data["model"] not in {choice["id"] for choice in choices}:
             return _response({"error": "Selected model is not available for this account."}, key, 400)
-        ok, _ = persist_env_keys({"AI_MODEL": data["model"]})
+        updates = {"AI_MODEL": data["model"]}
+        if not Path(_config_file_path()).is_file():
+            updates = {**_agent_environment(), **updates}
+        ok, _ = persist_env_keys(updates)
         if not ok:
             return _response({"error": "Failed to persist model to config.env."}, key, 500)
         conversation.model = data["model"]
