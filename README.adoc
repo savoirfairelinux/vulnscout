@@ -52,8 +52,8 @@ This project contains default examples of VulnScout.
 To run VulnScout demo in interactive mode, you can simply run the command:
 [source,shell]
 ----
-./vulnscout --serve --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout --serve --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--add-cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
 Then open your browser to view the results:
@@ -73,9 +73,39 @@ If you don't need additional source files, VulnScout can be rerun directly witho
 It is also possible to add sources files on a specific project and variant with the `--project` and `--variant` arguments:
 [source,shell]
 ----
-./vulnscout --project demo --variant x86 --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout --project demo --variant x86 --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--add-cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
+
+=== Bundled example data
+
+The `example/` directory contains separate datasets for Yocto and Zephyr:
+
+[cols="1,2",options="header"]
+|===
+|Directory |Contents
+|`example/yocto-wrynose-spdx3/` |Yocto Wrynose SPDX 3 JSON-LD and CVE-check JSON
+|`example/yocto-scarthgap-spdx2/` |Yocto Scarthgap SPDX 2 archive and CVE-check JSON
+|`example/yocto-scarthgap-cdx/` |Yocto CycloneDX SBOM/VEX
+|`example/zephyr/` |Zephyr West-generated SPDX 3 JSON-LD companion documents
+|===
+
+To import the Zephyr example, pass all four companion documents in the same
+command so their cross-document references can be resolved:
+
+[source,shell]
+----
+./vulnscout --serve --project zephyr_demo --variant mbedtls_native_sim \
+  --add-spdx "$(pwd)/example/zephyr/app.jsonld" \
+  --add-spdx "$(pwd)/example/zephyr/build.jsonld" \
+  --add-spdx "$(pwd)/example/zephyr/modules-deps.jsonld" \
+  --add-spdx "$(pwd)/example/zephyr/zephyr.jsonld"
+----
+
+The Zephyr SBOMs describe the component inventory. Add `--perform-scans all`
+to request vulnerability discovery; scanners may require network access and credentials.
+See link:doc/source/examples.md[Bundled Examples] for commands for every dataset,
+including the SPDX 2 archives and CycloneDX exports.
 
 == :book: Documentation
 
@@ -238,7 +268,7 @@ This can be chained with other inputs to scan newly added files immediately:
 
 [source,shell]
 ----
-./vulnscout --project demo --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-scans grype
+./vulnscout --project demo --add-spdx example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-scans grype
 ----
 
 `--perform-scans` also accepts `nvd`, `osv`, and `sbom-cve-check`. Use comma-separated types such as `--perform-scans nvd,osv`, repeat the option, or pass `all` to run every scanner in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh remains a separate option.

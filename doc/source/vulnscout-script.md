@@ -48,8 +48,8 @@ By default VulnScout runs in **interactive mode**, starting a web dashboard.
 
 ```bash
 ./vulnscout --serve \
-  --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+  --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --add-cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
 ```
 
 After starting the scan, open:
@@ -120,8 +120,8 @@ Example:
 
 ```bash
 ./vulnscout --project demo --variant x86 \
-  --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+  --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --add-cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
 ```
 
 ## Input Sources
@@ -135,7 +135,7 @@ imported by that run with current EPSS, NVD, ENISA EUVD, and GitHub Advisory dat
 
 ```bash
 ./vulnscout \
-  --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --add-spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
   --refresh-vulnerability-data
 ```
 
@@ -176,12 +176,16 @@ For Zephyr's West SPDX generator, import the companion documents together into t
 same project and variant:
 
 ```bash
-./vulnscout --project zephyr_test --variant demo \
-  --add-spdx spdx/app.jsonld \
-  --add-spdx spdx/build.jsonld \
-  --add-spdx spdx/modules-deps.jsonld \
-  --add-spdx spdx/zephyr.jsonld
+./vulnscout --project zephyr_demo --variant mbedtls_native_sim \
+  --add-spdx "$(pwd)/example/zephyr/app.jsonld" \
+  --add-spdx "$(pwd)/example/zephyr/build.jsonld" \
+  --add-spdx "$(pwd)/example/zephyr/modules-deps.jsonld" \
+  --add-spdx "$(pwd)/example/zephyr/zephyr.jsonld"
 ```
+
+These files are bundled under `example/zephyr/`. See
+[Bundled Examples](examples.md) for the full dataset list and interactive
+import commands.
 
 Release versions and Git revisions are displayed separately in the SBOM table;
 see [Interactive mode](interactive-mode.md#column-visibility).
@@ -274,7 +278,7 @@ This can be chained with other inputs to scan newly added files immediately:
 
 ```bash
 ./vulnscout --project demo \
-  --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --add-spdx example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
   --perform-scans grype
 ```
 
@@ -311,7 +315,7 @@ The scan can be chained with other inputs:
 
 ```bash
 ./vulnscout --project demo \
-  --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --add-spdx example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
   --perform-scans sbom-cve-check
 ```
 
