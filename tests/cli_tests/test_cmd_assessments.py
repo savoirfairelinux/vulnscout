@@ -432,9 +432,9 @@ def _seed_custom_assessment(project_name, variant_name, cve_id):
 
 
 class TestExportCustomOpenVexAllVariants:
-    """Without --variant the export covers every variant of the project."""
+    """Without --variant every variant of the project is exported to its own file."""
 
-    def test_export_without_variant_covers_every_variant(self, app, tmp_path):
+    def test_export_without_variant_writes_one_file_per_variant(self, app, tmp_path):
         with app.app_context():
             _seed_custom_assessment("MultiProj", "v1", "CVE-2099-0001")
             _seed_custom_assessment("MultiProj", "v2", "CVE-2099-0002")
@@ -444,9 +444,10 @@ class TestExportCustomOpenVexAllVariants:
         ])
 
         assert result.exit_code == 0, result.output
-        document = json.loads((tmp_path / "custom_openvex_all.json").read_text())
-        names = {statement["vulnerability"]["name"] for statement in document["statements"]}
-        assert names == {"CVE-2099-0001", "CVE-2099-0002"}
+        assert not (tmp_path / "custom_openvex_all.json").exists()
+        for label, cve in (("v1", "CVE-2099-0001"), ("v2", "CVE-2099-0002")):
+            document = json.loads((tmp_path / f"custom_openvex_{label}.json").read_text())
+            assert {s["vulnerability"]["name"] for s in document["statements"]} == {cve}
 
     def test_export_without_variant_ignores_other_projects(self, app, tmp_path):
         from src.models.project import Project

@@ -480,9 +480,10 @@ unsupported future versions are rejected explicitly.
 
 ### OpenVEX
 
-OpenVEX custom-assessment transfers operate on one JSON document. With `-v`,
-`export custom-openvex` writes that variant; without it, it writes one document
-for every variant of the project (`custom_openvex_all.json`). `import
+OpenVEX products carry no variant identity, so each document belongs to one
+variant. With `-v`, `export custom-openvex` writes `custom_openvex_<variant>.json`;
+without it, it writes one such file per project variant that has custom
+assessments. `import
 custom-openvex` imports into `-v`, or into the project's only variant when `-v`
 is omitted. If the project has several variants, it exits with code 1 and lists
 them.
