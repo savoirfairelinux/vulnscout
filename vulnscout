@@ -421,7 +421,7 @@ legacy_modifier_replacement() {
 # Collect legacy tokens into LEGACY_TOKENS; return 0 when the call uses the legacy grammar.
 # Values of -p/--project/-v/--variant are skipped, so "-p list-scans" is not a legacy token.
 find_legacy_tokens() {
-    local is_legacy=1 skip_value=false
+    local is_legacy=1 skip_value=false seen_command=false
     LEGACY_TOKENS=()
     while [ $# -gt 0 ]; do
         if [ "$skip_value" = true ]; then
@@ -430,7 +430,18 @@ find_legacy_tokens() {
             case "$1" in
                 -p|--project|-v|--variant)
                     skip_value=true ;;
+                --dev|-h|--help|--version)
+                    ;;
+                start|stop|restart|update|version|serve|add|scan|match-condition|refresh|asset|report|export|import|delete|list)
+                    # A new-grammar verb as first command: the rest are its arguments, never legacy flags.
+                    if [ "$seen_command" = false ]; then
+                        return 1
+                    fi ;;
                 config)
+                    if [ "$seen_command" = false ] && { [ $# -lt 3 ] || case "$2" in -*|get|set|unset|list) true ;; *) false ;; esac; }; then
+                        return 1
+                    fi
+                    seen_command=true
                     # Legacy "config KEY VALUE" always has a key and a value. "config get|set|unset|list",
                     # "config --help", "help config" and typos such as "config show" use the new grammar.
                     if [ $# -ge 3 ]; then
@@ -440,6 +451,7 @@ find_legacy_tokens() {
                         esac
                     fi ;;
                 *)
+                    seen_command=true
                     if legacy_replacement "$1" > /dev/null; then
                         LEGACY_TOKENS+=("$1"); is_legacy=0
                     elif legacy_modifier_replacement "$1" > /dev/null; then
