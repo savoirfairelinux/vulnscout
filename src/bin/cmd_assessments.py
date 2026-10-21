@@ -25,6 +25,16 @@ from ._common import get_default_author, resolve_project, resolve_project_varian
 _JSON_SUFFIX = ".json"
 
 
+_PROJECT_MARKER = "x-vulnscout-project"
+
+
+def _is_project_export(file_path: str, project_name: str) -> bool:
+    try:
+        return _load_json_file(file_path).get(_PROJECT_MARKER) == project_name
+    except click.ClickException:
+        return False
+
+
 def _load_json_file(file_path: str) -> dict:
     if not os.path.isfile(file_path):
         raise click.ClickException(f"File not found: {file_path}")
@@ -140,10 +150,20 @@ def export_custom_openvex_assessments_command(
 ) -> None:
     """Export custom assessments as OpenVEX JSON, one file per variant."""
     if variant:
-        _, variant_obj = resolve_project_variant(project, variant, create=False)
+        project_obj, variant_obj = resolve_project_variant(project, variant, create=False)
         variants = [variant_obj]
     else:
-        variants = list(DBVariant.get_by_project(resolve_project(project).id))
+        project_obj = resolve_project(project)
+        variants = list(DBVariant.get_by_project(project_obj.id))
+
+    paths = {
+        variant_obj.id: os.path.join(
+            output_dir, f"custom_openvex_{sanitize_variant_name(variant_obj.name)}{_JSON_SUFFIX}")
+        for variant_obj in variants
+    }
+    if len(set(paths.values())) != len(paths):
+        raise click.ClickException(
+            "Variant names map to the same output file name; export them one at a time with --variant.")
 
     author = get_default_author()
     now_iso = _dt.now(_tz.utc).isoformat()
@@ -158,12 +178,21 @@ def export_custom_openvex_assessments_command(
         raise click.ClickException("No custom assessments to export.")
 
     os.makedirs(output_dir, exist_ok=True)
+    if not variant:
+        # A variant without custom assessments must not keep a stale export that a restore would
+        # resurrect. Output directories can be shared by projects, so only remove files marked as ours.
+        exported_ids = {variant_obj.id for variant_obj, _ in exports}
+        for variant_obj in variants:
+            stale_path = paths[variant_obj.id]
+            if variant_obj.id not in exported_ids and _is_project_export(stale_path, project_obj.name):
+                os.remove(stale_path)
+                click.echo(f"Removed stale export: {stale_path}")
     for variant_obj, handmade in exports:
         document = build_openvex_doc(handmade, author, now_iso, variant_ids=[variant_obj.id])
-        output_path = os.path.join(
-            output_dir, f"custom_openvex_{sanitize_variant_name(variant_obj.name)}{_JSON_SUFFIX}")
+        output_path = paths[variant_obj.id]
         if amend:
             document = reconcile_review_export(_load_json_file(output_path), document)
+        document[_PROJECT_MARKER] = project_obj.name
         with open(output_path, "w") as file:
             _json.dump(document, file, indent=2)
         click.echo(f"Custom OpenVEX assessments exported: {output_path}")
