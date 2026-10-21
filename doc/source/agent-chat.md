@@ -17,9 +17,11 @@ metadata. When the file exists it is authoritative, even if AI keys are absent,
 so disconnecting cannot resurrect inherited credentials. Environment-only AI
 settings are supported when no config file exists. Values written by the
 dashboard are shell-quoted and control characters are rejected.
-Provider model selections are also persisted; after restarting a provider that
-has no saved model, the toolbar requires an explicit selection rather than
-sending Copilot's `auto` model ID to that provider.
+Model selections made in the agent chatbox selector are also persisted as
+`AI_MODEL`, including GitHub Copilot (device sign-in or an existing CLI identity),
+and restored on restart. After restarting a non-GitHub provider that has no saved
+model, the toolbar requires an explicit selection rather than sending Copilot's
+`auto` model ID to that provider.
 
 From the demo worktree, with Python 3.11+ and Node.js installed:
 
