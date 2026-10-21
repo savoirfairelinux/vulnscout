@@ -57,27 +57,19 @@ Global options (before or after the command):
     --version               Show the VulnScout version
 
 Data commands (also accept --project and --variant; see '<command> --help'):
-    add <input options>     Add files to the project/variant and process them:
-                            --spdx, --cdx, --cve-check, --yocto-vex, --openvex, --grype <path>
-                            (each repeatable)
-    scan [types|all]        Run grype, nvd, osv, sbom-cve-check scans (default: all)
-    match-condition <expr>  Test stored vulnerabilities; exit 2 when the condition matches
-    report <template|path>... [--format pdf|html] [--condition <expr>]
-                            Generate reports into the outputs directory
-    export <kind>... [--amend]
-                            Export spdx, cdx, openvex, custom-data, custom-openvex, context
-    import <kind> <path> [--timestamps original|current]
-                            Import custom-data, custom-openvex, or context
+    add                     Add SBOMs and scan results, then process them
+    scan                    Run vulnerability scans
+    match-condition         Test stored vulnerabilities against a condition
+    report                  Generate reports
+    export                  Export SBOMs, custom data, assessments or context
+    import                  Import custom data, assessments or context
     refresh                 Refresh stored vulnerability data, including EPSS
 
 Maintenance commands:
-    delete scan <id>|outdated|empty-scans|orphaned-vulns [--dry-run] [--yes]
-                            Delete data; asks for confirmation on a terminal
-    list projects|scans [--json]
-                            List projects and variants, or past scans
-    config get <key> | set <key> <value> | unset <key> | list
-                            Read or change the host config file
-    asset add <path>...     Stage image assets for report templates
+    delete                  Delete scans and stale data
+    list                    List projects, variants or past scans
+    config                  Read or change the host config file
+    asset                   Stage image assets for report templates
 
 Container commands:
     start                   Start the container (other commands start it when needed)
@@ -86,15 +78,6 @@ Container commands:
     update                  Pull the image and restart if a new version is available
     version                 Show the VulnScout version
     serve                   Start the web UI on port 7275
-
-Examples:
-    vulnscout -p demo -v x86 add --spdx sbom.spdx.json --cve-check cve.json
-    vulnscout -p demo -v x86 scan nvd,osv
-    vulnscout -p demo report summary.adoc --condition "cvss >= 9.0"
-    vulnscout -p demo export cdx custom-openvex
-    vulnscout -p demo match-condition "cvss >= 9.0"
-    vulnscout config set NVD_API_KEY abc123
-    vulnscout serve
 
 The legacy flag syntax (for example --add-spdx, --perform-scans, --report)
 still works until v0.26 and prints a deprecation warning. See doc/source/vulnscout-script.md for the mapping.
@@ -106,9 +89,9 @@ show_verb_help() {
         add) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] add <input options>
 
-Add input files to the project/variant, then process them.
-Input options (repeatable, types can be mixed; all files form one scan):
-    --spdx <path>           SPDX 2/3 SBOM file or archive (.tar, .tar.gz, .tar.zst)
+Add SBOMs and scan results to a variant, then process them.
+Input options (repeatable and combinable; all files form one scan):
+    --spdx <path>           SPDX SBOM file or archive
     --cdx <path>            CycloneDX file
     --cve-check <path>      Yocto cve-check JSON file
     --yocto-vex <path>      Yocto VEX JSON file
@@ -117,80 +100,83 @@ Input options (repeatable, types can be mixed; all files form one scan):
 Options:
     -p, --project <name>    Project (default: "default")
     -v, --variant <name>    Variant (default: "default")
+
+Examples:
+    vulnscout -p demo -v x86 add --spdx sbom.spdx.json
+    vulnscout add --spdx sbom.spdx.json --cve-check cve.json
 EOF
             ;;
         scan) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]
 
 Run vulnerability scans. Types: grype, nvd, osv, sbom-cve-check, all (default: all).
-Separate several types with commas or spaces: scan nvd,osv or scan nvd osv.
 Options:
     -p, --project <name>    Project (default: "default")
     -v, --variant <name>    Variant (default: "default")
+
+Examples:
+    vulnscout scan
+    vulnscout -p demo -v x86 scan nvd,osv
 EOF
             ;;
         match-condition) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] match-condition <expr>
 
-Test stored vulnerability data against a condition, e.g. match-condition "cvss >= 9.0".
-Run 'vulnscout refresh' first for current EPSS.
+Test stored vulnerabilities against a condition. Exits 2 if any vulnerability matches.
 Options:
-    -p, --project <name>    Project; without it, the "default" project. Alone, tests
-                            every variant of the project.
+    -p, --project <name>    Project (default: "default"); alone, tests every variant
     -v, --variant <name>    Variant; requires --project
-Exit codes:
-    0   No vulnerability matches
-    1   Error
-    2   At least one vulnerability matches
+Exit codes: 0 no match, 1 error, 2 match
+
+Examples:
+    vulnscout match-condition "cvss >= 9.0"
+    vulnscout -p demo -v x86 match-condition "epss >= 50%"
 EOF
             ;;
         report) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] report <template|path>... [options]
 
-Generate one or more reports into the outputs directory. A template is a built-in name
-(e.g. summary.adoc) or a local file. --project alone reports on every variant.
+Generate reports from built-in templates or local files.
 Options:
     -p, --project <name>    Project (default: "default")
     -v, --variant <name>    Variant; without it, every variant of the project
     --format pdf|html       Output format
-    --condition <expr>      Fill the matched-vulnerabilities section; a match does not
-                            fail the call (use 'vulnscout match-condition' as the gate)
+    --condition <expr>      Fill the matched-vulnerabilities section
+
+Examples:
+    vulnscout report summary.adoc
+    vulnscout -p demo -v x86 report summary.adoc --format html
 EOF
             ;;
         export) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] export <kind>... [--amend]
 
-Kinds:
-    spdx                    SPDX 3.0 SBOM
-    cdx                     CycloneDX 1.6 SBOM
-    openvex                 OpenVEX document
-    custom-data             Custom VulnScout JSON data
-    custom-openvex          Custom OpenVEX assessments (all variants without --variant)
-    context                 AI assessment context (context-export.json)
+Kinds: spdx, cdx, openvex, custom-data, custom-openvex, context
 Options:
     -p, --project <name>    Project (default: "default")
     -v, --variant <name>    Variant; without it, every variant of the project
-    --amend                 Update the existing custom-* output file, keeping review order
+    --amend                 Update the existing custom-* file, keeping review order
+
+Examples:
+    vulnscout export spdx
+    vulnscout -p demo -v x86 export cdx custom-openvex
 EOF
             ;;
         import) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] import <kind> <path> [options]
 
-Kinds:
-    custom-data             Custom VulnScout JSON data (variants come from the file;
-                            --variant is rejected)
-    custom-openvex          Custom OpenVEX assessments. Without --variant, the project's
-                            only variant is used; with several variants, --variant is required.
-    context                 AI assessment context. No scope: entries go where the file says.
-                            -p P: every entry goes to project P. -p P -v V: the file must
-                            hold one entry, imported into P/V.
+Kinds: custom-data, custom-openvex, context
 Options:
-    -p, --project <name>    Project (default: "default"; see each kind above)
-    -v, --variant <name>    Variant (see each kind above)
+    -p, --project <name>    Project (default: "default")
+    -v, --variant <name>    Variant
     --timestamps original|current
-                            custom-* only. Defaults: custom-data = current,
-                            custom-openvex = original.
+                            custom-* only
+Scope rules differ per kind; see doc/source/vulnscout-script.md.
 SBOMs and scan results are added with 'vulnscout add'.
+
+Examples:
+    vulnscout import custom-data custom_data.json
+    vulnscout -p demo -v x86 import custom-openvex custom_openvex_x86.json
 EOF
             ;;
         refresh) cat <<'EOF'
@@ -200,6 +186,10 @@ Refresh stored vulnerability data, including EPSS.
 Options:
     -p, --project <name>    Project; without it, all projects are refreshed
     -v, --variant <name>    Variant; requires --project
+
+Examples:
+    vulnscout refresh
+    vulnscout -p demo refresh
 EOF
             ;;
         delete) cat <<'EOF'
@@ -213,14 +203,20 @@ Targets:
 Options:
     --dry-run               Show what would be deleted, delete nothing
     --yes                   Do not ask for confirmation
-On a terminal, the command shows a preview and asks before deleting. Without a terminal
-(e.g. CI), it deletes without asking.
+
+Examples:
+    vulnscout delete outdated --dry-run
+    vulnscout delete scan 12 --yes
 EOF
             ;;
         list) cat <<'EOF'
 Usage: vulnscout list projects|scans [--json]
 
 List all projects and their variants, or all past scans.
+
+Examples:
+    vulnscout list projects
+    vulnscout list scans --json
 EOF
             ;;
         config) cat <<'EOF'
@@ -229,21 +225,75 @@ Usage: vulnscout config get <key>
        vulnscout config unset <key>
        vulnscout config list
 
-Read or change the host config file (.vulnscout/cache/config.env). 'list' masks values
-of keys containing API_KEY, PASSWORD or SECRET. Setting VULNSCOUT_CACHE_DIR restarts a
-running container.
+Read or change the host config file (.vulnscout/cache/config.env).
+'list' masks sensitive values.
+
+Examples:
+    vulnscout config set NVD_API_KEY abc123
+    vulnscout config list
 EOF
             ;;
         asset) cat <<'EOF'
 Usage: vulnscout asset add <path>...
 
 Stage image assets (png, jpg, jpeg, gif, svg, webp) for report templates.
+
+Examples:
+    vulnscout asset add logo.png
 EOF
             ;;
-        start|stop|restart|update|version|serve) cat <<EOF
-Usage: vulnscout $1
+        start) cat <<'EOF'
+Usage: vulnscout start
 
-See 'vulnscout --help' for a description.
+Start the container. Other commands start it when needed.
+
+Examples:
+    vulnscout start
+EOF
+            ;;
+        stop) cat <<'EOF'
+Usage: vulnscout stop
+
+Stop and remove the container.
+
+Examples:
+    vulnscout stop
+EOF
+            ;;
+        restart) cat <<'EOF'
+Usage: vulnscout restart
+
+Restart the container.
+
+Examples:
+    vulnscout restart
+EOF
+            ;;
+        update) cat <<'EOF'
+Usage: vulnscout update
+
+Pull the image and restart the container if a new version is available.
+
+Examples:
+    vulnscout update
+EOF
+            ;;
+        version) cat <<'EOF'
+Usage: vulnscout version
+
+Show the VulnScout version.
+
+Examples:
+    vulnscout version
+EOF
+            ;;
+        serve) cat <<'EOF'
+Usage: vulnscout serve
+
+Start the web UI on port 7275.
+
+Examples:
+    vulnscout serve
 EOF
             ;;
         *)
