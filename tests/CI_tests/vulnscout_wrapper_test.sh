@@ -91,6 +91,14 @@ refute_stderr() {
     fi
 }
 
+refute_stdout() {
+    if grep -qF -- "$1" "$TEST_DIR/stdout"; then
+        echo "Unexpected stdout containing: $1" >&2
+        cat "$TEST_DIR/stdout" >&2
+        exit 1
+    fi
+}
+
 assert_stdout() {
     if ! grep -qF -- "$1" "$TEST_DIR/stdout"; then
         echo "Expected stdout containing: $1" >&2
@@ -252,7 +260,8 @@ done
 
 # --- New grammar: parser, help, lifecycle verbs ---
 run_ok --help
-assert_stdout "scan [types|all]"
+assert_stdout "Run vulnerability scans"
+refute_stdout "Examples:"
 assert_stdout "still works until v0.26"
 refute_stderr "deprecated:"
 
@@ -261,6 +270,7 @@ assert_stdout "Usage: vulnscout [global options] <command>"
 
 run_ok scan --help
 assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]"
+assert_stdout "Examples:"
 if [ -s "$VULNSCOUT_TEST_LOG" ]; then
     echo "Help must not call the container engine." >&2
     exit 1

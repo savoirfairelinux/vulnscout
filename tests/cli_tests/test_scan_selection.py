@@ -64,7 +64,7 @@ def test_wrapper_lists_scan_selection():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "scan [types|all]" in result.stdout
+    assert "Run vulnerability scans" in result.stdout
 
 
 @pytest.mark.parametrize(
