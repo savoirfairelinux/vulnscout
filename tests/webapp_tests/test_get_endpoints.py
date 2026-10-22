@@ -1045,6 +1045,16 @@ def test_render_document_html(client):
         assert response.status_code == 200
 
 
+def test_sbom_export_return_annotation_is_resolvable():
+    """Documentation tools can resolve the export helper's response types."""
+    from typing import get_type_hints
+    from src.routes.documents import handle_sbom_exports
+
+    assert get_type_hints(handle_sbom_exports)["return"] == (
+        tuple[str, int, dict[str, str]] | tuple[dict[str, str], int]
+    )
+
+
 def test_render_cdx_v1_6(client):
     response = client.get("/api/documents/CycloneDX 1.6?ext=json")
     assert response.status_code == 200
