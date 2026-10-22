@@ -583,6 +583,30 @@ describe('Review — bulk AI reviews', () => {
         expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
     });
 
+    test('docks the chat in the right sidebar outside the review table content', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        const sidebar = document.createElement('div');
+        document.body.appendChild(sidebar);
+        const { container, unmount } = render(<Review agentPanelContainer={sidebar} />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        const panel = screen.getByRole('complementary', { name: 'Bulk assessment review chat' });
+        expect(sidebar).toContainElement(panel);
+        expect(container).not.toContainElement(panel);
+        expect(panel).toHaveClass('right-0', 'h-dvh', 'w-full', 'lg:static', 'lg:h-auto', 'lg:shrink-0', 'lg:w-[400px]', 'xl:w-[440px]', '2xl:w-[480px]');
+        const threadId = screen.getByTestId('review-agent-chat').getAttribute('data-thread');
+        await user.click(screen.getByText('hide-review-chat'));
+        expect(panel).not.toBeVisible();
+        await user.click(screen.getByRole('button', { name: 'AI review chat' }));
+        expect(panel).toBeVisible();
+        expect(screen.getByTestId('review-agent-chat')).toHaveAttribute('data-thread', threadId);
+        expect(queue()).toHaveLength(1);
+        unmount();
+        expect(sidebar).toBeEmptyDOMElement();
+        sidebar.remove();
+    });
+
     test('switching scope discards its thread and pending requests; unmount cleans up the new thread', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         const { rerender, unmount } = render(<Review projectId="proj1" />);
