@@ -182,6 +182,9 @@ class CycloneDx:
 
             if component.bom_ref.value:
                 self.ref_dict[component.bom_ref.value] = package.string_id
+                # Detached VEX documents identify components by BOM-Link, not just the local bom-ref.
+                bom_link = f"urn:cdx:{self.sbom.serial_number}/{self.sbom.version}#{component.bom_ref.value}"
+                self.ref_dict[bom_link] = package.string_id
                 self._document_refs[component.bom_ref.value] = package.string_id
 
             self.packagesCtrl.add(package)

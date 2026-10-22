@@ -8,11 +8,114 @@ from src.views.cyclonedx import CycloneDx
 from src.models.assessment import Assessment
 from src.controllers import ControllersCache
 import json
+from pathlib import Path
 
 
 @pytest.fixture
 def cdx_parser():
     return CycloneDx(ControllersCache())
+
+
+def test_parse_yocto_bom_and_vex_examples(cdx_parser):
+    """The detached VEX targets the BOM's components through BOM-Link URNs."""
+    example_dir = Path(__file__).resolve().parents[2] / "example" / "yocto-scarthgap-cdx"
+    bom = json.loads((example_dir / "bom.json").read_text())
+    vex = json.loads((example_dir / "vex.json").read_text())
+    cdx_parser.load_from_dict(bom)
+    cdx_parser.parse_and_merge()
+
+    # Cover each package and analysis state without importing thousands of duplicate CVEs.
+    seen = set()
+    vulnerabilities = []
+    for vulnerability in vex["vulnerabilities"]:
+        key = (vulnerability["affects"][0]["ref"], vulnerability["analysis"]["state"])
+        if key not in seen:
+            seen.add(key)
+            vulnerabilities.append(vulnerability)
+    vex["vulnerabilities"] = vulnerabilities
+    cdx_parser.load_from_dict(vex)
+    cdx_parser.parse_and_merge()
+
+    expected_packages = {component["bom-ref"]: f'{component["name"]}@{component["version"]}'
+                         for component in bom["components"]}
+    assert len(cdx_parser.packagesCtrl) == len(set(expected_packages.values())) == 93
+    for vulnerability in vulnerabilities:
+        package_id = expected_packages[vulnerability["affects"][0]["ref"].split("#", 1)[1]]
+        parsed = cdx_parser.vulnerabilitiesCtrl.get(vulnerability["id"])
+        assert package_id in parsed.packages
+        assert any(package_id in assessment.packages
+                   and assessment.is_compatible_status(vulnerability["analysis"]["state"])
+                   for assessment in cdx_parser.assessmentsCtrl.gets_by_vuln(vulnerability["id"]))
+
+
+def test_bom_links_are_scoped_to_document_and_version(cdx_parser):
+    serials = ["87b5cc5a-ee50-449f-bcdf-cabea628c2a2", "082c4a99-77b3-4edd-83d8-066e303ce202"]
+    for serial, version, name in [(serials[0], 1, "first"), (serials[0], 2, "second"),
+                                  (serials[1], 1, "other")]:
+        cdx_parser.load_from_dict({
+            "bomFormat": "CycloneDX", "specVersion": "1.4",
+            "serialNumber": f"urn:uuid:{serial}", "version": version,
+            "components": [{"type": "library", "name": name, "version": "1", "bom-ref": "shared"}],
+        })
+        cdx_parser.parse_and_merge()
+
+    refs = [f"urn:cdx:{serials[0]}/1#shared", f"urn:cdx:{serials[0]}/2#shared",
+            f"urn:cdx:{serials[1]}/1#shared", f"urn:cdx:{serials[1]}/2#shared", "shared"]
+    cdx_parser.load_from_dict({
+        "bomFormat": "CycloneDX", "specVersion": "1.4", "version": 1,
+        "vulnerabilities": [{"id": f"CVE-2026-{index}", "affects": [{"ref": ref}]}
+                            for index, ref in enumerate(refs)],
+    })
+    cdx_parser.parse_and_merge()
+    for index, expected in enumerate([["first@1"], ["second@1"], ["other@1"], [], ["other@1"]]):
+        assert cdx_parser.vulnerabilitiesCtrl.get(f"CVE-2026-{index}").packages == expected
+
+
+def test_process_yocto_bom_and_vex_examples(monkeypatch, tmp_path):
+    """The normal process command must persist findings visible in the selected variant."""
+    from flask import current_app
+    from src.extensions import db
+    from src.models import Assessment as StoredAssessment
+    from src.models import Finding, Observation, Project, SBOMDocument, Scan, Variant
+
+    monkeypatch.setenv("MATCH_CONDITION", "")
+    status = tmp_path / "scan-status"
+    status.write_text("__END_OF_SCAN_SCRIPT__\n")
+    monkeypatch.setitem(current_app.config, "SCAN_FILE", str(status))
+    example_dir = Path(__file__).resolve().parents[2] / "example" / "yocto-scarthgap-cdx"
+    project = Project.create("yocto_demo")
+    variant = Variant.create("cyclonedx", project.id)
+    scan = Scan.create("CycloneDX examples", variant.id)
+    for name in ("bom.json", "vex.json"):
+        SBOMDocument.create(str(example_dir / name), name, scan.id, format="cdx")
+
+    result = current_app.test_cli_runner().invoke(args=["process"])
+    assert result.exit_code == 0, result.output
+    assert "Error" not in result.output
+    assert "dropped" not in result.output
+
+    bom = json.loads((example_dir / "bom.json").read_text())
+    vex = json.loads((example_dir / "vex.json").read_text())
+    packages = {component["bom-ref"]: f'{component["name"]}@{component["version"]}'
+                for component in bom["components"]}
+    expected = {(vulnerability["id"], packages[affect["ref"].split("#", 1)[1]])
+                for vulnerability in vex["vulnerabilities"] for affect in vulnerability["affects"]}
+    assert len(expected) == 7063
+    findings = db.session.execute(db.select(Finding)).scalars().all()
+    assert {(finding.vulnerability_id, finding.package.string_id) for finding in findings} == expected
+    observations = db.session.execute(db.select(Observation).where(Observation.scan_id == scan.id)).scalars().all()
+    assert {observation.finding_id for observation in observations} == {finding.id for finding in findings}
+    assessments = db.session.execute(db.select(StoredAssessment)).scalars().all()
+    assert all(assessment.is_compatible_status("resolved") or assessment.is_compatible_status("not_affected")
+               for assessment in assessments)
+    assert {finding_id for assessment in assessments for variant_id, finding_id in assessment.targets
+            if variant_id == variant.id} == {finding.id for finding in findings}
+
+    response = current_app.test_client().get(f"/api/vulnerabilities?variant_id={variant.id}")
+    assert response.status_code == 200
+    expected_ids = {vuln_id for vuln_id, _ in expected}
+    assert len(expected_ids) == 3133
+    assert {vulnerability["id"] for vulnerability in response.get_json()} == expected_ids
 
 
 def test_parse_empty_json(cdx_parser):
