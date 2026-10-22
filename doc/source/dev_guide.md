@@ -149,6 +149,11 @@ cqfd -b test_ci
 
 Activate the virtual environment and install dev dependencies first:
 
+The backend suite also needs Git and PostgreSQL server binaries. On Debian or
+Ubuntu, install them with `sudo apt-get install git postgresql libpq-dev`.
+The CQFD image includes these dependencies; rebuild it with `cqfd init` after
+updating the container definition.
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -173,6 +178,17 @@ pytest --cov-report html --cov=src tests/
 # Type checking
 mypy --config-file tests/tox.ini
 ```
+
+The PostgreSQL migration test starts a temporary server as the current
+non-root user, listens only on a private Unix socket, and stops it at teardown.
+No existing PostgreSQL service or database is required. To use an external test
+database instead, set `VULNSCOUT_TEST_POSTGRES_URI` to its SQLAlchemy connection
+URI; the test creates and drops its own isolated schema.
+
+Scanner-selection tests create small local NVD/CVEList Git repositories and use
+a local OSV HTTP fixture and a Grype executable stub. They exercise the real
+entrypoint, Flask commands, advisory matching, and database persistence without
+downloading advisory feeds or requiring a Grype installation.
 
 #### Frontend
 
