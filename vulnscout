@@ -1,6 +1,106 @@
 #!/bin/bash
 set -euo pipefail
 
+print_completion() {
+    cat <<'EOF'
+_vulnscout_complete() {
+    local cur prev word verb="" i
+    local data_verbs="add scan match-condition report export import refresh"
+    local all_verbs="add scan match-condition report export import refresh delete list config asset start stop restart update version serve"
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Find the subcommand, skipping global options and the values of -p/-v.
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        word="${COMP_WORDS[i]}"
+        case "$word" in
+            -p|--project|-v|--variant) i=$((i + 1)) ;;
+            -*) ;;
+            *) verb="$word"; break ;;
+        esac
+    done
+
+    case "$prev" in
+        -p|--project|-v|--variant|--condition) return 0 ;;
+        --format) mapfile -t COMPREPLY < <(compgen -W "pdf html" -- "$cur"); return 0 ;;
+        --timestamps) mapfile -t COMPREPLY < <(compgen -W "original current" -- "$cur"); return 0 ;;
+        --spdx|--cdx|--cve-check|--yocto-vex|--openvex|--grype)
+            mapfile -t COMPREPLY < <(compgen -f -- "$cur"); return 0 ;;
+    esac
+
+    local globals="--dev -h --help --version"
+    local scope=""
+    if [[ " $data_verbs " == *" $verb "* || -z "$verb" ]]; then
+        scope="-p --project -v --variant"
+    fi
+
+    local words=""
+    case "$verb" in
+        "")
+            words="$all_verbs" ;;
+        add)
+            words="--spdx --cdx --cve-check --yocto-vex --openvex --grype" ;;
+        scan)
+            local prefix=""
+            if [[ "$cur" == *,* ]]; then
+                prefix="${cur%,*},"
+                cur="${cur##*,}"
+            fi
+            local t
+            for t in grype nvd osv sbom-cve-check all; do
+                [[ "$t" == "$cur"* ]] && COMPREPLY+=("$prefix$t")
+            done
+            if [ -z "$prefix" ]; then
+                mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -W "$scope $globals" -- "$cur")
+            fi
+            return 0 ;;
+        report)
+            words="--format --condition"
+            mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
+            mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -f -- "$cur")
+            return 0 ;;
+        export)
+            words="spdx cdx openvex custom-data custom-openvex context --amend" ;;
+        import)
+            words="custom-data custom-openvex context --timestamps"
+            mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
+            if [ "$prev" != "import" ]; then
+                mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -f -- "$cur")
+            fi
+            return 0 ;;
+        delete)
+            words="scan outdated empty-scans orphaned-vulns --dry-run --yes" ;;
+        list)
+            words="projects scans --json" ;;
+        config)
+            words="get set unset list" ;;
+        asset)
+            words="add"
+            mapfile -t COMPREPLY < <(compgen -W "$words $globals" -- "$cur")
+            if [ "$prev" = "add" ]; then
+                mapfile -t COMPREPLY < <(compgen -f -- "$cur")
+            fi
+            return 0 ;;
+        match-condition|refresh)
+            words="" ;;
+    esac
+    mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
+}
+complete -F _vulnscout_complete vulnscout ./vulnscout
+EOF
+}
+
+# Hidden verb: runs before config sourcing and container engine detection.
+if [ "${1:-}" = "completion" ]; then
+    if [ "${2:-}" != "bash" ] || [ $# -gt 2 ]; then
+        echo "Error: unsupported shell. Usage: source <(vulnscout completion bash)" >&2
+        exit 1
+    fi
+    print_completion
+    exit 0
+fi
+
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
 DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.23}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
