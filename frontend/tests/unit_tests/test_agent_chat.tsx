@@ -69,7 +69,8 @@ test('device flow polls at the interval returned by the server', async () => {
     expect(requests.filter(item => item.endsWith('/auth/poll'))).toHaveLength(2);
     expect(screen.getByText('Connection verified')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Start using' }));
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Configure model provider' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
 });
 
 test('connects a local provider when already signed in and restores the GitHub account on disconnect', async () => {
@@ -110,8 +111,11 @@ test('connects a local provider when already signed in and restores the GitHub a
     fireEvent.change(screen.getByRole('combobox', { name: 'Agent model' }), { target: { value: 'Qwen/Qwen3-Coder' } });
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue('Qwen/Qwen3-Coder'));
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
+    expect(screen.queryByRole('button', { name: 'Disconnect provider' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect provider' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue('auto'));
+    fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
 });
 
@@ -146,6 +150,31 @@ test('connector wizard shows only the selected authentication fields', async () 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.getByLabelText('Provider API key')).not.toBeRequired();
     expect(screen.getByRole('button', { name: /Use custom endpoint URL \(required\)/ })).toBeInTheDocument();
+});
+
+test('keeps model selection in the composer and exposes sign-out only through the plug', async () => {
+    const requests: string[] = [];
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/auth') && options?.method === 'DELETE') {
+            requests.push(path);
+            return jsonResponse({ cleanup_error: null });
+        }
+        return jsonResponse(signedIn);
+    };
+    const { container } = render(<AgentChat context={context} onClose={() => undefined} />);
+    const model = await screen.findByRole('combobox', { name: 'Agent model' });
+    expect(container.querySelector('header')).not.toContainElement(model);
+    expect(screen.getByRole('textbox', { name: 'Message the agent' }).closest('form')).toContainElement(model);
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
+    expect(screen.queryByRole('combobox', { name: 'Agent model' })).not.toBeInTheDocument();
+    expect(screen.getByText('GitHub Copilot · tester')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await screen.findByText('Select a connector');
+    expect(requests).toEqual(['/api/agent/auth']);
+    expect(screen.queryByRole('button', { name: 'Configure model provider' })).not.toBeInTheDocument();
 });
 
 test('streams split NDJSON events without a write permission checkbox', async () => {
@@ -248,7 +277,7 @@ test('reset discards messages but retains the connection', async () => {
     fireEvent.click(screen.getByRole('button', { name: 'New conversation' }));
     await waitFor(() => expect(screen.queryByText('Previous question')).not.toBeInTheDocument());
     expect(requests.some(path => path.endsWith('/conversation'))).toBe(true);
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Configure model provider' })).toBeInTheDocument();
 });
 
 test('interrupted response restores the draft', async () => {
@@ -287,7 +316,8 @@ test('sign-out shows a remote cleanup error after discarding local identity', as
     };
 
     render(<AgentChat onClose={() => undefined} context={context} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure model provider' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete the stored conversation');
     expect(screen.getByText('Select a connector')).toBeInTheDocument();
 });
