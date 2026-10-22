@@ -408,7 +408,7 @@ class VulnerabilitiesController:
                     vuln.set_epss(result['score'], result['percentile'])
                     rec = self._db_record_cache.get(cve_id) or Vulnerability.get_by_id(cve_id)
                     if rec is not None:
-                        now = datetime.datetime.utcnow()
+                        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
                         new_score = decimal.Decimal(str(result['score']))
                         rec.update_record(
                             epss_score=new_score,
@@ -447,7 +447,7 @@ class VulnerabilitiesController:
         if not full_map and not kev_map:
             verbose("[fetch_euvd_data] EUVD mappings are empty")
             return EnrichmentResult(failed=1)
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         updated = 0
         failed = 0
 
@@ -598,7 +598,10 @@ class VulnerabilitiesController:
                     try:
                         rec = self._db_record_cache.get(vuln.id) or Vulnerability.get_by_id(vuln.id)
                         if rec is not None:
-                            rec.update_record(nvd_fetched_at=datetime.datetime.utcnow(), commit=False)
+                            rec.update_record(
+                                nvd_fetched_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
+                                commit=False,
+                            )
                     except Exception as e:
                         verbose(f"[fetch_nvd_data not_found sentinel {vuln.id!r}] {e}")
                         failed += 1
@@ -636,8 +639,8 @@ class VulnerabilitiesController:
                                 versions_data=vuln.versions_data,
                                 patch_url=vuln.patch_url,
                                 nvd_last_modified=vuln.nvd_last_modified,
-                                nvd_fetched_at=datetime.datetime.utcnow(),
-                                nvd_data_updated_at=datetime.datetime.utcnow(),
+                                nvd_fetched_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
+                                nvd_data_updated_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
                                 commit=False,
                             )
                     except Exception as e:
@@ -672,8 +675,12 @@ class VulnerabilitiesController:
                                 if rec is not None:
                                     rec.update_record(
                                         publish_date=publish_date,
-                                        ghsa_fetched_at=datetime.datetime.utcnow(),
-                                        ghsa_data_updated_at=datetime.datetime.utcnow(),
+                                        ghsa_fetched_at=datetime.datetime.now(datetime.timezone.utc).replace(
+                                            tzinfo=None,
+                                        ),
+                                        ghsa_data_updated_at=datetime.datetime.now(datetime.timezone.utc).replace(
+                                            tzinfo=None,
+                                        ),
                                         commit=False,
                                     )
                             except Exception as e:

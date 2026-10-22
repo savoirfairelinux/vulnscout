@@ -4,6 +4,7 @@
 import os
 import pytest
 import tempfile
+from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -118,11 +119,15 @@ def test_initial_epss_enrichment_sets_data_updated_at(app_with_scan):
         mock_epss.api_get_epss_batch.return_value = {cve_id: {"score": 0.42, "percentile": 0.7}}
         ctrl.epss_api = mock_epss
 
+        before = datetime.now(timezone.utc).replace(tzinfo=None)
         ctrl.fetch_epss_scores()
+        after = datetime.now(timezone.utc).replace(tzinfo=None)
+        assert rec.epss_fetched_at.tzinfo is None
+        assert before <= rec.epss_fetched_at <= after
+        assert rec.epss_data_updated_at == rec.epss_fetched_at
         db.session.commit()
 
     with app_with_scan.app_context():
         rec = db.session.get(Vulnerability, cve_id)
         assert rec.epss_data_updated_at is not None
         assert abs(float(rec.epss_score) - 0.42) < 1e-4
-
