@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faClock, faCopy, faLocationDot, faPlug, faPlus, faRightFromBracket, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faClock, faCopy, faLocationDot, faPlug, faPlus, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext, type Activity, type AgentMessage as Message, type AgentUsage as Usage, type AgentStreamEvent as StreamEvent, type QueuedAgentMessage } from '../types/agent';
@@ -76,6 +76,10 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     const [queueOpen, setQueueOpen] = useState(queue.length > 0);
     const composerId = useId();
     const queueId = useId();
+    const providerFormId = useId();
+    const endpointId = useId();
+    const discardTitleId = useId();
+    const discardDescriptionId = useId();
     const [copied, setCopied] = useState<string | null>(null);
     const [awayFromBottom, setAwayFromBottom] = useState(false);
     const confirmation = useRef<HTMLDialogElement>(null);
@@ -295,6 +299,26 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         }
     }
 
+    async function signOut() {
+        setBusy(true);
+        setError('');
+        try {
+            const result = await request<{ cleanup_error: string | null }>('/auth', { method: 'DELETE' });
+            setModels([]);
+            setDraft('');
+            setShowConnections(false);
+            setSetupStep(1);
+            setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false, messages: [], model: 'auto', usage: emptyUsage });
+            setSelectedModel('auto');
+            notifyConnectionChange();
+            if (result.cleanup_error) setError(result.cleanup_error);
+        } catch (reason) {
+            setError(errorMessage(reason));
+        } finally {
+            setBusy(false);
+        }
+    }
+
     async function reset() {
         if (busy || modelBusy || threadBusy || sharedQueue.some(item => item.threadId === threadId)) return;
         setBusy(true);
@@ -366,14 +390,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
 
     return <div className="flex h-full min-h-0 min-w-0 flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
         <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-neutral-200 px-3 dark:border-neutral-800">
-            <div className="min-w-0 flex-1 pr-2">
-                {state?.authenticated && <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || threadBusy || !models.length} className="w-full max-w-56 truncate rounded border-0 bg-transparent py-2 pl-1 pr-6 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:bg-neutral-950">
-                    {!selectedModel && <option value="">Select a model</option>}
-                    {!models.length && selectedModel && <option value={selectedModel}>{error ? 'Models unavailable' : 'Loading models...'}</option>}
-                    {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-                </select>}
-            </div>
-            {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
+            <h2 className="min-w-0 flex-1 truncate pr-2 text-sm font-semibold" title={source}>{source}</h2>
             <button type="button" title="AI queue" aria-label={`AI queue (${sharedQueue.length})`} aria-expanded={queueOpen} aria-controls={queueId} onClick={() => setQueueOpen(value => !value)} className={iconButton}>
                 <FontAwesomeIcon icon={faClock} /><span className="ml-1 text-xs">{sharedQueue.length}</span>
             </button>
@@ -396,24 +413,9 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     confirmation.current?.showModal();
                 }
             }} disabled={busy || modelBusy || threadBusy || sharedQueue.some(item => item.threadId === threadId) || !state || (!conversation.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
-            {state?.authenticated && state.token_connected && <button type="button" title={state.login ? `Sign out of ${state.login}` : 'Sign out'} aria-label="Sign out" disabled={busy || modelBusy || sharedQueue.length > 0} className={iconButton} onClick={async () => {
-                setBusy(true);
-                setError('');
-                try {
-                    const result = await request<{ cleanup_error: string | null }>('/auth', { method: 'DELETE' });
-                    setModels([]);
-                    setDraft('');
-                    setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false, messages: [], model: 'auto', usage: emptyUsage });
-                    setSelectedModel('auto');
-                    notifyConnectionChange();
-                    if (result.cleanup_error) setError(result.cleanup_error);
-                } catch (reason) { setError(errorMessage(reason)); }
-                finally { setBusy(false); }
-            }}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
-            {state?.provider && <button type="button" title="Disconnect provider" aria-label="Disconnect provider" disabled={busy || modelBusy || sharedQueue.length > 0} className={iconButton} onClick={() => void disconnectProvider()}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
             <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>
         </header>
-        <dialog ref={confirmation} aria-labelledby="agent-discard-title" aria-describedby="agent-discard-description" className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
+        <dialog ref={confirmation} aria-labelledby={discardTitleId} aria-describedby={discardDescriptionId} className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 event.stopPropagation();
@@ -421,8 +423,8 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                 confirmation.current?.close();
             }
         }}>
-            <h2 id="agent-discard-title" className="text-base font-semibold">New conversation?</h2>
-            <p id="agent-discard-description" className="mt-3 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">This conversation will be discarded forever. This cannot be undone.</p>
+            <h2 id={discardTitleId} className="text-base font-semibold">New conversation?</h2>
+            <p id={discardDescriptionId} className="mt-3 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">This conversation will be discarded forever. This cannot be undone.</p>
             <label className="mt-4 flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={neverAsk} onChange={event => setNeverAsk(event.target.checked)} className="accent-cyan-500" />
                 Never ask again
@@ -455,6 +457,17 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             {state && (!state.authenticated || showConnections) && <div className="space-y-5 py-2 text-sm">
                 <div className="border-b border-neutral-200 pb-4 dark:border-neutral-800">
                     <h3 className="text-lg font-semibold">Connect an agent</h3>
+                    {state.authenticated && <div className="mt-3 flex items-center justify-between gap-3">
+                        <span className="text-xs text-neutral-500">{state.provider
+                            ? connectors.find(connector => connector.id === state.provider)?.label
+                            : state.login ? `GitHub Copilot · ${state.login}` : 'GitHub Copilot'}</span>
+                        {(state.provider || state.token_connected) && <button type="button"
+                            disabled={busy || modelBusy || sharedQueue.length > 0}
+                            onClick={() => state.provider ? void disconnectProvider() : void signOut()}
+                            className="rounded border border-neutral-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-40 dark:border-neutral-700 dark:text-red-400 dark:hover:bg-red-950">
+                            {state.provider ? 'Disconnect provider' : 'Sign out'}
+                        </button>}
+                    </div>}
                     <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">Step {setupStep} of 3</p>
                     <ol className="mt-4 grid grid-cols-3 gap-2 text-xs">
                         {['Connector', 'Connect', 'Confirm'].map((label, index) => <li key={label} className={index + 1 <= setupStep ? 'font-semibold text-cyan-700 dark:text-cyan-300' : 'text-neutral-500'}><span className="mr-1">{index + 1}.</span>{label}</li>)}
@@ -464,7 +477,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     <h4 className="font-semibold">Select a connector</h4>
                     <div className="grid gap-2">
                         {connectors.map(({ id, label, description, icon }) => <label key={id} className={`flex cursor-pointer items-start gap-3 rounded border px-3 py-3 transition-colors ${providerChoice === id ? 'border-cyan-600 bg-cyan-50 text-neutral-900 dark:border-cyan-500 dark:bg-cyan-950/40 dark:text-white' : 'border-neutral-300 text-neutral-700 hover:border-cyan-600 dark:border-neutral-700 dark:text-neutral-300'}`}>
-                            <input type="radio" name="agent-connector" value={id} checked={providerChoice === id} onChange={() => {
+                            <input type="radio" name={`agent-connector-${composerId}`} value={id} checked={providerChoice === id} onChange={() => {
                                 setProviderChoice(id);
                                 setProviderKey('');
                                 setProviderUrl('');
@@ -480,12 +493,12 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     <p className="text-neutral-500 dark:text-neutral-400">{state.authenticated && !state.provider ? 'Your GitHub account is already connected.' : 'Sign in with a GitHub account that has Copilot access.'}</p>
                 </> : setupStep === 2 ? <>
                     <h4 className="font-semibold">{connectors.find(connector => connector.id === providerChoice)?.label}</h4>
-                    <form id="agent-provider-form" onSubmit={event => void connectProvider(event)} className="space-y-3">
+                    <form id={providerFormId} onSubmit={event => void connectProvider(event)} className="space-y-3">
                         <label className="block space-y-1">API key {providerChoice === 'local' && <span className="text-neutral-500">(optional)</span>}
                             <input aria-label="Provider API key" type="password" autoComplete="off" required={providerChoice !== 'local'} value={providerKey} onChange={event => setProviderKey(event.target.value)} className="w-full rounded border border-neutral-300 bg-white p-2 dark:border-neutral-700 dark:bg-neutral-900" />
                         </label>
-                        <button type="button" aria-expanded={showEndpoint} aria-controls="agent-endpoint-field" onClick={() => setShowEndpoint(value => !value)} className="flex items-center gap-2 text-sm font-medium text-cyan-700 hover:text-cyan-600 dark:text-cyan-400"><FontAwesomeIcon icon={faChevronDown} className={showEndpoint ? 'rotate-180' : ''} />Use custom endpoint URL{(providerChoice === 'azure' || providerChoice === 'local') && ' (required)'}</button>
-                        {showEndpoint && <label id="agent-endpoint-field" className="block space-y-1">API base URL
+                        <button type="button" aria-expanded={showEndpoint} aria-controls={endpointId} onClick={() => setShowEndpoint(value => !value)} className="flex items-center gap-2 text-sm font-medium text-cyan-700 hover:text-cyan-600 dark:text-cyan-400"><FontAwesomeIcon icon={faChevronDown} className={showEndpoint ? 'rotate-180' : ''} />Use custom endpoint URL{(providerChoice === 'azure' || providerChoice === 'local') && ' (required)'}</button>
+                        {showEndpoint && <label id={endpointId} className="block space-y-1">API base URL
                             <input aria-label="Provider API base URL" type="url" value={providerUrl} onChange={event => setProviderUrl(event.target.value)} placeholder={providerChoice === 'local' ? 'http://127.0.0.1:11434/v1' : providerChoice === 'azure' ? 'https://your-resource.openai.azure.com/openai/v1/' : 'Default provider endpoint'} className="w-full rounded border border-neutral-300 bg-white p-2 dark:border-neutral-700 dark:bg-neutral-900" />
                         </label>}
                     </form>
@@ -547,10 +560,10 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             {setupStep === 1 ? <button type="button" onClick={() => setSetupStep(2)} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600">Next</button>
                 : setupStep === 3 ? <button type="button" onClick={() => { setShowConnections(false); setSetupStep(1); setDevice(null); setError(''); }} disabled={checkState !== 'success'} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">Start using</button>
                     : providerChoice === 'github' ? <button type="button" onClick={() => state.authenticated && !state.provider ? void verifyGitHub() : void signIn()} disabled={busy} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">{state.authenticated && !state.provider ? 'Verify GitHub connection' : 'Sign in with GitHub'}</button>
-                        : <button type="submit" form="agent-provider-form" disabled={busy} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">Verify connection</button>}
+                        : <button type="submit" form={providerFormId} disabled={busy} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">Verify connection</button>}
         </div>}
 
-        {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model in the toolbar to start chatting.</p>}
+        {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model in the message box to start chatting.</p>}
 
         {queueOpen && <AgentQueue id={queueId} />}
 
@@ -574,7 +587,13 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             <label htmlFor={composerId} className="sr-only">Message the agent</label>
             <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">
                 <textarea ref={composer} id={composerId} rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || Boolean(failedQueuedId)} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
-                <div className="mt-2 flex justify-end">
+                <div className="mt-2 flex min-w-0 items-center gap-2">
+                    <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || threadBusy || !models.length} className="min-w-0 flex-1 truncate rounded border-0 bg-transparent py-2 pl-1 pr-6 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:bg-neutral-900">
+                        {!selectedModel && <option value="">Select a model</option>}
+                        {!models.length && selectedModel && <option value={selectedModel}>{error ? 'Models unavailable' : 'Loading models...'}</option>}
+                        {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+                    </select>
+                    {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
                     <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || Boolean(failedQueuedId)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
                 </div>
             </div>
