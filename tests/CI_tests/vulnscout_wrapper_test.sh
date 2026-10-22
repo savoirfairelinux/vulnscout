@@ -16,6 +16,9 @@ log_call() {
 }
 
 case "$1" in
+    info)
+        echo false
+        ;;
     ps)
         if [ -z "${VULNSCOUT_TEST_NOT_RUNNING:-}" ]; then
             echo "vulnscout"

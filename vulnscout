@@ -9,15 +9,6 @@ VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
 VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$VULNSCOUT_BUILD_DIR/outputs}"
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
 
-# Source config early so stored values (e.g. VULNSCOUT_BUILD_DIR) take effect
-if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
-    # shellcheck source=/dev/null
-    . "$VULNSCOUT_CONFIG_FILE"
-fi
-# Re-derive VULNSCOUT_CONFIG_FILE in case VULNSCOUT_CACHE_DIR was updated by config
-VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-$DOCKER_IMAGE}"
-
 if command -v podman &> /dev/null; then
     CONTAINER_ENGINE="podman"
 elif command -v docker &> /dev/null; then
@@ -26,6 +17,40 @@ else
     echo "Error: \"podman\" or \"docker\" is not installed or not in PATH."
     exit 1
 fi
+
+# Recover traversal before testing for files inside a private legacy cache.
+if [[ -d "$VULNSCOUT_CACHE_DIR" && ! -x "$VULNSCOUT_CACHE_DIR" ]]; then
+    if [[ "$CONTAINER_ENGINE" != "podman" ]] ||
+        ! podman unshare chown 0:0 "$VULNSCOUT_CACHE_DIR"; then
+        echo "Error: cannot restore host ownership of $VULNSCOUT_CACHE_DIR." >&2
+        exit 1
+    fi
+    if [[ ! -x "$VULNSCOUT_CACHE_DIR" ]]; then
+        echo "Error: $VULNSCOUT_CACHE_DIR is not accessible. Restore owner search permission before retrying." >&2
+        exit 1
+    fi
+fi
+
+# Source config early so stored values (e.g. VULNSCOUT_BUILD_DIR) take effect
+if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
+    # Older rootless Podman containers chowned the cache to a subordinate host UID.
+    if [ ! -r "$VULNSCOUT_CONFIG_FILE" ]; then
+        if [[ "$CONTAINER_ENGINE" != "podman" ]] ||
+            ! podman unshare chown 0:0 "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_CONFIG_FILE"; then
+            echo "Error: cannot restore host ownership of $VULNSCOUT_CONFIG_FILE. Restore its ownership to $(id -u):$(id -g) before retrying." >&2
+            exit 1
+        fi
+        if [ ! -r "$VULNSCOUT_CONFIG_FILE" ]; then
+            echo "Error: $VULNSCOUT_CONFIG_FILE is not readable. Restore owner read permission before retrying." >&2
+            exit 1
+        fi
+    fi
+    # shellcheck source=/dev/null
+    . "$VULNSCOUT_CONFIG_FILE"
+fi
+# Re-derive VULNSCOUT_CONFIG_FILE in case VULNSCOUT_CACHE_DIR was updated by config
+VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-$DOCKER_IMAGE}"
 
 # Run a container command using the detected container engine on the host (podman or docker)
 call_container_engine() {
@@ -644,7 +669,19 @@ EOF
         echo "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
     fi
 
+    local -a userns_args=()
+    if [[ "$CONTAINER_ENGINE" = "podman" ]]; then
+        local rootless
+        rootless=$(call_container_engine info --format '{{.Host.Security.Rootless}}')
+        if [[ "$rootless" = "true" ]]; then
+            # Container root must own private host files and bind-mounted directories.
+            userns_args+=("--userns=keep-id:uid=0,gid=0" --user=0:0)
+            env_args+=(-e VULNSCOUT_ROOTLESS_PODMAN=true)
+        fi
+    fi
+
     call_container_engine run -d --name "$CONTAINER_NAME" \
+        "${userns_args[@]}" \
         -p 7275:7275 \
         "${env_args[@]}" \
         "${vol_args[@]}" \
