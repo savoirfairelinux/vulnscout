@@ -164,11 +164,6 @@ class TestSPDX3JSONExport:
                         and item["relationshipType"] == "affects"]
         assert len(relationships) == 2  # One for each vulnerability
 
-    @pytest.mark.skip(reason="VEX assessment functionality not yet implemented in SPDX3 class")
-    def test_export_vex_assessments(self, populated_spdx3_exporter):
-        """Test exporting VEX assessments."""
-        pass
-
     def test_export_with_custom_author(self, spdx3_exporter):
         """Test export with custom author name."""
         output = json.loads(spdx3_exporter.output_as_json("Custom Organization"))
@@ -236,11 +231,6 @@ class TestSPDX3ElementGeneration:
         if url_ids:
             assert url_ids[0]["identifier"] == "https://example.com/vuln"
 
-    @pytest.mark.skip(reason="VEX assessment functionality not yet implemented in SPDX3 class")
-    def test_generate_vex_assessment_mapping(self, spdx3_exporter):
-        """Test VEX assessment status mapping."""
-        pass
-
     def test_generate_relationship(self, spdx3_exporter):
         """Test relationship generation."""
         relationship = spdx3_exporter.generate_relationship("from-ref", ["to-ref-1", "to-ref-2"], "testRelation")
@@ -250,11 +240,6 @@ class TestSPDX3ElementGeneration:
         assert relationship["to"] == ["to-ref-1", "to-ref-2"]
         assert relationship["relationshipType"] == "testRelation"
         assert "spdxId" in relationship
-
-    @pytest.mark.skip(reason="VEX assessment functionality not yet implemented in SPDX3 class")
-    def test_justification_mapping(self, spdx3_exporter):
-        """Test VEX justification mapping."""
-        pass
 
 
 class TestSPDX3DocumentStructure:

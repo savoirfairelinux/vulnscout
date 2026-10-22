@@ -1,9 +1,15 @@
 """CLI coverage for typed scanner selection at the host and container boundaries."""
 
+from contextlib import closing
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
+import sys
+import threading
 
 import pytest
 
@@ -11,6 +17,108 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = ROOT / "src" / "entrypoint.sh"
 WRAPPER = ROOT / "vulnscout"
+
+
+@pytest.fixture
+def scanner_environment(tmp_path):
+    """Run the real scanner CLI against isolated, deterministic advisory inputs."""
+    databases = tmp_path / "local_databases"
+    for name in ("nvd-fkie", "cvelist"):
+        repository = databases / f"{name}-source"
+        repository.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repository)], check=True)
+        if name == "nvd-fkie":
+            advisory = repository / "CVE-2026" / "CVE-2026-00xx" / "CVE-2026-0001.json"
+            advisory.parent.mkdir(parents=True)
+            advisory.write_text(json.dumps({
+                "id": "CVE-2026-0001",
+                "sourceIdentifier": "test@example.org",
+                "published": "2026-01-01T00:00:00.000",
+                "lastModified": "2026-01-01T00:00:00.000",
+                "vulnStatus": "Analyzed",
+                "descriptions": [{"lang": "en", "value": "Local scanner test advisory"}],
+                "configurations": [{"nodes": [{
+                    "operator": "OR",
+                    "cpeMatch": [{
+                        "vulnerable": True,
+                        "criteria": "cpe:2.3:a:haxx:curl:*:*:*:*:*:*:*:*",
+                        "versionStartIncluding": "7.0.0",
+                        "versionEndExcluding": "8.0.0",
+                    }],
+                }]}],
+            }))
+        subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "-c", "user.name=Test", "-c",
+             "user.email=test@example.org", "commit", "-qm", "Test advisories", "--allow-empty"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "clone", "-q", str(repository), str(databases / name)],
+            check=True,
+        )
+
+    queries = []
+
+    class OSVHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path != "/v1/query":
+                self.send_error(404)
+                return
+            queries.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps({"vulns": [{
+                "id": "CVE-2026-0002", "summary": "Local OSV test advisory",
+            }]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    flask = binaries / "flask"
+    flask.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "from src.controllers import osv_client\n"
+        "from flask.cli import main\n"
+        "osv_client.OSV_API_BASE = os.environ['TEST_OSV_API_BASE']\n"
+        "main()\n"
+    )
+    flask.chmod(0o755)
+    grype = binaries / "grype"
+    grype.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "sbom = next(Path(arg[5:]) for arg in sys.argv[1:] if arg.startswith('sbom:'))\n"
+        "assert json.loads(sbom.read_text())['components']\n"
+        "Path(os.environ['TEST_GRYPE_LOG']).write_text(json.dumps(sys.argv[1:]))\n"
+        "print(json.dumps({'matches': []}))\n"
+    )
+    grype.chmod(0o755)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), OSVHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield {
+            **os.environ,
+            "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
+            "PYTHONPATH": f"{ROOT}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
+            "SBOM_CVE_CHECK_DATABASES_DIR": str(databases),
+            "SBOM_CVE_CHECK_AUTO_UPDATE": "false",
+            "TEST_OSV_API_BASE": f"http://127.0.0.1:{server.server_port}/v1",
+            "TEST_GRYPE_LOG": str(tmp_path / "grype.json"),
+        }, queries
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 @pytest.mark.parametrize("script", [ENTRYPOINT, WRAPPER], ids=["entrypoint", "wrapper"])
@@ -151,21 +259,11 @@ def test_entrypoint_dispatches_scan_with_real_flask_cli(tmp_path, args, scanner)
         ["--perform-scans", "all"],
     ],
 )
-def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args):
-    if any("nvd" in arg or arg == "all" for arg in args):
-        databases_dir = Path(os.environ.get("SBOM_CVE_CHECK_DATABASES_DIR", ""))
-        if not (databases_dir / "nvd-fkie").is_dir():
-            pytest.skip("requires a configured local NVD advisory database")
-        if "all" in args and not shutil.which("grype"):
-            pytest.skip("requires the Grype scanner")
-
-    env = os.environ.copy()
+def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args, scanner_environment):
+    env, osv_queries = scanner_environment
     env["VULNSCOUT_CONFIG"] = str(tmp_path / "absent-config.env")
     env["VULNSCOUT_BASE_DIR"] = str(ROOT)
     env["VULNSCOUT_INPUTS_DIR"] = str(tmp_path / "inputs")
-    if "SBOM_CVE_CHECK_DATABASES_DIR" not in env:
-        env["SBOM_CVE_CHECK_DATABASES_DIR"] = str(tmp_path / "local_databases")
-    env["SBOM_CVE_CHECK_AUTO_UPDATE"] = "false"
     env["FLASK_SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{tmp_path / 'scan.db'}"
     seed = subprocess.run(
         ["bash", str(ENTRYPOINT), "--project", "scan-selection", "--add-cdx",
@@ -180,13 +278,20 @@ def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args):
     )
 
     assert result.returncode == 0, result.stderr
+    assert {"package": {"purl": "pkg:generic/haxx/curl@7.82.0"}} in osv_queries
+    with closing(sqlite3.connect(tmp_path / "scan.db")) as connection:
+        vulnerabilities = {row[0] for row in connection.execute("SELECT id FROM vulnerabilities")}
+    assert "CVE-2026-0002" in vulnerabilities
     if any("nvd" in arg or arg == "all" for arg in args):
+        assert "CVE-2026-0001" in vulnerabilities
         assert result.stdout.index("Running NVD scan") < result.stdout.index("Running OSV scan")
         assert result.stdout.count("Scan complete") >= 2
     else:
         assert "Running OSV scan" in result.stdout
         assert "Scan complete" in result.stdout
     if "all" in args:
+        grype_args = json.loads(Path(env["TEST_GRYPE_LOG"]).read_text())
+        assert "--add-cpes-if-none" in grype_args
         assert result.stdout.index("Merging Grype results") < result.stdout.index("Running NVD scan")
         assert result.stdout.index("Running OSV scan") < result.stdout.index("Running sbom-cve-check scan")
 

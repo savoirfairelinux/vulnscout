@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	curl \
 	git \
 	jq \
+	postgresql \
 	ruby \
 	wget \
 	xz-utils \
