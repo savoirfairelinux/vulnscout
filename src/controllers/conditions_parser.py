@@ -25,7 +25,7 @@ class ConditionParser:
         pp.ParserElement.enable_left_recursion()
 
         LPAR, RPAR = map(pp.Suppress, "()")
-        comparator = pp.oneOf("== != < > <= >=").set_name("comparator")
+        comparator = pp.one_of("== != < > <= >=").set_name("comparator")
         NOT, AND, OR = map(pp.CaselessKeyword, "not and or".split())
 
         ident = pp.Word(pp.alphas + "_", pp.alphanums + "_-:").set_name("identifier")
