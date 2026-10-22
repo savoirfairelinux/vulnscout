@@ -269,6 +269,7 @@ def test_new_inputs_are_processed_before_scanners(tmp_path, scan_types):
         'step="$3"\n'
         'printf "%s\\n" "$step" >> "$TEST_FLASK_LOG"\n'
         'case "$step" in\n'
+        '  new-scan-run-id) echo "q-test-run";;\n'
         '  merge) touch "$TEST_PENDING";;\n'
         '  process)\n'
         '    if [[ -f "$TEST_PENDING" && -n "$MATCH_CONDITION" ]]; then exit 20; fi\n'
@@ -311,7 +312,7 @@ def test_new_inputs_are_processed_before_scanners(tmp_path, scan_types):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    expected = ["db", "merge", "process"]
+    expected = ["db", "new-scan-run-id", "merge", "process"]
     if scan_types in ("all", "grype"):
         expected.extend(["export", "merge", "process"])
     if scan_types != "grype":
@@ -321,14 +322,22 @@ def test_new_inputs_are_processed_before_scanners(tmp_path, scan_types):
     assert not sbom.exists()
 
 
-def test_initial_processing_failure_prevents_scanning(tmp_path):
+@pytest.mark.parametrize(
+    "failed_step,expected_steps",
+    [
+        ("new-scan-run-id", ["db", "new-scan-run-id"]),
+        ("process", ["db", "new-scan-run-id", "merge", "process"]),
+    ],
+)
+def test_initial_processing_failure_prevents_scanning(tmp_path, failed_step, expected_steps):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     flask = fake_bin / "flask"
     flask.write_text(
         '#!/bin/bash\n'
         'printf "%s\\n" "$3" >> "$TEST_FLASK_LOG"\n'
-        'if [[ "$3" == "process" ]]; then exit 9; fi\n'
+        'if [[ "$3" == "$TEST_FAILED_STEP" ]]; then exit 9; fi\n'
+        'if [[ "$3" == "new-scan-run-id" ]]; then echo "q-test-run"; fi\n'
     )
     flask.chmod(0o755)
     inputs = tmp_path / "inputs" / "spdx"
@@ -344,11 +353,12 @@ def test_initial_processing_failure_prevents_scanning(tmp_path):
         "VULNSCOUT_INPUTS_DIR": str(inputs.parent),
         "SBOM_CVE_CHECK_DATABASES_DIR": str(tmp_path / "local_databases"),
         "TEST_FLASK_LOG": str(log),
+        "TEST_FAILED_STEP": failed_step,
     }
     result = subprocess.run(
         ["bash", str(ENTRYPOINT), "--perform-scans", "all"],
         env=env, capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 9, result.stdout + result.stderr
-    assert log.read_text().splitlines() == ["db", "merge", "process"]
+    assert log.read_text().splitlines() == expected_steps
     assert sbom.exists()

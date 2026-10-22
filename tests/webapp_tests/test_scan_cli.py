@@ -5,12 +5,15 @@
 
 import json
 import os
+import uuid
 import pytest
 from unittest.mock import patch, MagicMock
 
 from src.bin.webapp import create_app
 from src.controllers.nvd_db import NVD_DB as _RealNvdDb
 from src.extensions import db as _db
+from src.models.scan import Scan
+from src.routes._scan_diff import invalidate_scan_list_cache
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +97,160 @@ def app(tmp_path):
 @pytest.fixture()
 def ids(app):
     return app._test_ids
+
+
+def _scan_args(ids, *args):
+    return ["--project", ids["project_name"], "--variant", ids["variant_name"], *args]
+
+
+@pytest.mark.parametrize("command,options", [
+    ("nvd-scan", ["--mode", "api"]),
+    ("nvd-scan", []),
+    ("osv-scan", []),
+    ("sbom-cve-check-scan", []),
+])
+@pytest.mark.parametrize("run_id", [None, "q-cli-batch"])
+def test_tool_commands_persist_run_ids(app, ids, command, options, run_id):
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = []
+    with patch("src.bin.cmd_vuln_scan.NVD_DB") as nvd, \
+            patch("src.bin.cmd_vuln_scan.OSVClient") as osv, \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine):
+        nvd.return_value.api_get_cves_by_cpe.return_value = []
+        osv.return_value.query_by_purl.return_value = []
+        runner = app.test_cli_runner()
+        arguments = [command, *_scan_args(ids, *options)]
+        if run_id:
+            arguments += ["--run-id", run_id]
+        for _ in range(2):
+            result = runner.invoke(args=arguments)
+            assert result.exit_code == 0, result.output
+
+    with app.app_context():
+        scans = _db.session.execute(_db.select(Scan).where(Scan.scan_type == "tool")).scalars().all()
+        assert len(scans) == 2
+        assert all(scan.run_id for scan in scans)
+        if run_id:
+            assert {scan.run_id for scan in scans} == {run_id}
+        else:
+            assert len({scan.run_id for scan in scans}) == 2
+
+
+def test_cli_run_is_grouped_by_scan_api_with_deduplicated_counts(app, ids):
+    runner = app.test_cli_runner()
+    run_id = runner.invoke(args=["new-scan-run-id"]).output.strip()
+    assert run_id.startswith("q-")
+    assert run_id != runner.invoke(args=["new-scan-run-id"]).output.strip()
+    with patch("src.bin.cmd_vuln_scan.NVD_DB") as nvd, \
+            patch("src.bin.cmd_vuln_scan.OSVClient") as osv:
+        nvd.extract_cve_details = _RealNvdDb.extract_cve_details
+        nvd.return_value.api_get_cves_by_cpe.return_value = [{"cve": {"id": "CVE-2026-1234"}}]
+        osv.return_value.query_by_purl.return_value = [{"id": "CVE-2026-1234"}]
+        for command, options in [("nvd-scan", ["--mode", "api"]), ("osv-scan", [])]:
+            result = runner.invoke(args=[
+                command, *_scan_args(ids, *options, "--run-id", run_id),
+            ])
+            assert result.exit_code == 0, result.output
+
+    invalidate_scan_list_cache()
+    try:
+        response = app.test_client().get(f"/api/variants/{ids['variant_id']}/scans")
+        assert response.status_code == 200
+        steps = [scan for scan in response.json if scan["run_id"] == run_id]
+        assert len(steps) == 2
+        assert steps[0]["run"] == steps[1]["run"]
+        summary = steps[0]["run"]
+        assert summary["sources"] == ["nvd", "osv"]
+        assert summary["vuln_count"] == 1
+        assert summary["finding_count"] == 2  # OSV also matches requests.
+        assert set(summary["scan_ids"]) == {step["id"] for step in steps}
+        assert all(scan["run"] is None for scan in response.json if scan["scan_type"] == "sbom")
+    finally:
+        invalidate_scan_list_cache()
+
+
+@pytest.mark.parametrize("command,options", [
+    ("nvd-scan", ["--mode", "api"]),
+    ("nvd-scan", []),
+    ("osv-scan", []),
+    ("sbom-cve-check-scan", []),
+])
+@pytest.mark.parametrize("error", [RuntimeError("write failed"), KeyboardInterrupt()])
+def test_failed_cli_step_is_removed_without_removing_completed_steps(app, ids, command, options, error):
+    with app.app_context():
+        completed = Scan.create("completed", uuid.UUID(ids["variant_id"]),
+                                scan_type="tool", scan_source="grype", run_id="q-partial")
+        completed_id = completed.id
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = []
+    with patch("src.bin.cmd_vuln_scan.NVD_DB") as nvd, \
+            patch("src.bin.cmd_vuln_scan.OSVClient") as osv, \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine), \
+            patch("src.bin.cmd_vuln_scan._SccBulkWriter.flush", side_effect=error), \
+            patch("src.bin.cmd_vuln_scan._persist_finding", side_effect=error):
+        nvd.extract_cve_details = _RealNvdDb.extract_cve_details
+        nvd.return_value.api_get_cves_by_cpe.return_value = [{"cve": {"id": "CVE-2026-1234"}}]
+        osv.return_value.query_by_purl.return_value = [{"id": "CVE-2026-1234"}]
+        result = app.test_cli_runner().invoke(args=[
+            command, *_scan_args(ids, *options, "--run-id", "q-partial"),
+        ])
+        assert result.exit_code != 0
+
+    with app.app_context():
+        scans = _db.session.execute(_db.select(Scan).where(Scan.run_id == "q-partial")).scalars().all()
+        assert [scan.id for scan in scans] == [completed_id]
+
+
+def test_vulnerability_refresh_does_not_create_scan_steps(app, ids):
+    with patch("src.bin.cmd_process._refresh_source", return_value=True):
+        result = app.test_cli_runner().invoke(args=[
+            "refresh-vulnerability-data", *_scan_args(ids),
+        ])
+    assert result.exit_code == 0, result.output
+    with app.app_context():
+        scans = Scan.get_all()
+        assert len(scans) == 1
+        assert scans[0].scan_type == "sbom"
+        assert scans[0].run_id is None
+
+
+def test_standalone_grype_imports_get_separate_run_ids(app, ids, tmp_path):
+    grype = tmp_path / "scan.grype.json"
+    grype.write_text('{"matches": []}')
+    for _ in range(2):
+        result = app.test_cli_runner().invoke(args=[
+            "merge", *_scan_args(ids, "--grype", str(grype)),
+        ])
+        assert result.exit_code == 0, result.output
+    with app.app_context():
+        scans = _db.session.execute(_db.select(Scan).where(Scan.scan_type == "tool")).scalars().all()
+        assert len(scans) == 2
+        assert all(scan.scan_source == "grype" and scan.run_id for scan in scans)
+        assert scans[0].run_id != scans[1].run_id
+
+
+@pytest.mark.parametrize("error", [RuntimeError("chunk failed"), KeyboardInterrupt()])
+def test_failed_step_removes_committed_observations(app, ids, error):
+    from src.helpers.scan_runs import tool_scan
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+
+    with app.app_context():
+        finding = _db.session.execute(_db.select(Finding)).scalars().first()
+        finding_id = finding.id
+        with pytest.raises(type(error)):
+            with tool_scan(uuid.UUID(ids["variant_id"]), "nvd", "q-failed-chunk") as scan:
+                scan_id = scan.id
+                Observation.create(finding_id=finding_id, scan_id=scan_id)
+                _db.session.commit()
+                raise error
+        assert _db.session.get(Scan, scan_id) is None
+        assert _db.session.execute(
+            _db.select(Observation).where(Observation.scan_id == scan_id)
+        ).first() is None
+        assert _db.session.get(Finding, finding_id) is not None
 
 
 # ---------------------------------------------------------------------------
