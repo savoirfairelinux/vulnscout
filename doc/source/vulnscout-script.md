@@ -700,3 +700,13 @@ Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in
 ./vulnscout -p demo -v x86 export cdx
 ./vulnscout -p demo -v x86 match-condition "cvss >= 9.0"   # last: exit 2 fails the job
 ```
+
+## Shell completion
+
+Bash completion for commands, options and fixed values (scan types, export and import kinds, `--format`, `--timestamps`):
+
+```bash
+source <(vulnscout completion bash)
+```
+
+It is registered for `vulnscout` (on `PATH`) and `./vulnscout`. For any other invocation path, register it too, for example `complete -F _vulnscout_complete /opt/tools/vulnscout`. Add the line to `~/.bashrc` to make it permanent. Project and variant names are not completed.
