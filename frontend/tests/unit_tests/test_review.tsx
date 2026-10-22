@@ -8,6 +8,7 @@ import "@testing-library/jest-dom";
 import React from 'react';
 
 let mockRealAgentChat = false;
+import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 jest.mock('../../src/components/AgentChat', () => ({
     __esModule: true,
@@ -17,19 +18,23 @@ jest.mock('../../src/components/AgentChat', () => ({
             return <RealAgentChat {...props} />;
         }
         const ReactMock = require('react');
+        const store = jest.requireActual('../../src/handlers/agentQueue');
+        const useQueue = jest.requireActual('../../src/hooks/useAgentQueue').default;
+        const queue = useQueue(props.threadId);
         const [sentId, setSentId] = ReactMock.useState('');
         return <div data-testid="review-agent-chat" data-context={JSON.stringify(props.context)}
-            data-thread={props.threadId} data-queue={JSON.stringify(props.queue)}>
+            data-thread={props.threadId} data-queue={JSON.stringify(queue)}>
             <button onClick={props.onClose}>hide-review-chat</button>
             <button onClick={() => {
-                const id = props.queue[0].id;
-                setSentId(id);
-                props.onQueuedMessageSent(id);
+                const item = queue[0];
+                setSentId(item.id);
+                item.status = 'running';
+                store.enqueueAgentMessages([], { page: 'review' });
             }}>send-review-head</button>
-            <button onClick={() => props.onQueuedMessageDone(sentId, true)}>finish-review</button>
-            <button onClick={() => props.onQueuedMessageDone(sentId, false)}>fail-review</button>
-            <button onClick={() => props.onQueueRemove(props.queue[0].id)}>remove-review-head</button>
-            <button onClick={props.onQueueClear}>clear-review-queue</button>
+            <button onClick={() => { const item = queue.find((task: { id: string }) => task.id === sentId); if (item) item.status = 'queued'; store.removeAgentTask(sentId); }}>finish-review</button>
+            <button onClick={() => { queue[0].status = 'failed'; store.enqueueAgentMessages([], { page: 'review' }); }}>fail-review</button>
+            <button onClick={() => store.removeAgentTask(queue[0].id)}>remove-review-head</button>
+            <button onClick={store.clearAgentQueue}>clear-review-queue</button>
         </div>;
     },
 }));
@@ -434,6 +439,7 @@ const fileInput = (): HTMLInputElement =>
     document.querySelector('input[type="file"]') as HTMLInputElement;
 
 beforeEach(() => {
+    resetAgentQueue();
     mockedDownloadJson.mockClear();
     mockRealAgentChat = false;
 });
@@ -627,7 +633,7 @@ describe('Review — bulk AI reviews', () => {
         sidebar.remove();
     });
 
-    test('switching scope discards its thread and pending requests; unmount cleans up the new thread', async () => {
+    test('switching scope isolates the new thread and preserves queued requests after unmount', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         const { rerender, unmount } = render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -636,7 +642,7 @@ describe('Review — bulk AI reviews', () => {
         const oldThread = screen.getByTestId('review-agent-chat').getAttribute('data-thread');
         rerender(<Review variantId="v1" />);
         await waitFor(() => expect(screen.queryByTestId('review-agent-chat')).not.toBeInTheDocument());
-        expect(fetchMock).toHaveBeenCalledWith('/api/agent/conversation', expect.objectContaining({
+        expect(fetchMock).not.toHaveBeenCalledWith('/api/agent/conversation', expect.objectContaining({
             method: 'DELETE', headers: { 'X-Agent-Thread': oldThread },
         }));
         await user.click(await screen.findByRole('button', { name: 'Review selected with AI (1)' }));
@@ -644,7 +650,8 @@ describe('Review — bulk AI reviews', () => {
         expect(newThread).not.toBe(oldThread);
         expect(queue()).toHaveLength(1);
         unmount();
-        expect(fetchMock).toHaveBeenCalledWith('/api/agent/conversation', expect.objectContaining({
+        expect(getAgentQueue()).toHaveLength(2);
+        expect(fetchMock).not.toHaveBeenCalledWith('/api/agent/conversation', expect.objectContaining({
             method: 'DELETE', headers: { 'X-Agent-Thread': newThread },
         }));
     });
@@ -752,7 +759,7 @@ describe('Review — bulk AI reviews', () => {
         await waitFor(() => expect(sent).toHaveLength(2));
         expect(sent[1].message).toContain('Review the user assessment a2');
         expect(sent[1].thread).toBe(sent[0].thread);
-        expect(await screen.findByText('Review provider unavailable')).toBeInTheDocument();
+        expect(await screen.findByRole('alert')).toHaveTextContent('Review provider unavailable');
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
         expect(screen.getByRole('button', { name: 'Review selected with AI (1)' })).toBeEnabled();
         expect(screen.getByText('Delete selected (3)')).toBeInTheDocument();
@@ -761,7 +768,7 @@ describe('Review — bulk AI reviews', () => {
         await user.click(screen.getByRole('button', { name: 'Retry failed action' }));
         await waitFor(() => expect(sent).toHaveLength(3));
         expect(sent[2]).toEqual(sent[1]);
-        expect(await screen.findByText('Review provider unavailable')).toBeInTheDocument();
+        expect(await screen.findByRole('alert')).toHaveTextContent('Review provider unavailable');
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
         expect(sent).toHaveLength(3);
         await user.click(screen.getByRole('button', { name: 'Retry failed action' }));

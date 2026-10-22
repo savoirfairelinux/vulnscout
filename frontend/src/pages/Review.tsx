@@ -30,7 +30,9 @@ import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
 import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
-import AgentChat, { type QueuedAgentMessage } from '../components/AgentChat';
+import AgentChat from '../components/AgentChat';
+import { enqueueAgentMessages } from '../handlers/agentQueue';
+import useAgentQueue from '../hooks/useAgentQueue';
 import { assessmentReviewKey, resolveAssessmentReviewAction } from '../helpers/aiAssessmentReview';
 
 type AssessmentMutation =
@@ -279,26 +281,22 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const reviewScopeVersion = useRef(0);
     const reviewPreparingRef = useRef(false);
     const [reviewPreparing, setReviewPreparing] = useState(false);
-    const [reviewActions, setReviewActions] = useState<{
-        queue: QueuedAgentMessage[];
-        running: QueuedAgentMessage | null;
-        failed: QueuedAgentMessage | null;
-    }>({ queue: [], running: null, failed: null });
+    const reviewQueue = useAgentQueue(reviewThreadId);
+    const reviewActions = {
+        queue: reviewQueue,
+        running: reviewQueue.find(item => item.status === 'running'),
+        failed: reviewQueue.find(item => item.status === 'failed'),
+    };
 
     // Keep a hidden chat alive, but never reuse a conversation across scopes.
     useEffect(() => {
         setReviewChatOpen(false);
         setReviewThreadId(undefined);
-        setReviewActions({ queue: [], running: null, failed: null });
         reviewPreparingRef.current = false;
         setReviewPreparing(false);
         return () => {
             reviewScopeVersion.current += 1;
-            const threadId = reviewThreadRef.current;
             reviewThreadRef.current = undefined;
-            if (threadId) void fetch('/api/agent/conversation', {
-                method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
-            }).catch(() => {});
         };
     }, [variantId, projectId]);
     const [bulkDeleteTab, setBulkDeleteTab] = useState<ReviewTab | null>(null);
@@ -969,12 +967,8 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 setReviewThreadId(reviewThreadRef.current);
             }
             setReviewChatOpen(true);
-            setReviewActions(previous => {
-                const keys = new Set([...previous.queue.map(action => action.key), previous.running?.key, previous.failed?.key]);
-                return { ...previous, queue: [...previous.queue, ...actions
-                    .filter(action => !keys.has(action.key))
-                    .map(action => ({ ...action, id: crypto.randomUUID() }))] };
-            });
+            enqueueAgentMessages(actions.map(action => ({ ...action, id: crypto.randomUUID() })),
+                reviewContextRef.current, reviewThreadRef.current, 'Review chat');
         } catch (error) {
             if (version === reviewScopeVersion.current) showMessage(`Unable to queue AI reviews: ${String(error)}`, 'error');
         } finally {
@@ -1859,24 +1853,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                     className={`fixed inset-y-0 right-0 z-[110] h-dvh w-full max-w-full overflow-hidden border-l border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentPanelContainer ? 'lg:static lg:h-auto' : ''}`}>
                     <AgentChat key={reviewThreadId} threadId={reviewThreadId} active={reviewChatOpen}
                         context={reviewContextRef.current}
-                        onClose={() => setReviewChatOpen(false)} queue={reviewActions.queue}
-                        onQueuedMessageSent={id => setReviewActions(previous => ({
-                            ...previous,
-                            running: previous.queue.find(action => action.id === id) ?? previous.failed ?? previous.running,
-                            failed: null,
-                        }))}
-                        onQueuedMessageDone={(id, success) => setReviewActions(previous => ({
-                            ...previous, running: previous.running?.id === id ? null : previous.running,
-                            queue: success ? previous.queue.filter(action => action.id !== id) : previous.queue,
-                            failed: previous.running?.id === id && !success ? previous.running : null,
-                        }))}
-                        onQueueRemove={id => setReviewActions(previous => ({
-                            ...previous, queue: previous.queue.filter(action => action.id !== id),
-                            failed: previous.failed?.id === id ? null : previous.failed,
-                        }))}
-                        onQueueClear={() => setReviewActions(previous => ({
-                            ...previous, queue: previous.queue.filter(action => action.id === previous.running?.id), failed: null,
-                        }))}
+                        onClose={() => setReviewChatOpen(false)}
                     />
                 </aside>,
                 agentPanelContainer ?? document.body

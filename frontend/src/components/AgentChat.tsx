@@ -1,27 +1,17 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faClock, faCopy, faLocationDot, faPlug, faPlus, faRightFromBracket, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext } from '../types/agent';
+import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext, type Activity, type AgentMessage as Message, type AgentUsage as Usage, type AgentStreamEvent as StreamEvent, type QueuedAgentMessage } from '../types/agent';
 import { providerIcons } from '../assets/providers';
-import { prepareAssessmentReviewVerification } from '../helpers/aiAssessmentReview';
-
-type Activity = { id: string; name: string; status: 'running' | 'done' | 'failed' };
-type Message = { role: 'user' | 'assistant'; content: string; activity?: Activity[] };
-type Usage = { cost: number | null; input_tokens: number | null; output_tokens: number | null };
+import { agentRequest, agentErrorMessage as errorMessage } from '../handlers/agent';
+import { configureAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentQueue, initializeAgentConversation, resetAgentConversation, resetAgentQueue, subscribeAgentQueue } from '../handlers/agentQueue';
+import AgentQueue from './AgentQueue';
 type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; provider: string | null; messages: Message[]; model: string; usage: Usage };
 type DeviceCode = { user_code: string; verification_uri: string; interval: number };
 type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; login?: string | null };
 type ModelChoice = { id: string; name: string };
-type StreamEvent =
-    | { type: 'delta'; message_id: string; text: string }
-    | { type: 'tool_start'; id: string; name: string }
-    | { type: 'tool_end'; id: string; success: boolean; write?: boolean }
-    | { type: 'status'; text: string }
-    | { type: 'heartbeat' }
-    | { type: 'done'; reply: string; model: string; usage: Usage }
-    | { type: 'error'; error: string };
 const emptyUsage: Usage = { cost: null, input_tokens: null, output_tokens: null };
 const pageLabels: Record<string, string> = { metrics: 'Overview', packages: 'SBOM', vulnerabilities: 'Vulnerabilities', scans: 'Scans', review: 'Review', exports: 'Export', settings: 'Settings', ai: 'AI context', unknown: 'Page not found' };
 const iconButton = 'flex h-9 w-9 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white';
@@ -36,51 +26,6 @@ const connectors = [
 ] as const;
 type Connector = (typeof connectors)[number]['id'];
 
-function errorMessage(reason: unknown) {
-    if (reason instanceof TypeError) return 'Connection lost. Check the backend and retry.';
-    return reason instanceof Error ? reason.message : 'Something went wrong. Please try again.';
-}
-
-async function agentRequest<T>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void): Promise<T> {
-    const response = await fetch(`/api/agent${path}`, {
-        credentials: 'same-origin',
-        ...options,
-        headers: { 'Content-Type': 'application/json', ...(onEvent ? { Accept: 'application/x-ndjson' } : {}), ...options?.headers },
-    });
-    if (response.ok && onEvent && response.headers.get('content-type')?.includes('application/x-ndjson') && response.body) {
-        const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-        let buffer = '';
-        try {
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) throw new Error('Response interrupted. The agent may still finish this request; reload to check before retrying.');
-                buffer += value;
-                let boundary = buffer.indexOf('\n');
-                while (boundary !== -1) {
-                    const line = buffer.slice(0, boundary);
-                    buffer = buffer.slice(boundary + 1);
-                    if (line.trim()) {
-                        const event = JSON.parse(line) as StreamEvent;
-                        if (event.type === 'error') throw new Error(event.error);
-                        onEvent(event);
-                        if (event.type === 'done') return event as T;
-                    }
-                    boundary = buffer.indexOf('\n');
-                }
-            }
-        } finally {
-            await reader.cancel();
-            reader.releaseLock();
-        }
-    }
-    if (!response.headers.get('content-type')?.includes('application/json')) {
-        throw new Error('Agent service unavailable. Check that agent chat is enabled on the backend, then retry.');
-    }
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `Agent request failed (${response.status})`);
-    return data as T;
-}
-
 function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; pending?: boolean }>) {
     if (!items.length) return null;
     return <details open={pending || undefined} className="mb-3 rounded border border-neutral-200 p-3 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
@@ -92,19 +37,7 @@ function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; p
     </details>;
 }
 
-export type QueuedAgentMessage = {
-    id: string;
-    text: string;
-    /** Identical requests share a key so they are not queued twice. */
-    key: string;
-    kind: 'assess' | 'review';
-    title: string;
-    detail?: string;
-    context?: AgentContext;
-    assessmentId?: string;
-};
-
-const queuedKindLabel: Record<QueuedAgentMessage['kind'], string> = { assess: 'Assess', review: 'Review' };
+export type { QueuedAgentMessage } from '../types/agent';
 
 type QueueProps = {
     /** Pending AI actions, oldest first; the head is sent once the chat is idle. */
@@ -115,7 +48,7 @@ type QueueProps = {
     onQueueClear?: () => void;
 };
 
-function AgentChat({ onClose, context, active = true, threadId, queue = [], onQueuedMessageSent, onQueuedMessageDone, onQueueRemove, onQueueClear }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string } & QueueProps>) {
+function AgentChat({ onClose, context, active = true, threadId, queue = [], onQueuedMessageSent, onQueuedMessageDone }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string } & QueueProps>) {
     const request = useCallback(<T,>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void) => agentRequest<T>(path, {
         ...options,
         headers: { ...options?.headers, ...(threadId ? { 'X-Agent-Thread': threadId } : {}) },
@@ -137,10 +70,12 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     const [selectedModel, setSelectedModel] = useState('auto');
     const [neverAsk, setNeverAsk] = useState(false);
     const [refresh, setRefresh] = useState(0);
-    const [pendingMessage, setPendingMessage] = useState('');
-    const [liveReply, setLiveReply] = useState('');
-    const [activity, setActivity] = useState<Activity[]>([]);
-    const [progress, setProgress] = useState('Connecting to Copilot...');
+    const conversation = useSyncExternalStore(subscribeAgentQueue, () => getAgentConversation(threadId));
+    const sharedQueue = useSyncExternalStore(subscribeAgentQueue, getAgentQueue);
+    const { pendingMessage, liveReply, activity, progress } = conversation;
+    const [queueOpen, setQueueOpen] = useState(queue.length > 0);
+    const composerId = useId();
+    const queueId = useId();
     const [copied, setCopied] = useState<string | null>(null);
     const [awayFromBottom, setAwayFromBottom] = useState(false);
     const confirmation = useRef<HTMLDialogElement>(null);
@@ -148,12 +83,14 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     const conversationLog = useRef<HTMLDivElement>(null);
     const composer = useRef<HTMLTextAreaElement>(null);
     const followMessages = useRef(true);
-    const sentQueuedMessageId = useRef<string | null>(null);
-    const [failedQueuedId, setFailedQueuedId] = useState<string | null>(null);
-    const pendingQueue = queue.filter(item => !busy || item.id !== sentQueuedMessageId.current);
-    const nextQueued = queue[0];
+    const failedTask = sharedQueue.find(item => item.threadId === threadId && item.status === 'failed');
+    const failedQueuedId = failedTask?.id;
+    const previousFailed = useRef<string>();
+    const threadBusy = Boolean(pendingMessage);
     const ready = Boolean(state?.authenticated && state.configured && models.length && selectedModel && !showConnections);
     const pageLabel = pageLabels[context.page] ?? context.page;
+    const source = !threadId ? 'Global chat' : context.page === 'review' ? 'Review chat'
+        : context.view?.openVulnerabilityId ? `Vulnerability ${context.view.openVulnerabilityId}` : 'Bulk assessment chat';
     const scopeLabel = context.view?.openVulnerabilityId ?? context.view?.selectedVariantName ?? context.view?.selectedProjectName;
     const largeVulnerabilityView = context.page === 'vulnerabilities' && !context.view?.openVulnerabilityId &&
         (context.view?.visibleVulnerabilityIds?.length ?? context.view?.visibleCount ?? 0) > 100;
@@ -169,9 +106,10 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         return () => window.removeEventListener(connectionChangedEvent, reload);
     }, []);
 
-    const notifyConnectionChange = () => window.dispatchEvent(new CustomEvent(connectionChangedEvent, {
-        detail: connectionSource.current,
-    }));
+    const notifyConnectionChange = () => {
+        resetAgentQueue();
+        window.dispatchEvent(new CustomEvent(connectionChangedEvent, { detail: connectionSource.current }));
+    };
 
     useEffect(() => {
         let active = true;
@@ -179,12 +117,31 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             if (active) {
                 setState(result);
                 setSelectedModel(result.model);
+                initializeAgentConversation(threadId, result.messages, result.usage);
             }
         }).catch(reason => {
             if (active) setError(errorMessage(reason));
         });
         return () => { active = false; };
-    }, [refresh, request]);
+    }, [refresh, request, threadId]);
+
+    useEffect(() => {
+        configureAgentQueue(threadId, {
+            ready: Boolean(state?.authenticated && state.configured && models.length && selectedModel) && !modelBusy && !busy,
+            model: selectedModel,
+        });
+    }, [threadId, state?.authenticated, state?.configured, models.length, modelBusy, busy, selectedModel]);
+
+    useEffect(() => {
+        if (!queue.length) return;
+        try {
+            enqueueAgentMessages(queue, context, threadId, source, {
+                onSent: onQueuedMessageSent, onDone: onQueuedMessageDone,
+            });
+        } catch (reason) {
+            setError(errorMessage(reason));
+        }
+    }, [queue, context, threadId, source, onQueuedMessageSent, onQueuedMessageDone]);
 
     useEffect(() => {
         if (!state?.authenticated) return;
@@ -201,7 +158,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         if (active && followMessages.current && conversationLog.current) {
             conversationLog.current.scrollTop = conversationLog.current.scrollHeight;
         }
-    }, [active, state?.messages.length, pendingMessage, liveReply, activity]);
+    }, [active, conversation.messages.length, pendingMessage, liveReply, activity]);
 
     useEffect(() => {
         if (!active || !composer.current) return;
@@ -339,12 +296,13 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     }
 
     async function reset() {
-        if (busy || modelBusy) return;
+        if (busy || modelBusy || threadBusy || sharedQueue.some(item => item.threadId === threadId)) return;
         setBusy(true);
         setError('');
         try {
             const result = await request<{ usage: Usage }>('/conversation', { method: 'DELETE' });
             setState(previous => previous && { ...previous, messages: [], usage: result.usage });
+            resetAgentConversation(threadId);
             setDraft('');
             followMessages.current = true;
             setAwayFromBottom(false);
@@ -372,110 +330,32 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         }
     }
 
-    async function send(event?: FormEvent, actionMessage?: string, actionContext = context, action?: QueuedAgentMessage): Promise<boolean> {
+    function send(event?: FormEvent, actionMessage?: string) {
         event?.preventDefault();
         const message = (actionMessage ?? draft).trim();
-        if (!message || busy || modelBusy || !ready || failedQueuedId) return false;
-        setBusy(true);
-        setError('');
-        setDraft('');
-        setPendingMessage(message);
-        setLiveReply('');
-        setActivity([]);
-        setProgress('Connecting to Copilot...');
-        let currentMessageId = '';
-        let turnActivity: Activity[] = [];
-        followMessages.current = true;
-        setAwayFromBottom(false);
-        const context = actionContext;
+        if (!message || busy || modelBusy || !ready) return;
         try {
-            if (action?.kind === 'review' && !action.assessmentId) throw new Error('Missing assessment ID for review verification.');
-            const verifyReview = action?.kind === 'review'
-                ? await prepareAssessmentReviewVerification(action.assessmentId!) : undefined;
-            const visibleIds = context.view?.visibleVulnerabilityIds;
-            const packageIds = context.view?.visiblePackageIds;
-            const scanIds = context.view?.visibleScanIds;
-            const exportKeys = context.view?.selectedExportKeys;
-            const enabledExportDocuments = context.view?.enabledExportDocuments;
-            const selectedVariantIds = context.view?.selectedVariantIds;
-            const selectedVulnerabilityIds = context.view?.selectedVulnerabilityIds;
-            const matchingVariantIds = context.view?.matchingVariantIds;
-            const contextForTurn: AgentContext = { ...context,
-                view: context.view && {
-                ...context.view,
-                visibleVulnerabilityIds: visibleIds && visibleIds.length > 100 ? undefined : visibleIds,
-                visiblePackageIds: packageIds && packageIds.length > 100 ? undefined : packageIds,
-                visibleScanIds: scanIds && scanIds.length > 100 ? undefined : scanIds,
-                selectedExportKeys: exportKeys && exportKeys.length > 100 ? undefined : exportKeys,
-                enabledExportDocuments: enabledExportDocuments && enabledExportDocuments.length > 100 ? undefined : enabledExportDocuments,
-                selectedVariantIds: selectedVariantIds && selectedVariantIds.length > 100 ? undefined : selectedVariantIds,
-                selectedVulnerabilityIds: selectedVulnerabilityIds && selectedVulnerabilityIds.length > 100 ? undefined : selectedVulnerabilityIds,
-                matchingVariantIds: matchingVariantIds && matchingVariantIds.length > 100 ? undefined : matchingVariantIds,
-                visibleCount: visibleIds || packageIds || scanIds
-                    ? Math.max(visibleIds?.length ?? 0, packageIds?.length ?? 0, scanIds?.length ?? 0) : undefined,
-                selectionCount: exportKeys || selectedVariantIds || enabledExportDocuments || selectedVulnerabilityIds || matchingVariantIds
-                    ? Math.max(exportKeys?.length ?? 0, selectedVariantIds?.length ?? 0, enabledExportDocuments?.length ?? 0, selectedVulnerabilityIds?.length ?? 0, matchingVariantIds?.length ?? 0) : undefined,
-            } };
-            const result = await request<{ reply: string; model: string; usage: Usage }>('/messages', {
-                method: 'POST', body: JSON.stringify({ message, context: contextForTurn, model: selectedModel }),
-            }, event => {
-                if (event.type === 'status') setProgress(event.text);
-                if (event.type === 'delta') {
-                    const continued = currentMessageId === event.message_id;
-                    currentMessageId = event.message_id;
-                    setLiveReply(previous => (continued ? previous : '') + event.text);
-                    setProgress('Writing response...');
-                }
-                if (event.type === 'tool_start') {
-                    turnActivity = [...turnActivity, { id: event.id, name: event.name, status: 'running' as const }].slice(-50);
-                    setActivity(turnActivity);
-                    setProgress('Checking VulnScout...');
-                }
-                if (event.type === 'tool_end') {
-                    const tool = turnActivity.find(item => item.id === event.id)?.name;
-                    turnActivity = turnActivity.map(item => item.id === event.id ? { ...item, status: event.success ? 'done' : 'failed' } : item);
-                    setActivity(turnActivity);
-                    setProgress('Preparing response...');
-                    if (event.success && event.write) {
-                        window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool } }));
-                    }
-                }
-            });
-            setState(previous => previous && { ...previous, messages: [
-                ...previous.messages, { role: 'user', content: message },
-                { role: 'assistant', content: result.reply, activity: turnActivity },
-            ], model: result.model, usage: result.usage });
-            await verifyReview?.();
-            return true;
+            const id = crypto.randomUUID();
+            enqueueAgentMessages([{ id, key: id, text: message, kind: 'message', title: message }], context, threadId, source);
+            setDraft('');
+            setError('');
+            followMessages.current = true;
+            setAwayFromBottom(false);
         } catch (reason) {
-            setDraft(message);
             setError(errorMessage(reason));
-            return false;
-        } finally {
-            setPendingMessage('');
-            setBusy(false);
         }
     }
 
     useEffect(() => {
-        if (failedQueuedId) {
-            if (!queue.some(item => item.id === failedQueuedId)) {
-                setFailedQueuedId(null);
-                setDraft('');
-                setError('');
-            }
-            return;
+        if (failedTask) {
+            setDraft(current => current || failedTask.text);
+            setQueueOpen(true);
+        } else if (previousFailed.current) {
+            const failedText = previousFailed.current;
+            setDraft(current => current === failedText ? '' : current);
         }
-        if (!nextQueued || sentQueuedMessageId.current === nextQueued.id || !ready || busy || modelBusy) return;
-        const { id, text } = nextQueued;
-        sentQueuedMessageId.current = id;
-        onQueuedMessageSent?.(id);
-        void send(undefined, text, nextQueued.context ?? context, nextQueued).then(success => {
-            if (!success) setFailedQueuedId(id);
-            onQueuedMessageDone?.(id, success);
-        });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [nextQueued, ready, busy, modelBusy, failedQueuedId, queue]);
+        previousFailed.current = failedTask?.text;
+    }, [failedTask]);
 
     function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -487,13 +367,16 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     return <div className="flex h-full min-h-0 min-w-0 flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
         <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-neutral-200 px-3 dark:border-neutral-800">
             <div className="min-w-0 flex-1 pr-2">
-                {state?.authenticated && <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || !models.length} className="w-full max-w-56 truncate rounded border-0 bg-transparent py-2 pl-1 pr-6 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:bg-neutral-950">
+                {state?.authenticated && <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || threadBusy || !models.length} className="w-full max-w-56 truncate rounded border-0 bg-transparent py-2 pl-1 pr-6 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:bg-neutral-950">
                     {!selectedModel && <option value="">Select a model</option>}
                     {!models.length && selectedModel && <option value={selectedModel}>{error ? 'Models unavailable' : 'Loading models...'}</option>}
                     {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
                 </select>}
             </div>
             {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
+            <button type="button" title="AI queue" aria-label={`AI queue (${sharedQueue.length})`} aria-expanded={queueOpen} aria-controls={queueId} onClick={() => setQueueOpen(value => !value)} className={iconButton}>
+                <FontAwesomeIcon icon={faClock} /><span className="ml-1 text-xs">{sharedQueue.length}</span>
+            </button>
             {state?.authenticated && <button type="button" title="Configure model provider" aria-label="Configure model provider" aria-expanded={showConnections} onClick={() => {
                 setShowConnections(value => !value);
                 setProviderChoice((state.provider as Connector | null) ?? 'github');
@@ -502,7 +385,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                 setShowEndpoint(false);
                 setCheckState('idle');
                 setError('');
-            }} disabled={busy || modelBusy} className={iconButton}><FontAwesomeIcon icon={faPlug} /></button>}
+            }} disabled={busy || modelBusy || sharedQueue.length > 0} className={iconButton}><FontAwesomeIcon icon={faPlug} /></button>}
             <button type="button" title="New conversation" aria-label="New conversation" onClick={() => {
                 let skipConfirmation = neverAsk;
                 try { skipConfirmation = localStorage.getItem(skipDiscardKey) === 'true'; } catch { skipConfirmation = neverAsk; }
@@ -512,8 +395,8 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     setNeverAsk(false);
                     confirmation.current?.showModal();
                 }
-            }} disabled={busy || modelBusy || !state || (!state.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
-            {state?.authenticated && state.token_connected && <button type="button" title={state.login ? `Sign out of ${state.login}` : 'Sign out'} aria-label="Sign out" disabled={busy || modelBusy} className={iconButton} onClick={async () => {
+            }} disabled={busy || modelBusy || threadBusy || sharedQueue.some(item => item.threadId === threadId) || !state || (!conversation.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
+            {state?.authenticated && state.token_connected && <button type="button" title={state.login ? `Sign out of ${state.login}` : 'Sign out'} aria-label="Sign out" disabled={busy || modelBusy || sharedQueue.length > 0} className={iconButton} onClick={async () => {
                 setBusy(true);
                 setError('');
                 try {
@@ -527,7 +410,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                 } catch (reason) { setError(errorMessage(reason)); }
                 finally { setBusy(false); }
             }}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
-            {state?.provider && <button type="button" title="Disconnect provider" aria-label="Disconnect provider" disabled={busy || modelBusy} className={iconButton} onClick={() => void disconnectProvider()}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
+            {state?.provider && <button type="button" title="Disconnect provider" aria-label="Disconnect provider" disabled={busy || modelBusy || sharedQueue.length > 0} className={iconButton} onClick={() => void disconnectProvider()}><FontAwesomeIcon icon={faRightFromBracket} /></button>}
             <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>
         </header>
         <dialog ref={confirmation} aria-labelledby="agent-discard-title" aria-describedby="agent-discard-description" className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
@@ -626,14 +509,14 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     </>}
                 </div>}
             </div>}
-            {ready && state?.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
+            {ready && conversation.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
                 <h3 className="text-lg font-semibold leading-snug">What needs your attention?</h3>
                 <div className="space-y-3">
                     {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || (largeVulnerabilityView && index === 0)} onClick={() => void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
                     {largeVulnerabilityView && <p className="text-xs text-neutral-500 dark:text-neutral-400">Filter to 100 or fewer vulnerabilities to summarize the displayed rows.</p>}
                 </div>
             </div>}
-            {state?.messages.map((message, index) => <div key={index} className={`min-w-0 ${message.role === 'user' ? 'flex justify-end' : ''}`}>
+            {conversation.messages.map((message, index) => <div key={index} className={`min-w-0 ${message.role === 'user' ? 'flex justify-end' : ''}`}>
                 <div className={`min-w-0 break-words text-sm leading-7 [overflow-wrap:anywhere] ${message.role === 'user' ? 'max-w-[90%] whitespace-pre-wrap rounded-lg bg-neutral-100 px-4 py-3 dark:bg-neutral-800' : ''}`}>
                     {message.activity && <ActivityLog items={message.activity} />}
                     {message.role === 'assistant' ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
@@ -657,7 +540,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             {pendingMessage && <><div className="flex justify-end"><div className="max-w-[90%] whitespace-pre-wrap break-words rounded-lg bg-neutral-100 px-4 py-3 text-sm leading-7 [overflow-wrap:anywhere] dark:bg-neutral-800">{pendingMessage}</div></div><div><ActivityLog items={activity} pending />{liveReply && <div className="mb-3 whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">{liveReply}</div>}<div role="status" className="flex items-center gap-2 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin />{progress}</div></div></>}
         </div>
         {awayFromBottom && <button type="button" aria-label="Jump to latest message" title="Jump to latest message" onClick={() => { if (conversationLog.current) conversationLog.current.scrollTop = conversationLog.current.scrollHeight; }} className={`${iconButton} mx-auto mb-2 border border-neutral-200 dark:border-neutral-700`}><FontAwesomeIcon icon={faArrowDown} /></button>}
-        {error && <div className="mx-4 mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><p role="alert" className="min-w-0 flex-1 break-words leading-relaxed">{error}</p><button type="button" title="Retry connection" aria-label="Retry connection" disabled={busy} onClick={() => { setError(''); setRefresh(value => value + 1); }} className={iconButton}><FontAwesomeIcon icon={faArrowRotateRight} /></button><button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button></div>}
+        {(error || conversation.error) && <div className="mx-4 mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><p role="alert" className="min-w-0 flex-1 break-words leading-relaxed">{error || conversation.error}</p><button type="button" title="Retry connection" aria-label="Retry connection" disabled={busy} onClick={() => { setError(''); setRefresh(value => value + 1); }} className={iconButton}><FontAwesomeIcon icon={faArrowRotateRight} /></button><button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button></div>}
 
         {state && (!state.authenticated || showConnections) && <div className="flex shrink-0 items-center justify-between gap-3 border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
             <button type="button" onClick={() => { setDevice(null); setSetupStep(step => step === 3 ? 2 : 1); setCheckState('idle'); setError(''); }} disabled={setupStep === 1 || busy} className="rounded border border-neutral-300 px-4 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800">Back</button>
@@ -669,27 +552,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
 
         {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model in the toolbar to start chatting.</p>}
 
-        {pendingQueue.length > 0 && <section aria-label="Queued AI actions" className="mx-4 mb-3 shrink-0 overflow-hidden rounded-lg border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900">
-            {failedQueuedId && <p role="status" className="px-3 py-2 text-sm">Queue paused. Retry or remove the failed action to continue.</p>}
-            <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-                <span className="flex items-center gap-2 font-semibold text-neutral-700 dark:text-neutral-300"><FontAwesomeIcon icon={faClock} />Up next · {pendingQueue.length} queued</span>
-                {onQueueClear && <button type="button" onClick={onQueueClear} className="text-neutral-500 hover:text-cyan-700 dark:text-neutral-400 dark:hover:text-cyan-400">Clear all</button>}
-            </div>
-            <ol className="scrollbar-minimal max-h-40 overflow-y-auto">
-                {pendingQueue.map((item, index) => <li key={item.id} className="flex items-center gap-3 border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[11px] tabular-nums text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">{index + 1}</span>
-                    <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm" title={`${queuedKindLabel[item.kind]} ${item.title}`}><span className="font-semibold text-cyan-700 dark:text-cyan-300">{queuedKindLabel[item.kind]}</span> {item.title}</p>
-                        {item.detail && <p className="truncate text-xs text-neutral-500" title={item.detail}>{item.detail}</p>}
-                    </div>
-                    {failedQueuedId === item.id && <button type="button" disabled={!ready || busy || modelBusy} onClick={() => {
-                        sentQueuedMessageId.current = null;
-                        setFailedQueuedId(null);
-                    }} className="text-sm font-semibold text-cyan-700 dark:text-cyan-400">Retry failed action</button>}
-                    {onQueueRemove && <button type="button" aria-label={`Remove ${queuedKindLabel[item.kind].toLowerCase()} ${item.title} from queue`} title="Remove from queue" onClick={() => onQueueRemove(item.id)} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>}
-                </li>)}
-            </ol>
-        </section>}
+        {queueOpen && <AgentQueue id={queueId} />}
 
         {state?.authenticated && state.configured && !showConnections && <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-200 px-4 pb-4 pt-3 dark:border-neutral-800">
             <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
@@ -708,14 +571,14 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     }
                 }} disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess displayed</button>}
             </div>}
-            <label htmlFor="agent-prompt" className="sr-only">Message the agent</label>
+            <label htmlFor={composerId} className="sr-only">Message the agent</label>
             <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">
-                <textarea ref={composer} id="agent-prompt" rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || Boolean(failedQueuedId)} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
+                <textarea ref={composer} id={composerId} rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || Boolean(failedQueuedId)} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
                 <div className="mt-2 flex justify-end">
                     <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || Boolean(failedQueuedId)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
                 </div>
             </div>
-            {state.messages.length > 0 && <details className="text-xs text-neutral-500 dark:text-neutral-400"><summary className="w-fit cursor-pointer">Conversation usage</summary><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 tabular-nums"><span>{state.usage.cost == null ? 'Cost not reported' : `SDK cost ${state.usage.cost.toFixed(4)}`}</span><span>{state.usage.input_tokens?.toLocaleString() ?? '—'} input tokens</span><span>{state.usage.output_tokens?.toLocaleString() ?? '—'} output tokens</span></div></details>}
+            {conversation.messages.length > 0 && <details className="text-xs text-neutral-500 dark:text-neutral-400"><summary className="w-fit cursor-pointer">Conversation usage</summary><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 tabular-nums"><span>{conversation.usage.cost == null ? 'Cost not reported' : `SDK cost ${conversation.usage.cost.toFixed(4)}`}</span><span>{conversation.usage.input_tokens?.toLocaleString() ?? '—'} input tokens</span><span>{conversation.usage.output_tokens?.toLocaleString() ?? '—'} output tokens</span></div></details>}
         </form>}
     </div>;
 }
