@@ -39,7 +39,7 @@ def test_agent_enabled_by_default(client):
     assert response.status_code == 200
 
 
-def test_sdk_exposes_only_scoped_reference_tools(monkeypatch):
+def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     import asyncio
     from src.routes import agent
 
@@ -84,6 +84,14 @@ def test_sdk_exposes_only_scoped_reference_tools(monkeypatch):
     assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
     assert captured["enable_skills"] is False
     assert "untrusted evidence" in captured["system_message"]["content"]
+    dependency_tools = {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies"}
+    assert dependency_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
+    assert {f"mcp:vulnscout-{name}" for name in dependency_tools} <= set(captured["available_tools"])
+    assert dependency_tools <= set(agent.READ_TOOLS)
+    assert not dependency_tools & set(agent.WRITE_TOOLS)
+    instructions = captured["system_message"]["content"]
+    assert all(term in instructions for term in ("next_offset", "max_depth=0", "runtime usage",
+                                                 "backports", "unknown", "no web research", "read-only"))
 
 
 def test_agent_rejects_remote_requests(client):

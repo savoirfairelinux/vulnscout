@@ -97,6 +97,41 @@ class VulnScoutClient:
             raise VulnScoutError(error_msg)
         return response.json()
 
+    def get_dependency_graph(self, variant_id: str) -> dict:
+        """Read the same active-SBOM graph used by the SBOM dependency view."""
+        if not variant_id:
+            raise VulnScoutError("A variant scope is required.")
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.get(f"{self.base_url}/api/package-dependencies",
+                                    params={"variant_id": variant_id})
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if not response.is_success:
+            try:
+                message = response.json().get("error", response.text)
+            except (ValueError, AttributeError):
+                message = response.text
+            raise VulnScoutError(message)
+        try:
+            graph = response.json()
+            documents = graph["documents"]
+            if not isinstance(documents, list) or any(doc["variant_id"] != variant_id for doc in documents):
+                raise ValueError
+            for doc in documents:
+                if (not all(isinstance(doc[key], str) for key in ("id", "source_name", "variant_name"))
+                        or not isinstance(doc["dependencies_recorded"], bool)
+                        or not isinstance(doc["packages"], list) or not isinstance(doc["edges"], list)):
+                    raise ValueError
+                if any(not isinstance(package["id"], str) for package in doc["packages"]):
+                    raise ValueError
+                if any(not all(isinstance(edge[key], str) for key in ("package_id", "dependency_id"))
+                       for edge in doc["edges"]):
+                    raise ValueError
+        except (ValueError, TypeError, KeyError) as exc:
+            raise VulnScoutError("Invalid dependency graph response for the requested variant.") from exc
+        return graph
+
     def get_merged_context(self, project_id: str, variant_id: str) -> dict:
         """GET /api/context?project_id=<project_id>&variant_id=<variant_id>.
 
@@ -432,6 +467,10 @@ class ScopedVulnScoutClient(VulnScoutClient):
     def get_codebase_source(self, variant_id: str, file_id: str, params: dict) -> dict:
         self._variant(variant_id)
         return super().get_codebase_source(variant_id, file_id, params)
+
+    def get_dependency_graph(self, variant_id: str) -> dict:
+        self._variant(variant_id)
+        return super().get_dependency_graph(variant_id)
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         self._project(project_id)
