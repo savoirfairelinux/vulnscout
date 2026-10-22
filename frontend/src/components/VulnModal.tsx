@@ -32,6 +32,8 @@ import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
+import { enqueueAgentMessages } from '../handlers/agentQueue';
+import useAgentQueue from '../hooks/useAgentQueue';
 import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
 import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
 import { assessmentReviewKey, buildAssessmentReviewAction } from "../helpers/aiAssessmentReview";
@@ -147,10 +149,8 @@ type VariantScopedSnapshot = {
     const [assessmentChatOpen, setAssessmentChatOpen] = useState(false);
     const [assessmentChatMounted, setAssessmentChatMounted] = useState(false);
     const [assessmentThreadId, setAssessmentThreadId] = useState(() => crypto.randomUUID());
-    const activeAssessmentThread = useRef<string | null>(null);
-    // FIFO of AI actions waiting for the chat; the head is sent once the chat is idle.
-    const [agentMessageQueue, setAgentMessageQueue] = useState<QueuedAgentMessage[]>([]);
-    const [runningAgentAction, setRunningAgentAction] = useState<QueuedAgentMessage | null>(null);
+    const agentMessageQueue = useAgentQueue(assessmentThreadId);
+    const runningAgentAction = agentMessageQueue.find(item => item.status === 'running');
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
@@ -190,32 +190,15 @@ type VariantScopedSnapshot = {
     const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [reviewToDiscard, setReviewToDiscard] = useState<AssessmentReview | null>(null);
 
-    // Closing only hides the panel; the chat stays mounted so its session (and
-    // any in-flight reply) persists until the modal closes or the CVE changes.
     const closeAssessmentChat = () => {
         setAssessmentChatOpen(false);
     };
 
     const discardAssessmentChat = () => {
-        const threadId = activeAssessmentThread.current;
-        activeAssessmentThread.current = null;
         setAssessmentChatMounted(false);
         setAssessmentChatOpen(false);
-        setAgentMessageQueue([]);
-        setRunningAgentAction(null);
-        if (threadId) void fetch('/api/agent/conversation', {
-            method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
-        });
+        setAssessmentThreadId(crypto.randomUUID());
     };
-
-    useEffect(() => {
-        return () => {
-            const threadId = activeAssessmentThread.current;
-            if (threadId) void fetch('/api/agent/conversation', {
-                method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
-            });
-        };
-    }, []);
 
     useEffect(() => {
         discardAssessmentChat();
@@ -228,28 +211,14 @@ type VariantScopedSnapshot = {
     };
 
     const openAssessmentChat = (actions: Omit<QueuedAgentMessage, 'id'>[] = []) => {
-        if (!activeAssessmentThread.current) {
-            const threadId = crypto.randomUUID();
-            activeAssessmentThread.current = threadId;
-            setAssessmentThreadId(threadId);
-        }
         setAssessmentChatMounted(true);
         setAssessmentChatOpen(true);
         setIsEditing(true);
         // An identical request already queued or running is not queued again.
         if (actions.length && !agentActionState(actions[0].key)) {
-            setAgentMessageQueue(queue => [...queue, ...actions.map(action => ({ ...action, id: crypto.randomUUID() }))]);
+            enqueueAgentMessages(actions.map(action => ({ ...action, id: crypto.randomUUID() })),
+                assessmentAgentContext, assessmentThreadId, `Vulnerability ${vuln.id}`);
         }
-    };
-
-    const onQueuedAgentMessageSent = (id: string) => {
-        const sent = agentMessageQueue.find(item => item.id === id);
-        if (sent) setRunningAgentAction(sent);
-    };
-
-    const onQueuedAgentMessageDone = (id: string, success: boolean) => {
-        setRunningAgentAction(running => running?.id === id ? null : running);
-        if (success) setAgentMessageQueue(queue => queue.filter(item => item.id !== id));
     };
 
     const toggleAssessmentChat = () => {
@@ -2388,7 +2357,7 @@ type VariantScopedSnapshot = {
 
                     </div>
                     {assessmentChatMounted && <aside id="assessment-agent-panel" hidden={!assessmentChatOpen} role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
-                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} queue={agentMessageQueue} onQueuedMessageSent={onQueuedAgentMessageSent} onQueuedMessageDone={onQueuedAgentMessageDone} onQueueRemove={id => setAgentMessageQueue(queue => queue.filter(item => item.id !== id))} onQueueClear={() => setAgentMessageQueue(queue => queue.filter(item => item.id === runningAgentAction?.id))} />
+                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} />
                     </aside>}
         </ModalShell>
 
