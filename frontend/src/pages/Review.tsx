@@ -1862,18 +1862,21 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         onClose={() => setReviewChatOpen(false)} queue={reviewActions.queue}
                         onQueuedMessageSent={id => setReviewActions(previous => ({
                             ...previous,
-                            queue: previous.queue.filter(action => action.id !== id),
                             running: previous.queue.find(action => action.id === id) ?? previous.failed ?? previous.running,
                             failed: null,
                         }))}
                         onQueuedMessageDone={(id, success) => setReviewActions(previous => ({
                             ...previous, running: previous.running?.id === id ? null : previous.running,
+                            queue: success ? previous.queue.filter(action => action.id !== id) : previous.queue,
                             failed: previous.running?.id === id && !success ? previous.running : null,
                         }))}
                         onQueueRemove={id => setReviewActions(previous => ({
                             ...previous, queue: previous.queue.filter(action => action.id !== id),
+                            failed: previous.failed?.id === id ? null : previous.failed,
                         }))}
-                        onQueueClear={() => setReviewActions(previous => ({ ...previous, queue: [] }))}
+                        onQueueClear={() => setReviewActions(previous => ({
+                            ...previous, queue: previous.queue.filter(action => action.id === previous.running?.id), failed: null,
+                        }))}
                     />
                 </aside>,
                 agentPanelContainer ?? document.body

@@ -27,6 +27,7 @@ jest.mock('../../src/components/AgentChat', () => ({
                 props.onQueuedMessageSent(id);
             }}>send-review-head</button>
             <button onClick={() => props.onQueuedMessageDone(sentId, true)}>finish-review</button>
+            <button onClick={() => props.onQueuedMessageDone(sentId, false)}>fail-review</button>
             <button onClick={() => props.onQueueRemove(props.queue[0].id)}>remove-review-head</button>
             <button onClick={props.onQueueClear}>clear-review-queue</button>
         </div>;
@@ -501,7 +502,7 @@ describe('Review — bulk AI reviews', () => {
         await user.click(screen.getByRole('button', { name: 'AI reviews queued' }));
         expect(queue()).toHaveLength(2);
         await user.click(screen.getByText('send-review-head'));
-        expect(queue().map(action => action.key)).toEqual(['review:a2']);
+        expect(queue().map(action => action.key)).toEqual(['review:a1', 'review:a2']);
         expect(screen.getByRole('button', { name: 'AI review running…' })).toBeDisabled();
         await user.click(screen.getByText('finish-review'));
         await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
@@ -581,6 +582,25 @@ describe('Review — bulk AI reviews', () => {
         expect(screen.getByTestId('review-agent-chat')).toHaveAttribute('data-thread', threadId);
         expect(queue()).toHaveLength(1);
         expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
+    });
+
+    test.each(['remove-review-head', 'clear-review-queue'])('%s releases a failed review for requeueing', async control => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1')]);
+        render(<Review />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        await user.click(screen.getByText('send-review-head'));
+        await user.click(screen.getByText('fail-review'));
+        expect(screen.getByRole('button', { name: 'AI review paused — retry in chat' })).toBeDisabled();
+        await user.click(screen.getByText(control));
+        const remaining = control === 'remove-review-head' ? ['review:a2'] : [];
+        expect(queue().map(action => action.key)).toEqual(remaining);
+        await user.click(screen.getByRole('button', { name: `Review selected with AI (${2 - remaining.length})` }));
+        expect(queue().map(action => action.key)).toEqual(control === 'remove-review-head'
+            ? ['review:a2', 'review:a1'] : ['review:a1', 'review:a2']);
+        expect(screen.getByText('Delete selected (2)')).toBeInTheDocument();
     });
 
     test('docks the chat in the right sidebar outside the review table content', async () => {
@@ -736,22 +756,22 @@ describe('Review — bulk AI reviews', () => {
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
         expect(screen.getByRole('button', { name: 'Review selected with AI (1)' })).toBeEnabled();
         expect(screen.getByText('Delete selected (3)')).toBeInTheDocument();
-        expect(screen.getByText(/Batch paused/)).toBeInTheDocument();
+        expect(screen.getByText(/Queue paused/)).toBeInTheDocument();
         expect(sent).toHaveLength(2);
-        await user.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        await user.click(screen.getByRole('button', { name: 'Retry failed action' }));
         await waitFor(() => expect(sent).toHaveLength(3));
         expect(sent[2]).toEqual(sent[1]);
         expect(await screen.findByText('Review provider unavailable')).toBeInTheDocument();
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
         expect(sent).toHaveLength(3);
-        await user.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        await user.click(screen.getByRole('button', { name: 'Retry failed action' }));
         await waitFor(() => expect(sent).toHaveLength(5));
         expect(sent[3]).toEqual(sent[1]);
         expect(sent[4]).toMatchObject({
             message: expect.stringContaining('Review the user assessment a3'),
             context: { projectId: 'proj2', variantIds: ['v3'] },
         });
-        await waitFor(() => expect(screen.queryByText(/Batch paused/)).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByText(/Queue paused/)).not.toBeInTheDocument());
     });
 });
 

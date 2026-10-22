@@ -484,27 +484,29 @@ test.each(['missing', 'partial', 'unchanged', 'stale', 'read failure', 'changed 
             });
             return jsonResponse(signedIn);
         };
-        const done = jest.fn(() => { finishedTurn = false; });
+        const done = jest.fn<void, [string, boolean]>(() => { finishedTurn = false; });
         const first = { ...buildAssessmentReviewAction(assessment), id: 'first' };
         function QueueHarness() {
             const [queue, setQueue] = useState<QueuedAgentMessage[]>([first, {
                 id: 'second', key: 'assess:next', kind: 'assess', text: 'Next assessment', title: 'next',
             }]);
             return <AgentChat context={context} onClose={() => undefined} queue={queue}
-                onQueuedMessageSent={id => setQueue(items => items.filter(item => item.id !== id))}
-                onQueuedMessageDone={done} />;
+                onQueuedMessageDone={(id, success) => {
+                    done(id, success);
+                    if (success) setQueue(items => items.filter(item => item.id !== id));
+                }} />;
         }
         render(<QueueHarness />);
         await waitFor(() => expect(done).toHaveBeenCalledWith('first', false));
         expect(attempts).toBe(1);
-        expect(screen.getByText(/Batch paused/)).toBeInTheDocument();
+        expect(screen.getByText(/Queue paused/)).toBeInTheDocument();
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(first.text);
         expect(screen.getByRole('alert')).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
         await waitFor(() => expect(done).toHaveBeenCalledWith('first', true));
         await waitFor(() => expect(done).toHaveBeenCalledWith('second', true));
         expect(attempts).toBe(3);
-        expect(screen.queryByText(/Batch paused/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Queue paused/)).not.toBeInTheDocument();
     },
 );
 
