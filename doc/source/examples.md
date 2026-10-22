@@ -90,7 +90,18 @@ Alternatively, use the CycloneDX exports in a separate variant:
 
 Both files use CycloneDX, including `vex.json`; do not pass that file to
 `add --openvex`, which expects the different OpenVEX format and a filename
-containing `openvex` and ending in `.json`.
+containing `openvex` and ending in `.json`. Import the BOM first
+and the VEX second in the same `add` command: the VEX uses BOM-Link URNs
+(`urn:cdx:<BOM UUID>/<version>#<component reference>`) to refer to the BOM's
+components.
+
+The bundled files contain 97 components (93 distinct name/version packages) and
+3,133 distinct CVE IDs, forming 7,063 distinct package/CVE findings. These findings
+should appear under the `yocto_demo` project and `cyclonedx` variant without
+running additional scanners. All bundled VEX entries are assessed as `resolved`
+or `not_affected`, so a view filtered to exploitable or unassessed vulnerabilities
+can legitimately be empty. Clear status filters to inspect the imported findings
+and assessments. The BOM alone provides inventory, not vulnerability findings.
 
 See [VulnScout CLI](vulnscout-script.md) for input flags, scanner selection,
 metadata refresh, and container lifecycle commands.
