@@ -4288,13 +4288,13 @@ describe("VulnModal AI review block", () => {
         await screen.findByText('Review provider unavailable');
         const reviewButton = screen.getByRole('button', { name: /Review assessment assess-1 with AI/ });
         expect(reviewButton).toBeDisabled();
-        expect(screen.getByText(/Batch paused/)).toBeInTheDocument();
+        expect(screen.getByText(/Queue paused/)).toBeInTheDocument();
         await userEvent.click(reviewButton);
         expect(attempts).toBe(1);
-        await userEvent.click(screen.getByRole('button', { name: 'Retry failed request' }));
+        await userEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
         await waitFor(() => expect(reviewButton).toBeEnabled());
         expect(attempts).toBe(2);
-        expect(screen.queryByText(/Batch paused/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Queue paused/)).not.toBeInTheDocument();
         expect(screen.queryByText('Review provider unavailable')).not.toBeInTheDocument();
     });
 
