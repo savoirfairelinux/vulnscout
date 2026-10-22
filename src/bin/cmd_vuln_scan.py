@@ -19,6 +19,8 @@ from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
 from ..helpers.scan_filters import filter_scannable_packages
+from ..helpers.scan_runs import tool_scan
+from ..controllers.operation_registry import new_queue_id
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
 import uuid
@@ -46,14 +48,10 @@ def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
     return filter_scannable_packages(packages)
 
 
-def _create_tool_scan(variant_uuid, scan_source: str):
-    """Create a new tool scan for the given variant."""
-    return ScanModel.create(
-        description="empty description",
-        variant_id=variant_uuid,
-        scan_type="tool",
-        scan_source=scan_source,
-    )
+@click.command("new-scan-run-id")
+def new_scan_run_id_command() -> None:
+    """Print a fresh run ID for grouping synchronous tool scan steps."""
+    click.echo(new_queue_id())
 
 
 def _echo_query_results(idx: int, total: int, label: str, vuln_ids: list[str],
@@ -105,9 +103,10 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
 @click.option("--mode", "-m", default="local", type=click.Choice(["local", "api"]),
               help="NVD backend: 'local' (default, uses local NVD-FKIE DB) or 'api' (NVD REST API).")
+@click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
 @serialized_engine_operation
-def nvd_scan_command(project: str, variant: str | None, mode: str) -> None:
+def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str | None = None) -> None:
     """Run an NVD-based vulnerability scan for the given project/variant.
 
     With ``--mode local`` (default) the local NVD-FKIE advisory database is
@@ -120,13 +119,14 @@ def nvd_scan_command(project: str, variant: str | None, mode: str) -> None:
 
     packages = _resolve_active_packages(variant_uuid)
 
-    if mode == "api":
-        _nvd_scan_api(variant_uuid, packages)
-    else:
-        _nvd_scan_local(variant_uuid, packages)
+    with tool_scan(variant_uuid, "nvd", run_id or new_queue_id()) as scan:
+        if mode == "api":
+            _nvd_scan_api(variant_uuid, packages, scan)
+        else:
+            _nvd_scan_local(variant_uuid, packages, scan)
 
 
-def _nvd_scan_api(variant_uuid, packages) -> None:
+def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
     """NVD scan using the NVD REST API v2 (CPE-based)."""
     import os as _os
     nvd = NVD_DB(nvd_api_key=_os.getenv("NVD_API_KEY"))
@@ -146,7 +146,6 @@ def _nvd_scan_api(variant_uuid, packages) -> None:
         f"Found {len(packages)} packages with {total_cpes} unique CPEs to query"
     )
 
-    scan = _create_tool_scan(variant_uuid, "nvd")
     cves_found: set[str] = set()
     observation_pairs: set = set()
     assessed_findings: set = set()
@@ -192,12 +191,11 @@ def _nvd_scan_api(variant_uuid, packages) -> None:
     )
 
 
-def _nvd_scan_local(variant_uuid, packages) -> None:
+def _nvd_scan_local(variant_uuid, packages, scan: ScanModel) -> None:
     """NVD scan using the local NVD-FKIE advisory database."""
     click.echo("Loading local NVD advisory database…")
     engine = get_engine(progress=click.echo)
 
-    scan = _create_tool_scan(variant_uuid, "nvd")
     total = len(packages)
     writer = _SccBulkWriter(scan.id, variant_uuid, packages)
     seen_keys: set = set()
@@ -225,8 +223,9 @@ def _nvd_scan_local(variant_uuid, packages) -> None:
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
+@click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
-def osv_scan_command(project: str, variant: str | None) -> None:
+def osv_scan_command(project: str, variant: str | None, run_id: str | None = None) -> None:
     """Run an OSV PURL-based vulnerability scan for the given project/variant.
 
     Queries the OSV.dev API for every PURL in the variant's active SBOM
@@ -258,7 +257,12 @@ def osv_scan_command(project: str, variant: str | None) -> None:
         f"{total_pkgs} unique PURL identifiers to query"
     )
 
-    scan = _create_tool_scan(variant_uuid, "osv")
+    with tool_scan(variant_uuid, "osv", run_id or new_queue_id()) as scan:
+        _osv_scan(variant_uuid, packages, purl_to_packages, osv, scan)
+
+
+def _osv_scan(variant_uuid, packages, purl_to_packages, osv, scan: ScanModel) -> None:
+    total_pkgs = len(purl_to_packages)
     vulns_found: set = set()
     observation_pairs: set = set()
     assessed_findings: set = set()
@@ -646,9 +650,10 @@ class _SccBulkWriter:
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
+@click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
 @serialized_engine_operation
-def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
+def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str | None = None) -> None:
     """Run a local CVE-database scan (NVD-FKIE + CVEList V5) with version-range evaluation.
 
     Unlike the live ``nvd-scan`` / ``osv-scan`` paths, this command matches every
@@ -673,7 +678,11 @@ def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
     engine = get_engine(progress=click.echo)
     click.echo("Index ready — scanning packages")
 
-    scan = _create_tool_scan(variant_uuid, "scc")
+    with tool_scan(variant_uuid, "scc", run_id or new_queue_id()) as scan:
+        _sbom_cve_check_scan(variant_uuid, packages, engine, scan)
+
+
+def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel) -> None:
     total_pkgs = len(packages)
     writer = _SccBulkWriter(scan.id, variant_uuid, packages)
 

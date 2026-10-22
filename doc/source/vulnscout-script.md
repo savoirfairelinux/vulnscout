@@ -329,6 +329,32 @@ VulnScout can run Grype on the current database contents:
 
 `scan` accepts `grype`, `nvd` (CPE-based), `osv` (PURL-based), and `sbom-cve-check` (local advisory databases). Select several with commas (`scan nvd,osv`) or spaces (`scan nvd osv`). With no type, or with `all`, every available scanner runs. Scans always run in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh is a separate command (`refresh`).
 
+All tool scans produced by one `scan` invocation share a fresh run ID, including
+Grype results. The Scan page displays multiple steps for the same variant as one
+transaction block, just as it does for scans launched from the web UI. Repeating
+the command starts a separate run; a single-step run remains an ordinary scan
+entry. The container entrypoint's `--perform-scans` and individual
+`--perform-*-scan` options use the same grouping.
+
+When invoking Flask commands directly, pass the same `--run-id` to each step:
+
+```bash
+run_id=$(flask --app src.bin.webapp new-scan-run-id)
+flask --app src.bin.webapp nvd-scan -p demo -v x86 --run-id "$run_id"
+flask --app src.bin.webapp osv-scan -p demo -v x86 --run-id "$run_id"
+```
+
+`sbom-cve-check-scan` and Grype-only `merge --grype results.grype.json` also accept
+`--run-id`. Without it, each direct tool scan gets its own run ID. SBOM imports
+stay separate from tool runs even when `merge` is given `--run-id`.
+An unhandled scan error or interruption removes that failed NVD, OSV, or
+sbom-cve-check step from history; other completed steps remain. Existing
+per-package error handling and command exit codes are unchanged.
+
+`refresh` (and `flask refresh-vulnerability-data` or
+`process --refresh-vulnerability-data`) enriches existing vulnerability records;
+it does not run scanners or create scan history/transaction blocks.
+
 To scan newly added files, run `add` and then `scan` with the same scope:
 
 ```bash

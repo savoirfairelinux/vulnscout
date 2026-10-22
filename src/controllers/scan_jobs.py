@@ -17,11 +17,11 @@ import shutil
 import subprocess
 import tempfile
 import uuid as uuid_module
-from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, List, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Sequence, Set, Tuple
 
 from ..extensions import db
 from ..helpers.scan_filters import is_kernel_package_name, is_native_package_name
+from ..helpers.scan_runs import tool_scan as _tool_scan
 from ..models.finding import Finding
 from ..models.package import Package
 from ..models.project import Project
@@ -42,7 +42,6 @@ GRYPE_MERGE_TIMEOUT = 120
 GRYPE_PROCESS_TIMEOUT = 300
 
 FLASK_APP = "src.bin.webapp"
-EMPTY_DESCRIPTION = "empty description"
 RESOLVING_PACKAGES = "Resolving active packages…"
 
 
@@ -88,28 +87,6 @@ def _active_packages(ctx: JobContext) -> Sequence[Package]:
             error if error in safe_errors else "Unable to resolve active packages"
         )
     return packages
-
-
-@contextmanager
-def _tool_scan(
-    variant_uuid: uuid_module.UUID, source: str, run_id: str | None = None
-) -> Iterator[Scan]:
-    scan = Scan.create(
-        description=EMPTY_DESCRIPTION,
-        variant_id=variant_uuid,
-        scan_type="tool",
-        scan_source=source,
-        run_id=run_id,
-    )
-    try:
-        yield scan
-    except Exception:
-        db.session.rollback()
-        persisted_scan = db.session.get(Scan, scan.id)
-        if persisted_scan is not None:
-            db.session.delete(persisted_scan)
-            db.session.commit()
-        raise
 
 
 def _detect_memory_ceiling() -> int:
