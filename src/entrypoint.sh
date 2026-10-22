@@ -472,6 +472,14 @@ cmd_scan() {
         scanners_requested=true
     fi
 
+    # One ID per invocation, passed explicitly across Flask subprocesses.
+    # Never persist it in config: later invocations must form separate runs.
+    local scan_run_id=""
+    if [[ "$scanners_requested" == "true" ]]; then
+        scan_run_id=$(flask --app src.bin.webapp new-scan-run-id) || return $?
+        INIT_APP_ARGS+=(--run-id "$scan_run_id")
+    fi
+
     if [[ "$has_inputs" == "true" || "$has_condition" == "true" || "$scanners_requested" == "true" ]]; then
         if [[ "$has_inputs" == "true" ]]; then
             if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
@@ -514,7 +522,8 @@ cmd_scan() {
                 fi
                 echo "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
-                    --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --grype "$grype_out") || {
+                    --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                    --run-id "$scan_run_id" --grype "$grype_out") || {
                     rm -rf "$grype_tmp"; return 1
                 }
                 # A later scanner creates a newer scan; ingest Grype while it is latest.
@@ -532,21 +541,24 @@ cmd_scan() {
         if [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running NVD scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp nvd-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                --run-id "$scan_run_id") || _cmd_scan_exit=$?
         fi
 
         # If an OSV scan was requested, run it synchronously via the flask CLI.
         if [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp osv-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                --run-id "$scan_run_id") || _cmd_scan_exit=$?
         fi
 
         # If an sbom-cve-check scan was requested, run it synchronously via the flask CLI.
         if [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running sbom-cve-check scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp sbom-cve-check-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                --run-id "$scan_run_id") || _cmd_scan_exit=$?
         fi
 
         # merger_ci.py emits lines of the form  ::STATUS::<step>::<message>
