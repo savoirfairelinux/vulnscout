@@ -453,6 +453,16 @@ VulnScout lets you export scan data as JSON files for archiving, reporting, or s
 
 Both files include scan metadata (timestamp, scan type, project, and variant) and strip internal identifiers so the output is portable.
 
+Package entries also carry `sbom_evidence`: document-scoped CPEs, PURLs, source URLs,
+source revisions, and component types. Importing these exports preserves the inputs
+needed to run package advisory scans again, including for Zephyr SBOMs. Evidence
+comes only from the SBOM contributing to the exported scan, not from other variants
+or newer imports. Separate association records preserve component classifications;
+`null` identifiers remain unknown, while empty arrays mean identifiers were recorded
+but none were present. Older exports without this evidence can still be imported
+for their scan history, but require reimporting the original SBOM before rescanning.
+Tool-scan imports remain findings-only and do not replace the active SBOM.
+
 **Export All:** an **Export** button in the toolbar lets you download the entire visible scan history at once. A dropdown offers two modes — **Export All Diffs** and **Export All Scan Results** — which produce a single JSON array grouping all scans by variant. The export respects the current project/variant scope.
 
 ---

@@ -29,7 +29,7 @@ from ..models.package import Package, _normalize_supplier
 from ..models.project import Project
 from ..models.scan import Scan
 from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
+from ..models.sbom_package import PackageType, SBOMPackage
 from ..models.variant import Variant
 from ..models.vulnerability import Vulnerability
 from ..extensions import db
@@ -156,6 +156,35 @@ def _strip_package(entry: dict) -> dict:
     return result
 
 
+def _export_package_evidence(scan: Scan, entries: list[dict]) -> list[dict]:
+    """Attach portable SBOM association evidence, never shared Package identifiers."""
+    if not entries:
+        return entries
+    sbom_scan, _ = _contributing_scans_at(scan, ScanController.get_by_variant(scan.variant_id))
+    if sbom_scan is None:
+        return [_strip_package(entry) for entry in entries]
+    evidence: dict[str, list[dict]] = {}
+    rows = db.session.execute(
+        db.select(SBOMPackage)
+        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+        .where(SBOMDocument.scan_id == sbom_scan.id)
+        .order_by(SBOMPackage.sbom_document_id, SBOMPackage.package_id)
+    ).scalars()
+    for row in rows:
+        evidence.setdefault(str(row.package_id), []).append({
+            "cpe": row.cpe,
+            "purl": row.purl,
+            "source_urls": row.source_urls,
+            "source_revisions": row.source_revisions,
+            "type": row.type,
+        })
+    return [
+        {**_strip_package(entry),
+         **({"sbom_evidence": evidence[entry["package_id"]]} if entry.get("package_id") in evidence else {})}
+        for entry in entries
+    ]
+
+
 def _strip_package_upgrade(entry: dict) -> dict:
     supplier = _extract_supplier_name(entry.get("package_supplier", "") or "")
     result = {
@@ -258,10 +287,9 @@ def _build_diff_export(
                 or (diff.get("findings_added", []) + diff.get("findings_unchanged", []))
             )
         ],
-        "packages": [
-            _strip_package(p)
-            for p in (diff.get("packages_added", []) + diff.get("packages_unchanged", []))
-        ],
+        "packages": _export_package_evidence(
+            scan, diff.get("packages_added", []) + diff.get("packages_unchanged", []),
+        ),
         "assessments": [
             _strip_assessment(a)
             for a in (
@@ -304,13 +332,11 @@ def _build_global_result_export(
     return {
         **meta,
         "packages": [
-            {
-                "package_name": p.get("package_name", ""),
-                "package_version": p.get("package_version", ""),
-                **({"supplier": s} if (s := _extract_supplier_name(p.get("package_supplier", "") or "")) else {}),
-                "sources": p.get("sources", []),
-            }
-            for p in result.get("packages", [])
+            {**package, "sources": entry.get("sources", [])}
+            for package, entry in zip(
+                _export_package_evidence(scan, result.get("packages", [])),
+                result.get("packages", []),
+            )
         ],
         "findings": [
             {
@@ -410,8 +436,47 @@ class _ScanImport(NamedTuple):
     scan_source: str | None
     timestamp: datetime
     package_keys: list[PackageKey]
+    package_evidence: dict[PackageKey, list["_ImportPackageEvidence"]]
     findings: list[FindingKey]
     assessments: list["_ImportAssessment"]
+
+
+class _ImportPackageEvidence(TypedDict):
+    cpe: list[str] | None
+    purl: list[str] | None
+    source_urls: list[str] | None
+    source_revisions: list[str] | None
+    type: PackageType
+
+
+def _import_package_evidence(entry: dict) -> list[_ImportPackageEvidence]:
+    """Keep unknown identifiers distinct from explicitly recorded empty lists."""
+    if "sbom_evidence" not in entry:
+        return []
+    values = entry["sbom_evidence"]
+    if not isinstance(values, list) or not values:
+        raise ValueError("'sbom_evidence' must be a non-empty array")
+    evidence = []
+    for value in values:
+        if not isinstance(value, dict):
+            raise ValueError("'sbom_evidence' entries must be objects")
+        fields = {}
+        for field in ("cpe", "purl", "source_urls", "source_revisions"):
+            identifiers = value.get(field)
+            if identifiers is not None and (
+                not isinstance(identifiers, list)
+                or any(not isinstance(identifier, str) or not identifier.strip() for identifier in identifiers)
+            ):
+                raise ValueError(f"'sbom_evidence.{field}' must be an array of non-empty strings or null")
+            fields[field] = identifiers
+        package_type = value.get("type", "normal")
+        if package_type not in ("normal", "workspace", "built"):
+            raise ValueError("'sbom_evidence.type' must be 'normal', 'workspace', or 'built'")
+        evidence.append(_ImportPackageEvidence(
+            cpe=fields["cpe"], purl=fields["purl"], source_urls=fields["source_urls"],
+            source_revisions=fields["source_revisions"], type=package_type,
+        ))
+    return evidence
 
 
 def _chunked(items: Sequence[_T], size: int) -> Iterator[Sequence[_T]]:
@@ -598,9 +663,14 @@ def _parse_scan_export(payload: object) -> _ScanImport:
     packages_raw = _import_array(payload, "packages", required=(scan_type == "sbom"))
 
     package_keys: list[PackageKey] = []
+    package_evidence: dict[PackageKey, list[_ImportPackageEvidence]] = {}
     seen_packages: set[PackageKey] = set()
     for entry in packages_raw:
         key = _import_package_key(entry)
+        for evidence in _import_package_evidence(entry):
+            entries = package_evidence.setdefault(key, [])
+            if evidence not in entries:
+                entries.append(evidence)
         if key not in seen_packages:
             seen_packages.add(key)
             package_keys.append(key)
@@ -643,6 +713,7 @@ def _parse_scan_export(payload: object) -> _ScanImport:
         scan_source=scan_source,
         timestamp=timestamp,
         package_keys=package_keys,
+        package_evidence=package_evidence,
         findings=findings,
         assessments=assessments,
     )
@@ -794,6 +865,14 @@ def _persist_scan_import(item: _ScanImport) -> _ImportSummary:
     if item.scan_type == "sbom":
         # SBOM scans expose their package set through an SBOM document; tool
         # scans reach theirs through their findings and need none.
+        # Two export entries can resolve to one row (e.g. suppliers that
+        # normalise to the same value), so deduplicate their evidence.
+        evidence_by_id: dict[uuid_module.UUID, list[_ImportPackageEvidence]] = {}
+        for key, package in packages.items():
+            entries = evidence_by_id.setdefault(package.id, [])
+            for evidence in item.package_evidence.get(key, []):
+                if evidence not in entries:
+                    entries.append(evidence)
         document = SBOMDocument(
             path=f"imported-scan://{scan.id}",
             source_name=_IMPORT_SOURCE_LABEL,
@@ -802,13 +881,27 @@ def _persist_scan_import(item: _ScanImport) -> _ImportSummary:
         )
         db.session.add(document)
         db.session.flush()
-        # Two export entries can resolve to one row (e.g. suppliers that
-        # normalise to the same value), so link each package only once.
-        for package_id in {package.id for package in packages.values()}:
-            db.session.add(SBOMPackage(
-                sbom_document_id=document.id,
-                package_id=package_id,
-            ))
+        documents = [document]
+        # Preserve separate association types and unknown identifier evidence.
+        # Several pieces of evidence for one package need separate junction rows.
+        for package_id, entries in evidence_by_id.items():
+            associations: list[_ImportPackageEvidence | None] = list(entries) if entries else [None]
+            for index, association_evidence in enumerate(associations):
+                if index == len(documents):
+                    document = SBOMDocument(
+                        path=f"imported-scan://{scan.id}/{index}",
+                        source_name=_IMPORT_SOURCE_LABEL,
+                        format="vulnscout_json",
+                        scan_id=scan.id,
+                    )
+                    db.session.add(document)
+                    db.session.flush()
+                    documents.append(document)
+                db.session.add(SBOMPackage(
+                    sbom_document_id=documents[index].id,
+                    package_id=package_id,
+                    **dict(association_evidence or {}),
+                ))
 
     vulnerability_ids = {vulnerability_id for _key, vulnerability_id in item.findings}
     _ensure_import_vulnerabilities(vulnerability_ids)
