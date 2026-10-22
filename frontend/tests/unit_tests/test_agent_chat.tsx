@@ -10,6 +10,7 @@ import AgentChat, { type QueuedAgentMessage } from '../../src/components/AgentCh
 import { buildAssessmentReviewAction } from '../../src/helpers/aiAssessmentReview';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type { AgentContext } from '../../src/types/agent';
+import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
 const signedIn = { authenticated: true, login: 'tester', configured: true, device_login: true,
@@ -32,7 +33,10 @@ function streamResponse(chunks: string[]): Response {
         } }) } as unknown as Response;
 }
 
-beforeEach(() => Object.assign(global, { TextDecoderStream }));
+beforeEach(() => {
+    resetAgentQueue();
+    Object.assign(global, { TextDecoderStream });
+});
 afterEach(() => jest.useRealTimers());
 
 test('device flow polls at the interval returned by the server', async () => {
@@ -313,7 +317,7 @@ test('keyboard send renders structured Markdown, usage, and response copy', asyn
     const composer = screen.getByRole('textbox', { name: 'Message the agent' });
     fireEvent.change(composer, { target: { value: 'Review evidence' } });
     fireEvent.keyDown(composer, { key: 'Enter', code: 'Enter' });
-    expect(await screen.findByRole('heading', { name: 'Report' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Report' })).toBeInTheDocument());
     expect(requests).toMatchObject([{ message: 'Review evidence' }]);
     expect(requests[0].allow_writes).toBeUndefined();
     expect(screen.getByRole('heading', { name: 'Findings' })).toBeInTheDocument();
@@ -450,6 +454,45 @@ test('sends a queued message once when ready and again only for a new queued id'
     expect(accepted).toEqual(['q1', 'q2']);
 });
 
+test('all chat windows see the same queue and work continues after the originating window unmounts', async () => {
+    const sent: string[] = [];
+    let finish: (response: Response) => void = () => {};
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) {
+            sent.push(JSON.parse(String(options?.body)).message);
+            if (sent.length === 1) return new Promise(resolve => { finish = resolve; });
+            return jsonResponse({ reply: 'Second completed', model: 'auto', usage });
+        }
+        return jsonResponse(signedIn);
+    };
+    const source = render(<AgentChat context={context} threadId="bulk" onClose={() => undefined} />);
+    const globalChat = render(<AgentChat context={{ page: 'metrics' }} onClose={() => undefined} />);
+    const sourceView = within(source.container);
+    const globalView = within(globalChat.container);
+    await waitFor(() => expect(sourceView.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
+    await waitFor(() => expect(globalView.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
+    fireEvent.change(sourceView.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'First request' } });
+    fireEvent.click(sourceView.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(sent).toEqual(['First request']));
+    fireEvent.change(globalView.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Second request' } });
+    fireEvent.click(globalView.getByRole('button', { name: 'Send message' }));
+    fireEvent.click(sourceView.getByRole('button', { name: 'AI queue (2)' }));
+    fireEvent.click(globalView.getByRole('button', { name: 'AI queue (2)' }));
+    for (const view of [sourceView, globalView]) {
+        const queue = within(view.getByRole('region', { name: 'Queued AI actions' }));
+        expect(queue.getAllByRole('listitem')).toHaveLength(2);
+        expect(queue.getByText('Bulk assessment chat · running')).toBeInTheDocument();
+        expect(queue.getByText('Global chat · queued')).toBeInTheDocument();
+    }
+    source.unmount();
+    await act(async () => finish(jsonResponse({ reply: 'First completed', model: 'auto', usage })));
+    await globalView.findByText('Second completed');
+    expect(sent).toEqual(['First request', 'Second request']);
+    expect(getAgentQueue()).toEqual([]);
+});
+
 test.each(['missing', 'partial', 'unchanged', 'stale', 'read failure', 'changed targets'])(
     'pauses a review after an HTTP success with %s saved reviews, then verifies all targets on retry',
     async failure => {
@@ -563,7 +606,7 @@ test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action q
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Assess displayed' })).toBeDisabled();
     expect(screen.getByRole('alert')).toHaveTextContent(failure === 'interrupted stream' ? 'Response interrupted' : 'Provider unavailable');
-    expect(screen.getByRole('region', { name: 'Queued AI actions' })).toHaveTextContent('Up next · 2 queued');
+    expect(screen.getByRole('region', { name: 'Queued AI actions' })).toHaveTextContent('AI queue · 1 queued');
     await act(async () => { await Promise.resolve(); });
     expect(sent).toHaveLength(1);
 
@@ -575,7 +618,7 @@ test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action q
     await screen.findByText('Reply 4');
     expect(sent).toEqual(['Assess CVE-1', 'Assess CVE-1', 'Assess CVE-1', 'Assess CVE-2']);
     expect(done.mock.calls).toEqual([['q1', false], ['q1', false], ['q1', true], ['q2', true]]);
-    expect(screen.queryByRole('region', { name: 'Queued AI actions' })).not.toBeInTheDocument();
+    expect(screen.getByText('No AI requests queued.')).toBeInTheDocument();
 });
 
 test.each(['remove', 'clear'])('%s releases a failed action without retrying it', async action => {
@@ -607,7 +650,7 @@ test.each(['remove', 'clear'])('%s releases a failed action without retrying it'
     expect(sent).toEqual(['Assess CVE-1']);
     fireEvent.click(screen.getByRole('button', { name: action === 'remove' ? 'Remove assess CVE-1 from queue' : 'Clear all' }));
     if (action === 'remove') await screen.findByText('Second done');
-    else await waitFor(() => expect(screen.queryByRole('region', { name: 'Queued AI actions' })).not.toBeInTheDocument());
+    else expect(screen.getByText('No AI requests queued.')).toBeInTheDocument();
     expect(sent).toEqual(action === 'remove' ? ['Assess CVE-1', 'Assess CVE-2'] : ['Assess CVE-1']);
     expect(screen.getByLabelText('Message the agent')).toHaveValue('');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -623,13 +666,14 @@ test('lists queued actions with remove and clear controls', async () => {
     ]} />);
 
     const queue = await screen.findByRole('region', { name: 'Queued AI actions' });
-    expect(queue).toHaveTextContent('Up next · 2 queued');
+    expect(queue).toHaveTextContent('AI queue · 2 queued');
     const items = within(queue).getAllByRole('listitem');
-    expect(items[0]).toHaveTextContent('1Assess 2 targetsdefault · pkg@1.0.0');
+    expect(items[0]).toHaveTextContent('1Assess 2 targets');
+    expect(items[0]).toHaveTextContent('default · pkg@1.0.0');
     expect(items[1]).toHaveTextContent('2Review assessment 1a2b3c4d');
 
     fireEvent.click(within(queue).getByRole('button', { name: 'Remove review assessment 1a2b3c4d from queue' }));
-    expect(onQueueRemove).toHaveBeenCalledWith('q2');
+    expect(getAgentQueue().map(item => item.id)).toEqual(['q1']);
     fireEvent.click(within(queue).getByRole('button', { name: 'Clear all' }));
-    expect(onQueueClear).toHaveBeenCalled();
+    expect(getAgentQueue()).toEqual([]);
 });
