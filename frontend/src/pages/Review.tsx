@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
@@ -52,6 +53,7 @@ type Props = {
     onAssessmentChanged?: (mutation: AssessmentMutation) => void;
     onAgentContextChange?: (context: AgentViewContext) => void;
     onOpenAgent?: () => void;
+    agentPanelContainer?: HTMLElement | null;
 };
 
 export type { AssessmentMutation };
@@ -231,7 +233,7 @@ function hasOutdatedAssessment(row: ReviewRow): boolean {
     return row.targets.some(t => t.outdated) || row.context_outdated;
 }
 
-function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
+function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange, onOpenAgent, agentPanelContainer }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<ReviewRow[]>([]);
@@ -1851,10 +1853,10 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 </div>
             </div>
 
-            {reviewThreadId && (
+            {reviewThreadId && createPortal(
                 <aside id="bulk-review-agent-panel" hidden={!reviewChatOpen}
                     aria-label="Bulk assessment review chat"
-                    className="mb-4 h-[min(640px,75vh)] overflow-hidden rounded border border-neutral-700 bg-white">
+                    className={`fixed inset-y-0 right-0 z-[110] h-dvh w-full max-w-full overflow-hidden border-l border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentPanelContainer ? 'lg:static lg:h-auto' : ''}`}>
                     <AgentChat key={reviewThreadId} threadId={reviewThreadId} active={reviewChatOpen}
                         context={reviewContextRef.current}
                         onClose={() => setReviewChatOpen(false)} queue={reviewActions.queue}
@@ -1873,7 +1875,8 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         }))}
                         onQueueClear={() => setReviewActions(previous => ({ ...previous, queue: [] }))}
                     />
-                </aside>
+                </aside>,
+                agentPanelContainer ?? document.body
             )}
 
             {transferMode && (
