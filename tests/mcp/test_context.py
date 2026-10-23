@@ -286,3 +286,12 @@ class TestUpdateVariantContextImpl:
             )
             result = _update_variant_context_impl(client, "v1", threat_model="x")
         assert result == "Error: Variant not found"
+
+    def test_stride_variant_conflict_reports_server_message(self, client):
+        message = "This variant uses the STRIDE editor; edit its threat model and risks in the AI Context page."
+        with respx.mock:
+            respx.put(f"{BASE_URL}/api/variants/v1/context").mock(
+                return_value=httpx.Response(409, json={"error": message})
+            )
+            result = _update_variant_context_impl(client, "v1", threat_model="x")
+        assert result == f"Error: {message}"

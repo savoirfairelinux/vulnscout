@@ -76,7 +76,8 @@ Remove any old `VULNSCOUT_MCP_SERVER_PATH` setting from `config.env`. Developmen
 
 ## Connect and chat
 
-The **AI** tab's **Codebase References** drop zone accepts source files and
+The **Codebase References** drop zone on the **AI Context** page (a variant's
+**Context** tab, with **Codebase source** set to references) accepts source files and
 ZIP/TAR/TAR.GZ/TGZ archives for the selected variant. The embedded Agent inspects
 them using scoped `list_codebase_files`, `search_codebase` and
 `read_codebase_file` MCP tools, without extraction, execution or arbitrary
