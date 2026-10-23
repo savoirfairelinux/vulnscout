@@ -288,7 +288,11 @@ def _build_diff_export(
             )
         ],
         "packages": _export_package_evidence(
-            scan, diff.get("packages_added", []) + diff.get("packages_unchanged", []),
+            scan, [
+                _pkg_to_dict(package) for package in _package_rows(
+                    _packages_by_scan_ids([scan.id]).get(scan.id, set()),
+                ).values()
+            ],
         ),
         "assessments": [
             _strip_assessment(a)
@@ -398,6 +402,9 @@ _IMPORT_SOURCE_LABEL = "Imported VulnScout scan"
 _SUPPORTED_EXPORT_VERSION = 1
 #: Upper bound on exports accepted in one request, mirroring MAX_EXPORT_SCANS.
 _MAX_IMPORT_EXPORTS = 200
+#: Raw association limits, before deduplication, per package/export and request.
+_MAX_IMPORT_EVIDENCE_PER_PACKAGE = 1000
+_MAX_IMPORT_EVIDENCE = 10000
 #: Batch size for ``IN`` lookups, kept well under SQLite's parameter limit.
 _IMPORT_QUERY_CHUNK = 400
 
@@ -447,6 +454,17 @@ class _ImportPackageEvidence(TypedDict):
     source_urls: list[str] | None
     source_revisions: list[str] | None
     type: PackageType
+
+
+def _import_evidence_key(evidence: _ImportPackageEvidence) -> tuple[object, ...]:
+    """Hash association values without conflating unknown and empty identifiers."""
+    return (
+        evidence["type"],
+        None if evidence["cpe"] is None else tuple(evidence["cpe"]),
+        None if evidence["purl"] is None else tuple(evidence["purl"]),
+        None if evidence["source_urls"] is None else tuple(evidence["source_urls"]),
+        None if evidence["source_revisions"] is None else tuple(evidence["source_revisions"]),
+    )
 
 
 def _import_package_evidence(entry: dict) -> list[_ImportPackageEvidence]:
@@ -664,12 +682,24 @@ def _parse_scan_export(payload: object) -> _ScanImport:
 
     package_keys: list[PackageKey] = []
     package_evidence: dict[PackageKey, list[_ImportPackageEvidence]] = {}
+    seen_evidence: dict[PackageKey, set[tuple[object, ...]]] = {}
+    evidence_counts: dict[PackageKey, int] = {}
     seen_packages: set[PackageKey] = set()
     for entry in packages_raw:
         key = _import_package_key(entry)
+        raw_evidence = entry.get("sbom_evidence", [])
+        if isinstance(raw_evidence, list):
+            evidence_counts[key] = evidence_counts.get(key, 0) + len(raw_evidence)
+            if evidence_counts[key] > _MAX_IMPORT_EVIDENCE_PER_PACKAGE:
+                raise ValueError(
+                    f"'sbom_evidence' exceeds {_MAX_IMPORT_EVIDENCE_PER_PACKAGE} records per package per export"
+                )
         for evidence in _import_package_evidence(entry):
             entries = package_evidence.setdefault(key, [])
-            if evidence not in entries:
+            seen = seen_evidence.setdefault(key, set())
+            evidence_key = _import_evidence_key(evidence)
+            if evidence_key not in seen:
+                seen.add(evidence_key)
                 entries.append(evidence)
         if key not in seen_packages:
             seen_packages.add(key)
@@ -868,35 +898,31 @@ def _persist_scan_import(item: _ScanImport) -> _ImportSummary:
         # Two export entries can resolve to one row (e.g. suppliers that
         # normalise to the same value), so deduplicate their evidence.
         evidence_by_id: dict[uuid_module.UUID, list[_ImportPackageEvidence]] = {}
+        seen_evidence: dict[uuid_module.UUID, set[tuple[object, ...]]] = {}
         for key, package in packages.items():
             entries = evidence_by_id.setdefault(package.id, [])
+            seen = seen_evidence.setdefault(package.id, set())
             for evidence in item.package_evidence.get(key, []):
-                if evidence not in entries:
+                evidence_key = _import_evidence_key(evidence)
+                if evidence_key not in seen:
+                    seen.add(evidence_key)
                     entries.append(evidence)
-        document = SBOMDocument(
-            path=f"imported-scan://{scan.id}",
-            source_name=_IMPORT_SOURCE_LABEL,
-            format="vulnscout_json",
-            scan_id=scan.id,
-        )
-        db.session.add(document)
+        documents = [
+            SBOMDocument(
+                path=f"imported-scan://{scan.id}" + (f"/{index}" if index else ""),
+                source_name=_IMPORT_SOURCE_LABEL,
+                format="vulnscout_json",
+                scan_id=scan.id,
+            )
+            for index in range(max(1, max(map(len, evidence_by_id.values()), default=0)))
+        ]
+        db.session.add_all(documents)
         db.session.flush()
-        documents = [document]
         # Preserve separate association types and unknown identifier evidence.
         # Several pieces of evidence for one package need separate junction rows.
         for package_id, entries in evidence_by_id.items():
             associations: list[_ImportPackageEvidence | None] = list(entries) if entries else [None]
             for index, association_evidence in enumerate(associations):
-                if index == len(documents):
-                    document = SBOMDocument(
-                        path=f"imported-scan://{scan.id}/{index}",
-                        source_name=_IMPORT_SOURCE_LABEL,
-                        format="vulnscout_json",
-                        scan_id=scan.id,
-                    )
-                    db.session.add(document)
-                    db.session.flush()
-                    documents.append(document)
                 db.session.add(SBOMPackage(
                     sbom_document_id=documents[index].id,
                     package_id=package_id,
@@ -1012,6 +1038,20 @@ def _import_scan_exports(exports: Sequence[object]) -> tuple[list[_ImportSummary
     parsed: list[_ScanImport] = []
     batch_keys: set[tuple[uuid_module.UUID, str, str | None, str]] = set()
     skipped_count = 0
+
+    evidence_count = 0
+    for export in exports:
+        packages = export.get("packages") if isinstance(export, dict) else None
+        if not isinstance(packages, list):
+            continue
+        for package in packages:
+            evidence = package.get("sbom_evidence") if isinstance(package, dict) else None
+            if isinstance(evidence, list):
+                evidence_count += len(evidence)
+                if evidence_count > _MAX_IMPORT_EVIDENCE:
+                    raise ValueError(
+                        f"'sbom_evidence' exceeds {_MAX_IMPORT_EVIDENCE} records per request"
+                    )
 
     for index, export in enumerate(exports):
         try:

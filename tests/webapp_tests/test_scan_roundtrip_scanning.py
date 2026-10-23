@@ -4,6 +4,7 @@
 """A scan archive must preserve scoped scanner inputs, not just display names."""
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 import uuid
@@ -17,6 +18,7 @@ from src.extensions import db
 from src.helpers.active_scans import package_snapshots_for_sbom_scans
 from src.models import Finding, Package, Project, SBOMDocument, SBOMPackage, Scan, Variant
 from src.models.sbom_package import SBOMReimportRequiredError
+from src.routes import scans as scan_routes
 
 
 @pytest.fixture
@@ -205,3 +207,136 @@ def test_evidence_preserves_empty_unknown_and_multiple_association_types(app):
     db.session.commit()
     with pytest.raises(SBOMReimportRequiredError):
         _snapshots(scan_id)
+
+
+@pytest.mark.parametrize("endpoint", ["export-diff", "bulk-diff"])
+def test_upgraded_package_diff_roundtrip_preserves_scanner_evidence(app, endpoint):
+    variant = _variant("upgrade-source", "original")
+    scans = []
+    for version in ("1", "2"):
+        scan = Scan.create(f"foo {version}", variant.id)
+        scan.timestamp = datetime(2026, 1, int(version), tzinfo=timezone.utc)
+        package = Package(name="foo", version=version, supplier="")
+        document = SBOMDocument(
+            path=f"foo-{version}.json", source_name="foo", scan_id=scan.id,
+        )
+        db.session.add_all([package, document])
+        db.session.flush()
+        db.session.add(SBOMPackage(
+            sbom_document_id=document.id, package_id=package.id,
+            cpe=[f"cpe:2.3:a:example:foo:{version}:*:*:*:*:*:*:*"],
+            purl=[f"pkg:generic/foo@{version}"], source_urls=[], source_revisions=[],
+        ))
+        db.session.commit()
+        scans.append(scan)
+    expected = _snapshots(scans[-1].id)
+    client = app.test_client()
+    if endpoint == "bulk-diff":
+        response = client.get("/api/scans/export?type=diff")
+        payload = next(entry for entry in response.json if entry["scan_id"] == str(scans[-1].id))
+    else:
+        response = client.get(f"/api/scans/{scans[-1].id}/export-diff")
+        payload = response.json
+    assert response.status_code == 200
+    assert payload["diff"]["packages_upgraded"][0]["new_version"] == "2"
+    assert [(entry["package_name"], entry["package_version"]) for entry in payload["packages"]] == [("foo", "2")]
+    assert payload["packages"][0]["sbom_evidence"][0]["purl"] == ["pkg:generic/foo@2"]
+
+    db.session.remove()
+    db.drop_all()
+    db.create_all()
+    _variant("upgrade-destination", "restored")
+    payload.update(project_name="upgrade-destination", variant_name="restored")
+    response = client.post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.json
+    assert _snapshots(uuid.UUID(response.json["scan_id"])) == expected
+    _advisory_scan(app, "upgrade-destination", "restored", "osv")
+
+
+def _evidence_archive():
+    return {
+        "export_version": 1, "export_format": "full-result",
+        "scan_id": str(uuid.uuid4()), "scan_type": "import_sbom",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "project_name": "evidence-destination", "variant_name": "restored",
+        "packages": [{
+            "package_name": "foo", "package_version": "1",
+            "sbom_evidence": [
+                {"cpe": [], "purl": [], "source_urls": [], "source_revisions": [], "type": "normal"},
+            ],
+        }],
+        "findings": [],
+    }
+
+
+@pytest.mark.parametrize("split_packages", [False, True])
+def test_evidence_per_package_limit_counts_duplicates_before_deduplication(app, monkeypatch, split_packages):
+    monkeypatch.setattr(scan_routes, "_MAX_IMPORT_EVIDENCE_PER_PACKAGE", 3, raising=False)
+    _variant("evidence-destination", "restored")
+    payload = _evidence_archive()
+    package = payload["packages"][0]
+    package["sbom_evidence"] *= 2 if split_packages else 4
+    if split_packages:
+        payload["packages"].append(deepcopy(package))
+    response = app.test_client().post("/api/scans/import", json=payload)
+    assert response.status_code == 400
+    assert "sbom_evidence" in response.json["error"]
+    assert db.session.query(Scan).count() == 0
+    assert db.session.query(Package).count() == 0
+
+
+@pytest.mark.parametrize("split_exports", [False, True])
+def test_evidence_request_limit_rejects_batch_atomically(app, monkeypatch, split_exports):
+    monkeypatch.setattr(scan_routes, "_MAX_IMPORT_EVIDENCE", 3, raising=False)
+    _variant("evidence-destination", "restored")
+    payload = _evidence_archive()
+    payload["packages"][0]["sbom_evidence"] *= 2
+    second = deepcopy(payload)
+    if split_exports:
+        second["scan_id"] = str(uuid.uuid4())
+        second["timestamp"] = "2026-01-02T00:00:00Z"
+        payload = [payload, second]
+    else:
+        second["packages"][0]["package_name"] = "bar"
+        payload["packages"].extend(second["packages"])
+    response = app.test_client().post("/api/scans/import", json=payload)
+    assert response.status_code == 400
+    assert "sbom_evidence" in response.json["error"]
+    assert db.session.query(Scan).count() == 0
+
+
+def test_evidence_limits_accept_exact_boundary(app, monkeypatch):
+    monkeypatch.setattr(scan_routes, "_MAX_IMPORT_EVIDENCE_PER_PACKAGE", 3)
+    monkeypatch.setattr(scan_routes, "_MAX_IMPORT_EVIDENCE", 3)
+    _variant("evidence-destination", "restored")
+    payload = _evidence_archive()
+    payload["packages"][0]["sbom_evidence"] *= 3
+    response = app.test_client().post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.json
+    assert db.session.query(SBOMPackage).count() == 1
+
+
+def test_many_evidence_records_use_batched_flushes_and_hash_deduplication(app):
+    _variant("evidence-destination", "restored")
+    payload = _evidence_archive()
+    evidence = payload["packages"][0]["sbom_evidence"]
+    evidence[:] = [
+        {**evidence[0], "purl": [f"pkg:generic/foo@{index}"]}
+        for index in range(100)
+    ]
+    payload["packages"].append(deepcopy(payload["packages"][0]))
+    with (
+        patch.object(db.session(), "flush", wraps=db.session().flush) as flush,
+        patch.object(scan_routes, "_import_evidence_key", wraps=scan_routes._import_evidence_key) as key,
+    ):
+        response = app.test_client().post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.json
+    assert flush.call_count < 20
+    assert key.call_count == 300
+    scan_id = uuid.UUID(response.json["scan_id"])
+    assert db.session.query(SBOMDocument).filter_by(scan_id=scan_id).count() == 100
+    restored = app.test_client().get(f"/api/scans/{scan_id}/export-result").json
+    assert len(restored["packages"][0]["sbom_evidence"]) == 100
+    assert {tuple(entry["purl"]) for entry in restored["packages"][0]["sbom_evidence"]} == {
+        (f"pkg:generic/foo@{index}",) for index in range(100)
+    }
