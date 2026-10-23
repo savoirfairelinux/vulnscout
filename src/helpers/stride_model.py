@@ -240,3 +240,136 @@ def normalize_system(raw: object) -> dict[str, Optional[str]]:
         out[key] = None if value is None else _text(value, f"system.{key}", errs)
     errs.raise_if_any()
     return out
+
+
+RISK_DESCRIPTION_MAX = 120
+
+_SYSTEM_HEADINGS: tuple[tuple[str, str], ...] = (
+    ("scope", "System scope and assets"),
+    ("actors", "Actors and access"),
+    ("entry_points", "Entry points and data flows"),
+    ("trust_boundaries", "Trust boundaries"),
+)
+
+
+def _has_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _labelled(row_id: str, name: object) -> str:
+    return f"{row_id} {name}" if _has_text(name) else row_id
+
+
+def _titled_section(title: str, text: object) -> list[str]:
+    return [f"{title}:\n{text}"] if _has_text(text) else []
+
+
+def _system_sections(system: Optional[dict[str, Optional[str]]]) -> list[str]:
+    source = system or {}
+    out: list[str] = []
+    for key, heading in _SYSTEM_HEADINGS:
+        out.extend(_titled_section(heading, source.get(key)))
+    return out
+
+
+def _component_line(comp: dict[str, Any]) -> str:
+    line = f"- {_labelled(comp['id'], comp.get('name'))}"
+    if _has_text(comp.get("trust_zone")):
+        line += f" (trust zone: {comp['trust_zone']})"
+    if _has_text(comp.get("description")):
+        line += f": {comp['description']}"
+    return line
+
+
+def _interaction_line(item: dict[str, Any], names: dict[str, str]) -> str:
+    source, dest = item.get("source_id", ""), item.get("destination_id", "")
+    head = _labelled(item["id"], item.get("name"))
+    line = f"- {head}: {_labelled(source, names.get(source))} -> {_labelled(dest, names.get(dest))}"
+    for label, key in (("interface", "interface"), ("data", "data"), ("trust boundary", "trust_boundary")):
+        if _has_text(item.get(key)):
+            line += f"; {label}: {item[key]}"
+    return line
+
+
+def _threat_line(threat: dict[str, Any], names: dict[str, str]) -> str:
+    targets = [_labelled(t, names.get(t)) for t in threat.get("target_ids") or []]
+    line = f"- {threat['id']}"
+    if targets:
+        line += f" [{', '.join(targets)}]"
+    if _has_text(threat.get("description")):
+        line += f": {threat['description']}"
+    return line
+
+
+def _threat_groups(threats: list[dict[str, Any]], names: dict[str, str]) -> list[str]:
+    lines: list[str] = []
+    for category in STRIDE_CATEGORIES:
+        group = [_threat_line(t, names) for t in threats if t.get("category") == category]
+        if group:
+            lines.extend([CATEGORY_LABELS[category], *group])
+    return lines
+
+
+def _model_sections(model: dict[str, Any]) -> list[str]:
+    components = model.get("components") or []
+    interactions = model.get("interactions") or []
+    threats = model.get("threats") or []
+    names = {row["id"]: row.get("name") or "" for row in [*components, *interactions]}
+    out: list[str] = []
+    if components:
+        out.append("Components:\n" + "\n".join(_component_line(c) for c in components))
+    if interactions:
+        out.append("Interactions:\n" + "\n".join(_interaction_line(i, names) for i in interactions))
+    groups = _threat_groups(threats, names)
+    if groups:
+        out.append("Threats:\n" + "\n".join(groups))
+    out.extend(_titled_section("Additional notes", model.get("notes")))
+    return out
+
+
+def render_threat_model(system: Optional[dict[str, Optional[str]]], model: Optional[dict[str, Any]]) -> Optional[str]:
+    """Render the system description and STRIDE model as plain text for the agent."""
+    sections = _system_sections(system) + (_model_sections(model) if model else [])
+    return "\n\n".join(sections) if sections else None
+
+
+def _threat_summary(threat_id: str, threat: Optional[dict[str, Any]]) -> str:
+    if threat is None:
+        return threat_id
+    summary = f"{threat_id} {CATEGORY_LABELS.get(threat.get('category', ''), threat.get('category', ''))}".rstrip()
+    description = threat.get("description") or ""
+    if _has_text(description):
+        if len(description) > RISK_DESCRIPTION_MAX:
+            description = description[:RISK_DESCRIPTION_MAX] + "…"
+        summary += f", {description}"
+    return summary
+
+
+def _risk_detail(risk: dict[str, Any]) -> str:
+    ratings = [
+        f"{label}: {RATING_LABELS[risk[key]]}"
+        for label, key in (("Likelihood", "likelihood"), ("Impact", "impact"))
+        if risk.get(key) in RATING_LABELS
+    ]
+    detail = ", ".join(ratings)
+    extras = [
+        f"{label}: {risk[key]}"
+        for label, key in (("Mitigation", "mitigation"), ("Residual risk / decision", "residual"))
+        if _has_text(risk.get(key))
+    ]
+    return ". ".join(([detail] if detail else []) + extras)
+
+
+def render_risks(model: Optional[dict[str, Any]]) -> Optional[str]:
+    """Render the risk assessment as plain text; ``None`` when nothing is filled in."""
+    if not model:
+        return None
+    threats = {t["id"]: t for t in model.get("threats") or []}
+    lines = []
+    for risk in model.get("risks") or []:
+        detail = _risk_detail(risk)
+        if detail:
+            lines.append(f"- {_threat_summary(risk['threat_id'], threats.get(risk['threat_id']))} — {detail}")
+    sections = ["\n".join(lines)] if lines else []
+    sections.extend(_titled_section("Additional risk notes", model.get("risk_notes")))
+    return "\n\n".join(sections) if sections else None
