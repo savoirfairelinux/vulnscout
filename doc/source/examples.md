@@ -86,8 +86,8 @@ Alternatively, use the CycloneDX exports in a separate variant:
 ```
 
 Both files use CycloneDX, including `vex.json`; do not pass that file to
-`add --openvex`, which expects the different OpenVEX format. Import the BOM first
-and the VEX second in the same `add` command: the VEX uses BOM-Link URNs
+`add --openvex`, which expects the different OpenVEX format. Import the BOM
+and the VEX in the same `add` command, in either order: the VEX uses BOM-Link URNs
 (`urn:cdx:<BOM UUID>/<version>#<component reference>`) to refer to the BOM's
 components.
 
