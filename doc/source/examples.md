@@ -79,13 +79,29 @@ Import the original SPDX 2 archive and CVE-check results:
 Alternatively, use the CycloneDX exports in a separate variant:
 
 ```bash
-./vulnscout --serve --project yocto_demo --variant cyclonedx \
-  --add-cdx "$(pwd)/example/yocto-scarthgap-cdx/bom.json" \
-  --add-cdx "$(pwd)/example/yocto-scarthgap-cdx/vex.json"
+./vulnscout --project yocto_demo --variant cyclonedx add \
+  --cdx "$(pwd)/example/yocto-scarthgap-cdx/bom.json" \
+  --cdx "$(pwd)/example/yocto-scarthgap-cdx/vex.json"
+./vulnscout serve
 ```
 
 Both files use CycloneDX, including `vex.json`; do not pass that file to
-`--add-openvex`, which expects the different OpenVEX format.
+`add --openvex`, which expects the different OpenVEX format. Import the BOM
+and the VEX in the same `add` command, in either order: the VEX uses BOM-Link URNs
+(`urn:cdx:<BOM UUID>/<version>#<component reference>`) to refer to the BOM's
+components.
+
+Local `bom-ref` affects retain path-order resolution when multiple BOMs reuse a
+reference. Only BOM-Link references can resolve against a later inventory;
+detached VEX documents mixing both forms preserve their original local mapping.
+
+The bundled files contain 97 components (93 distinct name/version packages) and
+3,133 distinct CVE IDs, forming 7,063 distinct package/CVE findings. These findings
+should appear under the `yocto_demo` project and `cyclonedx` variant without
+running additional scanners. All bundled VEX entries are assessed as `resolved`
+or `not_affected`, so a view filtered to exploitable or unassessed vulnerabilities
+can legitimately be empty. Clear status filters to inspect the imported findings
+and assessments. The BOM alone provides inventory, not vulnerability findings.
 
 See [VulnScout CLI](vulnscout-script.md) for input flags, scanner selection,
 metadata refresh, and container lifecycle commands.
