@@ -14,7 +14,7 @@ request an AI second opinion on existing user-authored assessments.
 
 ## How it works
 
-Three pieces work together:
+Four pieces work together:
 
 - **VulnScout** — runs the API and web interface, stores assessments, and
   provides the review UI.
@@ -243,6 +243,32 @@ multi-target assessment**, not one assessment per variant. Variants with a
 different verdict get their own assessment. The skill finishes with a summary of
 every group, the assessment ids, any skipped variants, and any pending AI
 assessments it replaced.
+
+### Confidence and strict assessments
+
+The external `cve-assessment` skill scores confidence separately for each
+variant. Its default policy allows a definitive status at HIGH or MEDIUM
+confidence; LOW confidence always submits `under_investigation`. A MEDIUM
+confidence decision includes the uncertainty in `status_notes`.
+
+Explicitly request a **strict assessment** to require HIGH confidence for a
+definitive status:
+
+```text
+Do a strict assessment of CVE-2024-XXXXX for project "my-product",
+variants "production" and "staging".
+```
+
+| Confidence | Default assessment | Strict assessment |
+| --- | --- | --- |
+| HIGH | Determined status | Determined status |
+| MEDIUM | Determined status, with uncertainty noted | `under_investigation` |
+| LOW | `under_investigation` | `under_investigation` |
+
+This is a prompt-controlled policy of the external skill, not an MCP parameter
+or a persistent UI setting. The embedded Agent uses its own system instructions,
+not external skill discovery. Skill submissions remain pending human approval
+regardless of confidence or strictness.
 
 ```{note}
 The skill's **security objectives profiles** and **report templates** are

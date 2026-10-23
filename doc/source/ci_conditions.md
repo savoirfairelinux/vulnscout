@@ -19,7 +19,8 @@ The scope is selected as follows:
 - With no `-p` or `-v`, the condition is evaluated for the `default/default` project and variant.
 - With `-p NAME` and no variant, the condition is evaluated across all variants in that project.
 - With `-p NAME -v NAME`, the condition is evaluated only for that variant.
-- With `-v NAME` alone, the variant is selected from the `default` project.
+- The host command rejects `-v NAME` without `-p`; use `-p default -v NAME`
+  to select a variant in the default project.
 
 The `CONDITION` is a boolean expression that is evaluated against each vulnerability identified. If the condition is met, the IDs of the matching vulnerabilities are displayed in the output. A vulnerability shared by multiple variants is displayed once for a project-wide evaluation. The command returns an exit code of **2** if at least one vulnerability meets the condition.
 

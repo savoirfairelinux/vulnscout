@@ -23,8 +23,8 @@ Start VulnScout and import the provided example data:
 
 ```bash
 ./vulnscout add \
-  --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+  --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
+  --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ./vulnscout serve
 ```
 
@@ -35,6 +35,16 @@ http://localhost:7275
 ```
 
 The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, and imports the input files; `serve` then starts the web interface.
+
+The import uses project `default` and variant `default`. It loads the supplied
+findings but does not run additional scanners or refresh provider metadata.
+See [VulnScout CLI](vulnscout-script.md) for `scan` and `refresh`.
+
+If you need proxy settings or API keys **before** this import, run
+`./vulnscout start` first to generate the default configuration, then use
+`./vulnscout config set <key> <value>` and `./vulnscout restart`.
+Do not create a partial configuration with `config set` before initialization;
+see [Configuration](vulnscout-script.md#configuration).
 
 Once the initial import finishes, background scans, vulnerability-data refreshes, SBOM uploads, and document exports appear in the web interface's **Operation queue**. See {ref}`Operation Queue <operation-queue>` for progress, cancellation, and recovery after a reload.
 
@@ -63,3 +73,7 @@ To stop and remove the container entirely:
 ```bash
 ./vulnscout stop
 ```
+
+The database, configuration, and exports remain in `.vulnscout/cache/` and
+`.vulnscout/outputs/` beside the launcher unless you configured other paths.
+Stopping the container does not reset your data.

@@ -1,13 +1,23 @@
 # REST API
 
 VulnScout exposes a REST API served by the Flask backend, available at `http://localhost:7275/api/` by default.
-All endpoints return JSON unless otherwise noted. Routes are registered directly on the Flask application without URL prefixes or blueprints.
+Successful responses return JSON unless a download, stream, HTML page, or empty response is noted below.
+Most routes are registered directly on the Flask application; the agent routes use a blueprint without an additional URL prefix.
+Project, variant, scan, assessment, finding, and file IDs are UUIDs.
+Vulnerability IDs are strings such as `CVE-2024-1234` or `GHSA-xxxx-xxxx-xxxx`; operation and queue IDs are opaque strings, not UUIDs.
 
 The backend also exposes a machine-readable OpenAPI document at `GET /api/openapi`.
 For compatibility, the same document is also available at `GET /api` and `GET /api/openapi.json`.
 An interactive Swagger UI is available at `GET /api/openapi/ui` and is preconfigured to load the canonical spec from `/api/openapi`.
-This JSON document is generated from the registered Flask routes and is intended to be the canonical API specification for external tooling.
-It is fully route-driven: every registered `GET`, `POST`, `PUT`, `PATCH`, and `DELETE` operation under `/api` is included, and operation descriptions and request metadata are inferred from route docstrings when available.
+This JSON document is generated from the registered Flask routes. Every registered `GET`, `POST`, `PUT`, `PATCH`, and `DELETE` operation under `/api` is included; descriptions and explicitly annotated metadata come from route docstrings.
+It is useful for route discovery, but is not a complete or fully accurate request/response schema:
+
+- Bodies and responses generally use free-form object schemas, not validated field definitions. Field-style `body` annotations are not parsed as object properties and may overwrite preceding body metadata.
+- A default success response (`201` for POST, `200` otherwise) is added even when another success status is explicitly annotated; do not assume every advertised success status is returned.
+- Parameters ending in `_id` are inferred as UUIDs, even for vulnerability and operation IDs.
+- Stream and download media types may be generic or incorrect; for example, the event stream is advertised as JSON instead of `text/event-stream`.
+
+Use the contracts below and the implementation when generated metadata is ambiguous. Swagger UI loads the canonical *spec URL*, not a separately curated specification.
 
 ---
 
@@ -34,7 +44,8 @@ The value comes from the `VULNSCOUT_VERSION` environment variable (`"unknown"` w
 GET /api/scan/status
 ```
 
-Returns the progress of the container entrypoint import script. This endpoint is available even while the import is still running (all other `/api/*` routes return `503` until the script finishes).
+Returns the progress of the container entrypoint import script. Most API routes return `503` with `{"error":"Scan not finished"}` until import finishes.
+Exceptions are this endpoint, `/api/version`, the four OpenAPI URLs above, `/api/events/stream`, and the independently registered agent blueprint. Agent routes still apply their own access and availability checks.
 
 **Response:**
 ```json
@@ -69,11 +80,48 @@ Returns the active project and variant based on the `PROJECT_NAME` / `VARIANT_NA
 ```json
 {
   "project": { "id": "...", "name": "..." },
-  "variant": { "id": "...", "name": "...", "project_id": "..." }
+  "variant": { "id": "...", "name": "...", "project_id": "..." },
+  "product_name": "",
+  "author_name": "vulnscout",
+  "client_name": "",
+  "contact_email": "",
+  "grype_memlimit": ""
 }
 ```
 
 Fields may be `null` if no project or variant exists.
+
+### Update Mutable Config
+
+```
+PATCH /api/config
+```
+
+Accepts a JSON object containing any of `product_name`, `author_name`, `client_name`, `contact_email`, and `grype_memlimit`.
+Values must be strings or `null` (clears the value); whitespace is trimmed. Unknown keys return `400`.
+Nonempty email values must have email syntax. `grype_memlimit` accepts a Go memory value such as `4GiB`, `512MiB`, or `1073741824`, or `off`/`disabled`.
+
+```json
+{ "author_name": "Example team", "grype_memlimit": "4GiB" }
+```
+
+**Response:** `200` with the same complete configuration shape as GET; `400` for invalid input; `500` if persistence to `config.env` fails.
+Validated settings also update the process environment.
+
+### Read or Set the NVD API Key
+
+```
+GET /api/config/nvd-api-key
+PUT /api/config/nvd-api-key
+```
+
+GET returns `200` with `{"has_key":false,"masked_key":""}` or a masked configured key.
+PUT accepts `{"api_key":"your-key"}`; an empty string removes the key.
+A nonempty key is checked using an NVD API probe. Explicit credential rejection returns `400`; network failure returns `503`.
+Other non-200 probe responses may still save the key with a `warning`.
+
+**PUT response:** `200` with `{"status":"ok","has_key":true,"masked_key":"masked-value"}` and optional `warning`.
+Invalid/missing key input returns `400`; persistence failure returns `500`. The key is saved to `config.env` and the process environment.
 
 ### Global Native-Package Scan Defaults
 
@@ -91,7 +139,7 @@ GET returns the global native-package scan defaults. PUT replaces them with:
 }
 ```
 
-`exclude_native` must be a boolean. The exception list may contain up to 1000 names, each at most 255 characters and ending in `-native`. Names are trimmed, lowercased, deduplicated, and sorted. An empty list excludes all native packages when `exclude_native` is true; false scans all native packages while retaining the exception list.
+`exclude_native` must be a boolean. The exception list must contain strings, each at most 255 characters and ending in `-native`. Names are trimmed, lowercased, deduplicated, and sorted. An empty list excludes all native packages when `exclude_native` is true; false scans all native packages while retaining the exception list.
 
 These defaults apply to projects without saved scan preferences; saved project preferences override them. Values persist in the top-level `global` node of `project-scan.json` under `VULNSCOUT_CACHE_DIR`, alongside a `projects` node keyed by exact project names. Existing flat mappings are upgraded on save without dropping project entries.
 
@@ -100,6 +148,33 @@ These defaults apply to projects without saved scan preferences; saved project p
 ---
 
 ## Projects
+
+### Read or Save Project Scan Preferences
+
+```
+GET /api/projects/<project_id>/scan-configuration
+PUT /api/projects/<project_id>/scan-configuration
+PUT /api/projects/scan-configurations
+```
+
+Single-project PUT replaces native-package preferences using the same `exclude_native` boolean and
+`native_package_exceptions` list, normalization, and limits as the global defaults above.
+GET returns saved preferences or the global defaults when none are saved.
+Both single-project methods return `200` with these fields plus `native_packages`, the available `-native` package names from the project's latest SBOMs.
+
+The batch PUT accepts a nonempty JSON object keyed by project UUID and saves all selected preferences atomically:
+
+```json
+{
+  "11111111-1111-1111-1111-111111111111": {
+    "exclude_native": true,
+    "native_package_exceptions": ["cmake-native"]
+  }
+}
+```
+
+Its `200` response is the normalized preferences keyed by the same UUIDs, without `native_packages`.
+All three operations return `400` for invalid identifiers/preferences, `404` for missing projects, and `500` for configuration read/write failures.
 
 ### List Projects
 
@@ -153,6 +228,44 @@ Deletes the project and all its associated data (variants, scans, findings).
 ---
 
 ## Variants
+
+### Preview or Copy Custom Assessments
+
+```
+POST /api/variants/copy-assessments/preview
+POST /api/variants/copy-assessments
+```
+
+Both accept:
+
+```json
+{
+  "source_variant_id": "11111111-1111-1111-1111-111111111111",
+  "target_variant_id": "22222222-2222-2222-2222-222222222222",
+  "match_mode": "exact",
+  "version_precision": 1,
+  "copy_condition": "no_custom"
+}
+```
+
+Source and target variants must belong to the same project. Only custom assessments are copied,
+using active SBOM packages and findings actually observed in the target's active scans.
+`match_mode` is `exact` (name/version, default),
+`ignore_minor_version` (name plus leading version components), or `ignore_version` (name only).
+`version_precision` defaults to 1, must be integer-convertible, and is clamped to at least 1.
+`copy_condition` is `no_custom` (default), `different_status`, or `different_value`; the latter two also allow a copy when the newest target custom assessment differs in simplified status or copied content, respectively.
+Copies create new custom rows; they do not overwrite existing rows.
+
+**Preview response:** `200` with `count`, `skipped`, `message`, `mode`, and either:
+
+- `entries` for exact matching, with `source_assessment_id`, `source_finding_id`, `target_finding_id`, `vulnerability_id`, `source_package`, `target_package`, `already_has_custom`, `selected`, and `assessment_details`.
+- `groups` for other modes, with source assessment/finding/package details and a `candidates` array containing target finding/package IDs, `already_has_custom`, and `selected`.
+
+The copy request optionally includes `selections`, an array of
+`{"source_assessment_id":"uuid","target_finding_id":"uuid"}` pairs from the preview.
+Without it, eligible candidates are recomputed and copied automatically.
+**Copy response:** `200` with `{"copied":2,"skipped":0,"message":"Copied 2 assessments to target."}`.
+Invalid payloads, IDs, modes, or selections return `400`; missing variants return `404`.
 
 ### List All Variants
 
@@ -264,6 +377,8 @@ Unsafe paths, duplicate file paths, encrypted ZIP members, links,
 sparse files and special entries are rejected. Archives are never extracted or executed.
 Upload/delete updates the variant context timestamp, marking older pending AI assessments outdated.
 Context JSON import/export includes text fields only, not uploaded references; text imports leave existing uploads intact.
+Upload returns `201` with the file's `id`, `original_name`, and `description`; delete returns an empty `204` response.
+Invalid uploads/UUIDs return `400`, missing variants/references `404`, and upload storage failures `500`.
 
 ### Browse Uploaded Source
 
@@ -303,10 +418,15 @@ GET /api/packages
 | `compare_variant_id` | UUID | Second variant for comparison (requires `variant_id`) |
 | `operation` | string | `"difference"` (default) or `"intersection"` — comparison mode |
 | `format` | string | `"list"` (default) or `"dict"` (keyed by `name@version`) |
+| `variant_ids` | string | Comma-separated variant IDs; union (default) or intersection |
+| `include_outdated` | boolean-like string | `1`, `true`, or `yes` includes historical packages alongside active packages |
+| `outdated_only` | boolean-like string | Same true values; returns historical packages only |
 
 **Response:** JSON array of package objects enriched with `variants` and `sources` fields.
 
-When `compare_variant_id` is provided together with `variant_id`, the endpoint computes a diff or intersection of packages between the two variants.
+When `compare_variant_id` is provided together with `variant_id`, difference means packages in the **compare** variant but not the base `variant_id`; intersection includes both.
+Pairwise comparison takes precedence over `variant_ids`, then single `variant_id`, then `project_id`.
+Outdated queries require a variant/project scope (`400` otherwise). Outdated entries have `outdated: true`, `variant_id`, `finding_ids`, and `vulnerability_ids`; their dict keys append `@<variant_id>` to `name@version`.
 
 ### Package Dependencies
 
@@ -344,10 +464,14 @@ GET /api/vulnerabilities
 | `variant_id` | UUID | Filter by variant |
 | `project_id` | UUID | Filter by project |
 | `compare_variant_id` | UUID | Second variant for comparison |
-| `operation` | string | `"difference"` or `"intersection"` |
-| `format` | string | `"list"` (default) or `"dict"` |
+| `variant_ids` | string | Comma-separated variant IDs; union (default) or intersection |
+| `operation` | string | Pairwise `"difference"` (compare minus base, default) or `"intersection"`; multi-variant `"union"` (default) or `"intersection"` |
+| `format` | string | `"list"` (default), `"dict"` (keyed by vulnerability ID), or `"compact"` |
 
 **Response:** JSON array of vulnerability objects enriched with `packages_current`, `variants`, `first_scan_date` and `found_by`.
+
+`dict` returns an object instead. `compact` returns a reduced array without texts, URLs, or CPEs, sets `details_loaded: false`, and reduces CVSS entries to version, score, and attack vector.
+Pairwise comparison takes precedence over `variant_ids`, then single variant, then project.
 
 > **Note:** When `variant_id` or `project_id` is provided, findings from tool scans (Grype, NVD, OSV) are automatically filtered to only include packages present in the variant's active SBOM. This prevents stale or cross-variant vulnerabilities from appearing. SBOM-scan findings are always included unconditionally.
 
@@ -358,6 +482,40 @@ GET /api/vulnerabilities/<id>
 ```
 
 **Response:** Vulnerability object. `404` if not found.
+
+Optional `variant_id` applies variant-scoped effort/CVSS and observation text selection; `project_id` scopes texts to a project when no variant is supplied.
+With `variant_id` and `agent_scoped=1`, the vulnerability must be in that variant's active scope (`404` otherwise), and packages are scoped accordingly. Malformed UUID filters return `400`. Missing vulnerabilities currently return plain-text `Not found`.
+
+### Get Variant-Specific Vulnerability Data
+
+```
+GET /api/vulnerabilities/<id>/variant-snapshots
+GET /api/vulnerabilities/<vuln_id>/variant-active-packages
+```
+
+Both accept an optional `project_id` UUID to restrict variants (`400` for a malformed UUID).
+
+Snapshots return `200` with an array of `{"variant_id":"uuid","effort":{"optimistic":"PT1H","likely":"PT2H","pessimistic":"PT4H"},"custom_cvss":[]}`.
+Each entry contains the scoped effort and custom CVSS metric objects for an observing variant with available scoped data.
+A missing vulnerability returns plain-text `Not found` with `404`.
+
+Active-packages returns `200` with an array of:
+
+```json
+[
+  {
+    "variant_id": "11111111-1111-1111-1111-111111111111",
+    "active_packages": ["pkg@1.0::supplier"],
+    "findings": [
+      { "finding_id": "22222222-2222-2222-2222-222222222222", "package": "pkg@1.0::supplier", "outdated": false }
+    ]
+  }
+]
+```
+
+`active_packages` contains the vulnerability's packages still present in each variant's active SBOM.
+`findings` describes actually observed variant/finding pairs; `outdated` compares package name/version with the active SBOM.
+No findings (including an unknown vulnerability) returns an empty array.
 
 ### Update Vulnerability
 
@@ -371,22 +529,27 @@ Update effort estimates and/or CVSS scoring for a vulnerability.
 ```json
 {
   "effort": {
-    "optimistic": 3600,
-    "likely": 7200,
-    "pessimistic": 14400
+    "optimistic": 1,
+    "likely": 2,
+    "pessimistic": 4
   },
   "cvss": {
     "base_score": 7.5,
     "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
     "version": "3.1"
   },
-  "variant_id": "optional-uuid"
+  "variant_id": "11111111-1111-1111-1111-111111111111"
 }
 ```
 
-Effort values can be integers (seconds) or ISO 8601 duration strings.
+Effort values are integer **hours** or ISO 8601 duration strings (converted to whole hours, discarding sub-hour precision).
+All three effort fields are required and must satisfy `optimistic <= likely <= pessimistic`.
+CVSS updates require all of `base_score`, `vector_string`, and `version`; `author` and `origin` are optional.
+With `variant_id`, writes affect that variant. Without it, updates apply to every variant observing the vulnerability, falling back to unscoped data if none does.
 
 **Response:** Updated vulnerability object.
+
+Success returns `200`; invalid effort/CVSS/UUID input returns `400`, and a missing vulnerability returns plain-text `Not found` with `404`.
 
 ### Batch Update Vulnerabilities
 
@@ -398,8 +561,8 @@ PATCH /api/vulnerabilities/batch
 ```json
 {
   "vulnerabilities": [
-    { "id": "CVE-2024-1234", "effort": { "likely": 3600 } },
-    { "id": "CVE-2024-5678", "cvss": { "base_score": 9.0 } }
+    { "id": "CVE-2024-1234", "effort": { "optimistic": 1, "likely": 2, "pessimistic": 4 } },
+    { "id": "CVE-2024-5678", "cvss": { "base_score": 9.8, "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "version": "3.1" } }
   ]
 }
 ```
@@ -409,11 +572,12 @@ PATCH /api/vulnerabilities/batch
 {
   "status": "success",
   "vulnerabilities": [...],
-  "count": 2,
-  "errors": [],
-  "error_count": 0
+  "count": 2
 }
 ```
+
+Batch update items support `variant_id` and the same complete effort/CVSS objects as the single update.
+Items are processed independently: `200` if any succeed, `400` if none succeed. Failures add `errors` and `error_count`; these keys are absent when there are no failures.
 
 ### Evaluate a Match Condition
 
@@ -466,6 +630,9 @@ GET /api/assessments
 | `project_id` | UUID | Filter by project |
 | `format` | string | `"list"` (default) or `"dict"` |
 
+`format=compact` also returns a reduced positional-array representation for the Explorer, rather than full assessment objects.
+Single-variant filtering takes precedence over project filtering.
+
 ### Get Single Assessment
 
 ```
@@ -481,7 +648,6 @@ every `(variant_id, package)` pair the assessment covers, each annotated with
   "id": "uuid",
   "vuln_id": "CVE-2024-1234",
   "status": "not_affected",
-  "simplified_status": "not_affected",
   "status_notes": "",
   "justification": "vulnerable_code_not_present",
   "impact_statement": "",
@@ -494,6 +660,9 @@ every `(variant_id, package)` pair the assessment covers, each annotated with
   ]
 }
 ```
+
+Single-assessment responses also include flattened `packages`, `variant_id` (null for multi-variant scope), `variant_ids`, `source`, `last_update`, `project_id`, `assessment_fingerprint`, and `reviews`.
+Targets include `project_id`. `simplified_status` is not part of this serializer. Use the fingerprint when writing an independent review below.
 
 ### List Assessments for a Vulnerability
 
@@ -645,9 +814,8 @@ POST /api/vulnerabilities/<vuln_id>/assessments
 {
   "packages": ["package-name@1.0.0"],
   "status": "affected",
-  "variant_id": "optional-uuid",
+  "variant_id": "11111111-1111-1111-1111-111111111111",
   "status_notes": "Confirmed by manual review",
-  "justification": "",
   "impact_statement": "",
   "workaround": "",
   "responses": ["update"]
@@ -657,6 +825,13 @@ POST /api/vulnerabilities/<vuln_id>/assessments
 `variant_ids` (a list) may be given instead of `variant_id` to scope one
 assessment to several variants. Set `"ai_generated": true` to create a pending
 AI assessment (`origin` `"ai"`) instead of a `custom` one.
+
+One variant scope is required. Alternatively, supply a non-empty `targets` array of exact
+`{"variant_id":"uuid","package":"name@version::supplier"}` pairs; it overrides flattened scope fields.
+Packages must already exist and have an observed finding for this vulnerability in at least one selected variant; no package or finding is invented.
+Selected variants must belong to one project. Unobserved cross-product pairs are omitted.
+For `not_affected`, provide an accepted OpenVEX/CycloneDX justification; omit `justification` rather than sending an empty string for other statuses.
+An optional ISO 8601 `timestamp` overrides creation time. Success returns `200`, invalid input `400`, database errors `500`.
 
 **Response:**
 ```
@@ -688,8 +863,8 @@ POST /api/assessments/batch
 ```json
 {
   "assessments": [
-    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_ids": ["uuid-a", "uuid-b"], "status": "affected" },
-    { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "variant_id": "uuid", "status": "not_affected", "justification": "code_not_reachable" }
+    { "vuln_id": "CVE-2024-1234", "packages": ["pkg@1.0"], "variant_ids": ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"], "status": "affected" },
+    { "vuln_id": "CVE-2024-5678", "packages": ["pkg@2.0"], "variant_id": "11111111-1111-1111-1111-111111111111", "status": "not_affected", "justification": "code_not_reachable" }
   ]
 }
 ```
@@ -742,7 +917,13 @@ PATCH /api/assessments/<assessment_id>
 }
 ```
 
-All fields are optional.
+Individual content fields are optional, but the JSON object must not be empty.
+An existing `not_affected` assessment still requires a `justification` key when edited.
+`update_timestamp` defaults to `true`; `false` preserves the timestamp, while an optional ISO 8601 `timestamp` selects it explicitly when updating.
+`allowed_variant_ids` may restrict the edit to assessments whose complete current target set is within that non-empty UUID array (`409` on scope changes).
+Targets must still reference observed package/vulnerability/variant combinations (`400` otherwise).
+Editing a scan-imported assessment converts it to `custom`; editing pending AI keeps origin `ai` until explicit approval/rejection.
+Changing status away from `not_affected`/`false_positive` clears justification and impact before other supplied fields are applied.
 
 **Response:**
 ```
@@ -757,6 +938,8 @@ All fields are optional.
 ```
 DELETE /api/assessments/<assessment_id>
 ```
+
+Deletes the whole assessment and its targets. Pending AI assessments return `400`; use the reject endpoint instead. Missing assessments return `404`.
 
 **Response:**
 ```json
@@ -777,6 +960,44 @@ GET /api/assessments/review
 Returns only user-created assessments (not scan-imported).
 
 **Query parameters:** `variant_id`, `project_id`.
+
+#### List Pending AI Assessments
+
+```
+GET /api/assessments/review/ai
+```
+
+Optional `variant_id` or `project_id` filters use UUIDs; a single variant takes precedence.
+Returns `200` with an array of pending `origin: "ai"` assessments, their target/outdated metadata,
+and `context_outdated` when project or variant context changed after assessment creation.
+Malformed UUIDs return `400`. This endpoint does not approve suggestions.
+
+#### List Custom CVSS and Time Estimates
+
+```
+GET /api/assessments/review/time-estimates
+GET /api/assessments/review/custom-cvss
+DELETE /api/assessments/review/time-estimates
+DELETE /api/assessments/review/custom-cvss
+```
+
+GET accepts optional `variant_id` or `project_id` (variant takes precedence; malformed UUIDs return `400`).
+Time estimates include nonzero records with `id`, `vuln_id`, nullable `variant_id`, integer-hour
+`optimistic`/`likely`/`pessimistic`, corresponding `optimistic_iso`/`likely_iso`/`pessimistic_iso` duration strings,
+and `vuln_texts`. Variant-scoped entries take precedence over an unscoped estimate for the same vulnerability.
+Custom CVSS entries contain `id`, `vuln_id`, nullable `variant_id`, `version`, `vector_string`,
+`base_score`, `author`, `origin`, and `vuln_texts`; scanner-authored records are excluded.
+Scoped queries can include legacy unscoped data. Both return `200` arrays, including `[]`.
+
+DELETE takes a nonempty JSON `ids` array of record UUIDs:
+
+```json
+{ "ids": ["11111111-1111-1111-1111-111111111111"] }
+```
+
+It deletes exactly those records atomically, not every record in a query scope.
+Returns `200` with `{"status":"success","deleted":["11111111-1111-1111-1111-111111111111"]}`,
+`400` for invalid IDs/body, or `404` if any record is absent (or is not custom CVSS for that endpoint).
 
 #### Export Review Assessments
 
@@ -809,6 +1030,7 @@ Upload an OpenVEX `.json` file into a selected variant. The uploaded filename is
 |-------|------|-------------|
 | `file` | file | OpenVEX `.json` document (required) |
 | `variant_id` | UUID | Required target variant. |
+| `timestamp_policy` | string | `"original"` (default) preserves statement timestamps; `"current"` uses import time |
 
 **Response:**
 ```json
@@ -839,9 +1061,9 @@ from the **AI Assessments** tab after import.
 | `variant_id` | UUID | Restrict to selected variants; may be repeated. |
 | `project_id` | UUID | Restrict to all variants in a project. |
 
-**Response:** JSON file download (`Content-Disposition: attachment; filename=custom_data.json`) containing:
+**Response:** JSON file download (`Content-Disposition: attachment`) named `custom_data_<project-name>.json` when a project name is resolved, otherwise `custom_data.json`, containing:
 
-```json
+```text
 {
   "version": 2,
   "assessments": [...],
@@ -872,12 +1094,14 @@ pending state and appear in the **AI Assessments** tab.
 
 Accepts either:
 
-- `multipart/form-data` with a `file` field containing a `.json` file.
+- `multipart/form-data` with a `file` field containing a `.json` file and a required `project_id` form field.
 - `application/json` body with the custom-data payload directly.
 
 The JSON body must include the destination `project_id` UUID. Version 2 variant
 names are resolved only within that project. Version 1 retains its legacy
 variant ID/name resolution for existing backups.
+The payload's optional `timestamp_policy` is `"current"` (default) or `"original"`; for multipart, it belongs inside the uploaded JSON, not a separate form field.
+Do not supply `variant_id` query parameters: variants are selected from the file. Missing destination projects return `404`.
 
 **Response:**
 ```json
@@ -892,9 +1116,121 @@ variant ID/name resolution for existing backups.
 
 Returns `400` for invalid format or unsupported content type.
 
+#### Update an Existing Review Export
+
+```
+POST /api/assessments/review/export-update
+```
+
+Accepts multipart form-data: required `file` (a `.json` VulnScout custom-data or OpenVEX export),
+required `project_id`, and one or more repeated `variant_id` fields belonging to that project.
+OpenVEX requires exactly one variant; optional `author` defaults to the uploaded author or `Savoir-faire Linux`.
+The uploaded format determines the output format. Current database records replace matching records,
+records outside the selected variants are removed, and new records are appended while retaining matching order.
+This updates the downloaded file, not the database.
+
+**Response:** `200` JSON attachment using a sanitized uploaded filename; `400` for invalid format/body/scope,
+`404` for a missing selected variant.
+
+### Independent Reviews of Custom Assessments
+
+These reviews are separate from the assessment itself, one per `(assessment, variant, finding)` target.
+They never change the assessment's VEX verdict.
+
+#### Read or Delete Reviews
+
+```
+GET /api/assessments/<assessment_id>/review
+GET /api/assessments/<assessment_id>/reviews
+DELETE /api/assessments/<assessment_id>/review
+```
+
+Singular GET and DELETE require query `variant_id` and either `finding_id` (UUID, takes precedence)
+or `package` (exact package string ID). The resolved pair must be a target of that assessment.
+Plural GET needs no query and returns every target's review.
+
+**Responses:** singular GET returns `200` with `{"review":{...}}`; plural GET returns `{"reviews":[...]}`.
+DELETE returns `200` with `{"status":"success","deleted":"<assessment_id>"}`.
+Invalid IDs/targets return `400`; missing assessments or singular reviews return `404`.
+Review objects have `id`, `assessment_id`, `variant_id`, `package`, VEX fields (`status`, `status_notes`,
+`justification`, `impact_statement`, `workaround`, `responses`), `rationale`, `timestamp`,
+`verdict` (`agrees` or `differs`, comparing VEX content), and `is_stale` (assessment changed since review).
+
+#### Write a Target Review
+
+```
+PUT /api/assessments/<assessment_id>/review
+```
+
+Read the assessment first, then submit its current `assessment_fingerprint` as
+`expected_assessment_fingerprint`, with a target and independently derived verdict:
+
+```json
+{
+  "variant_id": "11111111-1111-1111-1111-111111111111",
+  "package": "pkg@1.0::supplier",
+  "expected_assessment_fingerprint": "fingerprint-from-assessment-response",
+  "status": "not_affected",
+  "justification": "vulnerable_code_not_present",
+  "rationale": "The vulnerable implementation is absent from this target.",
+  "responses": []
+}
+```
+
+`finding_id` may replace `package`. `status` must be an OpenVEX status
+(`under_investigation`, `not_affected`, `affected`, `fixed`); nonblank `rationale` is required.
+`not_affected` requires an OpenVEX justification. Optional `status_notes`, `impact_statement`,
+`workaround`, and `responses` are stored with the review; `responses` must be an array.
+PUT creates or replaces the review for that target.
+
+**Response:** `200` with `{"status":"success","review":{...}}`; `400` for invalid data/targets;
+`404` for missing assessment; `409` if origin is not `custom` or the fingerprint no longer matches.
+Fingerprint conflicts include `code: "assessment_changed"` and the current `assessment_fingerprint`; reread and reassess before retrying.
+
+#### List Custom Assessments and Reviews
+
+```
+GET /api/custom-assessments
+GET /api/assessment-reviews
+```
+
+Both accept repeated `variant_id` UUIDs or `project_id`; if both are supplied, variants must belong to that project.
+Without a filter, results span all variants. Invalid identifiers/scope return `400`, and a missing explicitly
+selected variant checked against a project returns `404`.
+
+Custom-assessments accepts `has_review=true` (any reviewed scoped target) or `false`
+(any unreviewed or stale scoped target), `order=timestamp_desc` (default) or `timestamp_asc`,
+`limit` (integer >=1, default 50), and `offset` (integer >=0, default 0).
+It returns a `200` array of custom assessment objects with scoped `packages`, `variant_ids`, `targets`,
+`project_id`, `assessment_fingerprint`, `has_review`, and `target_reviews`
+(`variant_id`, `package`, `has_review`, `is_stale`). Invalid pagination returns `400`.
+
+Assessment-reviews additionally accepts `vulnerability_id` and returns `200` with an object keyed by
+assessment ID, whose values are arrays of review objects (one per target). An empty scope returns `{}`.
+
 ---
 
 ## Documents
+
+### Upload a Custom Template or Image Asset
+
+```
+POST /api/documents/templates
+POST /api/documents/assets
+```
+
+Both require `multipart/form-data` with a single `file` field and save into the first writable template directory
+(assets use its `assets/` subdirectory). Filenames are sanitized; uploading the same sanitized name replaces that file.
+
+Templates allow `adoc`, `asciidoc`, `html`, `htm`, `md`, `markdown`, `csv`, `txt`, `json`, `xml`, `tex`, `j2`, `jinja`, and `jinja2`, up to 10 MiB.
+**Template response:** `201` with `{"id":"custom.adoc","category":["custom"],"message":"Template imported."}`.
+
+Assets allow genuine raster images matching `png`, `jpg`, `jpeg`, `gif`, or `webp`, up to 5 MiB.
+SVG is not accepted by this upload endpoint.
+**Asset response:** `201` with `{"name":"logo.png","message":"Asset uploaded."}`.
+
+Both return `400` for missing/invalid upload or unsupported content, `413` when the applicable upload/request size limit is exceeded,
+and `500` if no writable storage exists or saving fails. Discover saved resources through `GET /api/documents`.
 
 ### List Available Documents
 
@@ -907,12 +1243,15 @@ Returns all available report templates and SBOM export formats.
 **Response:**
 ```json
 [
-  { "id": "summary.adoc", "extension": "adoc", "is_template": true, "category": "report" },
-  { "id": "CycloneDX 1.6", "extension": "json", "is_template": false, "category": "sbom" }
+  { "id": "summary.adoc", "extension": "adoc | pdf | html", "is_template": true, "category": ["built-in"] },
+  { "id": "CycloneDX 1.6", "extension": "json", "is_template": false, "category": ["sbom"] }
 ]
 ```
 
 ### Generate / Download Document
+
+The list also includes image assets (`is_template: false`, `category: ["assets"]`).
+`category` is always an array; `extension` may contain pipe-separated alternatives.
 
 ```
 GET /api/documents/<doc_name>
@@ -932,8 +1271,12 @@ Generate a report from a template or export an SBOM in the requested format.
 | `export_date` | string | Export date override |
 | `ignore_before` | ISO datetime | Ignore vulnerabilities assessed before this date |
 | `only_epss_greater` | float | Only include vulns with EPSS score above this value |
+| `variant_id` | UUID | Restrict to one variant; takes precedence over `project_id` |
+| `project_id` | UUID | Restrict to all variants of one project |
 
 **Response:** File download with appropriate `Content-Type` and `Content-Disposition` headers. Supports JSON, XML, PDF, and HTML outputs depending on the template.
+
+Without a scope filter, exports include global data. The same URL can download an asset by its name.
 
 ### Export Multiple Documents
 
@@ -968,6 +1311,52 @@ With `"async": true`, returns `202 Accepted` with `{ "op_id": "export:<uuid>" }`
 
 ## Scans
 
+### Import Scan Exports
+
+```
+POST /api/scans/import
+```
+
+Accepts an `application/json` scan export object, or a nonempty array of up to 200 exports from
+`GET /api/scans/export`. Use exports from `/export-diff` or `/export-result`, not raw scanner/SBOM files.
+Supported markers are `export_version: 1` and `export_format: "scan-diff"` or `"full-result"`.
+Legacy full-result objects with neither marker remain accepted if they carry the required full-result fields.
+
+Required metadata is `scan_id` (source UUID), `scan_type` (`import_sbom` or `vulnerability_scan`),
+ISO 8601 `timestamp`, `project_name`, and `variant_name`. Names must resolve to an existing destination
+project/variant; no destination UUID override is accepted.
+`findings` is required; `packages` is required for SBOM imports.
+Package entries use `package_name`, optional `package_version`, and optional `supplier`; findings add `vulnerability_id`.
+Optional `scan_source`, `assessments`, and `newly_detected_assessments` preserve supported scan evidence.
+The exported `diff` is ignored: the destination recomputes history against its own timeline.
+
+Minimal empty-SBOM example (the named destination must already exist):
+
+```json
+{
+  "export_version": 1,
+  "export_format": "full-result",
+  "scan_id": "11111111-1111-1111-1111-111111111111",
+  "scan_type": "import_sbom",
+  "timestamp": "2026-01-01T00:00:00Z",
+  "project_name": "my-project",
+  "variant_name": "default",
+  "packages": [],
+  "findings": []
+}
+```
+
+The whole request is validated and written atomically. Imported scans receive new destination IDs.
+Previously imported/existing duplicate scans are skipped; duplicate scan entries within one request return `409`.
+
+**Response:** `201` with `imported_count`, `skipped_count`, and `scans` (one entry per imported scan:
+`scan_id`, `source_scan_id`, `format` (`diff` or `full`), `project_name`, `variant_name`,
+`package_count`, `finding_count`, `vulnerability_count`, `assessment_count`, `is_first`).
+Top-level `scan_id`, `format`, and `is_first` describe the last imported scan (null when all are skipped);
+top-level counts aggregate imported entries.
+Errors: `400` malformed/unsupported payload, `404` missing destination, `409` conflicting entries,
+`413` request-size limit, `500` persistence failure. No partial import is kept on failure.
+
 ### List Scans
 
 ```
@@ -975,6 +1364,9 @@ GET /api/scans
 ```
 
 Returns all scans with diff statistics compared to the previous scan of the same variant.
+
+Optional `variant_ids` is a comma-separated UUID list. With it, `project_id` validates that all selected variants belong to that project; `project_id` alone does not filter this endpoint (use the project-scans URL).
+Invalid filters return `400`, missing selected variants `404`.
 
 **Response:** JSON array of scan objects including:
 - `finding_count`, `package_count`, `vuln_count`
@@ -1092,7 +1484,8 @@ GET /api/scans/<scan_id>/global-result
 
 Returns every active finding, vulnerability, and package at the time of the given scan, combining SBOM and tool-scan data with source attribution. Tool-scan findings are filtered to packages present in the SBOM.
 
-**Response:** JSON object with `findings`, `vulnerabilities`, and `packages` arrays, each entry enriched with an `origin` field indicating the source (SBOM document name/format or tool scan source).
+**Response:** JSON object with `scan_id`, `scan_type`, `findings`, `vulnerabilities`, `packages`, and `assessments`, plus `finding_count`, `vuln_count`, `package_count`, and `assessment_count`.
+Packages, findings, and vulnerabilities carry `sources` arrays (SBOM document name/format or tool scan source), not an `origin` field.
 
 ### Export Scan Diff
 
@@ -1134,7 +1527,42 @@ Exports all visible scans, optionally filtered by variant or project.
 | `project_id` | UUID | Restrict to all variants of a project |
 | `type` | string | `"diff"` (default) or `"total"` — selects the diff or global-result export format |
 
-**Response:** JSON array of export objects grouped per variant, served as a file download (`Content-Disposition: attachment`). Returns `404` if no scans match the filter.
+**Response:** JSON array of export objects grouped per variant, served as a file download (`Content-Disposition: attachment`).
+No matching scans returns `200` with `[]`, without download headers. More than 200 matching scans returns `400`; reduce the scope. A missing requested project returns `404`.
+
+### Preview and Delete Obsolete Data
+
+```
+GET /api/outdated-data
+DELETE /api/outdated-data
+GET /api/empty-scans
+DELETE /api/empty-scans
+GET /api/orphaned-vulnerabilities
+DELETE /api/orphaned-vulnerabilities
+```
+
+These operations are global, not scoped by project/variant query parameters. Always fetch a fresh GET preview,
+then send its **complete** candidate set in the DELETE JSON body. They are not arbitrary subset-deletion APIs.
+
+| Endpoint | GET response (`200`) | DELETE body |
+|----------|----------------------|-------------|
+| `/api/outdated-data` | `candidate_ids` (`observations`, `assessments`, `package_pairs`), `packages`, `assessments` | `{"candidate_ids": <unchanged candidate_ids object>}` |
+| `/api/empty-scans` | `{"scans":[...]}`; entries have `id`, `description`, `timestamp`, `project`, `variant` | `{"scan_ids":["<every preview scan id>"]}` |
+| `/api/orphaned-vulnerabilities` | `{"vulnerabilities":[{"id":"CVE-2024-1234","assessments":0}]}` | `{"vulnerability_ids":["<every preview vulnerability id>"]}` |
+
+Outdated cleanup removes stale observations, package/variant evidence, and assessment targets,
+pruning shared rows only when no references remain. Its `package_pairs` are `{"package_id":"uuid","variant_id":"uuid"}` objects.
+The DELETE `200` response contains counts: `assessments_deleted`, `assessment_targets_removed`,
+`observations_deleted`, `sbom_packages_deleted`, `sbom_observations_deleted`, `findings_deleted`,
+`vulnerabilities_deleted`, and `packages_deleted`.
+
+Empty scans are non-initial **tool** scans whose complete change statistics are zero;
+DELETE returns `{"scans_deleted":0}` with the actual count.
+Orphaned vulnerabilities lack scan/SBOM evidence, time estimates, and variant-scoped metrics;
+DELETE returns `vulnerabilities_deleted`, `assessments_deleted`, and `findings_deleted` counts.
+
+All DELETEs return `400` for an invalid/missing candidate body, `409` if the preview no longer matches current candidates
+(fetch a new preview and review it), and `500` on cleanup failure. Empty complete candidate sets are allowed.
 
 ---
 
@@ -1142,7 +1570,7 @@ Exports all visible scans, optionally filtered by variant or project.
 
 These endpoints update cached NVD data (description, CVSS scores, references) for vulnerabilities already present in the database. Unlike the NVD scan, refresh does not create new findings — it only enriches existing `Vulnerability` records.
 
-All refresh endpoints accept a `mode` field to select the NVD data source:
+The NVD refresh endpoint accepts a `mode` field to select the NVD data source:
 
 - **`local`** (default) — reads from the local NVD-FKIE advisory database; no network calls, no API key needed.
 - **`api`** — queries the NVD REST API v2; requires network access and honours the `NVD_API_KEY` environment variable.
@@ -1164,7 +1592,7 @@ Fetches NVD data for the given CVE and updates the stored description, CVSS scor
 |-------|------|-------------|
 | `mode` | string | `"local"` (default) or `"api"`. |
 
-**Response:** Updated vulnerability object.
+**Response:** `200` with `{"vulnerabilities": [<updated vulnerability>]}`.
 
 **Error responses:**
 
@@ -1173,6 +1601,23 @@ Fetches NVD data for the given CVE and updates the stored description, CVSS scor
 | `503` | `unavailable` | Local mode: CVE not found in the local database. API mode: NVD API unreachable or returned no data. |
 | `429` | `rate_limited` | API mode only: NVD rate limit exceeded. |
 | `401`/`403` | `unauthorized` | API mode only: API key rejected by NVD. |
+
+### Refresh EPSS or GitHub Advisory Metadata
+
+```
+POST /api/vulnerabilities/<cve_id>/epss-refresh
+POST /api/vulnerabilities/<ghsa_id>/ghsa-refresh
+```
+
+Neither endpoint needs a request body or accepts NVD's `mode` selector.
+EPSS queries the EPSS API for an existing CVE and updates its score/fetched timestamps; percentile is returned transiently.
+GHSA refresh accepts a `GHSA-xxxx-xxxx-xxxx` identifier and updates the advisory's published date/fetched timestamps from GitHub.
+Identifiers are normalized to uppercase. Neither endpoint creates findings.
+
+**Response:** `200` with `{"vulnerabilities":[<updated vulnerability>]}`.
+EPSS returns `404` for an unknown CVE and `503` for unavailable data.
+GHSA returns `400` for invalid identifiers, `404` for missing local/upstream advisories,
+`502` for other upstream HTTP errors, and `503` for network/unusable published-date data.
 
 ### Operation Queue and Event Stream
 
@@ -1256,3 +1701,157 @@ Upload one or more SBOM files for asynchronous processing.
 ```
 
 Follow the returned `op_id` in `GET /api/events/stream` (or `GET /api/operations`) for progress, completion, and errors. There is no separate upload-status endpoint.
+
+The required project/variant must exist and the variant must belong to the project (`404` for missing entities, `400` for mismatches).
+Optional `format` overrides SBOM format detection. Multiple files/companion SPDX archive members form one scan.
+Omitting `refresh_sources` defaults to EPSS; send `none` alone for no refresh. Unknown refresh sources return `400`.
+
+---
+
+## Agent Chat
+
+Agent routes use the `vulnscout_agent` cookie to retain a browser conversation; preserve cookies between calls.
+An optional `X-Agent-Thread` UUID selects an independent thread sharing root credentials and the response lock
+(at most 20 child threads). Conversations expire after one hour of inactivity.
+Responses use `Cache-Control: no-store`; credentials are never included in status responses.
+
+All agent operations require a localhost host name and a trusted local client connection;
+non-GET browser requests with an `Origin` must match the server origin (`403` otherwise).
+Malformed thread IDs return `400`. The bootstrap import gate does not apply, but individual operations can still
+fail when the provider, Copilot SDK, MCP server, or database scope is unavailable.
+Agent POSTs return `200` on success, not `201`.
+
+### Read Agent Status
+
+```
+GET /api/agent
+```
+
+Returns `200` with `authenticated`, nullable `login`, `configured` (bundled MCP server file exists),
+`device_login`, `token_connected`, nullable `provider`, nullable `config_error`, `messages` (role/content objects),
+`model`, and `usage` (`cost`, `input_tokens`, `output_tokens`, each nullable).
+Provider authentication/configuration and conversation history are scoped to the cookie/root thread.
+
+### Connect or Disconnect a Provider
+
+```
+POST /api/agent/provider
+DELETE /api/agent/provider
+```
+
+POST accepts:
+
+```json
+{
+  "provider": "local",
+  "base_url": "http://localhost:11434/v1",
+  "model": "my-local-model",
+  "api_key": ""
+}
+```
+
+`provider` is `openai`, `azure`, `anthropic`, or `local`.
+Hosted providers require a nonblank `api_key`; local providers do not.
+`model` is optional (at most 100 characters); when omitted/empty, the server discovers available models.
+`api_key` is at most 4096 characters; control characters are rejected in these fields and URLs.
+`base_url` is optional for OpenAI/Anthropic (their standard API defaults), required for Azure/local, and at most 2048 characters.
+Hosted URLs require HTTPS; local URLs require HTTP and an allowed loopback/container host. URLs cannot include credentials, query strings, or fragments.
+
+POST uses the supplied model or discovers the provider's model list; supplying a model does not itself probe the provider.
+DELETE clears the provider. Both clear prior conversation threads and persist configuration to `config.env`.
+**Response:** `200` with `{"provider":"local","model":"my-local-model"}` (DELETE uses null provider and resets the model).
+Errors: `400` invalid configuration or model discovery failure, `409` agent already responding,
+`500` persistence failure, `503` failure clearing the previous stored conversation.
+
+### GitHub Device Sign-In and Sign-Out
+
+```
+POST /api/agent/auth
+POST /api/agent/auth/poll
+DELETE /api/agent/auth
+```
+
+No request bodies are needed. POST auth starts GitHub device sign-in and returns `200` with
+`user_code`, HTTPS `verification_uri`, and polling `interval` in seconds. Complete sign-in at that URI.
+POST poll uses the cookie's stored device code; wait at least the returned interval between calls.
+
+**Poll responses:** `200` with `{"status":"pending","interval":5}` while waiting (the interval can increase),
+or `{"status":"connected","authenticated":true,"login":"account-name"}` on verified Copilot access.
+`410` means the device code is missing/expired; start again.
+`401` means sign-in was denied/failed or the account has no Copilot access;
+`503` means GitHub/Copilot verification is unavailable; `500` means credentials could not be persisted.
+Starting sign-in can also return `503`.
+
+DELETE signs out, clears provider/device credentials and all threads, and returns
+`200` with `{"authenticated":false,"cleanup_error":null}`.
+A remote-session cleanup error may be reported in `cleanup_error` despite successful local sign-out;
+persistence failure returns `500`. Successful sign-in persists credentials and resets prior threads.
+
+### List or Select Models
+
+```
+GET /api/agent/models
+POST /api/agent/model
+```
+
+GET returns `200` with `{"models":[{"id":"model-id","name":"Model name"}]}` for the current provider/Copilot account.
+POST accepts `{"model":"model-id"}`; the string must be at most 100 characters, contain no control characters,
+and identify an available model. It persists `AI_MODEL` and returns `200` with `{"model":"model-id"}`.
+Errors: `400` invalid configuration/model, `503` unavailable Copilot model lookup;
+POST additionally returns `409` while the agent is responding or `500` if persistence fails.
+
+### Reset a Conversation
+
+```
+DELETE /api/agent/conversation
+```
+
+Deletes the selected thread's stored session, messages, and usage without signing out.
+With `X-Agent-Thread`, only that child thread is removed.
+Returns `200` with `{"messages":[],"usage":{"cost":null,"input_tokens":null,"output_tokens":null}}`,
+or `503` if deleting the stored session fails.
+
+### Send a Message
+
+```
+POST /api/agent/messages
+```
+
+```json
+{
+  "message": "Summarize the selected variant's pending assessments.",
+  "context": {
+    "page": "review",
+    "projectId": "11111111-1111-1111-1111-111111111111",
+    "variantId": "22222222-2222-2222-2222-222222222222"
+  }
+}
+```
+
+`message` is required, nonblank, and at most 8000 characters. Optional `model` defaults to the conversation model
+(nonempty string, at most 100 characters). Optional `context` describes browser selection, not trusted project facts.
+Its `page` must be `metrics`, `packages`, `vulnerabilities`, `scans`, `review`, `exports`, `settings`, `ai`, or `unknown`.
+Optional scope strings `projectId`, `variantId`, `baseVariantId`, `compareOperation`, `multiOperation` are at most 100 characters;
+`variantIds` permits at most 1000 strings of that length. Selected variant UUIDs must belong to the selected project.
+With no context/project on non-AI pages, the agent scope spans all projects.
+AI-page scope instead uses `view.selectedProjectId` and `view.selectedVariantId`, with no project selection yielding no project scope.
+
+Optional `context.view` accepts UI selection metadata:
+
+- Strings up to 200 characters: `openVulnerabilityId`, `search`, `section`, `selectedProjectId`, `selectedProjectName`,
+  `selectedVariantId`, `selectedVariantName`, `openScanId`, `exportType`, `exportMode`, `exportCategory`, `refreshMode`.
+- Arrays of up to 100 strings (each up to 200 characters): `visibleVulnerabilityIds`, `selectedVulnerabilityIds`,
+  `visiblePackageIds`, `visibleScanIds`, `matchingVariantIds`, `selectedVariantIds`, `selectedExportKeys`,
+  `enabledExportDocuments`, `selectedScanTypes`, `selectedRefreshTypes`.
+- Integers from 0 to 1,000,000: `visibleCount`, `selectionCount`.
+- Booleans: `hideEmptyScans`, `excludeKernel`, `excludeNative`.
+
+**Default response:** `200` JSON with `reply`, `model`, and accumulated `usage`.
+Set the exact header `Accept: application/x-ndjson` for a `200` newline-delimited JSON stream instead.
+Stream event `type` values include `status`, `heartbeat`, `delta`, `tool_start`, `tool_end`, and terminal
+`done` (with `reply`, `model`, `usage`) or `error` (with `error` message).
+Once streaming starts, failures are events rather than changed HTTP statuses.
+
+Before streaming/JSON processing, invalid messages/configuration/context return `400`,
+concurrent responses return `409`, and a missing bundled MCP server returns `503`.
+For nonstreaming requests, unavailable model selection returns `400` and provider/agent execution failures return `503`.

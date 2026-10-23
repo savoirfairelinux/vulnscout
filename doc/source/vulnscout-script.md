@@ -19,7 +19,7 @@ Releases before v0.24 used flags instead of commands. They still work until v0.2
 | `add --spdx\|--cdx\|--cve-check\|--yocto-vex\|--openvex\|--grype <path>` | Import input files. Options repeat and mix; one call is processed as one import. | default `default` | default `default` |
 | `scan [grype\|nvd\|osv\|sbom-cve-check\|all]` | Run scanners on the current data. No type means `all`. | default `default` | default `default` |
 | `refresh` | Refresh EPSS, NVD, ENISA EUVD and GitHub Advisory data. | optional; all data when omitted | optional; needs `-p` |
-| `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional |
+| `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional; needs `-p` |
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
 | `export <kind>... [--amend]` | Write `spdx`, `cdx`, `openvex`, `custom-data`, `custom-openvex` or `context` to the outputs directory. `--amend` applies to `custom-*` only. | default `default` | optional; all variants when omitted |
 | `import custom-data <path> [--timestamps original\|current]` | Import custom VulnScout JSON data. | default `default` | rejected (the file names its variants) |
@@ -63,28 +63,36 @@ The `vulnscout` script manages the container automatically (using Docker or Podm
 
 ## Updating VulnScout
 
-To update VulnScout to the latest version, pull the latest container image and restart:
+To pull the configured container image tag and replace a running container when
+its image has changed:
 
 ```bash
 ./vulnscout update
 ```
 
-Then verify the new version is correctly running:
+The default tag is `v0.23`; `update` does not select a newer release tag
+automatically. To change releases, set `VULNSCOUT_IMAGE` to the desired published
+tag, then run `update` and `restart` (or `start` if no container is running).
+
+Inspect the version label of the configured local image:
 
 ```bash
 ./vulnscout version
 ```
 
+This reports the image's version, not necessarily the running container's version.
+Check the web interface's version after restarting to confirm the active backend.
+
 ---
 
 ## Interactive Mode (Web UI)
 
-By default VulnScout runs in **interactive mode**, starting a web dashboard.
+Start the web dashboard explicitly with `serve`; importing data does not start it.
 
 ```bash
 ./vulnscout add \
-  --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+  --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
+  --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ./vulnscout serve
 ```
 
@@ -109,14 +117,16 @@ The web interface includes a **Settings** tab that provides:
 - **Import SBOM** — Upload an SBOM file directly from the browser instead of `vulnscout add`.
   When importing, you must select (or create) the target project and variant.
   Supported formats are auto-detected or can be specified explicitly: SPDX (2/3), CycloneDX, OpenVEX, Yocto CVE check, and Grype.
-- **Data Maintenance** — In **Scan Settings**, remove outdated data, empty scans, or CVEs no longer included in any project or variant.
+- **Data Maintenance** — In **General Settings**, remove outdated data, empty scans, or CVEs no longer included in any project or variant.
   This action is not limited to the project or variant currently selected in the web interface.
+- **Custom reports & assets** — Manage installed report templates and images from
+  this Settings page; see [Templates](templates.md).
 
 ### Removing Outdated Data
 
 VulnScout retains historical package evidence after an SBOM changes so it can identify
 outdated findings and assessments. After the replacement SBOM and scans have been
-reviewed, remove this obsolete data from **Settings → Scan Settings → Data Maintenance**.
+reviewed, remove this obsolete data from **Settings → General Settings → Data Maintenance**.
 
 The confirmation dialog previews every package/variant and custom assessment selected
 for deletion. The cleanup applies to every project and variant in the database.
@@ -152,7 +162,7 @@ VulnScout organises data into **projects** and **variants**. A project typically
 
 Select them with `-p, --project` and `-v, --variant`. Each command documents how it uses them (see [Commands](#commands)); commands that do not use a scope reject these options.
 
-```bash
+```text
 ./vulnscout -p <name> -v <name> <command>
 ```
 
@@ -160,8 +170,8 @@ Example:
 
 ```bash
 ./vulnscout -p demo -v x86 add \
-  --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+  --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
+  --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ```
 
 ## Input Sources
@@ -174,7 +184,7 @@ Use `refresh` to enrich vulnerabilities with current EPSS, NVD, ENISA EUVD, and
 GitHub Advisory data. After importing new inputs, refresh the same project:
 
 ```bash
-./vulnscout -p demo add --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json
+./vulnscout -p demo add --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json"
 ./vulnscout -p demo refresh
 ```
 
@@ -208,7 +218,11 @@ command exits with an error listing the failed sources.
 add --spdx <path>
 ```
 
-Path to an SPDX 2 or SPDX 3 SBOM file. SPDX 3 JSON-LD files (`.jsonld`), including Zephyr-generated SBOMs, are supported. Also supports SPDX JSON, tag-value (`.spdx`), and archive formats (`.tar`, `.tar.gz`, `.tar.zst`).
+Path to an SPDX 2 or SPDX 3 JSON SBOM named `*.spdx.json`, an SPDX 3 JSON-LD
+file named `*.jsonld`, or an archive (`.tar`, `.tar.gz`, `.tar.zst`) containing
+files with those names. Zephyr-generated JSON-LD is supported. Rename a generic
+SPDX JSON file such as `bom.json` to `bom.spdx.json` before importing.
+SPDX tag-value (`.spdx`) files are not supported by this import pipeline.
 
 For Zephyr's West SPDX generator, import the companion documents together into the
 same project and variant:
@@ -236,7 +250,7 @@ see [Interactive mode](interactive-mode.md#column-visibility).
 add --cdx <path>
 ```
 
-Path to a CycloneDX file.
+Path to a CycloneDX JSON file named `*.json`.
 
 ---
 
@@ -246,7 +260,7 @@ Path to a CycloneDX file.
 add --cve-check <path>
 ```
 
-JSON output from the Yocto `cve-check` task.
+JSON output from the Yocto `cve-check` task, named `*.json`.
 
 ---
 
@@ -256,7 +270,7 @@ JSON output from the Yocto `cve-check` task.
 add --yocto-vex <path>
 ```
 
-JSON output from the Yocto `vex.bbclass` task.  Carries richer CPE and
+JSON output from the Yocto `vex.bbclass` task, named `*.json`. Carries richer CPE and
 patch-file information than the plain cve-check output.
 
 ---
@@ -267,7 +281,9 @@ patch-file information than the plain cve-check output.
 add --openvex <path>
 ```
 
-Include vulnerability assessments provided as OpenVEX.
+Include vulnerability assessments provided as OpenVEX. The filename must contain
+`openvex` and end in `.json`, for example `assessments.openvex.json`; rename
+`assessments.json` before importing it.
 
 ---
 
@@ -293,8 +309,11 @@ Repeat or mix input options in one `add` call:
 ```
 
 ```{tip}
-The input format is determined by the CLI flag used (`--spdx`, `--cdx`, etc.), not by the file extension.
-The only exception is SPDX archive inputs (`.tar`, `.tar.gz`, `.tar.zst`), which are automatically extracted and their `.spdx.json` contents imported.
+The CLI flag selects the parser, but staging also filters filenames: SPDX needs
+`*.spdx.json` or `*.jsonld`, OpenVEX needs `*openvex*.json`, Grype needs
+`*.grype.json`, and the other inputs need `*.json`. Files that do not match
+can be ignored without failing the command. SPDX archives (`.tar`, `.tar.gz`,
+`.tar.zst`) are extracted and their `.spdx.json` and `.jsonld` files imported.
 To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
 ```
 
@@ -325,8 +344,8 @@ Use `GRYPE_MEMLIMIT` to override:
 # Set a persistent limit
 ./vulnscout config set GRYPE_MEMLIMIT 6GiB
 
-# Or export it on the host before running (forwarded into the container)
-export GRYPE_MEMLIMIT=24GiB
+# Change the persistent limit for subsequent scans
+./vulnscout config set GRYPE_MEMLIMIT 24GiB
 ./vulnscout -p demo scan grype
 
 # Disable the limit entirely
@@ -335,12 +354,20 @@ export GRYPE_MEMLIMIT=24GiB
 
 Accepts any value valid for Go's `GOMEMLIMIT` (`4GiB`, `8192MiB`, plain bytes).
 Set to `off`, `0`, or `disabled` to remove the cap.
+Host-exported `GRYPE_MEMLIMIT` is forwarded only when the container is created;
+an existing container does not receive later host environment changes. A value
+in `config.env` takes precedence. Prefer the persistent configuration above.
 
 ---
 
 ## Performing an sbom-cve-check Scan
 
-`scan sbom-cve-check` runs a CVE scan powered by [sbom-cve-check](https://github.com/savoirfairelinux/sbom-cve-check). Unlike the NVD and OSV scanners, and once the databases are synced, this scan never makes network calls during analysis; it queries locally-cloned advisory databases (NVD-FKIE JSON feeds and CVEList V5).
+`scan sbom-cve-check` runs a CVE scan powered by
+[sbom-cve-check](https://pypi.org/project/sbom-cve-check/). Both this scanner and
+the host command `scan nvd` use the shared local advisory engine (NVD-FKIE JSON
+feeds and CVEList V5). Matching uses local data, but automatic database updates
+are enabled by default: first use clones the databases, and each scan refreshes
+them. OSV uses its network API.
 
 ```bash
 ./vulnscout -p demo -v x86 scan sbom-cve-check
@@ -352,6 +379,35 @@ To scan newly added files, run `add` first:
 ./vulnscout -p demo add --spdx example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json
 ./vulnscout -p demo scan sbom-cve-check
 ```
+
+The default database directory is `.vulnscout/cache/local_databases` on the host
+(`/cache/vulnscout/local_databases` inside the container). To share existing
+clones, export `VULNSCOUT_SBOM_CVE_CHECK_DB_DIR=/absolute/path/to/databases` before
+starting or restarting the container; the wrapper mounts it at `/local_databases`.
+The directory must contain the `nvd-fkie` and `cvelist` clones.
+
+For offline local matching, first populate those databases while online, then:
+
+```bash
+./vulnscout config set SBOM_CVE_CHECK_AUTO_UPDATE 0
+./vulnscout restart
+./vulnscout -p demo scan nvd sbom-cve-check
+```
+
+Initialize configuration before using `config set` on a fresh installation; see
+[Configuration](#configuration). Offline mode requires both existing clones;
+it does not make Grype, OSV, or remote vulnerability-data refreshes offline.
+Set `SBOM_CVE_CHECK_AUTO_UPDATE` back to `1` and restart to resume updates.
+
+The host `scan nvd` command does not expose NVD API mode. If needed, invoke the
+lower-level command in a running container (replace its name if configured):
+
+```bash
+docker exec vulnscout flask --app src.bin.webapp nvd-scan \
+  --project demo --variant default --mode api
+```
+
+This mode needs network access; `NVD_API_KEY` increases its rate limit.
 
 ---
 
@@ -368,7 +424,7 @@ If vulnerabilities match the condition, `match-condition` exits with **code 2**,
 
 Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `match-condition` when the condition must use current enrichment data.
 
-When `-p demo` is supplied without `-v`, the condition is evaluated across all variants in `demo`. Supplying both options limits evaluation to one variant. Omitting both options evaluates `default/default`; supplying only `-v` selects that variant from the `default` project. Unknown names exit with **code 1**.
+When `-p demo` is supplied without `-v`, the condition is evaluated across all variants in `demo`. Supplying both options limits evaluation to one variant. Omitting both options evaluates `default/default`. Supplying only `-v` is rejected; use `-p default -v <name>` to select a variant in the default project. Unknown names exit with **code 1**.
 
 See the [Match Conditions](ci_conditions.md) page for the full syntax and token reference.
 
@@ -527,6 +583,10 @@ OpenVEX imports preserve statement timestamps by default. Add
 
 With `-p`, the file must name a single project. With `-p` and `-v`, it must
 hold exactly one entry. `-v` without `-p` is rejected.
+Create the target project and variants first, for example by importing their
+SBOMs. Context import does not create them: unmatched entries are ignored, and
+retargeting requires an existing destination. Imported context overwrites the
+matching scope's existing context.
 
 ---
 
@@ -535,6 +595,13 @@ hold exactly one entry. `-v` without `-p` is rejected.
 ### Configuration Commands
 
 Persistent configuration is stored in `.vulnscout/cache/config.env` and is automatically loaded on each run.
+
+On a fresh installation, run `./vulnscout start` **before the first `config set`**.
+Startup generates defaults only when `config.env` does not exist; setting a
+single key first creates a partial file without the Flask host/port settings.
+If a partial file already exists, add `FLASK_RUN_HOST=0.0.0.0` and
+`FLASK_RUN_PORT=7275` with `config set`, then restart. Keep configuration
+values shell-compatible because the file is sourced as shell configuration.
 
 Rootless Podman maps the host owner to container root with
 `--userns=keep-id:uid=0,gid=0 --user=0:0`. The entrypoint uses this same identity
@@ -548,7 +615,7 @@ the configuration, including when the cache is private (mode `700`). The
 configuration stays private (mode `600`); do not make it world-readable to
 work around a permission error.
 
-```bash
+```text
 # Set a config value
 ./vulnscout config set <key> <value>
 
@@ -562,37 +629,57 @@ work around a permission error.
 ./vulnscout config unset <key>
 ```
 
-Example — set an NVD API key for higher rate limits:
+Example — initialize configuration, then set an NVD API key for higher API rate limits:
 
 ```bash
+./vulnscout start
 ./vulnscout config set NVD_API_KEY abc123
+./vulnscout restart
 ```
 
 ### Environment Variables
 
-The following environment variables can be set via `vulnscout config set` or exported before running.
+Use `config set` for application settings such as API keys, proxy values, and
+report metadata. Arbitrary host environment variables are **not** automatically
+forwarded into the container.
 
-Example:
+Export host launcher settings before invocation. In particular, export
+`VULNSCOUT_CONTAINER`, `VULNSCOUT_BUILD_DIR`, and `VULNSCOUT_CACHE_DIR` before
+the first run: container identity and initial config-file lookup are determined
+before the stored configuration is loaded. `VULNSCOUT_IMAGE` and
+`VULNSCOUT_OUTPUTS_DIR` can also be configured persistently.
 
-```bash
-./vulnscout config set NVD_API_KEY abc123
-```
+Stored configuration is sourced after host variables, so stored values override
+same-named exports (except settings such as the container name that were already
+resolved before sourcing). The launcher explicitly forwards host `GRYPE_MEMLIMIT` and
+`SBOM_CVE_CHECK_AUTO_UPDATE` at container creation, but does not inject later
+host changes into `docker exec`/`podman exec`. Restart after environment, mount,
+or web-listener changes. Scan commands reload persistent application settings;
+an already-running web server must be restarted to pick up config-file changes.
 
 #### Container & Runtime
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `VULNSCOUT_CONTAINER` | Name of the container | `vulnscout` |
+| `VULNSCOUT_CONTAINER` | Name of the container; export on the host before invocation | `vulnscout` |
 | `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.23` |
-| `VULNSCOUT_BUILD_DIR` | Root build directory on the host | `./.vulnscout` |
+| `VULNSCOUT_BUILD_DIR` | Root build directory on the host; export before first run | `.vulnscout` beside the launcher |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
-| `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |
-| `FLASK_RUN_PORT` | Port the web UI listens on | `7275` |
-| `FLASK_RUN_HOST` | Host address for the web UI | `0.0.0.0` |
+| `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config); export before first run | `$VULNSCOUT_BUILD_DIR/cache` |
+| `FLASK_RUN_PORT` | Container web-listener port; keep `7275` with the wrapper's fixed `7275:7275` publishing | `7275` in generated config |
+| `FLASK_RUN_HOST` | Container bind address; keep `0.0.0.0` for access through the published port | `0.0.0.0` in generated config |
 | `VITE_API_URL` | Optional backend API URL for the dev frontend (empty uses Vite's same-origin `/api` proxy) | empty |
 | `USER_UID` | UID used to write output files | current user |
 | `USER_GID` | GID used to write output files | current group |
-| `REFRESH_REMOTE_DELAY` | How often EPSS/NVD data is re-fetched (`never`, `always`, `48h`, `7d`, etc.) | `48h` |
+
+The wrapper always publishes host port `7275` to container port `7275`; changing
+`FLASK_RUN_PORT` alone does not change this mapping. To use a different host
+port, manage the container yourself with a suitable `-p` mapping; see
+[Using Container Entrypoint](container-entrypoint.md).
+
+`REFRESH_REMOTE_DELAY` is a legacy setting, not a refresh scheduler. Generated
+configs contain `2w` and the entrypoint fallback is `48h`, but current enrichment
+does not consume this value. Use `refresh` explicitly when current data is needed.
 
 #### Scan & Enrichment
 
@@ -601,6 +688,8 @@ Example:
 | `NVD_API_KEY` | NVD API key for higher rate limits | _(none)_ |
 | `IGNORE_PARSING_ERRORS` | Continue scanning even if input files contain errors | `false` |
 | `VERBOSE_MODE` | Enable verbose logging in the container | `false` |
+| `SBOM_CVE_CHECK_AUTO_UPDATE` | Clone/fetch local advisory databases before NVD/local sbom-cve-check scans; `0` uses existing clones offline | `1` |
+| `VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` | Optional host directory with `nvd-fkie` and `cvelist` clones; mounted by the wrapper at `/local_databases` on startup | cache's `local_databases` directory |
 
 #### Report Metadata
 
@@ -620,17 +709,18 @@ Example:
 VulnScout supports HTTP proxies. Set them via the config command:
 
 ```bash
+./vulnscout start
 ./vulnscout config set HTTP_PROXY http://proxy.example.com:8080
 ./vulnscout config set HTTPS_PROXY http://proxy.example.com:8080
 ./vulnscout config set NO_PROXY localhost,127.0.0.1
+./vulnscout restart
 ```
 
-Or set them as environment variables in the shell before running `vulnscout`:
-
-```bash
-export HTTP_PROXY=http://proxy.example.com:8080
-./vulnscout serve
-```
+Start `serve` again after restarting if the web interface is needed. Merely
+exporting these variables on the host does not forward them into the wrapper's
+container. For a container you manage yourself, pass them with `docker run -e`
+or put them in the mounted configuration, then recreate/restart the web process
+as appropriate.
 
 ---
 

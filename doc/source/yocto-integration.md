@@ -1,7 +1,7 @@
 # Yocto Integration
 
 VulnScout can be integrated into your Yocto/OpenEmbedded build workflow using the
-**meta-vulnscout** BSP layer.
+**meta-vulnscout** integration layer.
 
 ## meta-vulnscout
 
@@ -22,3 +22,19 @@ Full documentation, installation instructions, and configuration options are
 available on the meta-vulnscout documentation site:
 
 > **[meta-vulnscout documentation](https://meta-vulnscout.readthedocs.io/en/latest/)**
+
+The layer is maintained separately from this repository; consult its documentation
+for supported Yocto releases and its build-specific configuration.
+
+### Importing existing Yocto build outputs
+
+You can also import build artifacts without installing the layer. See
+[Bundled Examples](examples.md) for SPDX 2 archives, SPDX 3 JSON-LD, and Yocto
+CVE-check inputs. Import matching artifacts together into the same project and
+variant. SPDX JSON filenames must end in `.spdx.json` (or `.jsonld` for JSON-LD);
+tag-value `.spdx` files are not supported by the current import pipeline.
+
+Importing findings, running additional scanners, refreshing vulnerability metadata,
+and enforcing CI conditions are separate host commands. See
+[VulnScout CLI](vulnscout-script.md) for their scope, local advisory database setup,
+and initialization requirements.

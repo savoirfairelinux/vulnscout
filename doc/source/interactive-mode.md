@@ -44,6 +44,27 @@ The interactive mode is where you investigate each CVE and record your triage de
 
 ---
 
+## Metrics
+
+The **Metrics** page is the home dashboard. Select a project and variant scope
+in the navigation bar before interpreting its counts. It summarizes the
+vulnerabilities in that scope by severity, assessment status, and discovery
+source, and shows the five most critical unfixed vulnerabilities and the five
+package names with the most vulnerability associations.
+
+Click a severity or status pie segment to open the Vulnerabilities table with
+that filter. Click a vulnerability ID in the critical list to inspect it, or
+use **See all** to open the corresponding full table.
+
+The **Active vulnerabilities** chart tracks pending and exploitable
+vulnerabilities over the selected time interval, from 24 hours to one year.
+Status-chart counts are per vulnerability per status: when variants disagree,
+one CVE can appear in more than one status segment, so the sum of segments is
+not necessarily the number of distinct vulnerabilities. A discovery-source
+breakdown can likewise count a vulnerability under several sources.
+
+---
+
 (operation-queue)=
 ## Operation Queue
 
@@ -442,7 +463,11 @@ The Review page gives you a consolidated view of every assessment that was creat
 
 ### Assessment Table
 
-The table presents one row per grouped assessment. Assessments that share the same vulnerability, status, justification, notes, workaround, and impact statement are automatically merged into a single row, with their packages and variants combined. This keeps the view compact even when a single triage decision was applied to many packages at once.
+The table presents one row per assessment record. One record can cover several
+exact `(variant, package)` targets; its row lists the combined package and
+variant sets. Separate records remain separate even when their content is
+identical. The displayed sets are summaries, not a guarantee that every listed
+package is targeted in every listed variant.
 
 The columns include:
 
@@ -454,7 +479,7 @@ The columns include:
 - **Impact**: the impact statement describing how the vulnerability affects (or doesn't affect) the product.
 - **Notes**: free-text status notes attached to the assessment.
 - **Workaround**: any documented workaround.
-- **Assessment Date**: the timestamp of the most recent assessment in the group.
+- **Assessment Date**: the assessment record's timestamp.
 - **AI review**: a second opinion on each target of a user-authored assessment. A single target shows ✓ when the review agrees, ⚠ when it differs, ⚠ stale when the assessment was edited since the review, or — when it has not been reviewed. Multi-target rows show counts for each state; hover for a breakdown. Open the vulnerability detail modal to read each target's review and rationale.
 
 ### Search and Filters
@@ -479,3 +504,94 @@ Two buttons in the toolbar handle review portability:
 
 - **Import Review**: choose either an OpenVEX JSON document or a VulnScout JSON file. OpenVEX imports assessments into one selected variant. VulnScout JSON restores all included assessments, custom CVSS scores, and time estimates using the variants recorded in the file.
 - **Export Review**: choose **Normal export** to create a new file, or **Append/update existing file** to upload a previous export and preserve its stable ordering for smaller Git diffs. The existing file automatically selects VulnScout JSON or OpenVEX. VulnScout JSON exports assessments, custom CVSS scores, and time estimates for selected variants; OpenVEX exports assessments for one selected variant. Append/update replaces changed records, appends new records, and removes data for variants that are not currently selected.
+
+---
+
+## Export
+
+Use the **Export** page to generate report and SBOM files. Review exports above
+transfer analyst data; this wizard produces rendered reports and standard
+SBOM/VEX documents.
+
+1. **Scope** — choose a project in the navigation bar, then select its variants
+   in the wizard. All project variants are initially selected, even when the
+   navigation bar has a narrower variant selection; check this step explicitly.
+2. **Export type** — choose **Reports** or **SBOM files**. Reports offer one
+   combined file per template/format across the selected variants, or a separate
+   file per variant and template/format. SBOM files are always generated
+   separately per variant; they cannot be combined with reports in one request.
+3. **Documents** — enable the desired documents and choose their output
+   formats. Reports can be filtered to built-in or custom templates.
+   **Select visible** and **Clear visible** apply to the current category.
+   Click **Download export** to queue the job.
+
+The result is a ZIP archive. Generation and errors appear in the
+[Operation queue](#operation-queue), and the download starts when it is ready.
+Closing the wizard or navigating away does not cancel the queued export.
+After a missed download, reopen the queue to retrieve the retained archive;
+it expires and can only be downloaded once.
+
+Manage templates and images through **Settings → Custom reports & assets**.
+Images are resources used by templates, not selectable export documents.
+See [Writing Report Templates](templates.md) for custom template fields,
+filters, and asset installation.
+
+---
+
+## Settings
+
+Settings has its own sidebar, independent of the main page selection:
+
+- **General Settings** contains report metadata, the NVD API key, global
+  native-package defaults, Grype memory settings, and data maintenance.
+- **Project pages** list and create variants, rename the project, and provide
+  project deletion. Expand a project in the sidebar to open a variant page.
+- **Variant pages** import SBOM files into that variant and allow renaming it.
+  Delete a variant from its project's variant list.
+  Select all companion SPDX documents in one import. Uploads and
+  their progress are tracked in the operation queue.
+- **Transfer Assessments** copies existing custom assessments to matching
+  findings; see the workflow below.
+- **Custom reports & assets** lists installed custom templates/images and
+  accepts uploads through the drop zone or file picker. Supported image uploads
+  are PNG, JPEG, GIF, and WebP. See [Adding Assets](templates.md#adding-assets).
+
+Deleting a project or variant permanently removes its associated data and
+requires confirmation. Export important review data before deleting it.
+
+### Data maintenance
+
+Under **General Settings → Data Maintenance**, choose **Analyze outdated data**,
+**Analyze empty scans**, or **Analyze orphaned CVEs** to inspect a deletion plan
+before confirming. These operations are global: the current project/variant
+selector does not restrict their scope. Outdated-data cleanup removes redundant
+historical records, empty-scan cleanup removes scans with no retained data, and
+orphan cleanup removes vulnerabilities no longer referenced by projects or
+variants, including their assessments.
+
+Review the listed records before confirming permanent deletion. If data changes
+after the preview and the server rejects the stale plan, analyze again rather
+than retrying the old selection. Keep a backup when history must be retained.
+
+### Copying assessments
+
+Open **Settings → Transfer Assessments** and select a project in the navigation
+bar. Only user-authored custom assessments are copied, not scanner assessments
+or pending AI suggestions.
+
+1. Choose **Within the same variant** to carry decisions from previous package
+   versions, or **Between two variants** to choose distinct source and
+   destination variants.
+2. Select a copy condition: only targets without a custom assessment, targets
+   with a different status, or targets differing in any assessment value.
+3. Choose package matching: **Same Versions**, **Same Major and Minor
+   Versions**, **Same Major Versions**, or **Any Versions**. Exact-version
+   matching is not offered within a single variant. Broader matching is a
+   convenience, not evidence that a decision remains valid after an upgrade.
+4. Click **Preview & Copy**. Inspect each source decision and its candidate
+   target packages, adjust the selected targets, and confirm the copy.
+
+Copying creates new custom assessment records on existing target findings;
+it does not move or modify the source assessment. Source timestamps and AI
+reviews are not carried over. Recheck the applicability of a decision before
+copying it across versions or environments, especially with **Any Versions**.
