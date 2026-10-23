@@ -9,10 +9,14 @@ import pytest
 from src.helpers.stride_model import (
     MAX_ROWS,
     MAX_TEXT,
+    RISK_DESCRIPTION_MAX,
+    SYSTEM_KEYS,
     StrideValidationError,
     empty_stride_model,
     normalize_stride_model,
     normalize_system,
+    render_risks,
+    render_threat_model,
 )
 
 
@@ -159,3 +163,105 @@ def test_system_rejects_non_string():
     with pytest.raises(StrideValidationError) as exc:
         normalize_system({"actors": 3})
     assert "system.actors" in exc.value.fields
+
+
+def test_full_render_matches_shape():
+    system = {"scope": "Gateway", "actors": None, "entry_points": "", "trust_boundaries": "LAN/WAN"}
+    assert render_threat_model(system, _model(notes="Check OTA")) == (
+        "System scope and assets:\nGateway\n\n"
+        "Trust boundaries:\nLAN/WAN\n\n"
+        "Components:\n- C1 OTA updater (trust zone: device)\n- C2 Update server (trust zone: cloud)\n\n"
+        "Interactions:\n- I1 Download: C1 OTA updater -> C2 Update server; interface: HTTPS; "
+        "data: image; trust boundary: internet\n\n"
+        "Threats:\nTampering\n- T1 [C1 OTA updater, I1 Download]: Swap image\n\n"
+        "Additional notes:\nCheck OTA")
+
+
+def test_all_empty_is_none():
+    assert render_threat_model({k: None for k in SYSTEM_KEYS}, None) is None
+    assert render_threat_model({}, empty_stride_model()) is None
+
+
+def test_whitespace_only_sections_omitted():
+    system = {"scope": "  \n", "actors": "Admin"}
+    assert render_threat_model(system, None) == "Actors and access:\nAdmin"
+
+
+def test_component_and_interaction_optional_parts_omitted():
+    m = empty_stride_model()
+    m["components"] = [
+        {"id": "C1", "name": "A", "description": "desc", "trust_zone": ""},
+        {"id": "C2", "name": "B", "description": "", "trust_zone": ""},
+    ]
+    m["interactions"] = [
+        {"id": "I1", "name": "", "source_id": "C1", "destination_id": "C2",
+         "interface": "", "data": "", "trust_boundary": ""},
+    ]
+    assert render_threat_model({}, m) == (
+        "Components:\n- C1 A: desc\n- C2 B\n\n"
+        "Interactions:\n- I1: C1 A -> C2 B")
+
+
+def test_threats_grouped_in_stride_order():
+    m = _model()
+    m["threats"] = [
+        {"id": "T1", "category": "tampering", "description": "Swap image", "target_ids": ["C1"]},
+        {"id": "T2", "category": "spoofing", "description": "", "target_ids": []},
+    ]
+    out = render_threat_model({}, m)
+    assert out is not None
+    assert out.split("Threats:\n")[1] == (
+        "Spoofing\n- T2\n"
+        "Tampering\n- T1 [C1 OTA updater]: Swap image")
+
+
+def _risk_model(**risk):
+    m = _model()
+    m["risks"] = [{"threat_id": "T1", "likelihood": None, "impact": None,
+                   "mitigation": "", "residual": "", **risk}]
+    return m
+
+
+def test_risk_line_full():
+    m = _risk_model(likelihood="high", impact="medium", mitigation="Sign images", residual="Accept")
+    assert render_risks(m) == (
+        "- T1 Tampering, Swap image \u2014 Likelihood: High, Impact: Medium. "
+        "Mitigation: Sign images. Residual risk / decision: Accept")
+
+
+def test_risk_line_partial():
+    assert render_risks(_risk_model(likelihood="high")) == "- T1 Tampering, Swap image \u2014 Likelihood: High"
+
+
+def test_risk_line_without_rating_starts_with_mitigation():
+    assert render_risks(_risk_model(mitigation="Sign")) == "- T1 Tampering, Swap image \u2014 Mitigation: Sign"
+
+
+def test_unrated_empty_risk_skipped_and_none():
+    assert render_risks(_risk_model()) is None
+    assert render_risks(None) is None
+
+
+def test_risk_notes_appended():
+    m = _risk_model(impact="low")
+    m["risk_notes"] = "Review yearly"
+    assert render_risks(m) == (
+        "- T1 Tampering, Swap image \u2014 Impact: Low\n\nAdditional risk notes:\nReview yearly")
+
+
+def test_risk_notes_alone_rendered():
+    m = _risk_model()
+    m["risk_notes"] = "Only notes"
+    assert render_risks(m) == "Additional risk notes:\nOnly notes"
+
+
+def test_long_threat_description_truncated():
+    m = _risk_model(likelihood="low")
+    m["threats"][0]["description"] = "x" * 200
+    assert render_risks(m) == f"- T1 Tampering, {'x' * RISK_DESCRIPTION_MAX}\u2026 \u2014 Likelihood: Low"
+
+
+def test_risk_with_unknown_threat_renders_id_only():
+    m = _risk_model(likelihood="low")
+    m["risks"][0]["threat_id"] = "T9"
+    assert render_risks(m) == "- T9 \u2014 Likelihood: Low"
