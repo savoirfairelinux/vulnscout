@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Callable, Iterable, Iterator
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import orm as sa_orm
+from sqlalchemy.sql.selectable import Exists
 from flask.cli import with_appcontext
 
 
@@ -379,7 +380,8 @@ class _IdSpool:
     """Append-only file of UUIDs, keeping cleanup ownership out of memory."""
 
     def __init__(self) -> None:
-        self._file = tempfile.TemporaryFile()
+        # Bound buffering independently of the filesystem's block size.
+        self._file = tempfile.TemporaryFile(buffering=8192)
         self._close = weakref.finalize(self, self._file.close)
 
     def extend(self, ids: Iterable[uuid.UUID]) -> None:
@@ -416,7 +418,8 @@ class _SccBulkWriter:
     ``bulk_insert_mappings`` in foreign-key order (vulnerabilities → metrics →
     findings → observations → assessments), committing once per chunk so SQLite
     writers are never held up by engine processing between packages. CLI scans
-    register failure cleanup for exclusively new findings and assessments.
+    register failure cleanup for new findings and created or adopted pending
+    assessments that no surviving scan needs.
     Duplicate work is avoided in memory:
 
     * ``(package_id, cve)`` pairs that already have a finding (from a prior
@@ -444,9 +447,11 @@ class _SccBulkWriter:
         # Kept on disk: the kernel-module case can create millions of rows.
         self._created_finding_ids: _IdSpool | None = None
         self._created_assessment_ids: _IdSpool | None = None
+        self._adopted_assessment_ids: _IdSpool | None = None
         if failure_cleanups is not None:
             self._created_finding_ids = _IdSpool()
             self._created_assessment_ids = _IdSpool()
+            self._adopted_assessment_ids = _IdSpool()
             failure_cleanups.append(self.cleanup)
         self.cves_found: set[str] = set()
 
@@ -666,6 +671,7 @@ class _SccBulkWriter:
                 _db.session.bulk_insert_mappings(sa_inspect(FindingModel), self._finding_rows)
             if self._obs_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(Observation), self._obs_rows)
+            self._track_adopted_assessments()
             if self._assess_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(Assessment), self._assess_rows)
             if self._assess_target_rows:
@@ -685,14 +691,8 @@ class _SccBulkWriter:
         self._assess_target_rows.clear()
         self._buffered_findings = 0
 
-    def cleanup(self) -> None:
-        """Remove only this writer's new rows, in bounded transactions."""
-        if self._created_finding_ids is None or self._created_assessment_ids is None:
-            return
-        # Another scan of the same variant may have observed a new target and
-        # reused its pending assessment instead of creating its own.
-        other_target = sa_orm.aliased(AssessmentTarget)
-        observed_elsewhere = (
+    def _observed_elsewhere(self) -> Exists:
+        return (
             _db.select(Observation.id)
             .join(ScanModel, ScanModel.id == Observation.scan_id)
             .where(
@@ -702,6 +702,34 @@ class _SccBulkWriter:
             )
             .exists()
         )
+
+    def _track_adopted_assessments(self) -> None:
+        # Only pre-existing findings can already be observed by another scan.
+        if self._adopted_assessment_ids is None or len(self._finding_rows) == len(self._obs_rows):
+            return
+        for i in range(0, len(self._obs_rows), self._SELECT_CHUNK):
+            finding_ids = [row["finding_id"] for row in self._obs_rows[i:i + self._SELECT_CHUNK]]
+            ids = _db.session.scalars(
+                _db.select(AssessmentTarget.assessment_id)
+                .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
+                .where(
+                    AssessmentTarget.finding_id.in_(finding_ids),
+                    AssessmentTarget.variant_id == self._variant_uuid,
+                    Assessment.origin == "scc",
+                    Assessment.status == "under_investigation",
+                    self._observed_elsewhere(),
+                )
+                .distinct()
+            )
+            for chunk in ids.partitions(self._SELECT_CHUNK):
+                self._adopted_assessment_ids.extend(chunk)
+
+    def cleanup(self) -> None:
+        """Reconcile owned and adopted rows in bounded write transactions."""
+        if (self._created_finding_ids is None or self._created_assessment_ids is None
+                or self._adopted_assessment_ids is None):
+            return
+        other_target = sa_orm.aliased(AssessmentTarget)
         assessed_elsewhere = (
             _db.select(other_target.assessment_id)
             .where(
@@ -711,20 +739,41 @@ class _SccBulkWriter:
             )
             .exists()
         )
-        for chunk in self._created_assessment_ids.chunks(self._SELECT_CHUNK):
-            with _write_lock():
-                still_needed = _db.select(AssessmentTarget.assessment_id).where(
-                    AssessmentTarget.assessment_id.in_(chunk),
-                    observed_elsewhere,
-                    ~assessed_elsewhere,
-                )
-                for assessment in _db.session.scalars(
-                    _db.select(Assessment).where(
+        for spool, created in (
+            (self._created_assessment_ids, True),
+            (self._adopted_assessment_ids, False),
+        ):
+            for chunk in spool.chunks(self._SELECT_CHUNK):
+                with _write_lock():
+                    # Remove our observations and reconcile their assessments
+                    # atomically, so failing scans cannot preserve each other.
+                    finding_ids = _db.select(AssessmentTarget.finding_id).where(
+                        AssessmentTarget.assessment_id.in_(chunk),
+                        AssessmentTarget.variant_id == self._variant_uuid,
+                    )
+                    _db.session.execute(
+                        _db.delete(Observation).where(
+                            Observation.scan_id == self._scan_id,
+                            Observation.finding_id.in_(finding_ids),
+                        )
+                    )
+                    still_needed = _db.select(AssessmentTarget.assessment_id).where(
+                        AssessmentTarget.assessment_id.in_(chunk),
+                        self._observed_elsewhere(),
+                    )
+                    if created:
+                        still_needed = still_needed.where(~assessed_elsewhere)
+                    assessments = _db.select(Assessment).where(
                         Assessment.id.in_(chunk), Assessment.id.not_in(still_needed),
                     )
-                ).all():
-                    _db.session.delete(assessment)
-                _db.session.commit()
+                    if not created:
+                        assessments = assessments.where(
+                            Assessment.origin == "scc",
+                            Assessment.status == "under_investigation",
+                        )
+                    for assessment in _db.session.scalars(assessments).all():
+                        _db.session.delete(assessment)
+                    _db.session.commit()
 
         for chunk in self._created_finding_ids.chunks(self._SELECT_CHUNK):
             with _write_lock():
@@ -750,6 +799,7 @@ class _SccBulkWriter:
 
         self._created_finding_ids.close()
         self._created_assessment_ids.close()
+        self._adopted_assessment_ids.close()
 
     def _existing_vuln_ids(self, ids: list[str]) -> set[str]:
         found: set[str] = set()
