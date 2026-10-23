@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import pytest
 
 from src.bin.webapp import create_app
-from src.bin.cmd_vuln_scan import _SccBulkWriter
+from src.bin.cmd_vuln_scan import _SccBulkWriter, _persist_finding
 from src.extensions import db as _db
 from src.models.project import Project
 from src.models.variant import Variant
@@ -173,6 +173,69 @@ class TestSccBulkWriter:
             assert _db.session.query(AssessmentTarget).count() == 1
             observation = _db.session.query(Observation).one()
             assert (observation.finding_id, observation.scan_id) == (adopted_id, other_scan_id)
+
+    def test_failure_cleanup_keeps_pending_assessment_reused_by_another_scan(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+                    writer.flush()
+
+                    # A concurrent scan of the same variant observes the new
+                    # finding, reuses its pending assessment, and completes.
+                    with app.app_context():
+                        with tool_scan(variant_id, "osv") as other_scan:
+                            other_scan_id = other_scan.id
+                            _persist_finding(
+                                package_id, "CVE-2023-0001", other_scan_id, variant_id,
+                                "osv", set(), set(),
+                            )
+                    raise KeyboardInterrupt
+
+            finding = _db.session.query(Finding).one()
+            assert list(_db.session.scalars(_db.select(Scan.id))) == [other_scan_id]
+            observation = _db.session.query(Observation).one()
+            assert (observation.finding_id, observation.scan_id) == (finding.id, other_scan_id)
+            pending = _assessments_for(finding.id, variant_id).one()
+            assert pending.status == "under_investigation"
+
+    def test_failure_cleanup_removes_pending_assessment_seen_only_by_other_variant(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            other_variant = Variant.create("W", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, other_variant_id = variant.id, other_variant.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+                    writer.flush()
+                    finding_id = _db.session.query(Finding).one().id
+
+                    with app.app_context():
+                        with tool_scan(other_variant_id, "osv") as other_scan:
+                            _persist_finding(
+                                pkg.id, "CVE-2023-0001", other_scan.id, other_variant_id,
+                                "osv", set(), set(),
+                            )
+                    raise KeyboardInterrupt
+
+            assert _assessments_for(finding_id, variant_id).count() == 0
+            assert _assessments_for(finding_id, other_variant_id).count() == 1
 
     def test_kernel_explosion_persists_once_per_package_cve(self, app):
         """Many sibling packages sharing the same CVE set each get their own
