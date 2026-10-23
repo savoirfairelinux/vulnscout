@@ -4,6 +4,7 @@ import CodebaseReferences from "../CodebaseReferences";
 import FieldErrorText from "./FieldErrorText";
 import { describeField } from "./fieldErrors";
 import { BUTTON_SECONDARY, FIELD, HELP, LABEL, TEXTAREA } from "./styles";
+import { CELL, RemoveButton, TH } from "./SystemTables";
 
 type Props = {
     draft: VariantDraft;
@@ -61,9 +62,6 @@ function RadioGroup<T extends string>({ name, label, options, value, onChange, e
     );
 }
 
-const TH = "px-2 py-1 text-left text-xs font-semibold text-zinc-300";
-const CELL = "px-1 py-1 align-top";
-
 function CodebasePathsTable({ paths, onChange, errors, disabled }: Readonly<{
     paths: string[];
     onChange: (paths: string[]) => void;
@@ -94,12 +92,9 @@ function CodebasePathsTable({ paths, onChange, errors, disabled }: Readonly<{
                                         onChange={e => onChange(paths.map((p, i) => (i === index ? e.target.value : p)))}
                                         {...describeField('codebase_path', errors)} />
                                 </td>
-                                <td className={CELL}>
-                                    <button type="button" className={BUTTON_SECONDARY} aria-label={`Remove codebase path ${index + 1}`}
-                                        disabled={disabled} onClick={() => onChange(paths.filter((_, i) => i !== index))}>
-                                        Remove
-                                    </button>
-                                </td>
+                                <RemoveButton noun="codebase path" id={String(index + 1)}
+                                    hintId={`${fieldId('codebase_paths')}-${index}-blocked`} blocked={false}
+                                    disabled={disabled} onClick={() => onChange(paths.filter((_, i) => i !== index))} />
                             </tr>
                         ))}
                     </tbody>

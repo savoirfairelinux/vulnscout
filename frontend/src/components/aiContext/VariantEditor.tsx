@@ -5,6 +5,8 @@ import { faSpinner } from "@fortawesome/free-solid-svg-icons";
 import type { ContextFile, VariantDraft } from "../../handlers/context";
 import ContextTab from "./ContextTab";
 import SystemTab from "./SystemTab";
+import ThreatModelTab from "./ThreatModelTab";
+import RisksTab from "./RisksTab";
 import { BADGE_VARIANT, BUTTON_PRIMARY, BUTTON_SECONDARY, PANEL } from "./styles";
 
 export type VariantTab = 'context' | 'system' | 'threat_model' | 'risks';
@@ -116,6 +118,23 @@ function VariantEditor({
                     {key === 'system' && (
                         <SystemTab
                             key={`${variantId}:${draftGeneration}`}
+                            draft={draft}
+                            onDraftChange={onDraftChange}
+                            fieldErrors={fieldErrors}
+                            disabled={saving}
+                        />
+                    )}
+                    {key === 'threat_model' && (
+                        <ThreatModelTab
+                            key={`${variantId}:${draftGeneration}`}
+                            draft={draft}
+                            onDraftChange={onDraftChange}
+                            fieldErrors={fieldErrors}
+                            disabled={saving}
+                        />
+                    )}
+                    {key === 'risks' && (
+                        <RisksTab
                             draft={draft}
                             onDraftChange={onDraftChange}
                             fieldErrors={fieldErrors}

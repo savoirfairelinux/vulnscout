@@ -767,6 +767,212 @@ describe('AIContext page', () => {
         });
     });
 
+    describe('threat model and risks tabs', () => {
+        async function openStride(backend?: Partial<Backend>, tab = 'Threat model') {
+            const mocked = mockBackend(backend);
+            const utils = renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.click(screen.getByRole('radio', { name: 'STRIDE' }));
+            fireEvent.click(variantTab(tab));
+            return { backend: mocked, ...utils };
+        }
+        const addThreat = () => fireEvent.click(screen.getByRole('button', { name: 'Add threat' }));
+        const addRisk = () => fireEvent.click(screen.getByRole('button', { name: 'Add risk' }));
+        const saveBody = async (backend: Backend) => {
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+            return JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+        };
+
+        test('free mode binds the threat model and risks textareas to the free fields', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.click(variantTab('Threat model'));
+            expect(screen.getByText('Switching to STRIDE keeps existing free text as additional notes.')).toBeInTheDocument();
+            fireEvent.change(screen.getByRole('textbox', { name: 'Threat model' }), { target: { value: 'TM2' } });
+            fireEvent.click(variantTab('Risks'));
+            fireEvent.change(screen.getByRole('textbox', { name: 'Risks' }), { target: { value: 'R2' } });
+
+            const body = await saveBody(backend);
+
+            expect(body.free).toEqual({ threat_model: 'TM2', risks: 'R2' });
+        });
+
+        test('threat table lists STRIDE category labels and defaults a new threat to spoofing', async () => {
+            await openStride();
+            addThreat();
+
+            const table = screen.getByRole('table', { name: 'Threats' });
+            expect(within(table).getAllByRole('columnheader').map(h => h.textContent))
+                .toEqual(['ID', 'STRIDE category', 'Description', 'Targets', 'Remove']);
+            const category = screen.getByLabelText('Threat T1 STRIDE category');
+            expect(within(category).getAllByRole('option').map(o => o.textContent)).toEqual([
+                'Spoofing', 'Tampering', 'Repudiation', 'Information disclosure', 'Denial of service',
+                'Elevation of privilege',
+            ]);
+            expect(category).toHaveValue('spoofing');
+        });
+
+        test('selecting targets and category updates the saved threat', async () => {
+            const { backend } = await openStride();
+            fireEvent.click(variantTab('System'));
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            fireEvent.change(screen.getByLabelText('Component C1 name'), { target: { value: 'Broker' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+            fireEvent.click(variantTab('Threat model'));
+            addThreat();
+
+            const targets = screen.getByRole('group', { name: 'Threat T1 targets' });
+            expect(within(targets).getAllByRole('checkbox')).toHaveLength(2);
+            fireEvent.click(within(targets).getByRole('checkbox', { name: 'C1 Broker' }));
+            fireEvent.click(within(targets).getByRole('checkbox', { name: 'I1' }));
+            fireEvent.click(within(targets).getByRole('checkbox', { name: 'I1' }));
+            fireEvent.change(screen.getByLabelText('Threat T1 STRIDE category'), { target: { value: 'tampering' } });
+            fireEvent.change(screen.getByLabelText('Threat T1 description'), { target: { value: 'Forged frames' } });
+            fireEvent.change(screen.getByLabelText('Additional notes'), { target: { value: 'N' } });
+
+            const body = await saveBody(backend);
+
+            expect(body.stride.threats).toEqual([
+                { id: 'T1', category: 'tampering', description: 'Forged frames', target_ids: ['C1'] },
+            ]);
+            expect(body.stride.notes).toBe('N');
+        });
+
+        test('removed threat ids are not reused', async () => {
+            await openStride();
+            addThreat();
+            addThreat();
+            fireEvent.click(screen.getByRole('button', { name: 'Remove threat T2' }));
+            addThreat();
+
+            expect(screen.getByLabelText('Threat T3 description')).toBeInTheDocument();
+            expect(screen.queryByLabelText('Threat T2 description')).not.toBeInTheDocument();
+        });
+
+        test('a threat with a risk cannot be removed and says why', async () => {
+            await openStride();
+            addThreat();
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+            fireEvent.click(variantTab('Threat model'));
+
+            const remove = screen.getByRole('button', { name: 'Remove threat T1' });
+            expect(remove).toBeDisabled();
+            expect(remove).toHaveAccessibleDescription('Remove its risks first.');
+
+            fireEvent.click(variantTab('Risks'));
+            fireEvent.click(screen.getByRole('button', { name: 'Remove risk 1' }));
+            fireEvent.click(variantTab('Threat model'));
+            expect(screen.getByRole('button', { name: 'Remove threat T1' })).toBeEnabled();
+        });
+
+        test('Add risk is disabled with a hint until a threat exists', async () => {
+            await openStride(undefined, 'Risks');
+            const add = screen.getByRole('button', { name: 'Add risk' });
+            expect(add).toBeDisabled();
+            expect(add).toHaveAccessibleDescription('Add a threat first.');
+
+            fireEvent.click(variantTab('Threat model'));
+            addThreat();
+            fireEvent.click(variantTab('Risks'));
+
+            expect(screen.getByRole('button', { name: 'Add risk' })).toBeEnabled();
+        });
+
+        test('risk ratings show full text, store lowercase values and null for Not rated', async () => {
+            const { backend } = await openStride();
+            addThreat();
+            fireEvent.change(screen.getByLabelText('Threat T1 description'), { target: { value: 'x'.repeat(50) } });
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+
+            const table = screen.getByRole('table', { name: 'Risks' });
+            expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual([
+                'Threat', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision', 'Remove',
+            ]);
+            const likelihood = screen.getByLabelText('Risk 1 likelihood');
+            expect(within(likelihood).getAllByRole('option').map(o => o.textContent))
+                .toEqual(['Not rated', 'Low', 'Medium', 'High']);
+            expect(likelihood).toHaveValue('');
+            expect(within(screen.getByLabelText('Risk 1 threat')).getByRole('option').textContent)
+                .toBe(`T1: ${'x'.repeat(40)}`);
+            fireEvent.change(likelihood, { target: { value: 'high' } });
+            fireEvent.change(screen.getByLabelText('Risk 1 impact'), { target: { value: 'low' } });
+            fireEvent.change(screen.getByLabelText('Risk 1 impact'), { target: { value: '' } });
+            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Patch' } });
+            fireEvent.change(screen.getByLabelText('Risk 1 residual risk / decision'), { target: { value: 'Accept' } });
+            fireEvent.change(screen.getByLabelText('Additional risk notes'), { target: { value: 'RN' } });
+
+            const body = await saveBody(backend);
+
+            expect(body.stride.risks).toEqual([
+                { threat_id: 'T1', likelihood: 'high', impact: null, mitigation: 'Patch', residual: 'Accept' },
+            ]);
+            expect(body.stride.risk_notes).toBe('RN');
+        });
+
+        test('threat option shows just the id when the description is empty', async () => {
+            await openStride();
+            addThreat();
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+
+            expect(within(screen.getByLabelText('Risk 1 threat')).getByRole('option').textContent).toBe('T1');
+        });
+
+        async function failWith(fields: Record<string, string>, prepare: () => void = () => {}) {
+            await openStride({ variantPutError: { error: 'Invalid variant context', fields } });
+            prepare();
+            fireEvent.click(variantTab('Context'));
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            expect(await screen.findByText('Invalid variant context')).toBeInTheDocument();
+        }
+
+        test('threat 400 paths open the Threat model tab and mark the cells', async () => {
+            await failWith({ 'threats[0].target_ids': 'unknown target', 'notes': 'too long' }, addThreat);
+
+            expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
+            expect(screen.getByRole('group', { name: 'Threat T1 targets' })).toHaveAccessibleDescription('unknown target');
+            expect(screen.getByLabelText('Additional notes')).toHaveAccessibleDescription('too long');
+        });
+
+        test('risk 400 paths open the Risks tab and mark the cells', async () => {
+            await failWith({ 'risks[0].likelihood': 'invalid rating', 'risk_notes': 'bad' }, () => {
+                addThreat();
+                fireEvent.click(variantTab('Risks'));
+                addRisk();
+            });
+
+            expect(variantTab('Risks')).toHaveAttribute('aria-selected', 'true');
+            const select = screen.getByLabelText('Risk 1 likelihood');
+            expect(select).toHaveAttribute('aria-invalid', 'true');
+            expect(select).toHaveAccessibleDescription('invalid rating');
+            expect(screen.getByLabelText('Additional risk notes')).toHaveAccessibleDescription('bad');
+        });
+
+        test('a free-mode threat_model error opens the Threat model tab', async () => {
+            mockBackend({ variantPutError: { error: 'Invalid variant context', fields: { threat_model: 'required' } } });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.click(variantTab('Threat model'));
+            fireEvent.change(screen.getByRole('textbox', { name: 'Threat model' }), { target: { value: 'x' } });
+            fireEvent.click(variantTab('Context'));
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('required')).toBeInTheDocument();
+            expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
+            expect(screen.getByRole('textbox', { name: 'Threat model' })).toHaveAccessibleDescription(/required/);
+        });
+
+        test('an unrecognised or merely prefixed path falls back to the Context tab', async () => {
+            await failWith({ 'notesX': 'odd' });
+
+            expect(variantTab('Context')).toHaveAttribute('aria-selected', 'true');
+        });
+    });
+
     describe('import / export', () => {
         let createObjSpy: jest.Mock;
         let clickSpy: jest.SpyInstance;

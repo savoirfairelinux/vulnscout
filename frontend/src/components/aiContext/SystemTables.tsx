@@ -13,9 +13,9 @@ type Props = {
     disabled: boolean;
 };
 
-const TH = "px-2 py-1 text-left text-xs font-semibold text-zinc-300";
-const CELL = "px-1 py-1 align-top";
-const CELL_FIELD = `${FIELD} resize-y`;
+export const TH = "px-2 py-1 text-left text-xs font-semibold text-zinc-300";
+export const CELL = "px-1 py-1 align-top";
+export const CELL_FIELD = `${FIELD} resize-y`;
 const BLOCKED_HINT = 'Remove its interactions, threat targets and risks first.';
 
 type Column<T> = { key: keyof T & string; header: string; label: string; kind: 'input' | 'text' | 'source' | 'destination' };
@@ -103,8 +103,8 @@ function Cell<T extends { id: string }>({ row, index, col, noun, prefix, compone
     );
 }
 
-function RemoveButton({ noun, id, hintId, blocked, disabled, onClick }: Readonly<{
-    noun: string; id: string; hintId: string; blocked: boolean; disabled: boolean; onClick: () => void;
+export function RemoveButton({ noun, id, hintId, blocked, disabled, onClick, hint = BLOCKED_HINT }: Readonly<{
+    noun: string; id: string; hintId: string; blocked: boolean; disabled: boolean; onClick: () => void; hint?: string;
 }>) {
     return (
         <td className={CELL}>
@@ -112,7 +112,7 @@ function RemoveButton({ noun, id, hintId, blocked, disabled, onClick }: Readonly
                 disabled={disabled || blocked} aria-describedby={blocked ? hintId : undefined} onClick={onClick}>
                 Remove
             </button>
-            {blocked && <span id={hintId} className="sr-only">{BLOCKED_HINT}</span>}
+            {blocked && <span id={hintId} className="sr-only">{hint}</span>}
         </td>
     );
 }
