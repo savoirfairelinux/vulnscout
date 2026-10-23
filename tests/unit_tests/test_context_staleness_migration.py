@@ -152,3 +152,78 @@ def test_repair_preserves_an_already_upgraded_database():
         migration.upgrade()
         repair.upgrade()
         assert 'created_at' in _column_names(connection, 'assessments')
+
+
+editor_fields = importlib.import_module(
+    "src.migrations.versions.a3d5e7f9b1c2_add_variant_context_editor_fields"
+)
+
+EDITOR_COLUMNS = {
+    "editor_mode", "codebase_source", "system_scope", "system_actors",
+    "system_entry_points", "system_trust_boundaries", "stride_model",
+}
+
+
+def _create_editor_pre_upgrade_schema(connection):
+    connection.exec_driver_sql(
+        "CREATE TABLE variant_context ("
+        "id VARCHAR PRIMARY KEY, variant_id VARCHAR, codebase_path TEXT, updated_at DATETIME)"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE context_files (id VARCHAR PRIMARY KEY, variant_context_id VARCHAR)"
+    )
+    rows = [("A", "src;lib"), ("B", None), ("C", "src"), ("D", None)]
+    for ctx_id, path in rows:
+        connection.exec_driver_sql(
+            "INSERT INTO variant_context (id, variant_id, codebase_path, updated_at) "
+            "VALUES (?, ?, ?, '2026-01-01T00:00:00Z')",
+            (ctx_id, f"v{ctx_id}", path),
+        )
+    for ctx_id in ("A", "B"):
+        connection.exec_driver_sql(
+            "INSERT INTO context_files (id, variant_context_id) VALUES (?, ?)",
+            (f"f{ctx_id}", ctx_id),
+        )
+
+
+def test_editor_fields_migration_defaults():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+
+        editor_fields.upgrade()
+
+        rows = connection.exec_driver_sql(
+            "SELECT id, editor_mode, codebase_source, updated_at, stride_model, "
+            "system_scope, system_actors, system_entry_points, system_trust_boundaries "
+            "FROM variant_context"
+        ).mappings().all()
+
+    by_id = {r["id"]: r for r in rows}
+    assert {k: (v["editor_mode"], v["codebase_source"]) for k, v in by_id.items()} == {
+        "A": ("free", "references"), "B": ("free", "references"),
+        "C": ("free", "paths"), "D": ("free", "paths"),
+    }
+    for row in rows:
+        assert row["updated_at"] == "2026-01-01T00:00:00Z"
+        assert row["stride_model"] is None
+        assert row["system_scope"] is None
+        assert row["system_actors"] is None
+        assert row["system_entry_points"] is None
+        assert row["system_trust_boundaries"] is None
+
+
+def test_editor_fields_downgrade_drops_columns():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+
+        editor_fields.upgrade()
+        assert EDITOR_COLUMNS <= _column_names(connection, "variant_context")
+        editor_fields.downgrade()
+
+        columns = _column_names(connection, "variant_context")
+
+    assert not (EDITOR_COLUMNS & columns)

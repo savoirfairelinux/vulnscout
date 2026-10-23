@@ -308,6 +308,13 @@ def register_tools(server, client: VulnScoutClient) -> None:
         value back explicitly. If only the project/variant names are known,
         resolve variant_id first with find_variant_id.
 
+        Rejected (409) for STRIDE-mode variants when threat_model or risks is
+        set to a value that differs from the current one; other fields still
+        update when those two are omitted. Passing back the unchanged
+        values from get_merged_context is accepted. On a variant that uses
+        uploaded references, codebase_path may be omitted to keep the stored
+        paths.
+
         Args:
             variant_id: UUID of the variant to update.
             variant_description: Free-text description of this variant.

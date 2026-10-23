@@ -1,19 +1,25 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faSpinner, faRobot, faBook, faFileExport, faFileImport, faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import { faBook } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
-import Variants from "../handlers/variant";
-import Context from "../handlers/context";
+import Context, { ContextSaveError } from "../handlers/context";
 import Assessments from "../handlers/assessments";
-import type { VariantContextData, ContextExport, ImportResult, ContextFile } from "../handlers/context";
-import CodebaseReferences from "../components/CodebaseReferences";
+import type { ContextFile, ImportResult, VariantDraft } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
-import HelpPopover from "../components/HelpPopover";
-import useDismissablePopover from "../hooks/useDismissablePopover";
+import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
+import { useLoadedDraft } from "../hooks/useLoadedDraft";
+import { draftFromContext, draftsEqual, emptyDraft, hasThreatModel } from "../helpers/strideModel";
+import ContextSidebar from "../components/aiContext/ContextSidebar";
+import type { SidebarSelection } from "../components/aiContext/ContextSidebar";
+import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionPanel";
+import ContextTransferControls, { ImportDetails } from "../components/aiContext/ContextTransferControls";
+import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
+import CopyFromDialog, { type CopySourceProject } from "../components/aiContext/CopyFromDialog";
+import { ERROR } from "../components/aiContext/styles";
 import { AGENT_WRITE_EVENT, type AgentViewContext } from "../types/agent";
 
 // Throwing fetch helpers for selector loads (existing handlers swallow HTTP errors)
@@ -38,15 +44,59 @@ async function fetchVariantList(projectId: string): Promise<Variant[]> {
     ) as Variant[];
 }
 
-type SaveSnapshot = {
-    loadId: number;
-    projectId: string;
-    variantId: string;
-    description: string | null;
-    fields: VariantContextData;
-};
+/** Every project with its variants; projects whose variants fail to load are left out. */
+async function fetchCopySources(): Promise<CopySourceProject[]> {
+    const projects = await fetchProjectList();
+    const lists = await Promise.all(projects.map(p => fetchVariantList(p.id).catch(() => null)));
+    return projects.flatMap((p, i) => {
+        const list = lists[i];
+        return list ? [{ id: p.id, name: p.name, variants: list.map(v => ({ id: v.id, name: v.name })) }] : [];
+    });
+}
 
-function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (context: AgentViewContext) => void }>) {
+/**
+ * Top-bar scope; `variantIds` undefined means the whole project. `revision`
+ * changes on every applied scope, even an identical one, so the page drops
+ * edits the user chose to discard.
+ */
+export type AiContextScope = { projectId?: string; variantIds?: string[]; revision?: number };
+
+type SaveTarget =
+    | { kind: 'project'; projectId: string; description: string; sent: string }
+    | { kind: 'variant'; projectId: string; variantId: string; draft: VariantDraft };
+
+const DIRTY_PROJECT_AGENT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
+const DIRTY_VARIANT_AGENT_TEXT = "The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.";
+const EMPTY_VARIANT_DRAFT = emptyDraft();
+const NO_FILES: ContextFile[] = [];
+const sameText = (a: string, b: string) => a === b;
+type BannerType = 'success' | 'error' | 'info';
+
+/** The variant tab that owns a server field path (e.g. "components[0].name", "system.actors"). */
+function tabForField(path: string): VariantTab {
+    if (/^(system\.|components(\.|\[|$)|interactions(\.|\[|$))/.test(path)) return 'system';
+    if (/^(threats|notes|threat_model)(\.|\[|$)/.test(path)) return 'threat_model';
+    if (/^(risks|risk_notes)(\.|\[|$)/.test(path)) return 'risks';
+    return 'context';
+}
+
+async function hasPendingAi(target: SaveTarget): Promise<boolean> {
+    try {
+        // A project-description change outdates every variant in the project.
+        const rows = target.kind === 'variant'
+            ? await Assessments.listForReview(target.variantId, undefined, 'ai')
+            : await Assessments.listForReview(undefined, target.projectId, 'ai');
+        return rows.length > 0;
+    } catch {
+        // Could not check: warn anyway rather than silently outdating assessments.
+        return true;
+    }
+}
+
+function AIContext({ scope, onAgentContextChange }: Readonly<{
+    scope: AiContextScope;
+    onAgentContextChange?: (context: AgentViewContext) => void;
+}>) {
     const unmountedRef = useRef(false);
     useEffect(() => {
         unmountedRef.current = false;
@@ -54,220 +104,223 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
     }, []);
 
     const docUrl = useDocUrl("ai-assessments.html");
+    const { registerGuard, confirmLeave } = useUnsavedGuard();
+    const projectId = scope.projectId;
 
-    // Selectors
     const [projects, setProjects] = useState<Project[]>([]);
-    const [variants, setVariants] = useState<Variant[]>([]);
-    const [allVariants, setAllVariants] = useState<Variant[]>([]);
-    const [selectedProjectId, setSelectedProjectId] = useState<string>('');
-    const [selectedVariantId, setSelectedVariantId] = useState<string>('');
-    useEffect(() => {
-        onAgentContextChange?.({
-            selectedProjectId,
-            selectedProjectName: projects.find(project => project.id === selectedProjectId)?.name,
-            selectedVariantId,
-            selectedVariantName: variants.find(variant => variant.id === selectedVariantId)?.name,
-        });
-    }, [selectedProjectId, selectedVariantId, projects, variants, onAgentContextChange]);
-
-    // Form fields
-    const [description, setDescription] = useState<string>('');
-    const [variantDescription, setVariantDescription] = useState<string>('');
-    const [codebasePath, setCodebasePath] = useState<string>('');
-    const [contextFiles, setContextFiles] = useState<{ variantId: string; files: ContextFile[] }>({ variantId: '', files: [] });
-    const [environment, setEnvironment] = useState<string>('');
-    const [threatModel, setThreatModel] = useState<string>('');
-    const [risks, setRisks] = useState<string>('');
-    const [otherInfo, setOtherInfo] = useState<string>('');
+    // Tagged with their project: right after a project switch they still hold
+    // the previous project's values, which must not be used.
+    const [variantList, setVariantList] = useState<{ projectId: string; list: Variant[] } | null>(null);
+    const [selection, setSelection] = useState<{ projectId: string; item: SidebarSelection } | null>(null);
+    const variants = variantList && variantList.projectId === projectId ? variantList.list : null;
+    const selected = selection && selection.projectId === projectId ? selection.item : null;
 
     // UI state
     const [busy, setBusy] = useState(false);
-    const [variantContextLoading, setVariantContextLoading] = useState(false);
-    // Without a successful load there is no baseline to diff against, and the
-    // fields were cleared, so saving would both skip the outdating check and
-    // overwrite the stored context with blanks.
-    const [variantContextLoadFailed, setVariantContextLoadFailed] = useState(false);
-    // Same reasoning as variantContextLoadFailed, for the project description.
-    const [projectContextLoadFailed, setProjectContextLoadFailed] = useState(false);
+    const [fieldError, setFieldError] = useState('');
+    const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+    const [variantTab, setVariantTab] = useState<VariantTab>('context');
+    // Uploaded references are saved on their own, outside the draft; tagged with the draft key they belong to.
+    const [variantFiles, setVariantFiles] = useState<{ key: string | null; files: ContextFile[] }>({ key: null, files: [] });
+    const [announcement, setAnnouncement] = useState('');
     const [confirmOutdate, setConfirmOutdate] = useState(false);
-    // Variant fields as last loaded or saved, to detect whether a save changes anything.
-    const savedVariantFieldsRef = useRef<VariantContextData | null>(null);
-    // Project description as last loaded or saved, to detect whether a save changes anything.
-    const savedDescriptionRef = useRef<string | null>(null);
-    const variantLoadIdRef = useRef(0);
-    // The selection a pending confirmation belongs to, so confirming cannot save
-    // whatever happens to be selected by then.
-    const pendingSaveRef = useRef<SaveSnapshot | null>(null);
-    const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-    const [bannerMsg, setBannerMsg] = useState<ReactNode>('');
-    const [bannerType, setBannerType] = useState<'success' | 'error'>('success');
-    const [bannerVisible, setBannerVisible] = useState(false);
-
-    // Import/Export state
-    const [exportMenuOpen, setExportMenuOpen] = useState(false);
-    const [exportSelection, setExportSelection] = useState<Set<string>>(new Set());
-    const [ioBusy, setIoBusy] = useState(false);
+    // The save a pending confirmation belongs to, and who waits for its outcome.
+    const pendingSaveRef = useRef<{ target: SaveTarget; resolve: (saved: boolean) => void } | null>(null);
+    const [banner, setBanner] = useState<{ msg: ReactNode; type: BannerType } | null>(null);
     const [importDetails, setImportDetails] = useState<ImportResult | null>(null);
-    const exportMenuRef = useRef<HTMLDivElement | null>(null);
-    const importInputRef = useRef<HTMLInputElement | null>(null);
+    // Copy dialog sources; null while the dialog is closed.
+    const [copySources, setCopySources] = useState<CopySourceProject[] | null>(null);
 
-    const showBanner = (msg: ReactNode, type: 'success' | 'error') => {
-        setBannerMsg(msg);
-        setBannerType(type);
-        setBannerVisible(true);
-    };
+    const showBanner = useCallback((msg: ReactNode, type: BannerType) => {
+        if (unmountedRef.current) return;
+        setBanner({ msg, type });
+    }, []);
+    // Info banners (e.g. after Copy) stay; only an error that no longer applies is hidden.
+    const hideErrorBanner = useCallback(() => setBanner(prev => (prev?.type === 'error' ? null : prev)), []);
+    const showLoadError = useCallback((message: string) => showBanner(message, 'error'), [showBanner]);
 
-    // Load projects on mount
     useEffect(() => {
         fetchProjectList().then(ps => {
             if (!unmountedRef.current) setProjects(ps);
-        }).catch((e: any) => {
-            if (!unmountedRef.current) showBanner(e?.message || "Failed to load projects.", "error");
-        });
-     
-    }, []);
+        }).catch((e: any) => showBanner(e?.message || "Failed to load projects.", "error"));
+    }, [showBanner]);
 
-    // Load all variants for the export selector (lazily, when the menu first opens)
-    const [allVariantsLoaded, setAllVariantsLoaded] = useState(false);
-    const loadAllVariants = useCallback(() => {
-        if (allVariantsLoaded) return;
-        Variants.listAll().then(vs => {
-            if (unmountedRef.current) return;
-            setAllVariants(vs);
-            setAllVariantsLoaded(true);
+    // Every variant of the scope's project is listed; out-of-scope ones are locked.
+    useEffect(() => {
+        setVariantList(null);
+        setSelection(null);
+        if (!projectId) return;
+        let current = true;
+        fetchVariantList(projectId).then(vs => {
+            if (current) setVariantList({ projectId, list: vs });
         }).catch((e: any) => {
-            // Leave allVariantsLoaded false so reopening the menu retries.
-            if (!unmountedRef.current)
-                showBanner(e?.message || "Failed to load variants for export.", "error");
+            if (!current) return;
+            showBanner(e?.message || "Failed to load variants.", "error");
+            setVariantList({ projectId, list: [] });
         });
-    }, [allVariantsLoaded]);
+        return () => { current = false; };
+    }, [projectId, showBanner]);
 
-    const clearVariantFields = () => {
-        setVariantDescription('');
-        setCodebasePath('');
-        setContextFiles({ variantId: '', files: [] });
-        setEnvironment('');
-        setThreatModel('');
-        setRisks('');
-        setOtherInfo('');
+    const scopeKey = scope.variantIds?.join(',');
+    const inScopeIds = useMemo(() => {
+        const ids = (variants ?? []).map(v => v.id);
+        return scopeKey === undefined ? ids : ids.filter(id => scopeKey.split(',').includes(id));
+    }, [variants, scopeKey]);
+    const inScopeKey = inScopeIds.join(',');
+
+    // Drafts: only the open item has a key, so only it is loaded.
+    const projectKey = projectId && selected?.kind === 'project' ? projectId : null;
+    const variantKey = projectId && selected?.kind === 'variant' ? `${projectId}/${selected.id}` : null;
+    const projectDraft = useLoadedDraft<string>(
+        projectKey,
+        () => Context.getProject(projectId ?? '').then(ctx => ctx.description ?? ''),
+        '', sameText, showLoadError,
+    );
+    const variantDraft = useLoadedDraft<VariantDraft>(
+        variantKey,
+        () => Context.get(projectId ?? '', selected?.kind === 'variant' ? selected.id : '').then(ctx => {
+            setVariantFiles({ key: variantKey, files: ctx.editor?.files ?? ctx.files ?? [] });
+            return draftFromContext(ctx);
+        }),
+        EMPTY_VARIANT_DRAFT, draftsEqual, showLoadError,
+    );
+    const openKey = projectKey ?? variantKey;
+    const openKeyRef = useRef(openKey);
+    openKeyRef.current = openKey;
+    // Field errors and the active tab belong to the open item, however it changed.
+    useEffect(() => {
+        setFieldError('');
+        setFieldErrors({});
+        setVariantTab('context');
+    }, [openKey, projectDraft.epoch, variantDraft.epoch]);
+    useEffect(() => { setCopySources(null); }, [openKey]);
+    // Errors about the item or project just left no longer apply. Opening the
+    // first item keeps them: they may explain why the variant list is empty.
+    const lastOpenRef = useRef({ projectId, openKey });
+    useEffect(() => {
+        const last = lastOpenRef.current;
+        lastOpenRef.current = { projectId, openKey };
+        if (last.projectId !== projectId || (last.openKey !== null && last.openKey !== openKey)) hideErrorBanner();
+    }, [projectId, openKey, hideErrorBanner]);
+    const { reset: resetProject, reload: reloadProject } = projectDraft;
+    const { reset: resetVariant, reload: reloadVariant } = variantDraft;
+
+    // Keep the selection inside the scope: the first in-scope variant, else the
+    // project description. A scope change only happens after the unsaved
+    // prompt was answered, so the open item's edits are dropped.
+    useEffect(() => {
+        if (!projectId || variants === null) return;
+        const ids = inScopeKey ? inScopeKey.split(',') : [];
+        setSelection(prev => {
+            const item = prev?.projectId === projectId ? prev.item : null;
+            if (item?.kind === 'project' || (item?.kind === 'variant' && ids.includes(item.id))) return prev;
+            return { projectId, item: ids.length > 0 ? { kind: 'variant', id: ids[0] } : { kind: 'project' } };
+        });
+        resetProject();
+        resetVariant();
+    }, [projectId, variants, inScopeKey, scope.revision, resetProject, resetVariant]);
+
+    const projectName = projects.find(p => p.id === projectId)?.name ?? '';
+    const openVariant = selected?.kind === 'variant' ? variants?.find(v => v.id === selected.id) : undefined;
+    const openLabel = selected?.kind === 'variant' ? (openVariant?.name ?? 'this variant') : (projectName || 'the project description');
+    const dirty = selected?.kind === 'variant' ? variantDraft.dirty : projectDraft.dirty;
+
+    useEffect(() => {
+        onAgentContextChange?.({
+            selectedProjectId: projectId,
+            selectedProjectName: projectName || undefined,
+            selectedVariantId: openVariant?.id,
+            selectedVariantName: openVariant?.name,
+        });
+    }, [projectId, projectName, openVariant, onAgentContextChange]);
+
+    const buildSaveTarget = (): SaveTarget | null => {
+        if (!projectId || !selected) return null;
+        if (selected.kind === 'project') {
+            if (projectDraft.baseline === null) return null;
+            if (!projectDraft.draft.trim()) {
+                setFieldError("Project description is required.");
+                return null;
+            }
+            return { kind: 'project', projectId, description: projectDraft.draft.trim(), sent: projectDraft.draft };
+        }
+        if (variantDraft.baseline === null) return null;
+        if (!hasThreatModel(variantDraft.draft)) {
+            setFieldError("A threat model is required.");
+            setVariantTab('threat_model');
+            return null;
+        }
+        return { kind: 'variant', projectId, variantId: selected.id, draft: variantDraft.draft };
     };
 
-    // Load variants when project changes
-    useEffect(() => {
-        setVariants([]);
-        setSelectedVariantId('');
-        clearVariantFields();
-        if (!selectedProjectId) return;
-        fetchVariantList(selectedProjectId).then(vs => {
-            if (!unmountedRef.current) setVariants(vs);
-        }).catch((e: any) => {
-            if (!unmountedRef.current) showBanner(e?.message || "Failed to load variants.", "error");
-        });
-     
-    }, [selectedProjectId]);
-
-    // The project description is project-bound, so it is loaded only when the project
-    // changes. Reloading it on every variant change would discard unsaved edits.
-    const loadProjectContext = useCallback(() => {
-        setProjectContextLoadFailed(false);
-        if (!selectedProjectId) return;
-        Context.getProject(selectedProjectId)
-            .then(ctx => {
-                if (unmountedRef.current) return;
-                savedDescriptionRef.current = ctx.description ?? null;
-                setDescription(ctx.description ?? '');
-            }).catch((e: any) => {
-                if (!unmountedRef.current) {
-                    setProjectContextLoadFailed(true);
-                    showBanner(e?.message || "Failed to load project context.", "error");
-                }
-            });
-    }, [selectedProjectId]);
-
-    useEffect(() => {
-        loadProjectContext();
-    }, [loadProjectContext]);
-
-    // Variant-bound fields only. The merged endpoint also returns the project
-    // description; it is deliberately ignored here.
-    const loadVariantContext = useCallback(() => {
-        const loadId = ++variantLoadIdRef.current;
-        savedVariantFieldsRef.current = null;
-        clearVariantFields();
-        setVariantContextLoadFailed(false);
-        if (!selectedProjectId || !selectedVariantId) {
-            setVariantContextLoading(false);
-            return;
+    const performSave = async (target: SaveTarget, key: string | null): Promise<boolean> => {
+        setBusy(true);
+        hideErrorBanner();
+        try {
+            if (target.kind === 'project') {
+                const saved = await Context.saveProject(target.projectId, target.description);
+                if (openKeyRef.current === key) projectDraft.commit(saved.description ?? target.description, target.sent);
+            } else {
+                const saved = await Context.saveVariantEditor(target.variantId, target.draft);
+                const value = saved?.editor
+                    ? draftFromContext({ ...saved, project_id: target.projectId, description: null })
+                    : target.draft;
+                if (openKeyRef.current === key) variantDraft.commit(value, target.draft);
+            }
+            if (!unmountedRef.current) setAnnouncement("Saved.");
+            return true;
+        } catch (e: any) {
+            if (e instanceof ContextSaveError && !unmountedRef.current && openKeyRef.current === key) {
+                setFieldErrors(e.fields);
+                const first = Object.keys(e.fields)[0];
+                if (first !== undefined) setVariantTab(tabForField(first));
+            }
+            showBanner(e?.message || "Failed to save context.", "error");
+            return false;
+        } finally {
+            if (!unmountedRef.current) setBusy(false);
         }
-        setVariantContextLoading(true);
-        Context.get(selectedProjectId, selectedVariantId)
-            .then(ctx => {
-                if (unmountedRef.current || loadId !== variantLoadIdRef.current) return;
-                savedVariantFieldsRef.current = {
-                    variant_description: ctx.variant_description ?? null,
-                    codebase_path: ctx.codebase_path ?? null,
-                    environment: ctx.environment ?? null,
-                    threat_model: ctx.threat_model ?? null,
-                    risks: ctx.risks ?? null,
-                    other_info: ctx.other_info ?? null,
-                };
-                setVariantDescription(ctx.variant_description ?? '');
-                setCodebasePath(ctx.codebase_path ?? '');
-                setContextFiles({ variantId: selectedVariantId, files: ctx.files ?? [] });
-                setEnvironment(ctx.environment ?? '');
-                setThreatModel(ctx.threat_model ?? '');
-                setRisks(ctx.risks ?? '');
-                setOtherInfo(ctx.other_info ?? '');
-            }).catch((e: any) => {
-                if (!unmountedRef.current && loadId === variantLoadIdRef.current) {
-                    setVariantContextLoadFailed(true);
-                    showBanner(e?.message || "Failed to load context.", "error");
-                }
-            }).finally(() => {
-                if (!unmountedRef.current && loadId === variantLoadIdRef.current)
-                    setVariantContextLoading(false);
-            });
-    }, [selectedProjectId, selectedVariantId]);
-
-    useEffect(() => {
-        loadVariantContext();
-    }, [loadVariantContext]);
-
-    const validate = (): boolean => {
-        const errors: Record<string, string> = {};
-        if (!description.trim()) {
-            errors.description = "Project Description is required.";
-        }
-        if (selectedVariantId && !threatModel.trim()) {
-            errors.threatModel = "Threat Model is required.";
-        }
-        setValidationErrors(errors);
-        return Object.keys(errors).length === 0;
     };
 
-    const currentVariantFields = (): VariantContextData => ({
-        variant_description: variantDescription.trim() || null,
-        codebase_path: codebasePath.trim() || null,
-        environment: environment.trim() || null,
-        threat_model: threatModel.trim() || null,
-        risks: risks.trim() || null,
-        other_info: otherInfo.trim() || null,
-    });
+    // Saving marks pending AI assessments outdated (the variant's, or every
+    // variant's for the project description), so ask first when there are any.
+    // Resolves false when validation, the confirmation or the save fails.
+    const requestSave = async (): Promise<boolean> => {
+        if (busy) return false;
+        setFieldError('');
+        setFieldErrors({});
+        setAnnouncement('');
+        const target = buildSaveTarget();
+        if (!target) return false;
+        const key = openKeyRef.current;
+        const pending = await hasPendingAi(target);
+        // The selection may have moved on while the check was in flight.
+        if (unmountedRef.current || key !== openKeyRef.current) return false;
+        if (!pending) return performSave(target, key);
+        return new Promise<boolean>(resolve => {
+            pendingSaveRef.current = { target, resolve };
+            setConfirmOutdate(true);
+        });
+    };
 
-    // Agent updates reload only clean forms, so unsaved edits are never replaced.
+    const saveRef = useRef(requestSave);
+    useEffect(() => { saveRef.current = requestSave; });
+    useEffect(() => {
+        registerGuard(dirty ? { label: openLabel, save: () => saveRef.current() } : null);
+    }, [dirty, openLabel, registerGuard]);
+    useEffect(() => () => registerGuard(null), [registerGuard]);
+
+    // Agent updates reload only a clean open item, so unsaved edits are never replaced.
     const agentRefreshRef = useRef<(tool?: string) => void>(() => undefined);
     useEffect(() => {
         agentRefreshRef.current = (tool?: string) => {
-            if (tool === 'update_project_context') {
-                if ((description.trim() || null) === savedDescriptionRef.current) loadProjectContext();
-                else showBanner("The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.", "error");
+            if (tool === 'update_project_context' && selected?.kind === 'project') {
+                if (projectDraft.dirty) showBanner(DIRTY_PROJECT_AGENT_TEXT, "error");
+                else reloadProject();
             }
-            if (tool === 'update_variant_context') {
-                const saved = savedVariantFieldsRef.current;
-                const fields = currentVariantFields();
-                if (saved === null || (Object.keys(fields) as (keyof VariantContextData)[]).every(k => fields[k] === saved[k]))
-                    loadVariantContext();
-                else showBanner("The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.", "error");
+            if (tool === 'update_variant_context' && selected?.kind === 'variant') {
+                if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
+                else reloadVariant();
             }
         };
     });
@@ -277,192 +330,75 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
         return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
     }, []);
 
-    // Editing the variant context marks every pending AI assessment of that variant
-    // as outdated, and editing the project description does the same for every
-    // variant in the project, so ask first when the save would actually change
-    // either one.
-    const handleSave = async () => {
-        if (!selectedProjectId || busy || variantContextLoading) return;
-        if (selectedVariantId && variantContextLoadFailed) return;
-        if (projectContextLoadFailed) return;
-        if (!validate()) return;
-        const saved = savedVariantFieldsRef.current;
-        const fields = currentVariantFields();
-        const snapshot: SaveSnapshot = {
-            loadId: variantLoadIdRef.current,
-            projectId: selectedProjectId,
-            variantId: selectedVariantId,
-            description: description.trim() || null,
-            fields,
-        };
-        const variantChanged = !!selectedVariantId && saved !== null
-            && (Object.keys(fields) as (keyof VariantContextData)[]).some(k => fields[k] !== saved[k]);
-        const descriptionChanged = savedDescriptionRef.current !== null
-            && snapshot.description !== savedDescriptionRef.current;
-        if (descriptionChanged || variantChanged) {
-            let hasPendingAi = true;
-            try {
-                // A project-description change outdates every variant in the
-                // project, not just the one selected, so check project-wide.
-                hasPendingAi = descriptionChanged
-                    ? (await Assessments.listForReview(undefined, snapshot.projectId, 'ai')).length > 0
-                    : (await Assessments.listForReview(selectedVariantId, undefined, 'ai')).length > 0;
-            } catch {
-                // Could not check: warn anyway rather than silently outdating assessments.
-            }
-            // The selection may have moved on while the check was in flight; its
-            // answer says nothing about whatever is selected now.
-            if (unmountedRef.current || snapshot.loadId !== variantLoadIdRef.current) return;
-            if (hasPendingAi) {
-                pendingSaveRef.current = snapshot;
-                setConfirmOutdate(true);
-                return;
-            }
-        }
-        await performSave(snapshot);
+    const handleSelect = async (next: SidebarSelection) => {
+        const same = next.kind === selected?.kind && (next.kind === 'project' || (selected?.kind === 'variant' && next.id === selected.id));
+        if (!projectId || same || !(await confirmLeave())) return;
+        setSelection({ projectId, item: next });
     };
 
-    const performSave = async (snapshot: SaveSnapshot) => {
-        setBusy(true);
-        try {
-            await Context.saveProject(snapshot.projectId, snapshot.description);
-            if (snapshot.loadId === variantLoadIdRef.current) savedDescriptionRef.current = snapshot.description;
-        } catch (e: any) {
-            if (!unmountedRef.current) showBanner(e?.message || "Failed to save project context.", "error");
-            setBusy(false);
-            return;
-        }
-        if (snapshot.variantId) {
-            const fields = snapshot.fields;
-            try {
-                await Context.saveVariant(snapshot.variantId, fields);
-                if (snapshot.loadId === variantLoadIdRef.current) savedVariantFieldsRef.current = fields;
-            } catch (e: any) {
-                if (!unmountedRef.current)
-                    showBanner(
-                        `Project context saved, but variant context failed: ${e?.message ?? "unknown error"}`,
-                        "error"
-                    );
-                setBusy(false);
-                return;
-            }
-        }
-        if (!unmountedRef.current) {
-            showBanner(
-                <>
-                    Context saved successfully.
-                </>,
-                "success"
-            );
-            setBusy(false);
-        }
+    const resolvePendingSave = (confirmed: boolean) => {
+        const pending = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        setConfirmOutdate(false);
+        if (!pending) return;
+        if (!confirmed) pending.resolve(false);
+        else void performSave(pending.target, openKeyRef.current).then(pending.resolve);
     };
 
-    const handleFileDownload = (document_: ContextExport, filename: string) => {
-        const blob = new Blob([JSON.stringify(document_, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    };
-
-    const handleExportSelected = async () => {
-        if (ioBusy || exportSelection.size === 0) return;
-        setIoBusy(true);
-        try {
-            const doc = await Context.exportSelected([...exportSelection]);
-            handleFileDownload(doc, "vulnscout-context.json");
-            if (!unmountedRef.current) setExportMenuOpen(false);
-        } catch (e: any) {
-            if (!unmountedRef.current) showBanner(e?.message || "Failed to export context.", "error");
-        } finally {
-            if (!unmountedRef.current) setIoBusy(false);
-        }
-    };
-
-    const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        e.target.value = '';
-        if (!file || ioBusy) return;
-        setIoBusy(true);
+    // Import overwrites stored context, so unsaved edits are confirmed first.
+    const beforeImport = async () => {
+        if (!(await confirmLeave())) return false;
+        resetProject();
+        resetVariant();
         setImportDetails(null);
+        return true;
+    };
+
+    const openCopyFrom = () => {
+        const key = openKeyRef.current;
+        fetchCopySources().then(sources => {
+            if (!unmountedRef.current && openKeyRef.current === key) setCopySources(sources);
+        }).catch((e: any) => showBanner(e?.message || "Failed to load projects.", "error"));
+    };
+
+    // Copy replaces only the draft: the baseline stays, so the variant turns dirty.
+    const handleCopy = async (sourceProjectId: string, sourceVariantId: string) => {
+        const key = openKeyRef.current;
+        const project = copySources?.find(p => p.id === sourceProjectId);
+        const variant = project?.variants.find(v => v.id === sourceVariantId);
         try {
-            const text = await file.text();
-            let parsed: unknown;
-            try {
-                parsed = JSON.parse(text);
-            } catch {
-                throw new Error("The selected file is not valid JSON.");
-            }
-            const result = await Context.importContext(parsed);
-            if (unmountedRef.current) return;
-            setImportDetails(result);
-            const total = result.imported.length + result.ignored.length + result.failed.length;
-            const msg =
-                `Import complete: ${result.imported.length} of ${total} imported, ` +
-                `${result.ignored.length} ignored, ${result.failed.length} failed.`;
-            showBanner(msg, result.failed.length > 0 ? "error" : "success");
-            // Import overwrites stored context, so both scopes are reloaded.
-            loadProjectContext();
-            loadVariantContext();
-        } catch (err: any) {
-            if (!unmountedRef.current) showBanner(err?.message || "Import failed.", "error");
-        } finally {
-            if (!unmountedRef.current) setIoBusy(false);
+            const source = await Context.get(sourceProjectId, sourceVariantId);
+            if (unmountedRef.current || openKeyRef.current !== key) return;
+            variantDraft.setDraft(draftFromContext(source));
+            setFieldError('');
+            setFieldErrors({});
+            showBanner(`Copied the context of ${project?.name ?? ''} / ${variant?.name ?? ''}. Review it, then Save changes.`, "info");
+        } catch (e: any) {
+            showBanner(e?.message || "Failed to load context.", "error");
         }
     };
 
-    const toggleExportVariant = (variantId: string) => {
-        setExportSelection(prev => {
-            const next = new Set(prev);
-            if (next.has(variantId)) next.delete(variantId);
-            else next.add(variantId);
-            return next;
-        });
+    const handleImported = (result: ImportResult) => {
+        setImportDetails(result);
+        reloadProject();
+        reloadVariant();
     };
-
-    const selectAllExport = () => setExportSelection(new Set(allVariants.map(v => v.id)));
-    const clearAllExport = () => setExportSelection(new Set());
-
-    // Close the export menu on outside click
-    useDismissablePopover(exportMenuOpen, exportMenuRef, useCallback(() => setExportMenuOpen(false), []), { closeOnEscape: false });
-
-    const variantSelected = Boolean(selectedVariantId) && !variantContextLoading;
-    const projectSelected = Boolean(selectedProjectId);
-    const labelClass = "block text-sm text-zinc-300 mb-1";
-    const inputClass =
-        "w-full rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed";
-    const textareaClass = inputClass + " resize-y min-h-[80px]";
-    const selectClass =
-        "rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed";
-    const btnPrimary =
-        "px-4 py-2 rounded-lg bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
-    const btnTransfer =
-        "bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
-    const cardHeader =
-        "bg-gradient-to-r from-slate-700 to-slate-800 px-4 py-2.5 flex items-center gap-2 rounded-t-lg border-b border-slate-600/60";
-    const cardBody =
-        "bg-slate-800/60 p-4 rounded-b-lg ring-1 ring-slate-700/70 shadow-lg shadow-black/20 space-y-4";
 
     return (
         <div className="w-full space-y-6">
-            {bannerVisible && (
+            {banner && (
                 <div className="sticky top-0 z-10">
                     <MessageBanner
-                        type={bannerType}
-                        message={bannerMsg}
-                        isVisible={bannerVisible}
-                        onClose={() => setBannerVisible(false)}
+                        type={banner.type}
+                        message={banner.msg}
+                        isVisible={true}
+                        onClose={() => setBanner(null)}
                     />
                 </div>
             )}
 
-            <div className="flex items-center gap-4">
-                <h1 className="text-3xl font-bold text-white mb-2">AI Assessment Context</h1>
+            <div className="flex flex-wrap items-center gap-4">
+                <h1 className="text-3xl font-bold text-white">AI Assessment Context</h1>
                 <a
                     href={docUrl}
                     target="_blank"
@@ -473,343 +409,95 @@ function AIContext({ onAgentContextChange }: Readonly<{ onAgentContextChange?: (
                     >
                     <FontAwesomeIcon icon={faBook} size='lg' />
                 </a>
+                <span
+                    role="status"
+                    className={dirty ? "rounded-full border border-amber-400/60 px-3 py-0.5 text-xs font-semibold text-amber-300" : ""}
+                >
+                    {dirty ? `Unsaved changes in ${openLabel}` : ''}
+                </span>
 
-                {/* Import / Export controls */}
-                <div className="ml-auto flex items-center gap-2">
-                    <button
-                        type="button"
-                        aria-label="Import context"
-                        onClick={() => importInputRef.current?.click()}
-                        disabled={ioBusy}
-                        className={btnTransfer}
-                    >
-                        <FontAwesomeIcon icon={faFileImport} />
-                        Import
-                    </button>
-                    <input
-                        ref={importInputRef}
-                        type="file"
-                        accept="application/json,.json"
-                        aria-label="Import context file"
-                        className="hidden"
-                        onChange={handleImportFile}
+                <ContextTransferControls
+                    projects={projects}
+                    beforeImport={beforeImport}
+                    onImported={handleImported}
+                    notify={showBanner}
+                />
+            </div>
+
+            <ImportDetails result={importDetails} />
+
+            {!projectId ? (
+                <p className="text-sm text-zinc-400">Select a project with the project/variant selector in the top bar.</p>
+            ) : (
+                <div className="flex items-start gap-4">
+                    <ContextSidebar
+                        projectName={projectName}
+                        variants={variants ?? []}
+                        inScopeIds={inScopeIds}
+                        selected={selected}
+                        onSelect={next => { void handleSelect(next); }}
                     />
-                    <div className="relative" ref={exportMenuRef}>
-                        <button
-                            type="button"
-                            aria-label="Export context"
-                            aria-haspopup="true"
-                            aria-expanded={exportMenuOpen}
-                            onClick={() => setExportMenuOpen(o => { const next = !o; if (next) loadAllVariants(); return next; })}
-                            disabled={ioBusy}
-                            className={btnTransfer}
-                        >
-                            <FontAwesomeIcon icon={faFileExport} />
-                            Export
-                            <FontAwesomeIcon icon={faChevronDown} size="xs" />
-                        </button>
-                        {exportMenuOpen && (
-                            <div
-                                role="menu"
-                                className="absolute right-0 z-20 mt-2 w-72 max-h-96 overflow-auto rounded-lg bg-slate-800 border border-slate-600 shadow-xl shadow-black/40 p-3"
-                            >
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className="text-sm font-semibold text-white">Select variants</span>
-                                    <div className="flex gap-2 text-xs">
-                                        <button type="button" onClick={selectAllExport} className="text-cyan-400 hover:text-cyan-300">All</button>
-                                        <button type="button" onClick={clearAllExport} className="text-cyan-400 hover:text-cyan-300">None</button>
-                                    </div>
-                                </div>
-                                {projects.length === 0 && (
-                                    <p className="text-xs text-zinc-400">No projects available.</p>
+                    <div className="min-w-0 flex-1">
+                        {selected?.kind === 'project' && (
+                            <ProjectDescriptionPanel
+                                projectName={projectName}
+                                value={projectDraft.draft}
+                                onChange={projectDraft.setDraft}
+                                onSave={() => { void requestSave(); }}
+                                saving={busy}
+                                dirty={projectDraft.dirty}
+                                error={fieldError}
+                            />
+                        )}
+                        {selected?.kind === 'variant' && (
+                            <>
+                                {fieldError && <p role="alert" className={`${ERROR} mb-2`}>{fieldError}</p>}
+                                {variantDraft.baseline === null ? (
+                                    <p className="text-sm text-zinc-400">{variantDraft.loading ? 'Loading variant context…' : ''}</p>
+                                ) : (
+                                    <VariantEditor
+                                        variantId={selected.id}
+                                        variantName={openVariant?.name ?? ''}
+                                        draft={variantDraft.draft}
+                                        onDraftChange={variantDraft.setDraft}
+                                        files={variantFiles.key === variantKey ? variantFiles.files : NO_FILES}
+                                        onSave={() => { void requestSave(); }}
+                                        saving={busy}
+                                        dirty={variantDraft.dirty}
+                                        onCopyFrom={openCopyFrom}
+                                        fieldErrors={fieldErrors}
+                                        notify={showBanner}
+                                        draftGeneration={variantDraft.generation}
+                                        tab={variantTab}
+                                        onTabChange={setVariantTab}
+                                    />
                                 )}
-                                {projects.map(p => {
-                                    const pv = allVariants.filter(v => v.project_id === p.id);
-                                    return (
-                                        <div key={p.id} className="mb-2">
-                                            <p className="text-xs font-semibold text-zinc-300 mb-1">{p.name}</p>
-                                            {pv.length === 0 ? (
-                                                <p className="text-xs text-zinc-500 pl-2">No variants</p>
-                                            ) : pv.map(v => (
-                                                <label key={v.id} className="flex items-center gap-2 pl-2 py-0.5 text-sm text-zinc-200 cursor-pointer">
-                                                    <input
-                                                        type="checkbox"
-                                                        aria-label={`Export ${p.name} / ${v.name}`}
-                                                        checked={exportSelection.has(v.id)}
-                                                        onChange={() => toggleExportVariant(v.id)}
-                                                    />
-                                                    {v.name}
-                                                </label>
-                                            ))}
-                                        </div>
-                                    );
-                                })}
-                                <button
-                                    type="button"
-                                    onClick={handleExportSelected}
-                                    disabled={ioBusy || exportSelection.size === 0}
-                                    className={btnPrimary + " w-full mt-2 flex items-center justify-center gap-2"}
-                                >
-                                    {ioBusy && <FontAwesomeIcon icon={faSpinner} spin />}
-                                    Export selected ({exportSelection.size})
-                                </button>
-                            </div>
+                            </>
                         )}
                     </div>
-                    <HelpPopover ariaLabel="Import help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[320px] p-3">
-                        Importing overwrites the existing context for each matching
-                        project/variant. Variants whose project or variant does not exist
-                        are ignored; variants missing mandatory fields (description, threat
-                        model) fail. Accepts an exported file, whose projects each nest
-                        their variants. Uploaded codebase references are not included
-                        in context JSON transfers.
-                    </HelpPopover>
-                </div>
-            </div>
-
-            {importDetails && (importDetails.ignored.length > 0 || importDetails.failed.length > 0) && (
-                <div className="rounded-lg bg-slate-800/60 border border-slate-600 p-3 text-sm">
-                    {importDetails.failed.length > 0 && (
-                        <div className="mb-2">
-                            <p className="font-semibold text-red-400">Failed ({importDetails.failed.length})</p>
-                            <ul className="list-disc list-inside text-zinc-300">
-                                {importDetails.failed.map((it, i) => (
-                                    <li key={`f-${i}`}>{it.project_name ?? '—'} / {it.variant_name ?? '—'}: {it.reason}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                    {importDetails.ignored.length > 0 && (
-                        <div>
-                            <p className="font-semibold text-yellow-400">Ignored ({importDetails.ignored.length})</p>
-                            <ul className="list-disc list-inside text-zinc-300">
-                                {importDetails.ignored.map((it, i) => (
-                                    <li key={`i-${i}`}>{it.project_name ?? '—'} / {it.variant_name ?? '—'}: {it.reason}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
                 </div>
             )}
-            <div>
-                <div className={cardHeader}>
-                    <FontAwesomeIcon icon={faRobot} className="text-cyan-400" />
-                    <h2 className="text-xl font-bold text-white">Context</h2>
-                </div>
-                <div className={cardBody}>
 
-            {/* Project selector */}
-            <div>
-                <label className={labelClass} htmlFor="ai-project-select">Project</label>
-                <select
-                    id="ai-project-select"
-                    aria-label="Project"
-                    className={selectClass}
-                    value={selectedProjectId}
-                    onChange={e => setSelectedProjectId(e.target.value)}
-                >
-                    <option value="">— Select project —</option>
-                    {projects.map(p => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                </select>
-            </div>
-
-            {/* Project Description */}
-            <div>
-                <label className={labelClass} htmlFor="ai-project-description">
-                    Project Description <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                    id="ai-project-description"
-                    aria-label="Project Description"
-                    className={textareaClass}
-                    value={description}
-                    onChange={e => setDescription(e.target.value)}
-                    disabled={!projectSelected}
-                    placeholder={projectSelected ? "Describe your project..." : "Select a project first"}
+            {selected?.kind === 'variant' && (
+                <CopyFromDialog
+                    isOpen={copySources !== null}
+                    currentVariantId={selected.id}
+                    projects={copySources ?? []}
+                    onCopy={handleCopy}
+                    onClose={() => setCopySources(null)}
                 />
-                {validationErrors.description && (
-                    <p className="text-red-500 text-xs mt-1">{validationErrors.description}</p>
-                )}
-                {projectSelected && projectContextLoadFailed && (
-                    <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
-                        Could not load this project&apos;s context. Saving is disabled until it loads.
-                        <button
-                            type="button"
-                            onClick={loadProjectContext}
-                            className="underline hover:text-red-400"
-                        >
-                            Retry
-                        </button>
-                    </p>
-                )}
-            </div>
-
-            {/* Variant selector */}
-            <div>
-                <label className={labelClass} htmlFor="ai-variant-select">Variant</label>
-                <select
-                    id="ai-variant-select"
-                    aria-label="Variant"
-                    className={selectClass}
-                    value={selectedVariantId}
-                    onChange={e => setSelectedVariantId(e.target.value)}
-                    disabled={!projectSelected || variants.length === 0}
-                >
-                    <option value="">— Select variant —</option>
-                    {variants.map(v => (
-                        <option key={v.id} value={v.id}>{v.name}</option>
-                    ))}
-                </select>
-                {variantSelected && variantContextLoadFailed && (
-                    <p className="text-red-500 text-xs mt-1 flex items-center gap-2">
-                        Could not load this variant&apos;s context. Saving is disabled until it loads.
-                        <button
-                            type="button"
-                            onClick={loadVariantContext}
-                            className="underline hover:text-red-400"
-                        >
-                            Retry
-                        </button>
-                    </p>
-                )}
-            </div>
-
-            {/* Variant Description */}
-            <div>
-                <label className={labelClass} htmlFor="ai-variant-description">Variant Description</label>
-                <textarea
-                    id="ai-variant-description"
-                    aria-label="Variant Description"
-                    className={textareaClass}
-                    value={variantDescription}
-                    onChange={e => setVariantDescription(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Describe this variant..." : "Select a variant to enable"}
-                />
-            </div>
-
-            {/* Codebase Path */}
-            <div>
-                <label className={labelClass} htmlFor="ai-codebase-path">
-                    Codebase Path <span className="text-neutral-400 font-normal">(for external Copilot/MCP clients on your machine; separate multiple paths with a semicolon)</span>
-                </label>
-                <input
-                    id="ai-codebase-path"
-                    aria-label="Codebase Path"
-                    type="text"
-                    className={inputClass}
-                    value={codebasePath}
-                    onChange={e => setCodebasePath(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "e.g. /home/user/src/myproject;/home/user/src/otherproject" : "Select a variant to enable"}
-                />
-                <p className="text-xs text-zinc-400 mt-1">
-                    Paths do not mount host directories into the container. Use Codebase References below for the embedded Agent.
-                </p>
-            </div>
-
-            <CodebaseReferences
-                key={`${selectedProjectId}/${selectedVariantId}`}
-                variantId={selectedVariantId}
-                initialFiles={contextFiles.variantId === selectedVariantId ? contextFiles.files : []}
-                disabled={!variantSelected || contextFiles.variantId !== selectedVariantId || variantContextLoadFailed || busy || ioBusy}
-                notify={showBanner}
+            )}
+            <ConfirmationModal
+                isOpen={confirmOutdate}
+                title="Mark AI assessments as outdated?"
+                message="Saving this context will mark all pending AI assessments as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
+                confirmText="Save and mark outdated"
+                cancelText="Cancel"
+                showTitleIcon={true}
+                onConfirm={() => resolvePendingSave(true)}
+                onCancel={() => resolvePendingSave(false)}
             />
-
-            {/* Environment */}
-            <div>
-                <label className={labelClass} htmlFor="ai-environment">Environment</label>
-                <textarea
-                    id="ai-environment"
-                    aria-label="Environment"
-                    className={textareaClass}
-                    value={environment}
-                    onChange={e => setEnvironment(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "e.g. runtime environment details" : "Select a variant to enable"}
-                />
-            </div>
-
-            {/* Threat Model */}
-            <div>
-                <label className={labelClass} htmlFor="ai-threat-model">
-                    Threat Model <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                    id="ai-threat-model"
-                    aria-label="Threat Model"
-                    className={textareaClass}
-                    value={threatModel}
-                    onChange={e => setThreatModel(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Describe the threat criteria for CVEs..." : "Select a variant to enable"}
-                />
-                {validationErrors.threatModel && (
-                    <p className="text-red-500 text-xs mt-1">{validationErrors.threatModel}</p>
-                )}
-            </div>
-
-            {/* Risks */}
-            <div>
-                <label className={labelClass} htmlFor="ai-risks">Risks</label>
-                <textarea
-                    id="ai-risks"
-                    aria-label="Risks"
-                    className={textareaClass}
-                    value={risks}
-                    onChange={e => setRisks(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Describe known risks..." : "Select a variant to enable"}
-                />
-            </div>
-
-            {/* Other Information */}
-            <div>
-                <label className={labelClass} htmlFor="ai-other-info">Other Information</label>
-                <textarea
-                    id="ai-other-info"
-                    aria-label="Other Information"
-                    className={textareaClass}
-                    value={otherInfo}
-                    onChange={e => setOtherInfo(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Any additional context..." : "Select a variant to enable"}
-                />
-            </div>
-
-                <ConfirmationModal
-                    isOpen={confirmOutdate}
-                    title="Mark AI assessments as outdated?"
-                    message="Saving this context will mark all pending AI assessments as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
-                    confirmText="Save and mark outdated"
-                    cancelText="Cancel"
-                    showTitleIcon={true}
-                    onConfirm={() => {
-                        setConfirmOutdate(false);
-                        const snapshot = pendingSaveRef.current;
-                        pendingSaveRef.current = null;
-                        if (snapshot) void performSave(snapshot);
-                    }}
-                    onCancel={() => { pendingSaveRef.current = null; setConfirmOutdate(false); }}
-                />
-
-                {/* Save */}
-                <div>
-                    <button
-                        type="button"
-                        onClick={handleSave}
-                        disabled={!projectSelected || busy || variantContextLoading
-                            || (variantSelected && variantContextLoadFailed) || projectContextLoadFailed}
-                        className={btnPrimary + " flex items-center gap-2"}
-                    >
-                        {busy && <FontAwesomeIcon icon={faSpinner} spin />}
-                        Save
-                    </button>
-                </div>
-                </div>
-            </div>
+            <div role="status" className="sr-only">{announcement}</div>
         </div>
     );
 }
