@@ -19,11 +19,20 @@ from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
 from ..helpers.scan_filters import filter_scannable_packages
+from ..helpers.scan_runs import tool_scan
+from ..controllers.operation_registry import new_queue_id
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
+import os
+import tempfile
 import uuid
+import weakref
 from datetime import datetime, timezone
+from typing import Callable, Iterable, Iterator
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import orm as sa_orm
+from sqlalchemy import case as sa_case
+from sqlalchemy.sql.selectable import Exists
 from flask.cli import with_appcontext
 
 
@@ -46,14 +55,10 @@ def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
     return filter_scannable_packages(packages)
 
 
-def _create_tool_scan(variant_uuid, scan_source: str):
-    """Create a new tool scan for the given variant."""
-    return ScanModel.create(
-        description="empty description",
-        variant_id=variant_uuid,
-        scan_type="tool",
-        scan_source=scan_source,
-    )
+@click.command("new-scan-run-id")
+def new_scan_run_id_command() -> None:
+    """Print a fresh run ID for grouping synchronous tool scan steps."""
+    click.echo(new_queue_id())
 
 
 def _echo_query_results(idx: int, total: int, label: str, vuln_ids: list[str],
@@ -105,9 +110,10 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
 @click.option("--mode", "-m", default="local", type=click.Choice(["local", "api"]),
               help="NVD backend: 'local' (default, uses local NVD-FKIE DB) or 'api' (NVD REST API).")
+@click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
 @serialized_engine_operation
-def nvd_scan_command(project: str, variant: str | None, mode: str) -> None:
+def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str | None = None) -> None:
     """Run an NVD-based vulnerability scan for the given project/variant.
 
     With ``--mode local`` (default) the local NVD-FKIE advisory database is
@@ -120,13 +126,22 @@ def nvd_scan_command(project: str, variant: str | None, mode: str) -> None:
 
     packages = _resolve_active_packages(variant_uuid)
 
-    if mode == "api":
-        _nvd_scan_api(variant_uuid, packages)
-    else:
-        _nvd_scan_local(variant_uuid, packages)
+    engine = None
+    if mode == "local":
+        click.echo("Loading local NVD advisory database…")
+        engine = get_engine(progress=click.echo)
+
+    failure_cleanups: list[Callable[[], None]] = []
+    with tool_scan(
+        variant_uuid, "nvd", run_id or new_queue_id(), failure_cleanups=failure_cleanups,
+    ) as scan:
+        if mode == "api":
+            _nvd_scan_api(variant_uuid, packages, scan)
+        else:
+            _nvd_scan_local(variant_uuid, packages, scan, engine, failure_cleanups)
 
 
-def _nvd_scan_api(variant_uuid, packages) -> None:
+def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
     """NVD scan using the NVD REST API v2 (CPE-based)."""
     import os as _os
     nvd = NVD_DB(nvd_api_key=_os.getenv("NVD_API_KEY"))
@@ -146,7 +161,6 @@ def _nvd_scan_api(variant_uuid, packages) -> None:
         f"Found {len(packages)} packages with {total_cpes} unique CPEs to query"
     )
 
-    scan = _create_tool_scan(variant_uuid, "nvd")
     cves_found: set[str] = set()
     observation_pairs: set = set()
     assessed_findings: set = set()
@@ -192,14 +206,10 @@ def _nvd_scan_api(variant_uuid, packages) -> None:
     )
 
 
-def _nvd_scan_local(variant_uuid, packages) -> None:
+def _nvd_scan_local(variant_uuid, packages, scan: ScanModel, engine, failure_cleanups=None) -> None:
     """NVD scan using the local NVD-FKIE advisory database."""
-    click.echo("Loading local NVD advisory database…")
-    engine = get_engine(progress=click.echo)
-
-    scan = _create_tool_scan(variant_uuid, "nvd")
     total = len(packages)
-    writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages, failure_cleanups=failure_cleanups)
     seen_keys: set = set()
 
     for idx, pkg in enumerate(packages, 1):
@@ -225,8 +235,9 @@ def _nvd_scan_local(variant_uuid, packages) -> None:
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
+@click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
-def osv_scan_command(project: str, variant: str | None) -> None:
+def osv_scan_command(project: str, variant: str | None, run_id: str | None = None) -> None:
     """Run an OSV PURL-based vulnerability scan for the given project/variant.
 
     Queries the OSV.dev API for every PURL in the variant's active SBOM
@@ -258,7 +269,12 @@ def osv_scan_command(project: str, variant: str | None) -> None:
         f"{total_pkgs} unique PURL identifiers to query"
     )
 
-    scan = _create_tool_scan(variant_uuid, "osv")
+    with tool_scan(variant_uuid, "osv", run_id or new_queue_id()) as scan:
+        _osv_scan(variant_uuid, packages, purl_to_packages, osv, scan)
+
+
+def _osv_scan(variant_uuid, packages, purl_to_packages, osv, scan: ScanModel) -> None:
+    total_pkgs = len(purl_to_packages)
     vulns_found: set = set()
     observation_pairs: set = set()
     assessed_findings: set = set()
@@ -361,6 +377,33 @@ def _scc_cvss_version(metric) -> str:
     return f"{major}.{minor}"
 
 
+class _IdSpool:
+    """Append-only file of UUIDs, keeping cleanup ownership out of memory."""
+
+    def __init__(self) -> None:
+        # Bound buffering independently of the filesystem's block size.
+        self._file = tempfile.TemporaryFile(buffering=8192)
+        self._close = weakref.finalize(self, self._file.close)
+
+    def extend(self, ids: Iterable[uuid.UUID]) -> None:
+        self._file.seek(0, os.SEEK_END)
+        self._file.write(b"".join(id_.bytes for id_ in ids))
+
+    def chunks(self, size: int) -> Iterator[list[uuid.UUID]]:
+        self._file.flush()
+        offset = 0
+        while True:
+            self._file.seek(offset)
+            data = self._file.read(16 * size)
+            if not data:
+                return
+            offset += len(data)
+            yield [uuid.UUID(bytes=data[i:i + 16]) for i in range(0, len(data), 16)]
+
+    def close(self) -> None:
+        self._close()
+
+
 class _SccBulkWriter:
     """Buffered bulk persister for sbom-cve-check-scan findings.
 
@@ -374,8 +417,11 @@ class _SccBulkWriter:
 
     This writer instead accumulates plain row dictionaries and flushes them with
     ``bulk_insert_mappings`` in foreign-key order (vulnerabilities → metrics →
-    findings → observations → assessments), committing once per chunk.  Duplicate
-    work is avoided in memory:
+    findings → observations → assessments), committing once per chunk so SQLite
+    writers are never held up by engine processing between packages. CLI scans
+    register failure cleanup for new findings and created or adopted pending
+    assessments that no surviving scan needs.
+    Duplicate work is avoided in memory:
 
     * ``(package_id, cve)`` pairs that already have a finding (from a prior
       nvd/osv scan) are pre-loaded so existing findings are reused, never
@@ -396,9 +442,18 @@ class _SccBulkWriter:
     FLUSH_THRESHOLD = 5000
     _SELECT_CHUNK = 500
 
-    def __init__(self, scan_id, variant_uuid, packages):
+    def __init__(self, scan_id, variant_uuid, packages, *, failure_cleanups=None):
         self._scan_id = scan_id
         self._variant_uuid = variant_uuid
+        # Kept on disk: the kernel-module case can create millions of rows.
+        self._created_finding_ids: _IdSpool | None = None
+        self._created_assessment_ids: _IdSpool | None = None
+        self._adopted_assessment_ids: _IdSpool | None = None
+        if failure_cleanups is not None:
+            self._created_finding_ids = _IdSpool()
+            self._created_assessment_ids = _IdSpool()
+            self._adopted_assessment_ids = _IdSpool()
+            failure_cleanups.append(self.cleanup)
         self.cves_found: set[str] = set()
 
         # Confirmed-present (existing or already-inserted) vulnerability ids.
@@ -568,6 +623,7 @@ class _SccBulkWriter:
                 "finding_id": finding_id,
                 "variant_id": self._variant_uuid,
                 "origin": "scc",
+                "provisional_scan_id": self._scan_id if self._created_assessment_ids is not None else None,
                 "status_notes": None,
                 "timestamp": assessment_timestamp,
                 "created_at": assessment_timestamp,
@@ -617,10 +673,16 @@ class _SccBulkWriter:
                 _db.session.bulk_insert_mappings(sa_inspect(FindingModel), self._finding_rows)
             if self._obs_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(Observation), self._obs_rows)
+            self._track_adopted_assessments()
             if self._assess_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(Assessment), self._assess_rows)
             if self._assess_target_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(AssessmentTarget), self._assess_target_rows)
+            # Record ownership before committing, including when a caller is
+            # interrupted immediately after the commit returns.
+            if self._created_finding_ids is not None and self._created_assessment_ids is not None:
+                self._created_finding_ids.extend(row["id"] for row in self._finding_rows)
+                self._created_assessment_ids.extend(row["id"] for row in self._assess_rows)
             _db.session.commit()
 
         self._vuln_rows.clear()
@@ -630,6 +692,153 @@ class _SccBulkWriter:
         self._assess_rows.clear()
         self._assess_target_rows.clear()
         self._buffered_findings = 0
+
+    def _observed_elsewhere(self) -> Exists:
+        return (
+            _db.select(Observation.id)
+            .join(ScanModel, ScanModel.id == Observation.scan_id)
+            .where(
+                Observation.finding_id == AssessmentTarget.finding_id,
+                ScanModel.variant_id == AssessmentTarget.variant_id,
+                Observation.scan_id != self._scan_id,
+            )
+            .exists()
+        )
+
+    def _track_adopted_assessments(self) -> None:
+        # Only pre-existing findings can already be observed by another scan.
+        if self._adopted_assessment_ids is None or len(self._finding_rows) == len(self._obs_rows):
+            return
+        for i in range(0, len(self._obs_rows), self._SELECT_CHUNK):
+            finding_ids = [row["finding_id"] for row in self._obs_rows[i:i + self._SELECT_CHUNK]]
+            ids = _db.session.scalars(
+                _db.select(AssessmentTarget.assessment_id)
+                .join(Assessment, Assessment.id == AssessmentTarget.assessment_id)
+                .where(
+                    AssessmentTarget.finding_id.in_(finding_ids),
+                    AssessmentTarget.variant_id == self._variant_uuid,
+                    Assessment.origin == "scc",
+                    Assessment.status == "under_investigation",
+                    self._is_provisional(),
+                    self._observed_elsewhere(),
+                )
+                .distinct()
+            )
+            for chunk in ids.partitions(self._SELECT_CHUNK):
+                self._adopted_assessment_ids.extend(chunk)
+
+    @staticmethod
+    def _is_provisional() -> Exists:
+        return _db.select(ScanModel.id).where(
+            ScanModel.id == Assessment.provisional_scan_id,
+            ScanModel.in_progress.is_(True),
+        ).exists()
+
+    def cleanup(self) -> None:
+        """Reconcile owned and adopted rows in bounded write transactions."""
+        if (self._created_finding_ids is None or self._created_assessment_ids is None
+                or self._adopted_assessment_ids is None):
+            return
+        other_target = sa_orm.aliased(AssessmentTarget)
+        assessed_elsewhere = (
+            _db.select(other_target.assessment_id)
+            .where(
+                other_target.finding_id == AssessmentTarget.finding_id,
+                other_target.variant_id == AssessmentTarget.variant_id,
+                other_target.assessment_id != AssessmentTarget.assessment_id,
+            )
+            .exists()
+        )
+        for spool, created in (
+            (self._created_assessment_ids, True),
+            (self._adopted_assessment_ids, False),
+        ):
+            for chunk in spool.chunks(self._SELECT_CHUNK):
+                with _write_lock():
+                    # Remove our observations and reconcile their assessments
+                    # atomically, so failing scans cannot preserve each other.
+                    finding_ids = _db.select(AssessmentTarget.finding_id).where(
+                        AssessmentTarget.assessment_id.in_(chunk),
+                        AssessmentTarget.variant_id == self._variant_uuid,
+                    )
+                    _db.session.execute(
+                        _db.delete(Observation).where(
+                            Observation.scan_id == self._scan_id,
+                            Observation.finding_id.in_(finding_ids),
+                        )
+                    )
+                    still_needed = _db.select(AssessmentTarget.assessment_id).where(
+                        AssessmentTarget.assessment_id.in_(chunk),
+                        self._observed_elsewhere(),
+                    )
+                    if created:
+                        still_needed = still_needed.where(~assessed_elsewhere)
+                    assessments = _db.select(Assessment).where(
+                        Assessment.id.in_(chunk), Assessment.id.not_in(still_needed),
+                        self._is_provisional(),
+                        Assessment.origin == "scc",
+                        Assessment.status == "under_investigation",
+                    )
+                    for assessment in _db.session.scalars(assessments).all():
+                        _db.session.delete(assessment)
+                    _db.session.flush()
+                    # A completed observer establishes the assessment. Otherwise
+                    # hand cleanup ownership to a surviving in-progress observer.
+                    next_owner = (
+                        _db.select(sa_case(
+                            (ScanModel.in_progress.is_(True), ScanModel.id), else_=None,
+                        ))
+                        .select_from(AssessmentTarget)
+                        .join(Observation, Observation.finding_id == AssessmentTarget.finding_id)
+                        .join(ScanModel, ScanModel.id == Observation.scan_id)
+                        .where(
+                            AssessmentTarget.assessment_id == Assessment.id,
+                            ScanModel.variant_id == AssessmentTarget.variant_id,
+                            Observation.scan_id != self._scan_id,
+                        )
+                        .order_by(ScanModel.in_progress, ScanModel.id)
+                        .limit(1)
+                        .scalar_subquery()
+                    )
+                    _db.session.execute(
+                        _db.update(Assessment).where(
+                            Assessment.id.in_(chunk),
+                            self._is_provisional(),
+                        ).values(provisional_scan_id=sa_case(
+                            (
+                                (Assessment.origin == "scc") & (Assessment.status == "under_investigation"),
+                                next_owner,
+                            ),
+                            else_=None,
+                        )).execution_options(synchronize_session=False)
+                    )
+                    _db.session.commit()
+
+        for chunk in self._created_finding_ids.chunks(self._SELECT_CHUNK):
+            with _write_lock():
+                _db.session.execute(
+                    _db.delete(Observation).where(
+                        Observation.scan_id == self._scan_id,
+                        Observation.finding_id.in_(chunk),
+                    )
+                )
+                # Another scan or a user may have adopted a newly committed
+                # finding while the engine was processing the next package.
+                findings = _db.session.scalars(
+                    _db.select(FindingModel).where(
+                        FindingModel.id.in_(chunk),
+                        ~FindingModel.observations.any(),
+                        ~FindingModel.assessment_targets.any(),
+                        ~FindingModel.time_estimates.any(),
+                    )
+                ).all()
+                for finding in findings:
+                    _db.session.delete(finding)
+                _db.session.commit()
+
+        self._created_finding_ids.close()
+        self._created_assessment_ids.close()
+        self._adopted_assessment_ids.close()
 
     def _existing_vuln_ids(self, ids: list[str]) -> set[str]:
         found: set[str] = set()
@@ -646,9 +855,10 @@ class _SccBulkWriter:
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
+@click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
 @serialized_engine_operation
-def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
+def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str | None = None) -> None:
     """Run a local CVE-database scan (NVD-FKIE + CVEList V5) with version-range evaluation.
 
     Unlike the live ``nvd-scan`` / ``osv-scan`` paths, this command matches every
@@ -673,9 +883,16 @@ def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
     engine = get_engine(progress=click.echo)
     click.echo("Index ready — scanning packages")
 
-    scan = _create_tool_scan(variant_uuid, "scc")
+    failure_cleanups: list[Callable[[], None]] = []
+    with tool_scan(
+        variant_uuid, "scc", run_id or new_queue_id(), failure_cleanups=failure_cleanups,
+    ) as scan:
+        _sbom_cve_check_scan(variant_uuid, packages, engine, scan, failure_cleanups)
+
+
+def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel, failure_cleanups=None) -> None:
     total_pkgs = len(packages)
-    writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages, failure_cleanups=failure_cleanups)
 
     for idx, pkg in enumerate(packages, 1):
         pkg_label = f"{pkg.name}@{pkg.version}" if pkg.name else str(pkg.id)
@@ -695,7 +912,7 @@ def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
 
         _echo_query_results(idx, total_pkgs, pkg_label, persisted_ids,
                             "vuln(s)", "no vulnerabilities")
-        # Flush in large bulk-inserted chunks to bound memory/transaction size.
+        # Bound both buffer memory and SQLite write-transaction duration.
         writer.maybe_flush()
 
     writer.flush()

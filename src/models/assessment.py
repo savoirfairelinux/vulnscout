@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import orm, Text, DateTime, JSON
+from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
@@ -117,6 +117,11 @@ class Assessment(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     source: Mapped[str | None] = mapped_column()
     origin: Mapped[str | None] = mapped_column()
+    # Cleanup ownership can move between overlapping, unfinished scan steps.
+    provisional_scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("scans.id", name="fk_assessments_provisional_scan_id_scans", ondelete="SET NULL"),
+        index=True,
+    )
     status: Mapped[str | None] = mapped_column()
     simplified_status: Mapped[str | None] = mapped_column()
     status_notes: Mapped[str | None] = mapped_column(Text)

@@ -9,12 +9,14 @@ foreign-key relationships and the real priority write lock) — only the engine
 ``ComputedVulnInfo`` instances ``SccEngine.applicable_vulns`` yields.
 """
 
+import gc
 import os
+import tracemalloc
 from datetime import datetime, timezone
 import pytest
 
 from src.bin.webapp import create_app
-from src.bin.cmd_vuln_scan import _SccBulkWriter
+from src.bin.cmd_vuln_scan import _SccBulkWriter, _persist_finding
 from src.extensions import db as _db
 from src.models.project import Project
 from src.models.variant import Variant
@@ -26,6 +28,7 @@ from src.models.assessment import Assessment
 from src.models.assessment_target import AssessmentTarget
 from src.models.vulnerability import Vulnerability
 from src.models.metrics import Metrics
+from src.helpers.scan_runs import tool_scan
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +131,365 @@ def _assessments_for(finding_id, variant_id):
 # ---------------------------------------------------------------------------
 
 class TestSccBulkWriter:
+
+    def test_failure_cleanup_preserves_new_finding_adopted_by_another_scan(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [
+                        (_Computed("CVE-2023-0001"), "affected"),
+                        (_Computed("CVE-2023-0002"), "affected"),
+                    ])
+                    writer.flush()
+
+                    # A separate session adopts one of the newly committed
+                    # findings before the original producer is interrupted.
+                    with app.app_context():
+                        adopted = _db.session.scalar(_db.select(Finding).where(
+                            Finding.package_id == package_id,
+                            Finding.vulnerability_id == "CVE-2023-0001",
+                        ))
+                        adopted_id = adopted.id
+                        other_scan = Scan.create("completed", variant_id, scan_type="tool")
+                        other_scan_id = other_scan.id
+                        Observation.create(finding_id=adopted_id, scan_id=other_scan_id)
+                        custom = Assessment.create(
+                            status="not_affected", origin="custom",
+                            targets=[(variant_id, adopted_id)],
+                        )
+                        custom_id = custom.id
+                    raise KeyboardInterrupt
+
+            assert list(_db.session.scalars(_db.select(Finding.id))) == [adopted_id]
+            assert list(_db.session.scalars(_db.select(Scan.id))) == [other_scan_id]
+            assert list(_db.session.scalars(_db.select(Assessment.id))) == [custom_id]
+            assert _db.session.query(AssessmentTarget).count() == 1
+            observation = _db.session.query(Observation).one()
+            assert (observation.finding_id, observation.scan_id) == (adopted_id, other_scan_id)
+
+    def test_failure_cleanup_keeps_pending_assessment_reused_by_another_scan(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+                    writer.flush()
+
+                    # A concurrent scan of the same variant observes the new
+                    # finding, reuses its pending assessment, and completes.
+                    with app.app_context():
+                        with tool_scan(variant_id, "osv") as other_scan:
+                            other_scan_id = other_scan.id
+                            _persist_finding(
+                                package_id, "CVE-2023-0001", other_scan_id, variant_id,
+                                "osv", set(), set(),
+                            )
+                    raise KeyboardInterrupt
+
+            finding = _db.session.query(Finding).one()
+            assert list(_db.session.scalars(_db.select(Scan.id))) == [other_scan_id]
+            observation = _db.session.query(Observation).one()
+            assert (observation.finding_id, observation.scan_id) == (finding.id, other_scan_id)
+            pending = _assessments_for(finding.id, variant_id).one()
+            assert pending.status == "under_investigation"
+
+    @pytest.mark.parametrize("first_source", ["nvd", "scc"])
+    @pytest.mark.parametrize("second_source", ["nvd", "scc"])
+    @pytest.mark.parametrize("failure_order", [(0, 1), (1, 0), (0, 1, 2), (0, 2, 1), (2, 1, 0)])
+    def test_overlapping_failed_scans_remove_their_shared_pending_assessment(
+        self, app, monkeypatch, first_source, second_source, failure_order,
+    ):
+        monkeypatch.setattr(_SccBulkWriter, "_SELECT_CHUNK", 2)
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+
+        steps = []
+        for source in (first_source, second_source, first_source)[:len(failure_order)]:
+            with app.app_context():
+                failure_cleanups = []
+                step = tool_scan(variant_id, source, failure_cleanups=failure_cleanups)
+                scan = step.__enter__()
+                pkg = _db.session.get(Package, package_id)
+                writer = _SccBulkWriter(
+                    scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                )
+                for index in range(3):
+                    _scan_pkg(writer, pkg, [(_Computed(f"CVE-2023-{index:04d}"), "affected")])
+                    writer.flush()
+                steps.append(step)
+
+        with app.app_context():
+            assert _db.session.query(Scan).count() == len(steps)
+            assert _db.session.query(Observation).count() == 3 * len(steps)
+            pending_ids = set(_db.session.scalars(_db.select(Assessment.id)))
+            assert len(pending_ids) == 3
+
+        for remaining, index in zip(reversed(range(len(steps))), failure_order):
+            with app.app_context():
+                error = KeyboardInterrupt()
+                assert steps[index].__exit__(type(error), error, None) is False
+                assert _db.session.query(Scan).count() == remaining
+                assert _db.session.query(Observation).count() == 3 * remaining
+                if remaining:
+                    assert set(_db.session.scalars(_db.select(Assessment.id))) == pending_ids
+                    surviving_ids = set(_db.session.scalars(_db.select(Scan.id)))
+                    assert set(_db.session.scalars(_db.select(Assessment.provisional_scan_id))) <= surviving_ids
+                else:
+                    assert _db.session.query(Assessment).count() == 0
+                    assert _db.session.query(AssessmentTarget).count() == 0
+
+    @pytest.mark.parametrize("completion", ["before_overlap", "after_overlap", "adopter"])
+    def test_failed_scan_preserves_assessment_after_completed_scan_is_deleted(self, app, tmp_path, completion):
+        status_file = tmp_path / "status.txt"
+        status_file.write_text("__END_OF_SCAN_SCRIPT__")
+        app.config["SCAN_FILE"] = str(status_file)
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+
+        steps, scan_ids = [], []
+        for index, source in enumerate(("nvd", "scc")):
+            with app.app_context():
+                failure_cleanups = []
+                step = tool_scan(variant_id, source, failure_cleanups=failure_cleanups)
+                scan = step.__enter__()
+                scan_ids.append(scan.id)
+                pkg = _db.session.get(Package, package_id)
+                writer = _SccBulkWriter(
+                    scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                )
+                _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+                writer.flush()
+                steps.append(step)
+                if index == 0 and completion == "before_overlap":
+                    step.__exit__(None, None, None)
+
+        completed = int(completion == "adopter")
+        with app.app_context():
+            if completion != "before_overlap":
+                steps[completed].__exit__(None, None, None)
+            pending_id = _db.session.query(Assessment).one().id
+
+        response = app.test_client().delete(f"/api/scans/{scan_ids[completed]}")
+        assert response.status_code == 200
+        assert response.json["orphaned_findings_removed"] == 0
+
+        with app.app_context():
+            assert _db.session.query(Assessment).one().id == pending_id
+            error = KeyboardInterrupt()
+            assert steps[1 - completed].__exit__(type(error), error, None) is False
+            assert _db.session.query(Scan).count() == 0
+            assert _db.session.query(Observation).count() == 0
+            assert _db.session.query(Assessment).one().id == pending_id
+            assert _db.session.query(AssessmentTarget).count() == 1
+
+    @pytest.mark.parametrize("origin", ["scc", "custom"])
+    @pytest.mark.parametrize("observed", [False, True])
+    @pytest.mark.parametrize("has_custom_assessment", [False, True])
+    def test_failure_cleanup_preserves_preexisting_pending_assessments(
+        self, app, origin, observed, has_custom_assessment,
+    ):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            vuln = Vulnerability.create_record(id="CVE-2023-0001", description="existing")
+            finding = Finding.get_or_create(pkg.id, vuln.id)
+            pending = Assessment.create(
+                status="under_investigation", origin=origin,
+                targets=[(variant.id, finding.id)],
+            )
+            expected_ids = {pending.id}
+            if observed:
+                completed = Scan.create("completed", variant.id, scan_type="tool")
+                Observation.create(finding_id=finding.id, scan_id=completed.id)
+            if has_custom_assessment:
+                custom = Assessment.create(
+                    status="not_affected", origin="custom",
+                    targets=[(variant.id, finding.id)],
+                )
+                expected_ids.add(custom.id)
+            _db.session.commit()
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant.id, "nvd", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant.id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [(_Computed(vuln.id), "affected")])
+                    writer.flush()
+                    raise KeyboardInterrupt
+
+            assert set(_db.session.scalars(_db.select(Assessment.id))) == expected_ids
+            assert _db.session.query(AssessmentTarget).count() == len(expected_ids)
+            assert _db.session.query(Finding).count() == 1
+            assert _db.session.query(Observation).count() == int(observed)
+            assert _db.session.query(Scan).count() == int(observed)
+
+    @pytest.mark.parametrize("origin,status", [
+        ("custom", "under_investigation"),
+        ("scc", "fixed"),
+    ])
+    def test_failure_cleanup_preserves_edited_adopted_assessment(self, app, origin, status):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+            failure_cleanups = []
+            first = tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups)
+            scan = first.__enter__()
+            writer = _SccBulkWriter(
+                scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+            )
+            _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+            writer.flush()
+            pending_id = _db.session.query(Assessment).one().id
+
+        with app.app_context():
+            failure_cleanups = []
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "nvd", failure_cleanups=failure_cleanups) as scan:
+                    pkg = _db.session.get(Package, package_id)
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+                    writer.flush()
+                    with app.app_context():
+                        error = KeyboardInterrupt()
+                        assert first.__exit__(type(error), error, None) is False
+                    pending = _db.session.get(Assessment, pending_id)
+                    pending.origin, pending.status = origin, status
+                    _db.session.commit()
+                    raise KeyboardInterrupt
+
+            retained = _db.session.query(Assessment).one()
+            assert (retained.id, retained.origin, retained.status) == (pending_id, origin, status)
+            assert retained.provisional_scan_id is None
+            assert _db.session.query(AssessmentTarget).count() == 1
+            assert _db.session.query(Observation).count() == 0
+            assert _db.session.query(Scan).count() == 0
+
+    def test_failure_cleanup_removes_pending_assessment_seen_only_by_other_variant(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            other_variant = Variant.create("W", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, other_variant_id = variant.id, other_variant.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+                    writer.flush()
+                    finding_id = _db.session.query(Finding).one().id
+
+                    with app.app_context():
+                        with tool_scan(other_variant_id, "osv") as other_scan:
+                            _persist_finding(
+                                pkg.id, "CVE-2023-0001", other_scan.id, other_variant_id,
+                                "osv", set(), set(),
+                            )
+                    raise KeyboardInterrupt
+
+            assert _assessments_for(finding_id, variant_id).count() == 0
+            assert _assessments_for(finding_id, other_variant_id).count() == 1
+
+    def test_failure_cleanup_ownership_memory_stays_bounded_across_flushes(self, app, monkeypatch):
+        monkeypatch.setattr(_SccBulkWriter, "FLUSH_THRESHOLD", 1000)
+        cves = [_Computed(f"CVE-2023-{i:04d}") for i in range(100)]
+        findings_per_run = 100 * len(cves)
+
+        def run(variant_id, scan_id, prefix, track, writers):
+            pkgs = _make_packages([(f"{prefix}-{i}", "1.0") for i in range(100)])
+            gc.collect()
+            before = tracemalloc.get_traced_memory()[0]
+            writer = _SccBulkWriter(
+                scan_id, variant_id, pkgs, failure_cleanups=[] if track else None,
+            )
+            for pkg in pkgs:
+                _scan_pkg(writer, pkg, [(computed, "affected") for computed in cves])
+                writer.maybe_flush()
+            writer.flush()
+            writers.append(writer)
+            gc.collect()
+            return tracemalloc.get_traced_memory()[0] - before
+
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            scan = Scan.create("s", variant.id, scan_type="tool")
+            writers = []
+            tracemalloc.start()
+            try:
+                run(variant.id, scan.id, "warmup", True, writers)
+                untracked = run(variant.id, scan.id, "untracked", False, writers)
+                tracked = run(variant.id, scan.id, "tracked", True, writers)
+            finally:
+                tracemalloc.stop()
+
+            assert _db.session.query(Finding).count() == 3 * findings_per_run
+            # In-memory ownership lists would retain at least one pointer, and
+            # a UUID object per created assessment, for every created row.
+            assert tracked - untracked < findings_per_run * 8
+
+    def test_failure_cleanup_removes_rows_from_every_flushed_chunk(self, app, monkeypatch):
+        monkeypatch.setattr(_SccBulkWriter, "FLUSH_THRESHOLD", 3)
+        monkeypatch.setattr(_SccBulkWriter, "_SELECT_CHUNK", 4)
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkgs = _make_packages([(f"pkg-{i}", "1.0") for i in range(10)])
+            variant_id = variant.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, pkgs, failure_cleanups=failure_cleanups,
+                    )
+                    for pkg in pkgs:
+                        _scan_pkg(writer, pkg, [
+                            (_Computed("CVE-2023-0001"), "affected"),
+                            (_Computed("CVE-2023-0002"), "affected"),
+                        ])
+                        writer.maybe_flush()
+                    assert _db.session.query(Finding).count() > 2 * _SccBulkWriter._SELECT_CHUNK
+                    raise KeyboardInterrupt
+
+            assert _db.session.query(Finding).count() == 0
+            assert _db.session.query(Assessment).count() == 0
+            assert _db.session.query(AssessmentTarget).count() == 0
+            assert _db.session.query(Observation).count() == 0
+            assert _db.session.query(Scan).count() == 0
 
     def test_kernel_explosion_persists_once_per_package_cve(self, app):
         """Many sibling packages sharing the same CVE set each get their own

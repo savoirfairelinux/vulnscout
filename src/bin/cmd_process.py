@@ -33,6 +33,7 @@ from ._common import DEFAULT_VARIANT_NAME, resolve_project, resolve_project_vari
 from ..controllers.projects import ProjectController
 from ..helpers.export_scope import compute_export_scope
 from ..helpers.jsonld_groups import is_zephyr_jsonld, record_jsonld_groups
+from ..controllers.operation_registry import new_queue_id
 
 if TYPE_CHECKING:
     from ..controllers.packages import PackagesController
@@ -336,7 +337,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
 @click.option("--grype", "grype_inputs", multiple=True, type=click.Path(exists=True),
               help="Grype vulnerability JSON file (may be repeated).")
 @click.option("--run-id", default=None,
-              help="Operation queue id grouping this tool scan with the rest of its scan run.")
+              help="Group tool scans from the same invocation under this run ID (ignored for SBOM imports).")
 @with_appcontext
 def create_project_context(
     project: str,
@@ -369,7 +370,7 @@ def create_project_context(
 
     scan = ScanController.create(scan_description, variant_obj.id, scan_type=scan_type,
                                  scan_source=scan_source,
-                                 run_id=run_id if scan_type == "tool" else None)
+                                 run_id=(run_id or new_queue_id()) if scan_type == "tool" else None)
     click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}")
 
     format_groups: list[tuple[tuple, str]] = [

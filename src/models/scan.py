@@ -5,11 +5,11 @@ import typing
 import uuid
 from datetime import datetime, timezone
 
-from ..extensions import db, Base
+from ..extensions import db, Base, write_lock
 from ..helpers.datetime_utils import ensure_utc_iso
 from .variant import Variant
 
-from sqlalchemy import ForeignKey, Text, DateTime
+from sqlalchemy import ForeignKey, Text, DateTime, false, or_
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
@@ -29,6 +29,7 @@ class Scan(Base):
     scan_source: Mapped[str | None] = mapped_column()  # 'grype', 'nvd', 'osv', or None
     # Operation queue id shared by every tool scan launched in the same batch.
     run_id: Mapped[str | None] = mapped_column()
+    in_progress: Mapped[bool] = mapped_column(default=False, server_default=false())
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -72,10 +73,11 @@ class Scan(Base):
 
     @staticmethod
     def create(description: str, variant_id: uuid.UUID, scan_type: str = "sbom",
-               scan_source: str | None = None, run_id: str | None = None) -> "Scan":
+               scan_source: str | None = None, run_id: str | None = None, *,
+               in_progress: bool = False) -> "Scan":
         """Create a new scan with the given *description* under *variant_id*, persist it and return it."""
         scan = Scan(description=description, variant_id=variant_id,
-                    scan_type=scan_type, scan_source=scan_source, run_id=run_id)
+                    scan_type=scan_type, scan_source=scan_source, run_id=run_id, in_progress=in_progress)
         db.session.add(scan)
         db.session.commit()
         return scan
@@ -136,5 +138,26 @@ class Scan(Base):
 
     def delete(self) -> None:
         """Delete this scan (and its related SBOM documents via cascade) from the database."""
-        db.session.delete(self)
-        db.session.commit()
+        from .assessment import Assessment
+        from .assessment_target import AssessmentTarget
+        from .observation import Observation
+
+        with write_lock():
+            # Explicit history deletion preserves assessments, including those
+            # established by this scan while another producer is still running.
+            observed = db.select(Observation.finding_id).where(Observation.scan_id == self.id)
+            assessment_ids = db.select(AssessmentTarget.assessment_id).where(
+                AssessmentTarget.variant_id == self.variant_id,
+                AssessmentTarget.finding_id.in_(observed),
+            )
+            db.session.execute(
+                db.update(Assessment).where(
+                    Assessment.provisional_scan_id.is_not(None),
+                    or_(
+                        Assessment.provisional_scan_id == self.id,
+                        Assessment.id.in_(assessment_ids),
+                    ),
+                ).values(provisional_scan_id=None).execution_options(synchronize_session=False)
+            )
+            db.session.delete(self)
+            db.session.commit()

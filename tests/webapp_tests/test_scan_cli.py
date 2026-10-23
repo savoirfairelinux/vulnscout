@@ -5,12 +5,16 @@
 
 import json
 import os
+import sqlite3
+import uuid
 import pytest
 from unittest.mock import patch, MagicMock
 
 from src.bin.webapp import create_app
 from src.controllers.nvd_db import NVD_DB as _RealNvdDb
 from src.extensions import db as _db
+from src.models.scan import Scan
+from src.routes._scan_diff import invalidate_scan_list_cache
 
 
 # ---------------------------------------------------------------------------
@@ -75,10 +79,14 @@ def _build_db(app):
 
 
 @pytest.fixture()
-def app(tmp_path):
+def app(tmp_path, request):
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
-    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    database_uri = (
+        f"sqlite:///{tmp_path / 'scans.db'}"
+        if getattr(request, "param", None) == "wal" else "sqlite:///:memory:"
+    )
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = database_uri
     try:
         application = create_app()
         application.config.update({
@@ -94,6 +102,311 @@ def app(tmp_path):
 @pytest.fixture()
 def ids(app):
     return app._test_ids
+
+
+def _scan_args(ids, *args):
+    return ["--project", ids["project_name"], "--variant", ids["variant_name"], *args]
+
+
+@pytest.mark.parametrize("command,options", [
+    ("nvd-scan", ["--mode", "api"]),
+    ("nvd-scan", []),
+    ("osv-scan", []),
+    ("sbom-cve-check-scan", []),
+])
+@pytest.mark.parametrize("run_id", [None, "q-cli-batch"])
+def test_tool_commands_persist_run_ids(app, ids, command, options, run_id):
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = []
+    with patch("src.bin.cmd_vuln_scan.NVD_DB") as nvd, \
+            patch("src.bin.cmd_vuln_scan.OSVClient") as osv, \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine):
+        nvd.return_value.api_get_cves_by_cpe.return_value = []
+        osv.return_value.query_by_purl.return_value = []
+        runner = app.test_cli_runner()
+        arguments = [command, *_scan_args(ids, *options)]
+        if run_id:
+            arguments += ["--run-id", run_id]
+        for _ in range(2):
+            result = runner.invoke(args=arguments)
+            assert result.exit_code == 0, result.output
+
+    with app.app_context():
+        scans = _db.session.execute(_db.select(Scan).where(Scan.scan_type == "tool")).scalars().all()
+        assert len(scans) == 2
+        assert all(scan.run_id for scan in scans)
+        if run_id:
+            assert {scan.run_id for scan in scans} == {run_id}
+        else:
+            assert len({scan.run_id for scan in scans}) == 2
+
+
+def test_cli_run_is_grouped_by_scan_api_with_deduplicated_counts(app, ids):
+    runner = app.test_cli_runner()
+    run_id = runner.invoke(args=["new-scan-run-id"]).output.strip()
+    assert run_id.startswith("q-")
+    assert run_id != runner.invoke(args=["new-scan-run-id"]).output.strip()
+    with patch("src.bin.cmd_vuln_scan.NVD_DB") as nvd, \
+            patch("src.bin.cmd_vuln_scan.OSVClient") as osv:
+        nvd.extract_cve_details = _RealNvdDb.extract_cve_details
+        nvd.return_value.api_get_cves_by_cpe.return_value = [{"cve": {"id": "CVE-2026-1234"}}]
+        osv.return_value.query_by_purl.return_value = [{"id": "CVE-2026-1234"}]
+        for command, options in [("nvd-scan", ["--mode", "api"]), ("osv-scan", [])]:
+            result = runner.invoke(args=[
+                command, *_scan_args(ids, *options, "--run-id", run_id),
+            ])
+            assert result.exit_code == 0, result.output
+
+    invalidate_scan_list_cache()
+    try:
+        response = app.test_client().get(f"/api/variants/{ids['variant_id']}/scans")
+        assert response.status_code == 200
+        steps = [scan for scan in response.json if scan["run_id"] == run_id]
+        assert len(steps) == 2
+        assert steps[0]["run"] == steps[1]["run"]
+        summary = steps[0]["run"]
+        assert summary["sources"] == ["nvd", "osv"]
+        assert summary["vuln_count"] == 1
+        assert summary["finding_count"] == 2  # OSV also matches requests.
+        assert set(summary["scan_ids"]) == {step["id"] for step in steps}
+        assert all(scan["run"] is None for scan in response.json if scan["scan_type"] == "sbom")
+    finally:
+        invalidate_scan_list_cache()
+
+
+@pytest.mark.parametrize("command,options", [
+    ("nvd-scan", ["--mode", "api"]),
+    ("nvd-scan", []),
+    ("osv-scan", []),
+    ("sbom-cve-check-scan", []),
+])
+@pytest.mark.parametrize("error", [RuntimeError("write failed"), KeyboardInterrupt()])
+def test_failed_cli_step_is_removed_without_removing_completed_steps(app, ids, command, options, error):
+    with app.app_context():
+        completed = Scan.create("completed", uuid.UUID(ids["variant_id"]),
+                                scan_type="tool", scan_source="grype", run_id="q-partial")
+        completed_id = completed.id
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = []
+    with patch("src.bin.cmd_vuln_scan.NVD_DB") as nvd, \
+            patch("src.bin.cmd_vuln_scan.OSVClient") as osv, \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine), \
+            patch("src.bin.cmd_vuln_scan._SccBulkWriter.flush", side_effect=error), \
+            patch("src.bin.cmd_vuln_scan._persist_finding", side_effect=error):
+        nvd.extract_cve_details = _RealNvdDb.extract_cve_details
+        nvd.return_value.api_get_cves_by_cpe.return_value = [{"cve": {"id": "CVE-2026-1234"}}]
+        osv.return_value.query_by_purl.return_value = [{"id": "CVE-2026-1234"}]
+        result = app.test_cli_runner().invoke(args=[
+            command, *_scan_args(ids, *options, "--run-id", "q-partial"),
+        ])
+        assert result.exit_code != 0
+
+    with app.app_context():
+        scans = _db.session.execute(_db.select(Scan).where(Scan.run_id == "q-partial")).scalars().all()
+        assert [scan.id for scan in scans] == [completed_id]
+
+
+@pytest.mark.parametrize("command", ["nvd-scan", "sbom-cve-check-scan"])
+@pytest.mark.parametrize("error", [RuntimeError("after chunk"), KeyboardInterrupt()])
+@pytest.mark.parametrize("failure_point", ["chunk", "completion"])
+def test_failed_local_scan_rolls_back_flushed_assessments(app, ids, command, error, failure_point):
+    import click
+    from src.bin.cmd_vuln_scan import _SccBulkWriter
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+    from tests.webapp_tests.test_scc_bulk_writer import _Computed
+
+    with app.app_context():
+        existing = Finding.get_by_vulnerability("CVE-EXISTING-1")[0]
+        Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(uuid.UUID(ids["variant_id"]), existing.id)],
+        )
+        original_findings = set(_db.session.scalars(_db.select(Finding.id)))
+        original_assessments = set(_db.session.scalars(_db.select(Assessment.id)))
+        original_targets = _db.session.execute(_db.select(
+            AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+        )).all()
+    endpoint = "/api/vulnerabilities/CVE-BARE-001/assessments"
+    before = app.test_client().get(endpoint)
+    assert before.status_code == 200
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = [
+        (_Computed(cve), "affected")
+        for cve in ("CVE-EXISTING-1", "CVE-BARE-001", "CVE-2026-1234")
+    ]
+    real_flush = _SccBulkWriter.flush
+    real_echo = click.echo
+
+    def fail_after_chunk(writer):
+        real_flush(writer)
+        if failure_point == "chunk":
+            raise error
+
+    def echo(message=None, *args, **kwargs):
+        if failure_point == "completion" and str(message).startswith("✓ Scan complete"):
+            raise error
+        return real_echo(message, *args, **kwargs)
+
+    with patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine), \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch.object(_SccBulkWriter, "FLUSH_THRESHOLD", 1), \
+            patch.object(_SccBulkWriter, "flush", fail_after_chunk), \
+            patch("src.bin.cmd_vuln_scan.click.echo", side_effect=echo):
+        result = app.test_cli_runner().invoke(args=[command, *_scan_args(ids)])
+    assert result.exit_code != 0
+    with app.app_context():
+        assert set(_db.session.scalars(_db.select(Finding.id))) == original_findings
+        assert set(_db.session.scalars(_db.select(Assessment.id))) == original_assessments
+        assert _db.session.execute(_db.select(
+            AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+        )).all() == original_targets
+        assert all(scan.scan_type == "sbom" for scan in Scan.get_all())
+    assert app.test_client().get(endpoint).json == before.json
+
+
+@pytest.mark.parametrize("app", ["wal"], indirect=True)
+@pytest.mark.parametrize("command", ["nvd-scan", "sbom-cve-check-scan"])
+@pytest.mark.parametrize("fail_after_flush", [False, True])
+def test_local_scan_releases_sqlite_writer_after_each_chunk(app, ids, command, fail_after_flush):
+    from src.bin.cmd_vuln_scan import _SccBulkWriter
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from tests.webapp_tests.test_scc_bulk_writer import _Computed
+
+    with app.app_context():
+        database = _db.engine.url.database
+        original_findings = set(_db.session.scalars(_db.select(Finding.id)))
+        original_assessments = set(_db.session.scalars(_db.select(Assessment.id)))
+        with sqlite3.connect(database) as connection:
+            assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = [(_Computed("CVE-2026-1234"), "affected")]
+    real_flush = _SccBulkWriter.flush
+    concurrent_writes = []
+
+    def flush_and_write(writer):
+        real_flush(writer)
+        with sqlite3.connect(database, timeout=0.1) as connection:
+            connection.execute(
+                "UPDATE scans SET description = 'concurrent write' WHERE scan_type = 'sbom'"
+            )
+        concurrent_writes.append(True)
+        if fail_after_flush:
+            raise RuntimeError("after concurrent write")
+
+    with patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine), \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch.object(_SccBulkWriter, "FLUSH_THRESHOLD", 1), \
+            patch.object(_SccBulkWriter, "flush", flush_and_write):
+        result = app.test_cli_runner().invoke(args=[command, *_scan_args(ids)])
+
+    if fail_after_flush:
+        assert isinstance(result.exception, RuntimeError), (result.output, result.exception)
+        assert str(result.exception) == "after concurrent write"
+        assert len(concurrent_writes) == 1
+    else:
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert len(concurrent_writes) >= 2
+    with app.app_context():
+        if fail_after_flush:
+            assert set(_db.session.scalars(_db.select(Finding.id))) == original_findings
+            assert set(_db.session.scalars(_db.select(Assessment.id))) == original_assessments
+            assert not _db.session.scalars(_db.select(Scan).where(Scan.scan_type == "tool")).all()
+        assert _db.session.scalar(
+            _db.select(Scan.description).where(Scan.scan_type == "sbom")
+        ) == "concurrent write"
+
+
+@pytest.mark.parametrize("command", ["nvd-scan", "sbom-cve-check-scan"])
+def test_local_engine_load_precedes_scan_creation(app, ids, command):
+    def load_engine(**kwargs):
+        assert not _db.session.scalars(_db.select(Scan).where(Scan.scan_type == "tool")).all()
+        engine = MagicMock()
+        engine.applicable_vulns.return_value = []
+        return engine
+
+    with patch("src.bin.cmd_vuln_scan.get_engine", side_effect=load_engine), \
+            patch("src.controllers.scc_engine.get_engine", side_effect=load_engine):
+        result = app.test_cli_runner().invoke(args=[command, *_scan_args(ids)])
+    assert result.exit_code == 0, result.output
+
+
+def test_history_cache_notices_observations_committed_by_another_process(app, ids):
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.routes._scan_diff import serialize_list_with_diff_cached
+
+    invalidate_scan_list_cache()
+    try:
+        with app.app_context():
+            scan = Scan.create("in progress", uuid.UUID(ids["variant_id"]),
+                               scan_type="tool", scan_source="scc")
+            scans = Scan.get_all()
+            before = serialize_list_with_diff_cached("cli-progress", scans)
+            assert next(item for item in before if item["id"] == str(scan.id))["finding_count"] == 0
+            finding = Finding.get_by_vulnerability("CVE-EXISTING-1")[0]
+            # A direct commit bypasses this process's cache invalidation hooks,
+            # just like a separate CLI process writing to the shared database.
+            Observation.create(finding_id=finding.id, scan_id=scan.id)
+            after = serialize_list_with_diff_cached("cli-progress", scans)
+            assert next(item for item in after if item["id"] == str(scan.id))["finding_count"] == 1
+    finally:
+        invalidate_scan_list_cache()
+
+
+def test_vulnerability_refresh_does_not_create_scan_steps(app, ids):
+    with patch("src.bin.cmd_process._refresh_source", return_value=True):
+        result = app.test_cli_runner().invoke(args=[
+            "refresh-vulnerability-data", *_scan_args(ids),
+        ])
+    assert result.exit_code == 0, result.output
+    with app.app_context():
+        scans = Scan.get_all()
+        assert len(scans) == 1
+        assert scans[0].scan_type == "sbom"
+        assert scans[0].run_id is None
+
+
+def test_standalone_grype_imports_get_separate_run_ids(app, ids, tmp_path):
+    grype = tmp_path / "scan.grype.json"
+    grype.write_text('{"matches": []}')
+    for _ in range(2):
+        result = app.test_cli_runner().invoke(args=[
+            "merge", *_scan_args(ids, "--grype", str(grype)),
+        ])
+        assert result.exit_code == 0, result.output
+    with app.app_context():
+        scans = _db.session.execute(_db.select(Scan).where(Scan.scan_type == "tool")).scalars().all()
+        assert len(scans) == 2
+        assert all(scan.scan_source == "grype" and scan.run_id for scan in scans)
+        assert scans[0].run_id != scans[1].run_id
+
+
+@pytest.mark.parametrize("error", [RuntimeError("chunk failed"), KeyboardInterrupt()])
+def test_failed_step_removes_committed_observations(app, ids, error):
+    from src.helpers.scan_runs import tool_scan
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+
+    with app.app_context():
+        finding = _db.session.execute(_db.select(Finding)).scalars().first()
+        finding_id = finding.id
+        with pytest.raises(type(error)):
+            with tool_scan(uuid.UUID(ids["variant_id"]), "nvd", "q-failed-chunk") as scan:
+                scan_id = scan.id
+                Observation.create(finding_id=finding_id, scan_id=scan_id)
+                _db.session.commit()
+                raise error
+        assert _db.session.get(Scan, scan_id) is None
+        assert _db.session.execute(
+            _db.select(Observation).where(Observation.scan_id == scan_id)
+        ).first() is None
+        assert _db.session.get(Finding, finding_id) is not None
 
 
 # ---------------------------------------------------------------------------
