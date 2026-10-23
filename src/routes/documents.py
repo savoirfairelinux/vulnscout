@@ -570,7 +570,7 @@ def init_app(app: Flask) -> None:
         """List available report templates and SBOM export formats.
 
         OpenAPI:
-        response 200 JsonObject Available document descriptors.
+        response 200 Document[] Available document descriptors.
         response 500 Error Document discovery failed.
         """
         try:
@@ -588,9 +588,11 @@ def init_app(app: Flask) -> None:
         becomes available as a "custom" report.
 
         OpenAPI:
-        body multipart optional Multipart request containing a template file.
-        response 201 JsonObject Imported template descriptor.
+        body multipart required Template upload.
+        form file binary required Report template file.
+        response 201 TemplateUploaded Imported template descriptor.
         response 400 Error Invalid upload request.
+        response 413 Error Template exceeds the upload limit.
         response 500 Error Template storage failed.
         """
         if not (request.content_type and 'multipart/form-data' in request.content_type):
@@ -644,6 +646,14 @@ def init_app(app: Flask) -> None:
         The file is saved into the first writable
         ``<templates_dir>/assets/`` directory so :func:`~src.views.templates.find_asset`
         and :func:`~src.views.templates.embed_image` can locate it at render time.
+
+        OpenAPI:
+        body multipart required Raster image upload.
+        form file binary required PNG, JPEG, GIF, or WebP image.
+        response 201 AssetUploaded Uploaded image name.
+        response 400 Error Missing, unsupported, or invalid image.
+        response 413 Error Image exceeds the upload limit.
+        response 500 Error Image storage failed.
         """
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return {"error": "Expected multipart/form-data with a file upload."}, 400
@@ -688,7 +698,17 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/documents/export', methods=['POST'])
     def export_documents() -> ResponseReturnValue:
-        """Render selected documents for every variant of one project."""
+        """Render selected documents for every variant of one project.
+
+        OpenAPI:
+        body DocumentExportRequest required Project, mode, and document selections.
+        response 200 zip Rendered ZIP archive, unless async=true.
+        response 202 ExportAccepted Queued operation when async=true; follow progress through operations or SSE.
+        response 400 Error Invalid project identifier, mode, or document selections.
+        response 404 Error Project or selected variant not found.
+        response 500 Error Document generation failed.
+        response 503 Error Export capacity exhausted or required converter unavailable.
+        """
         body = request.get_json(silent=True) or {}
         raw_project_id = body.get("project_id")
         if not isinstance(raw_project_id, str):
@@ -807,6 +827,14 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/documents/export/<op_id>/download', methods=['GET'])
     def download_export(op_id: str) -> ResponseReturnValue:
+        """Download a completed export archive once.
+
+        OpenAPI:
+        response 200 zip Completed export archive; consumed after download.
+        response 404 Error Export job not found.
+        response 409 Error Export is not ready.
+        response 410 Error Export archive expired or already downloaded.
+        """
         with _export_archive_lock:
             _prune_export_archives()
             operation = registry.get(op_id)
@@ -841,8 +869,20 @@ def init_app(app: Flask) -> None:
         query only_epss_greater number optional Minimum EPSS threshold to include.
         query variant_id uuid optional Restrict export to a single variant.
         query project_id uuid optional Restrict export to a single project.
-        response 200 JsonObject Exported document payload or download response.
+        response 200 object JSON SBOM/VEX document, or rendered template in its requested media type.
+        response 200 xml SPDX XML export.
+        response 200 text-xml SPDX XML export.
+        response 200 html Rendered HTML report.
+        response 200 pdf Converted PDF report.
+        response 200 plain Rendered text template.
+        response 200 csv Rendered CSV template.
+        response 200 adoc Rendered AsciiDoc template.
+        response 200 markdown Rendered Markdown template.
+        response 200 image Template image asset.
+        response 200 binary Other template or asset content.
         response 400 Error Invalid export request.
+        response 404 Error Template or asset not found.
+        response 500 Error Document rendering failed.
         response 503 Error Required conversion tool not available.
         """
         try:

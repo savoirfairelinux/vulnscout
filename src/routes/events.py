@@ -139,7 +139,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         header Last-Event-ID string optional Resume from this instance-scoped cursor.
-        response 200 string Server-sent event stream.
+        response 200 sse Server-sent event frames: snapshot, operation, operation_removed, heartbeat, and bye.
         response 503 Error Too many concurrent streams.
         """
         if not _acquire_slot():

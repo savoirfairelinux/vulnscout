@@ -109,8 +109,8 @@ def init_app(app):
         """Read or replace global native-package scan defaults.
 
         OpenAPI:
-        body JsonObject optional Global exclude_native and native_package_exceptions.
-        response 200 JsonObject Global native-package scan defaults.
+        PUT body ScanConfiguration required Global exclude_native and native_package_exceptions.
+        response 200 ScanConfiguration Global native-package scan defaults.
         response 400 Error Invalid scan configuration.
         response 500 Error Configuration could not be accessed.
         """
@@ -133,7 +133,7 @@ def init_app(app):
         """Return active UI and scanning configuration values.
 
         OpenAPI:
-        response 200 JsonObject Active configuration payload.
+        response 200 Config Active configuration payload.
         """
         project_name = os.environ.get('PROJECT_NAME', '')
         variant_name = os.environ.get('VARIANT_NAME', 'default')
@@ -172,8 +172,8 @@ def init_app(app):
         """Update mutable configuration keys and persist them to config.env.
 
         OpenAPI:
-        body JsonObject optional JSON object containing mutable config keys.
-        response 200 JsonObject Updated configuration payload.
+        body ConfigUpdate required Mutable configuration keys.
+        response 200 Config Updated configuration payload.
         response 400 Error Invalid request payload.
         """
         data = request.get_json(silent=True)
@@ -234,7 +234,7 @@ def init_app(app):
         """Return NVD API key presence and masked representation.
 
         OpenAPI:
-        response 200 JsonObject Masked NVD API key status.
+        response 200 NvdKeyStatus Masked NVD API key status.
         """
         key = os.environ.get('NVD_API_KEY', '')
         if not key:
@@ -246,8 +246,8 @@ def init_app(app):
         """Validate and store a new NVD API key.
 
         OpenAPI:
-        body JsonObject optional JSON body containing api_key.
-        response 200 JsonObject Stored NVD API key status.
+        body NvdKeyUpdate required API key to validate and store.
+        response 200 NvdKeyStatus Stored NVD API key status.
         response 400 Error Invalid NVD API key payload.
         response 503 Error NVD API unavailable for validation.
         """

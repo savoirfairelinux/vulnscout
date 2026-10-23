@@ -23,8 +23,8 @@ def init_app(app):
         """Atomically replace preferences for the selected projects.
 
         OpenAPI:
-        body JsonObject required Scan preferences keyed by project UUID.
-        response 200 JsonObject Saved preferences keyed by project UUID.
+        body ScanConfigurationMap required Scan preferences keyed by project UUID.
+        response 200 ScanConfigurationMap Saved preferences keyed by project UUID.
         response 400 Error Invalid project UUID or configuration.
         response 404 Error Project not found.
         response 500 Error Configuration could not be saved.
@@ -58,9 +58,9 @@ def init_app(app):
         """Read or replace the project's cached native scan preferences.
 
         OpenAPI:
-        path project_id string required Project UUID.
-        body JsonObject optional Native exclusion and package exceptions.
-        response 200 JsonObject Scan configuration and available native packages.
+        path project_id uuid required Project UUID.
+        PUT body ScanConfiguration required Native exclusion and package exceptions.
+        response 200 ProjectScanConfiguration Scan configuration and available native packages.
         response 400 Error Invalid configuration or project UUID.
         response 404 Error Project not found.
         response 500 Error Configuration could not be read or saved.
@@ -114,7 +114,7 @@ def init_app(app):
         """List all projects currently stored in the database.
 
         OpenAPI:
-        response 200 JsonObject Project collection.
+        response 200 Project[] Project collection.
         """
         projects = ProjectController.get_all()
         return jsonify(ProjectController.serialize_list(projects))

@@ -114,7 +114,7 @@ def init_app(app) -> None:
         query variant_id uuid required The target's variant.
         query finding_id uuid optional The target's finding (or pass ``package``).
         query package string optional The target's package string-id.
-        response 200 JsonObject Review payload.
+        response 200 AssessmentReviewResult Review payload.
         response 400 Error Invalid or missing target.
         response 404 Error Assessment or review not found.
         """
@@ -135,7 +135,7 @@ def init_app(app) -> None:
         """Return every review attached to an assessment, across all its targets.
 
         OpenAPI:
-        response 200 JsonObject List of review payloads.
+        response 200 AssessmentReviewList List of review payloads.
         response 404 Error Assessment not found.
         """
         assessment, err = _load_assessment(assessment_id)
@@ -149,14 +149,11 @@ def init_app(app) -> None:
         """Create or overwrite the AI review attached to one target of a custom assessment.
 
         OpenAPI:
-        body variant_id uuid required The target's variant.
-        body finding_id uuid optional The target's finding (or pass ``package``).
-        body package string optional The target's package string-id.
-        body expected_assessment_fingerprint string required Fingerprint returned when the assessment was read.
-        response 200 JsonObject Review payload.
+        body ReviewWrite required Target, independent verdict, rationale, and expected assessment fingerprint.
+        response 200 AssessmentReviewResult Review payload.
         response 400 Error Invalid payload or target.
         response 404 Error Assessment not found.
-        response 409 Error Assessment origin is not 'custom'.
+        response 409 Error Assessment origin is not custom, or the assessment fingerprint changed.
         """
         assessment, err = _load_assessment(assessment_id)
         if err:
@@ -230,7 +227,7 @@ def init_app(app) -> None:
         query variant_id uuid required The target's variant.
         query finding_id uuid optional The target's finding (or pass ``package``).
         query package string optional The target's package string-id.
-        response 200 JsonObject Deletion confirmation.
+        response 200 DeletionSummary Deletion confirmation.
         response 400 Error Invalid or missing target.
         response 404 Error Assessment or review not found.
         """
@@ -252,13 +249,13 @@ def init_app(app) -> None:
         """List assessments with origin 'custom', annotated with review presence.
 
         OpenAPI:
-        query variant_id uuid optional Filter by one or more variant IDs (repeat parameter).
+        query variant_id uuid[] optional Filter by one or more variant IDs (repeat parameter).
         query project_id uuid optional Filter by a single project ID.
         query has_review string optional 'true' for any reviewed target or 'false' for any unreviewed target.
         query order string optional 'timestamp_desc' (default) or 'timestamp_asc'.
         query limit integer optional Maximum rows to return, default 50.
         query offset integer optional Rows to skip, default 0.
-        response 200 JsonObject Custom assessment collection.
+        response 200 CustomAssessmentPage Custom assessment collection.
         response 400 Error Invalid identifiers or pagination values.
         """
         variant_ids, err = _scoped_variant_ids()
@@ -380,10 +377,10 @@ def init_app(app) -> None:
         Each assessment ID may map to several reviews, one per target.
 
         OpenAPI:
-        query variant_id uuid optional Filter by a single variant ID.
+        query variant_id uuid[] optional Filter by selected variant IDs; repeat this parameter.
         query project_id uuid optional Filter by a single project ID.
         query vulnerability_id string optional Filter by vulnerability ID.
-        response 200 JsonObject Reviews grouped by assessment ID.
+        response 200 ReviewMap Reviews grouped by assessment ID.
         response 400 Error Invalid identifiers.
         """
         variant_ids, err = _scoped_variant_ids()

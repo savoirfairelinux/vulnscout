@@ -14,7 +14,7 @@ def init_app(app):
         """List all variants across every project.
 
         OpenAPI:
-        response 200 JsonObject Variant collection.
+        response 200 Variant[] Variant collection.
         """
         projects = ProjectController.get_all()
         all_variants = []
@@ -29,7 +29,7 @@ def init_app(app):
         """List variants belonging to a specific project.
 
         OpenAPI:
-        response 200 JsonObject Variant collection for the selected project.
+        response 200 Variant[] Variant collection for the selected project.
         response 404 Error Project not found.
         """
         project = ProjectController.get(project_id)

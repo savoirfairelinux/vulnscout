@@ -28,7 +28,8 @@ def init_app(app: Flask) -> None:
         query compare_variant_id uuid optional Compare against variant_id.
         query operation string optional Difference, intersection, or union.
         query counts string optional Return only per-package in/out totals when 1.
-        response 200 JsonObject Document-scoped packages and edges.
+        response 200 DependencyGraph Document-scoped packages and edges, or per-package totals with counts=1.
+        response 400 Error Missing scope or invalid variant identifiers.
         """
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')

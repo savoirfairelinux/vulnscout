@@ -1008,10 +1008,13 @@ def init_app(app: Flask) -> None:
         import leaves the database untouched.
 
         OpenAPI:
-        response 201 JsonObject Import summary, with one entry per newly imported scan.
+        body ScanImport required Scan diff or full-result export, or a non-empty array of exports.
+        response 201 ScanImportResult Import summary, with one entry per newly imported scan.
         response 400 Error Malformed or unsupported export payload.
         response 404 Error Destination project or variant not found.
         response 413 Error Request body exceeds an upstream/server size limit.
+        response 409 Error An export conflicts with an existing scan.
+        response 500 Error Scan import could not be persisted.
         """
         try:
             payload = flask_request.get_json(force=True, silent=True)
@@ -1079,7 +1082,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_ids string optional Comma-separated selected variant IDs.
         query project_id uuid optional Require selected variants to belong to this project.
-        response 200 JsonObject Scan collection.
+        response 200 ScanCollection Scan collection.
         """
         raw_variant_ids = flask_request.args.get('variant_ids', '')
         if raw_variant_ids:
@@ -1121,7 +1124,7 @@ def init_app(app: Flask) -> None:
         """List scans belonging to a specific project.
 
         OpenAPI:
-        response 200 JsonObject Scan collection for the selected project.
+        response 200 ScanCollection Scan collection for the selected project.
         response 404 Error Project not found.
         """
         project = ProjectController.get(project_id)
@@ -1136,7 +1139,7 @@ def init_app(app: Flask) -> None:
         """List scans belonging to a specific variant.
 
         OpenAPI:
-        response 200 JsonObject Scan collection for the selected variant.
+        response 200 ScanCollection Scan collection for the selected variant.
         response 404 Error Variant not found.
         """
         variant = VariantController.get(variant_id)
@@ -1151,8 +1154,8 @@ def init_app(app: Flask) -> None:
         """Update the editable description of a scan.
 
         OpenAPI:
-        body JsonObject optional JSON object containing a description field.
-        response 200 JsonObject Updated scan payload.
+        body description string required New scan description.
+        response 200 Scan Updated scan payload.
         response 400 Error Invalid scan identifier or payload.
         response 404 Error Scan not found.
         """
@@ -1184,7 +1187,7 @@ def init_app(app: Flask) -> None:
         deleted.
 
         OpenAPI:
-        response 200 JsonObject Deletion summary.
+        response 200 DeletionSummary Deletion summary.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1246,7 +1249,11 @@ def init_app(app: Flask) -> None:
         after their final reference disappears.
 
         OpenAPI:
-        response 200 JsonObject Cleanup summary or deletion preview.
+        GET response 200 CleanupPreview Cleanup preview with candidate IDs.
+        DELETE body CleanupSelection required Candidate IDs from the latest preview.
+        DELETE response 200 CleanupResult Cleanup summary.
+        response 400 Error Invalid candidate IDs.
+        response 409 Error Preview is stale; retrieve it again before deleting.
         response 500 Error Cleanup failed.
         """
         from ..helpers.outdated_cleanup import (
@@ -1272,7 +1279,16 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/empty-scans', methods=['GET', 'DELETE'])
     def empty_scans() -> ResponseReturnValue:
-        """Preview or delete non-initial scans with no recorded changes."""
+        """Preview or delete non-initial scans with no recorded changes.
+
+        OpenAPI:
+        GET response 200 CleanupPreview Empty scans available for deletion.
+        DELETE body scan_ids uuid[] required Selected scan IDs from the preview.
+        DELETE response 200 CleanupResult Cleanup summary.
+        response 400 Error Invalid scan IDs.
+        response 409 Error Preview is stale.
+        response 500 Error Cleanup failed.
+        """
         from ..helpers.outdated_cleanup import delete_empty_scans, empty_scans_preview
 
         if flask_request.method == 'GET':
@@ -1291,7 +1307,16 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/orphaned-vulnerabilities', methods=['GET', 'DELETE'])
     def orphaned_vulnerabilities() -> ResponseReturnValue:
-        """Preview or delete CVEs absent from every project and variant."""
+        """Preview or delete CVEs absent from every project and variant.
+
+        OpenAPI:
+        GET response 200 CleanupPreview Orphaned vulnerabilities available for deletion.
+        DELETE body vulnerability_ids string[] required Selected vulnerability IDs from the preview.
+        DELETE response 200 CleanupResult Cleanup summary.
+        response 400 Error Invalid vulnerability IDs.
+        response 409 Error Preview is stale.
+        response 500 Error Cleanup failed.
+        """
         from ..helpers.outdated_cleanup import (
             delete_orphaned_vulnerabilities,
             orphaned_vulnerabilities_preview,
@@ -1318,7 +1343,7 @@ def init_app(app: Flask) -> None:
         """Return the computed diff between a scan and its predecessor.
 
         OpenAPI:
-        response 200 JsonObject Scan diff payload.
+        response 200 ScanDiff Scan diff payload.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1393,7 +1418,7 @@ def init_app(app: Flask) -> None:
         are consistent with the list view's *Scan Result* badges.
 
         OpenAPI:
-        response 200 JsonObject Aggregated scan result.
+        response 200 ScanResult Aggregated scan result.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1720,7 +1745,7 @@ def init_app(app: Flask) -> None:
         """Export a single scan's diff as a cleaned JSON download.
 
         OpenAPI:
-        response 200 JsonObject JSON download containing the scan diff.
+        response 200 ScanExport JSON download containing the scan diff.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1753,7 +1778,7 @@ def init_app(app: Flask) -> None:
         """Export a single scan's global result as a cleaned JSON download.
 
         OpenAPI:
-        response 200 JsonObject JSON download containing the global scan result.
+        response 200 ScanExport JSON download containing the global scan result.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1797,7 +1822,7 @@ def init_app(app: Flask) -> None:
                 query variant_id uuid optional Restrict export to a single variant.
                 query project_id uuid optional Restrict export to a single project.
                 query type string optional Export type: diff or total.
-                response 200 JsonObject JSON export payload.
+                response 200 ScanExport[] JSON export payload.
                 response 400 Error Invalid filter or export type.
                 response 404 Error Project not found.
         """
