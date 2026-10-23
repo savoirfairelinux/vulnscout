@@ -334,6 +334,9 @@ per-package error handling and command exit codes are unchanged.
 Overlapping local NVD and sbom-cve-check scans retain shared pending assessments
 while another scan still observes their targets. If all overlapping steps fail,
 their shared pending assessments are removed rather than left in assessment views.
+Only assessments explicitly owned by an in-progress step are eligible for this
+cleanup. Established assessments remain protected if a completed scan is deleted
+from history while another scan is still running.
 
 `refresh` (and `flask refresh-vulnerability-data` or
 `process --refresh-vulnerability-data`) enriches existing vulnerability records;

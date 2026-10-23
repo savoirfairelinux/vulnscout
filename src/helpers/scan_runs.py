@@ -29,10 +29,14 @@ def tool_scan(
         scan_type="tool",
         scan_source=source,
         run_id=run_id,
+        in_progress=True,
     )
     scan_id = scan.id
     try:
         yield scan
+        persisted_scan = db.session.get(Scan, scan_id)
+        if persisted_scan is not None:
+            persisted_scan.in_progress = False
         db.session.commit()
     except BaseException:
         db.session.rollback()
