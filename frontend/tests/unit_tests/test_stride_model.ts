@@ -1,0 +1,224 @@
+import fetchMock from 'jest-fetch-mock';
+fetchMock.enableMocks();
+
+import Context, { ContextSaveError } from '../../src/handlers/context';
+import type { MergedContext, StrideModel } from '../../src/handlers/context';
+import {
+    STRIDE_CATEGORIES, RATING_OPTIONS, emptyStrideModel, emptyDraft, draftFromContext,
+    draftsEqual, nextId, isReferenced, hasThreatModel, switchEditorMode,
+} from '../../src/helpers/strideModel';
+
+beforeEach(() => fetchMock.resetMocks());
+
+function ctxWithEditor(editor: Partial<MergedContext['editor']> = {}): MergedContext {
+    return {
+        project_id: 'p1', description: null, variant_id: 'v1', variant_description: 'VD',
+        codebase_path: null, environment: null, threat_model: null, risks: null, other_info: null,
+        editor: {
+            editor_mode: 'stride', codebase_source: 'paths', codebase_path: null,
+            free: { threat_model: null, risks: null },
+            system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
+            stride: emptyStrideModel(), files: [], updated_at: null,
+            ...editor,
+        },
+    };
+}
+
+const populated: StrideModel = {
+    components: [{ id: 'C1', name: 'API', description: '', trust_zone: '' }],
+    interactions: [{ id: 'I1', name: 'call', source_id: 'C1', destination_id: 'C2', interface: '', data: '', trust_boundary: '' }],
+    threats: [{ id: 'T1', category: 'spoofing', description: 'x', target_ids: ['I1'] }],
+    notes: '',
+    risks: [{ threat_id: 'T1', likelihood: 'low', impact: null, mitigation: '', residual: '' }],
+    risk_notes: '',
+};
+
+describe('constants', () => {
+    test('STRIDE categories are in spec order with labels and letters', () => {
+        expect(STRIDE_CATEGORIES.map(c => c.key)).toEqual([
+            'spoofing', 'tampering', 'repudiation', 'information_disclosure',
+            'denial_of_service', 'elevation_of_privilege',
+        ]);
+        expect(STRIDE_CATEGORIES.map(c => c.letter).join('')).toBe('STRIDE');
+        expect(STRIDE_CATEGORIES[3].label).toBe('Information disclosure');
+    });
+
+    test('rating options start with not rated', () => {
+        expect(RATING_OPTIONS.map(r => r.label)).toEqual(['Not rated', 'Low', 'Medium', 'High']);
+        expect(RATING_OPTIONS[0].value).toBeNull();
+    });
+});
+
+describe('drafts', () => {
+    test('emptyDraft defaults to STRIDE mode and paths source', () => {
+        const d = emptyDraft();
+        expect(d.editor_mode).toBe('stride');
+        expect(d.codebase_source).toBe('paths');
+        expect(d.stride).toEqual(emptyStrideModel());
+    });
+
+    test('draftFromContext maps nulls to empty strings and reads the editor block', () => {
+        const d = draftFromContext(ctxWithEditor({
+            editor_mode: 'free', codebase_source: 'references', codebase_path: '/src',
+            free: { threat_model: 'TM', risks: null },
+            system: { scope: 'S', actors: null, entry_points: null, trust_boundaries: null },
+        }));
+        expect(d.variant_description).toBe('VD');
+        expect(d.environment).toBe('');
+        expect(d.other_info).toBe('');
+        expect(d.editor_mode).toBe('free');
+        expect(d.codebase_source).toBe('references');
+        expect(d.codebase_path).toBe('/src');
+        expect(d.free).toEqual({ threat_model: 'TM', risks: '' });
+        expect(d.system).toEqual({ scope: 'S', actors: '', entry_points: '', trust_boundaries: '' });
+    });
+
+    test('draftFromContext does not share references with the context', () => {
+        const ctx = ctxWithEditor({ stride: populated });
+        const d = draftFromContext(ctx);
+        expect(d.stride).toEqual(populated);
+        expect(d.stride.threats[0]).not.toBe(populated.threats[0]);
+        expect(d.stride.threats[0].target_ids).not.toBe(populated.threats[0].target_ids);
+    });
+
+    test('draftsEqual ignores object identity but detects changes', () => {
+        const a = draftFromContext(ctxWithEditor({ stride: populated }));
+        const b = draftFromContext(ctxWithEditor({ stride: populated }));
+        expect(draftsEqual(a, b)).toBe(true);
+        expect(draftsEqual(a, { ...b, environment: 'x' })).toBe(false);
+        const c = { ...b, stride: { ...b.stride, threats: [{ ...b.stride.threats[0], target_ids: ['I1', 'C1'] }] } };
+        expect(draftsEqual(a, c)).toBe(false);
+    });
+});
+
+describe('ids and references', () => {
+    test('nextId starts at 1 and takes max+1', () => {
+        expect(nextId([], 'C')).toBe('C1');
+        expect(nextId([{ id: 'C1' }, { id: 'C4' }], 'C')).toBe('C5');
+    });
+
+    test('nextId never reuses a removed id', () => {
+        expect(nextId([{ id: 'C1' }], 'C', ['C2'])).toBe('C3');
+    });
+
+    test('nextId ignores other prefixes and malformed ids', () => {
+        expect(nextId([{ id: 'I9' }, { id: 'Cx' }], 'C')).toBe('C1');
+    });
+
+    test('isReferenced covers interaction endpoints, threat targets and risk threat ids', () => {
+        expect(isReferenced(populated, 'C1')).toBe(true);
+        expect(isReferenced(populated, 'C2')).toBe(true);
+        expect(isReferenced(populated, 'I1')).toBe(true);
+        expect(isReferenced(populated, 'T1')).toBe(true);
+        expect(isReferenced(populated, 'C9')).toBe(false);
+    });
+});
+
+describe('hasThreatModel', () => {
+    test('free mode uses trimmed free threat model only', () => {
+        const base = { ...emptyDraft(), editor_mode: 'free' as const };
+        expect(hasThreatModel(base)).toBe(false);
+        expect(hasThreatModel({ ...base, free: { threat_model: '  ', risks: 'r' } })).toBe(false);
+        expect(hasThreatModel({ ...base, free: { threat_model: 'x', risks: '' } })).toBe(true);
+        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), notes: 'n' } })).toBe(false);
+    });
+
+    test('stride mode counts system fields, rows and notes but not risks', () => {
+        const base = emptyDraft();
+        expect(hasThreatModel(base)).toBe(false);
+        expect(hasThreatModel({ ...base, system: { ...base.system, scope: 'x' } })).toBe(true);
+        expect(hasThreatModel({ ...base, system: { ...base.system, scope: '  ' } })).toBe(false);
+        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), notes: ' n ' } })).toBe(true);
+        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), components: populated.components } })).toBe(true);
+        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), interactions: populated.interactions } })).toBe(true);
+        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), threats: populated.threats } })).toBe(true);
+        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), risks: populated.risks, risk_notes: 'rn' } })).toBe(false);
+        expect(hasThreatModel({ ...base, free: { threat_model: 'ignored', risks: '' } })).toBe(false);
+    });
+});
+
+describe('switchEditorMode', () => {
+    test('switching Free to STRIDE pre-fills notes when STRIDE is empty', () => {
+        const d = { ...emptyDraft(), editor_mode: 'free' as const, free: { threat_model: 'TM', risks: 'R' } };
+        const s = switchEditorMode(d, 'stride');
+        expect(s.editor_mode).toBe('stride');
+        expect(s.stride.notes).toBe('TM');
+        expect(s.stride.risk_notes).toBe('R');
+        expect(s.free.threat_model).toBe('TM');
+        expect(d.stride.notes).toBe('');
+    });
+
+    test('switching to STRIDE keeps existing STRIDE data untouched', () => {
+        const d = {
+            ...emptyDraft(), editor_mode: 'free' as const,
+            free: { threat_model: 'TM', risks: 'R' }, stride: populated,
+        };
+        const s = switchEditorMode(d, 'stride');
+        expect(s.stride).toEqual(populated);
+    });
+
+    test('non-empty system fields also block the pre-fill', () => {
+        const d = {
+            ...emptyDraft(), editor_mode: 'free' as const,
+            free: { threat_model: 'TM', risks: 'R' }, system: { ...emptyDraft().system, scope: 'S' },
+        };
+        expect(switchEditorMode(d, 'stride').stride.notes).toBe('');
+    });
+
+    test('switching to Free only changes the mode', () => {
+        const d = { ...emptyDraft(), stride: populated };
+        const s = switchEditorMode(d, 'free');
+        expect(s.editor_mode).toBe('free');
+        expect(s.stride).toEqual(populated);
+    });
+});
+
+describe('Context.saveVariantEditor', () => {
+    test('sends null for blank optional text and the editor shape', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify(ctxWithEditor()));
+        const draft = {
+            ...emptyDraft(), variant_description: ' ', environment: '', other_info: 'info',
+            free: { threat_model: '', risks: ' ' }, codebase_path: '',
+        };
+        await Context.saveVariantEditor('v 1', draft);
+        const [url, init] = fetchMock.mock.calls[0];
+        expect(String(url)).toContain('/api/variants/v%201/context');
+        expect(init?.method).toBe('PUT');
+        const body = JSON.parse(String(init?.body));
+        expect(body.variant_description).toBeNull();
+        expect(body.environment).toBeNull();
+        expect(body.other_info).toBe('info');
+        expect(body.codebase_path).toBeNull();
+        expect(body.free).toEqual({ threat_model: null, risks: null });
+        expect(body.system).toEqual({ scope: null, actors: null, entry_points: null, trust_boundaries: null });
+        expect(body.editor_mode).toBe('stride');
+        expect(body.codebase_source).toBe('paths');
+        expect(body.stride).toEqual(emptyStrideModel());
+    });
+
+    test('returns the saved variant context on success', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify(ctxWithEditor({ updated_at: 'now' })));
+        const res = await Context.saveVariantEditor('v1', emptyDraft());
+        expect(res.editor.updated_at).toBe('now');
+    });
+
+    test('throws ContextSaveError with fields on 400', async () => {
+        fetchMock.mockResponseOnce(
+            JSON.stringify({ error: 'invalid', fields: { 'threats[0].target_ids': 'unknown id' } }),
+            { status: 400 },
+        );
+        const err = await Context.saveVariantEditor('v1', emptyDraft()).catch(e => e);
+        expect(err).toBeInstanceOf(ContextSaveError);
+        expect(err.status).toBe(400);
+        expect(err.message).toBe('invalid');
+        expect(err.fields).toEqual({ 'threats[0].target_ids': 'unknown id' });
+    });
+
+    test('uses empty fields when the error body has none', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'nope' }), { status: 404 });
+        const err = await Context.saveVariantEditor('v1', emptyDraft()).catch(e => e);
+        expect(err).toBeInstanceOf(ContextSaveError);
+        expect(err.fields).toEqual({});
+        expect(err.status).toBe(404);
+    });
+});

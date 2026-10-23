@@ -15,6 +15,74 @@ type VariantContextData = {
 type VariantContext = VariantContextData & {
     variant_id: string;
     files?: ContextFile[];
+    editor: VariantEditorData;
+};
+
+type EditorMode = 'stride' | 'free';
+type CodebaseSource = 'paths' | 'references';
+type Rating = 'low' | 'medium' | 'high' | null;
+
+type StrideComponent = { id: string; name: string; description: string; trust_zone: string };
+
+type StrideInteraction = {
+    id: string;
+    name: string;
+    source_id: string;
+    destination_id: string;
+    interface: string;
+    data: string;
+    trust_boundary: string;
+};
+
+type StrideThreat = { id: string; category: string; description: string; target_ids: string[] };
+
+type StrideRisk = {
+    threat_id: string;
+    likelihood: Rating;
+    impact: Rating;
+    mitigation: string;
+    residual: string;
+};
+
+type StrideModel = {
+    components: StrideComponent[];
+    interactions: StrideInteraction[];
+    threats: StrideThreat[];
+    notes: string;
+    risks: StrideRisk[];
+    risk_notes: string;
+};
+
+type SystemFields = {
+    scope: string | null;
+    actors: string | null;
+    entry_points: string | null;
+    trust_boundaries: string | null;
+};
+
+/** Editor-shaped view of a variant's context, as returned by the backend. */
+type VariantEditorData = {
+    editor_mode: EditorMode;
+    codebase_source: CodebaseSource;
+    codebase_path: string | null;
+    free: { threat_model: string | null; risks: string | null };
+    system: SystemFields;
+    stride: StrideModel;
+    files: ContextFile[];
+    updated_at: string | null;
+};
+
+/** Editable form state for a variant; null text is held as ''. */
+type VariantDraft = {
+    variant_description: string;
+    environment: string;
+    other_info: string;
+    editor_mode: EditorMode;
+    codebase_source: CodebaseSource;
+    codebase_path: string;
+    free: { threat_model: string; risks: string };
+    system: Record<keyof SystemFields, string>;
+    stride: StrideModel;
 };
 
 type ContextFile = {
@@ -34,6 +102,10 @@ type VariantEntry = {
     threat_model: string | null;
     risks: string | null;
     other_info: string | null;
+    editor_mode?: EditorMode;
+    codebase_source?: CodebaseSource;
+    system?: SystemFields;
+    stride?: StrideModel;
 };
 
 /** One project with its variants nested underneath. */
@@ -73,7 +145,35 @@ export type {
     ImportResult,
     ContextExport,
     ContextFile,
+    EditorMode,
+    CodebaseSource,
+    Rating,
+    StrideComponent,
+    StrideInteraction,
+    StrideThreat,
+    StrideRisk,
+    StrideModel,
+    SystemFields,
+    VariantEditorData,
+    VariantDraft,
 };
+
+/** Rejected variant save; `fields` maps field paths to validation messages. */
+class ContextSaveError extends Error {
+    fields: Record<string, string>;
+    status: number;
+
+    constructor(message: string, status: number, fields: Record<string, string> = {}) {
+        super(message);
+        this.name = 'ContextSaveError';
+        this.status = status;
+        this.fields = fields;
+    }
+}
+
+export { ContextSaveError };
+
+const blankToNull = (value: string): string | null => (value.trim() === '' ? null : value);
 
 class Context {
     static async uploadFile(variantId: string, file: File, description: string): Promise<ContextFile> {
@@ -150,6 +250,46 @@ class Context {
         );
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Failed to save variant context (${res.status})`);
+        return data as VariantContext;
+    }
+
+    static async saveVariantEditor(variantId: string, draft: VariantDraft): Promise<VariantContext> {
+        const payload = {
+            variant_description: blankToNull(draft.variant_description),
+            environment: blankToNull(draft.environment),
+            other_info: blankToNull(draft.other_info),
+            editor_mode: draft.editor_mode,
+            codebase_source: draft.codebase_source,
+            codebase_path: blankToNull(draft.codebase_path),
+            free: {
+                threat_model: blankToNull(draft.free.threat_model),
+                risks: blankToNull(draft.free.risks),
+            },
+            system: {
+                scope: blankToNull(draft.system.scope),
+                actors: blankToNull(draft.system.actors),
+                entry_points: blankToNull(draft.system.entry_points),
+                trust_boundaries: blankToNull(draft.system.trust_boundaries),
+            },
+            stride: draft.stride,
+        };
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context`,
+            {
+                mode: 'cors',
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            }
+        );
+        const data = await res.json();
+        if (!res.ok) {
+            throw new ContextSaveError(
+                data.error || `Failed to save variant context (${res.status})`,
+                res.status,
+                data.fields ?? {},
+            );
+        }
         return data as VariantContext;
     }
 
