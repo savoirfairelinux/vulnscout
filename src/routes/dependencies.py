@@ -132,18 +132,29 @@ def init_app(app: Flask) -> None:
                 counts.setdefault(names[dependency_id], {'in': 0, 'out': 0})['out'] += 1
             # Packages only in documents never parsed with dependency support have no data rather than zero.
             return {'counts': counts, 'unrecorded': sorted(names[package_id] for package_id in unrecorded_ids)}
-        documents = db.session.execute(
+        document_rows = db.session.execute(
             db.select(SBOMDocument.id, SBOMDocument.scan_id, SBOMDocument.source_name, Variant.id, Variant.name,
-                      SBOMDocument.dependencies_recorded)
+                      SBOMDocument.dependencies_recorded, SBOMDocument.format)
             .join(Scan, Scan.id == SBOMDocument.scan_id)
             .join(Variant, Variant.id == Scan.variant_id)
             .where(SBOMDocument.scan_id.in_(scan_ids))
             .order_by(Variant.name, SBOMDocument.source_name, SBOMDocument.id)
         ).all()
+        # Imported evidence needs several junction rows, not several visible SBOM sources.
+        imported_documents: dict[uuid.UUID, uuid.UUID] = {}
+        document_ids: dict[uuid.UUID, uuid.UUID] = {}
+        documents = []
+        for document_id, scan_id, source_name, variant_id, variant_name, recorded, fmt in document_rows:
+            canonical_id = (
+                imported_documents.setdefault(scan_id, document_id) if fmt == 'vulnscout_json' else document_id
+            )
+            document_ids[document_id] = canonical_id
+            if canonical_id == document_id:
+                documents.append((document_id, scan_id, source_name, variant_id, variant_name, recorded))
         ids = [document_id for document_id, *_ in documents]
         # Join through the scan index: a long document-id IN list makes SQLite scan every package.
         rows: list[tuple[uuid.UUID, Package, SBOMPackage]] = [
-            (document_id, package, link) for document_id, package, link in db.session.execute(
+            (document_ids[document_id], package, link) for document_id, package, link in db.session.execute(
                 db.select(SBOMPackage.sbom_document_id, Package, SBOMPackage)
                 .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                 .join(Package, Package.id == SBOMPackage.package_id)
@@ -172,13 +183,25 @@ def init_app(app: Flask) -> None:
                           'dependencies_recorded': recorded, 'packages': [], 'edges': []}
             for document_id, _, source_name, variant_id, variant_name, recorded in documents
         }
+        package_links: dict[tuple[uuid.UUID, uuid.UUID], list[SBOMPackage]] = {}
+        packages = {}
         for document_id, package, link in rows:
+            key = (document_id, package.id)
+            package_links.setdefault(key, []).append(link)
+            packages[key] = package
+        for (document_id, package_id), links in package_links.items():
+            package = packages[(document_id, package_id)]
+            evidence = {
+                field: list(dict.fromkeys(value for link in links for value in (getattr(link, field) or [])))
+                for field in ('purl', 'cpe', 'source_urls', 'source_revisions')
+            }
             result[document_id]['packages'].append({
                 'id': package.string_id, 'name': package.name, 'version': package.version,
-                **package_version_info(package.version, list(link.purl or []), list(link.cpe or []),
-                                       list(link.source_urls or []), list(link.source_revisions or [])),
+                **package_version_info(package.version, evidence['purl'], evidence['cpe'],
+                                       evidence['source_urls'], evidence['source_revisions']),
             })
         for document_id, package_id, dependency_id in edges:
+            document_id = document_ids[document_id]
             if package_id in members[document_id] and dependency_id in scan_packages[scan_of[document_id]]:
                 result[document_id]['edges'].append({
                     'package_id': public_ids[package_id], 'dependency_id': public_ids[dependency_id],
