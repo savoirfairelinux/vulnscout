@@ -9,7 +9,9 @@ foreign-key relationships and the real priority write lock) — only the engine
 ``ComputedVulnInfo`` instances ``SccEngine.applicable_vulns`` yields.
 """
 
+import gc
 import os
+import tracemalloc
 from datetime import datetime, timezone
 import pytest
 
@@ -236,6 +238,74 @@ class TestSccBulkWriter:
 
             assert _assessments_for(finding_id, variant_id).count() == 0
             assert _assessments_for(finding_id, other_variant_id).count() == 1
+
+    def test_failure_cleanup_ownership_memory_stays_bounded_across_flushes(self, app, monkeypatch):
+        monkeypatch.setattr(_SccBulkWriter, "FLUSH_THRESHOLD", 1000)
+        cves = [_Computed(f"CVE-2023-{i:04d}") for i in range(100)]
+        findings_per_run = 100 * len(cves)
+
+        def run(variant_id, scan_id, prefix, track, writers):
+            pkgs = _make_packages([(f"{prefix}-{i}", "1.0") for i in range(100)])
+            gc.collect()
+            before = tracemalloc.get_traced_memory()[0]
+            writer = _SccBulkWriter(
+                scan_id, variant_id, pkgs, failure_cleanups=[] if track else None,
+            )
+            for pkg in pkgs:
+                _scan_pkg(writer, pkg, [(computed, "affected") for computed in cves])
+                writer.maybe_flush()
+            writer.flush()
+            writers.append(writer)
+            gc.collect()
+            return tracemalloc.get_traced_memory()[0] - before
+
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            scan = Scan.create("s", variant.id, scan_type="tool")
+            writers = []
+            tracemalloc.start()
+            try:
+                run(variant.id, scan.id, "warmup", True, writers)
+                untracked = run(variant.id, scan.id, "untracked", False, writers)
+                tracked = run(variant.id, scan.id, "tracked", True, writers)
+            finally:
+                tracemalloc.stop()
+
+            assert _db.session.query(Finding).count() == 3 * findings_per_run
+            # In-memory ownership lists would retain at least one pointer, and
+            # a UUID object per created assessment, for every created row.
+            assert tracked - untracked < findings_per_run * 8
+
+    def test_failure_cleanup_removes_rows_from_every_flushed_chunk(self, app, monkeypatch):
+        monkeypatch.setattr(_SccBulkWriter, "FLUSH_THRESHOLD", 3)
+        monkeypatch.setattr(_SccBulkWriter, "_SELECT_CHUNK", 4)
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkgs = _make_packages([(f"pkg-{i}", "1.0") for i in range(10)])
+            variant_id = variant.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, pkgs, failure_cleanups=failure_cleanups,
+                    )
+                    for pkg in pkgs:
+                        _scan_pkg(writer, pkg, [
+                            (_Computed("CVE-2023-0001"), "affected"),
+                            (_Computed("CVE-2023-0002"), "affected"),
+                        ])
+                        writer.maybe_flush()
+                    assert _db.session.query(Finding).count() > 2 * _SccBulkWriter._SELECT_CHUNK
+                    raise KeyboardInterrupt
+
+            assert _db.session.query(Finding).count() == 0
+            assert _db.session.query(Assessment).count() == 0
+            assert _db.session.query(AssessmentTarget).count() == 0
+            assert _db.session.query(Observation).count() == 0
+            assert _db.session.query(Scan).count() == 0
 
     def test_kernel_explosion_persists_once_per_package_cve(self, app):
         """Many sibling packages sharing the same CVE set each get their own
