@@ -5,6 +5,7 @@ import "@testing-library/jest-dom";
 import React from 'react';
 
 import StatusEditor from '../../src/components/StatusEditor';
+import { getAgentChatRequest } from '../../src/handlers/agentQueue';
 
 // Mock MessageBanner component
 jest.mock('../../src/components/MessageBanner', () => {
@@ -222,18 +223,26 @@ describe('StatusEditor', () => {
             variantPackageMap: {v1: ['pkg@1.0.0']},
             exactTargetSelection: true,
         };
-        const aiAssessState = jest.fn().mockReturnValue({status: 'queued', position: 2});
+        const aiAssessState = jest.fn().mockReturnValue({status: 'queued', position: 2, taskId: 'task-1'});
         const { rerender } = render(<StatusEditor {...props} aiAssessState={aiAssessState} />);
         const target = screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'});
         if (!(target as HTMLInputElement).checked) await user.click(target);
 
+        // A queued action stays clickable and opens its request in the agent chat instead of queueing it twice.
         const queued = screen.getByRole('button', { name: 'Assess with AI (queued, position 2)' });
-        expect(queued).toBeDisabled();
+        expect(queued).toBeEnabled();
         expect(queued).toHaveTextContent('Queued · #2');
         expect(aiAssessState).toHaveBeenLastCalledWith([{variant_id: 'v1', package: 'pkg@1.0.0'}]);
+        const opened = getAgentChatRequest().nonce;
+        await user.click(queued);
+        expect(onAssessWithAi).not.toHaveBeenCalled();
+        expect(getAgentChatRequest().nonce).toBe(opened + 1);
 
-        rerender(<StatusEditor {...props} aiAssessState={() => ({status: 'running'})} />);
-        expect(screen.getByRole('button', { name: 'Assess with AI (running)' })).toHaveTextContent('Assessing…');
+        rerender(<StatusEditor {...props} aiAssessState={() => ({status: 'running', taskId: 'task-1'})} />);
+        expect(screen.getByRole('button', { name: 'Assess with AI (running)' })).toHaveTextContent('Running…');
+
+        rerender(<StatusEditor {...props} aiAssessState={() => ({status: 'failed', taskId: 'task-1'})} />);
+        expect(screen.getByRole('button', { name: 'Assess with AI (failed)' })).toHaveTextContent('Failed · view');
 
         rerender(<StatusEditor {...props} aiAssessState={() => undefined} />);
         await user.click(screen.getByRole('button', { name: 'Assess with AI' }));

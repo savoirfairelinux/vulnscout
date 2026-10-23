@@ -1,22 +1,30 @@
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faClock, faCopy, faLocationDot, faPlug, faPlus, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faArrowDown, faArrowLeft, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faCopy, faLocationDot, faPerson, faPersonWalking, faHourglassHalf, faPlug, faPlus, faTriangleExclamation, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext, type Activity, type AgentMessage as Message, type AgentUsage as Usage, type AgentStreamEvent as StreamEvent, type QueuedAgentMessage } from '../types/agent';
+import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext, type Activity, type AgentMessage as Message, type AgentUsage as Usage } from '../types/agent';
 import { providerIcons } from '../assets/providers';
-import { agentRequest, agentErrorMessage as errorMessage } from '../handlers/agent';
-import { configureAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentQueue, initializeAgentConversation, resetAgentConversation, resetAgentQueue, subscribeAgentQueue } from '../handlers/agentQueue';
-import AgentQueue from './AgentQueue';
-type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; provider: string | null; messages: Message[]; model: string; usage: Usage };
+import { agentRequest as request, agentErrorMessage as errorMessage } from '../handlers/agent';
+import {
+    AGENT_CHAT_SOURCE, MAIN_CONVERSATION, clearAgentChatFocus, configureAgentQueue, enqueueAgentMessages, findAgentTask, getActiveConversationId,
+    getAgentChatRequest, getAgentConversation, getAgentQueue, initializeAgentConversation, openAgentChat, removeAgentTask, resetAgentConversation,
+    resetAgentQueue, retryAgentTask, setActiveConversation, subscribeAgentQueue, type AgentTask,
+} from '../handlers/agentQueue';
+import { bulkAssessmentKeyPrefix } from '../helpers/aiAssessment';
+import AgentConversationList from './AgentConversationList';
+import { agentScopeEntries } from '../helpers/agentTaskScope';
+type ConnectionState = { authenticated: boolean; login: string | null; configured: boolean; token_connected: boolean; provider: string | null };
+type AgentState = ConnectionState & { messages: Message[]; model: string; usage: Usage };
 type DeviceCode = { user_code: string; verification_uri: string; interval: number };
 type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; login?: string | null };
 type ModelChoice = { id: string; name: string };
-const emptyUsage: Usage = { cost: null, input_tokens: null, output_tokens: null };
 const pageLabels: Record<string, string> = { metrics: 'Overview', packages: 'SBOM', vulnerabilities: 'Vulnerabilities', scans: 'Scans', review: 'Review', exports: 'Export', settings: 'Settings', ai: 'AI context', unknown: 'Page not found' };
 const iconButton = 'flex h-9 w-9 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white';
 const skipDiscardKey = 'vulnscout.agent.skipDiscardConfirmation';
 const connectionChangedEvent = 'vulnscout:agent-connection-changed';
+const taskAnchor = (taskId: string) => `agent-task-${taskId}`;
+const assessPrompt = (id: string) => `Assess ${id} in the current scope. Retrieve its details with VulnScout MCP first.`;
 const connectors = [
     { id: 'github', label: 'GitHub Copilot', description: 'Sign in through GitHub on another device.', icon: providerIcons.github },
     { id: 'openai', label: 'OpenAI', description: 'Use an OpenAI API key.', icon: providerIcons.openai },
@@ -37,23 +45,8 @@ function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; p
     </details>;
 }
 
-export type { QueuedAgentMessage } from '../types/agent';
-
-type QueueProps = {
-    /** Pending AI actions, oldest first; the head is sent once the chat is idle. */
-    queue?: QueuedAgentMessage[];
-    onQueuedMessageSent?: (id: string) => void;
-    onQueuedMessageDone?: (id: string, success: boolean) => void;
-    onQueueRemove?: (id: string) => void;
-    onQueueClear?: () => void;
-};
-
-function AgentChat({ onClose, context, active = true, threadId, queue = [], onQueuedMessageSent, onQueuedMessageDone }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string } & QueueProps>) {
-    const request = useCallback(<T,>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void) => agentRequest<T>(path, {
-        ...options,
-        headers: { ...options?.headers, ...(threadId ? { 'X-Agent-Thread': threadId } : {}) },
-    }, onEvent), [threadId]);
-    const [state, setState] = useState<AgentState | null>(null);
+function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean }>) {
+    const [state, setState] = useState<ConnectionState | null>(null);
     const [error, setError] = useState('');
     const [draft, setDraft] = useState('');
     const [device, setDevice] = useState<DeviceCode | null>(null);
@@ -70,12 +63,17 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     const [selectedModel, setSelectedModel] = useState('auto');
     const [neverAsk, setNeverAsk] = useState(false);
     const [refresh, setRefresh] = useState(0);
-    const conversation = useSyncExternalStore(subscribeAgentQueue, () => getAgentConversation(threadId));
+    const activeId = useSyncExternalStore(subscribeAgentQueue, getActiveConversationId);
+    const conversation = useSyncExternalStore(subscribeAgentQueue, () => getAgentConversation(activeId));
     const sharedQueue = useSyncExternalStore(subscribeAgentQueue, getAgentQueue);
+    const chatRequest = useSyncExternalStore(subscribeAgentQueue, getAgentChatRequest);
+    const queueActive = sharedQueue.length > 0 && !sharedQueue.some(item => item.status === 'failed');
     const { pendingMessage, liveReply, activity, progress } = conversation;
-    const [queueOpen, setQueueOpen] = useState(queue.length > 0);
+    const inMain = conversation.id === MAIN_CONVERSATION;
+    const scope = inMain ? context : conversation.context ?? context;
+    const [view, setView] = useState<'chat' | 'conversations'>('chat');
+    const [highlighted, setHighlighted] = useState<string>();
     const composerId = useId();
-    const queueId = useId();
     const providerFormId = useId();
     const endpointId = useId();
     const discardTitleId = useId();
@@ -87,20 +85,20 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     const conversationLog = useRef<HTMLDivElement>(null);
     const composer = useRef<HTMLTextAreaElement>(null);
     const followMessages = useRef(true);
-    const failedTask = sharedQueue.find(item => item.threadId === threadId && item.status === 'failed');
+    const failedTask = sharedQueue.find(item => item.status === 'failed');
     const failedQueuedId = failedTask?.id;
-    const previousFailed = useRef<string>();
     const threadBusy = Boolean(pendingMessage);
+    const mainBusy = sharedQueue.some(item => item.conversationId === MAIN_CONVERSATION);
     const ready = Boolean(state?.authenticated && state.configured && models.length && selectedModel && !showConnections);
     const pageLabel = pageLabels[context.page] ?? context.page;
-    const source = !threadId ? 'Global chat' : context.page === 'review' ? 'Review chat'
-        : context.view?.openVulnerabilityId ? `Vulnerability ${context.view.openVulnerabilityId}` : 'Bulk assessment chat';
-    const scopeLabel = context.view?.openVulnerabilityId ?? context.view?.selectedVariantName ?? context.view?.selectedProjectName;
+    const scopeLabel = scope.view?.openVulnerabilityId ?? (scope.view?.selectedVulnerabilityIds?.length === 1 ? scope.view.selectedVulnerabilityIds[0] : undefined)
+        ?? scope.view?.selectedVariantName ?? scope.view?.selectedProjectName;
     const largeVulnerabilityView = context.page === 'vulnerabilities' && !context.view?.openVulnerabilityId &&
         (context.view?.visibleVulnerabilityIds?.length ?? context.view?.visibleCount ?? 0) > 100;
     const prompts = context.view?.openVulnerabilityId
-        ? [{ label: 'Assess this vulnerability', message: `Assess ${context.view.openVulnerabilityId} in the current scope. Retrieve its details with VulnScout MCP first.` }, { label: 'Review existing assessments', message: 'Review the existing assessments for the open vulnerability in the current scope.' }]
+        ? [{ label: 'Assess this vulnerability', message: assessPrompt(context.view.openVulnerabilityId) }, { label: 'Review existing assessments', message: 'Review the existing assessments for the open vulnerability in the current scope.' }]
         : [{ label: `Summarize ${pageLabel.toLowerCase()}`, message: `Summarize the current ${pageLabel.toLowerCase()} view and its project scope using VulnScout MCP.` }, { label: 'Prioritize next steps', message: 'Review the current scope and recommend the most important next steps. Do not make changes.' }];
+
 
     useEffect(() => {
         const reload = (event: Event) => {
@@ -119,33 +117,23 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         let active = true;
         request<AgentState>('').then(result => {
             if (active) {
-                setState(result);
-                setSelectedModel(result.model);
-                initializeAgentConversation(threadId, result.messages, result.usage);
+                const { messages, usage, model, ...connection } = result;
+                setState(connection);
+                setSelectedModel(model);
+                initializeAgentConversation(messages, usage);
             }
         }).catch(reason => {
             if (active) setError(errorMessage(reason));
         });
         return () => { active = false; };
-    }, [refresh, request, threadId]);
+    }, [refresh]);
 
     useEffect(() => {
-        configureAgentQueue(threadId, {
+        configureAgentQueue({
             ready: Boolean(state?.authenticated && state.configured && models.length && selectedModel) && !modelBusy && !busy,
             model: selectedModel,
         });
-    }, [threadId, state?.authenticated, state?.configured, models.length, modelBusy, busy, selectedModel]);
-
-    useEffect(() => {
-        if (!queue.length) return;
-        try {
-            enqueueAgentMessages(queue, context, threadId, source, {
-                onSent: onQueuedMessageSent, onDone: onQueuedMessageDone,
-            });
-        } catch (reason) {
-            setError(errorMessage(reason));
-        }
-    }, [queue, context, threadId, source, onQueuedMessageSent, onQueuedMessageDone]);
+    }, [state?.authenticated, state?.configured, models.length, modelBusy, busy, selectedModel]);
 
     useEffect(() => {
         if (!state?.authenticated) return;
@@ -156,7 +144,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             if (active) setError(errorMessage(reason));
         });
         return () => { active = false; };
-    }, [state?.authenticated, state?.token_connected, refresh, request]);
+    }, [state?.authenticated, state?.token_connected, refresh]);
 
     useEffect(() => {
         if (active && followMessages.current && conversationLog.current) {
@@ -199,7 +187,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     timer = window.setTimeout(() => void poll(), interval * 1000);
                     return;
                 }
-                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, provider: null, messages: [], model: 'auto', usage: emptyUsage });
+                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, provider: null });
                 setSelectedModel('auto');
                 setDevice(null);
                 setCheckState('success');
@@ -213,7 +201,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         };
         timer = window.setTimeout(() => void poll(), interval * 1000);
         return () => { active = false; window.clearTimeout(timer); };
-    }, [device, request]);
+    }, [device]);
 
     async function signIn() {
         setBusy(true);
@@ -265,7 +253,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             setShowConnections(true);
             setModels([]);
             setSelectedModel(result.model);
-            setState(previous => previous && { ...previous, provider: result.provider, authenticated: true, login: null, model: result.model, messages: [], usage: emptyUsage });
+            setState(previous => previous && { ...previous, provider: result.provider, authenticated: true, login: null });
             setRefresh(value => value + 1);
             setCheckState('success');
             notifyConnectionChange();
@@ -288,7 +276,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             setSetupStep(1);
             setProviderChoice('github');
             setShowEndpoint(false);
-            setState(previous => previous && { ...previous, provider: null, authenticated: false, login: null, model: 'auto', messages: [], usage: emptyUsage });
+            setState(previous => previous && { ...previous, provider: null, authenticated: false, login: null });
             setSelectedModel('auto');
             setRefresh(value => value + 1);
             notifyConnectionChange();
@@ -308,7 +296,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             setDraft('');
             setShowConnections(false);
             setSetupStep(1);
-            setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false, messages: [], model: 'auto', usage: emptyUsage });
+            setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false });
             setSelectedModel('auto');
             notifyConnectionChange();
             if (result.cleanup_error) setError(result.cleanup_error);
@@ -320,13 +308,13 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     }
 
     async function reset() {
-        if (busy || modelBusy || threadBusy || sharedQueue.some(item => item.threadId === threadId)) return;
+        if (busy || modelBusy || mainBusy) return;
         setBusy(true);
         setError('');
         try {
-            const result = await request<{ usage: Usage }>('/conversation', { method: 'DELETE' });
-            setState(previous => previous && { ...previous, messages: [], usage: result.usage });
-            resetAgentConversation(threadId);
+            await request('/conversation', { method: 'DELETE' });
+            resetAgentConversation();
+            setView('chat');
             setDraft('');
             followMessages.current = true;
             setAwayFromBottom(false);
@@ -345,7 +333,6 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         setError('');
         try {
             await request('/model', { method: 'POST', body: JSON.stringify({ model }) });
-            setState(current => current && { ...current, model });
         } catch (reason) {
             setSelectedModel(previous);
             setError(errorMessage(reason));
@@ -354,13 +341,31 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         }
     }
 
+    /** Each assessed vulnerability gets its own conversation, like every other AI action in the app. */
+    function assessInOwnConversations(ids: string[]) {
+        if (busy || modelBusy || !ready) return;
+        try {
+            const prefix = bulkAssessmentKeyPrefix(context);
+            const actions = ids.map(id => ({
+                id: crypto.randomUUID(), key: `${prefix}${id}`, kind: 'assess' as const, title: id, text: assessPrompt(id),
+                context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [id], selectionCount: 1 } },
+            }));
+            enqueueAgentMessages(actions, context, ids.length > 1 ? 'Displayed vulnerabilities' : `Vulnerability ${ids[0]}`, 'per-action');
+            setError('');
+            if (actions[0] && findAgentTask(actions[0].id)) openAgentChat(actions[0].id);
+        } catch (reason) {
+            setError(errorMessage(reason));
+        }
+    }
+
     function send(event?: FormEvent, actionMessage?: string) {
         event?.preventDefault();
         const message = (actionMessage ?? draft).trim();
-        if (!message || busy || modelBusy || !ready) return;
+        if (!message || busy || modelBusy || !ready || conversation.archived) return;
         try {
             const id = crypto.randomUUID();
-            enqueueAgentMessages([{ id, key: id, text: message, kind: 'message', title: message }], context, threadId, source);
+            enqueueAgentMessages([{ id, key: id, text: message, kind: 'message', title: message }], scope,
+                inMain ? AGENT_CHAT_SOURCE : conversation.title, conversation.id);
             setDraft('');
             setError('');
             followMessages.current = true;
@@ -370,16 +375,42 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         }
     }
 
+    function openConversation(id: string) {
+        setActiveConversation(id);
+        setView('chat');
+    }
+
+    function showTask(task: AgentTask) {
+        openConversation(task.conversationId);
+        followMessages.current = false;
+        setHighlighted(task.id);
+    }
+
     useEffect(() => {
-        if (failedTask) {
-            setDraft(current => current || failedTask.text);
-            setQueueOpen(true);
-        } else if (previousFailed.current) {
-            const failedText = previousFailed.current;
-            setDraft(current => current === failedText ? '' : current);
-        }
-        previousFailed.current = failedTask?.text;
-    }, [failedTask]);
+        if (!chatRequest.nonce) return;
+        setView('chat');
+        if (!chatRequest.taskId) return;
+        const task = findAgentTask(chatRequest.taskId);
+        clearAgentChatFocus();
+        if (!task) return;
+        setActiveConversation(task.conversationId);
+        followMessages.current = false;
+        setHighlighted(task.id);
+    }, [chatRequest]);
+
+    useEffect(() => {
+        if (!highlighted) return;
+        const frame = window.requestAnimationFrame(() => {
+            document.getElementById(taskAnchor(highlighted))?.scrollIntoView?.({ block: 'center' });
+        });
+        const timer = window.setTimeout(() => setHighlighted(undefined), 2500);
+        return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
+    }, [highlighted, activeId]);
+
+    useEffect(() => {
+        followMessages.current = true;
+        setAwayFromBottom(false);
+    }, [activeId]);
 
     function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -388,11 +419,26 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         }
     }
 
-    return <div className="flex h-full min-h-0 min-w-0 flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+    return <div className="relative flex h-full min-h-0 min-w-0 flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100" onKeyDown={event => {
+        if (event.key === 'Escape' && view === 'conversations') {
+            event.preventDefault();
+            event.stopPropagation();
+            setView('chat');
+        }
+    }}>
         <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-neutral-200 px-3 dark:border-neutral-800">
-            <h2 className="min-w-0 flex-1 truncate pr-2 text-sm font-semibold" title={source}>{source}</h2>
-            <button type="button" title="AI queue" aria-label={`AI queue (${sharedQueue.length})`} aria-expanded={queueOpen} aria-controls={queueId} onClick={() => setQueueOpen(value => !value)} className={iconButton}>
-                <FontAwesomeIcon icon={faClock} /><span className="ml-1 text-xs">{sharedQueue.length}</span>
+            {view === 'chat' && !inMain && <button type="button" title="All conversations" aria-label="All conversations" onClick={() => setView('conversations')} className={iconButton}><FontAwesomeIcon icon={faArrowLeft} /></button>}
+            {view === 'conversations' && <button type="button" title="Back to conversation" aria-label="Back to conversation" onClick={() => setView('chat')} className={iconButton}><FontAwesomeIcon icon={faArrowLeft} /></button>}
+            <h2 className="min-w-0 flex-1 truncate pr-2 text-sm font-semibold" title={view === 'chat' ? conversation.title : undefined}>{view === 'chat' ? conversation.title : 'Conversations'}</h2>
+            <button type="button" title={failedTask ? 'Conversations and AI queue (paused)' : 'Conversations and AI queue'} aria-label={`AI queue (${sharedQueue.length})${failedTask ? ', paused' : ''}`} aria-pressed={view === 'conversations'} onClick={() => setView(current => current === 'chat' ? 'conversations' : 'chat')} className={`${iconButton} relative ${view === 'conversations' ? 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-white' : ''}`}>
+                {failedTask && <FontAwesomeIcon icon={faTriangleExclamation} className="absolute -right-0.5 top-0.5 h-2.5 w-2.5 text-amber-500" />}
+                {queueActive
+                    ? <span className="agent-walker" data-testid="ai-queue-walking" aria-hidden="true">
+                        <FontAwesomeIcon icon={faPersonWalking} className="agent-walker-stride" />
+                        <FontAwesomeIcon icon={faPerson} className="agent-walker-step" />
+                    </span>
+                    : <FontAwesomeIcon icon={faPerson} data-testid="ai-queue-idle" />}
+                <span className="ml-1 text-xs">{sharedQueue.length}</span>
             </button>
             {state?.authenticated && <button type="button" title="Configure model provider" aria-label="Configure model provider" aria-expanded={showConnections} onClick={() => {
                 setShowConnections(value => !value);
@@ -412,7 +458,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     setNeverAsk(false);
                     confirmation.current?.showModal();
                 }
-            }} disabled={busy || modelBusy || threadBusy || sharedQueue.some(item => item.threadId === threadId) || !state || (!conversation.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
+            }} disabled={busy || modelBusy || mainBusy || !state || (inMain && !conversation.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
             <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>
         </header>
         <dialog ref={confirmation} aria-labelledby={discardTitleId} aria-describedby={discardDescriptionId} className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
@@ -439,6 +485,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             </div>
         </dialog>
 
+        {view === 'conversations' ? <AgentConversationList activeConversationId={conversation.id} onOpen={openConversation} /> : <>
         <div ref={conversationLog} className="scrollbar-minimal min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-6" role="log" aria-label="Agent conversation" aria-live="polite" onScroll={event => {
             const log = event.currentTarget;
             followMessages.current = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
@@ -522,15 +569,16 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     </>}
                 </div>}
             </div>}
-            {ready && conversation.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
+            {ready && inMain && conversation.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
                 <h3 className="text-lg font-semibold leading-snug">What needs your attention?</h3>
                 <div className="space-y-3">
-                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || (largeVulnerabilityView && index === 0)} onClick={() => void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
+                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || (largeVulnerabilityView && index === 0)} onClick={() => index === 0 && context.view?.openVulnerabilityId ? assessInOwnConversations([context.view.openVulnerabilityId]) : void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
                     {largeVulnerabilityView && <p className="text-xs text-neutral-500 dark:text-neutral-400">Filter to 100 or fewer vulnerabilities to summarize the displayed rows.</p>}
                 </div>
             </div>}
-            {conversation.messages.map((message, index) => <div key={index} className={`min-w-0 ${message.role === 'user' ? 'flex justify-end' : ''}`}>
-                <div className={`min-w-0 break-words text-sm leading-7 [overflow-wrap:anywhere] ${message.role === 'user' ? 'max-w-[90%] whitespace-pre-wrap rounded-lg bg-neutral-100 px-4 py-3 dark:bg-neutral-800' : ''}`}>
+            {conversation.archived && <p role="status" className="rounded border border-neutral-200 p-3 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">This conversation was archived to free agent resources. Its transcript stays here; continue in the main conversation.</p>}
+            {conversation.messages.map((message, index) => <div key={index} id={message.role === 'user' && message.taskId ? taskAnchor(message.taskId) : undefined} className={`min-w-0 scroll-mt-4 ${message.role === 'user' ? 'flex justify-end' : ''}`}>
+                <div className={`min-w-0 break-words text-sm leading-7 transition-shadow [overflow-wrap:anywhere] ${message.role === 'user' ? 'max-w-[90%] whitespace-pre-wrap rounded-lg bg-neutral-100 px-4 py-3 dark:bg-neutral-800' : ''} ${message.taskId && message.taskId === highlighted ? 'rounded-lg ring-2 ring-cyan-500' : ''}`}>
                     {message.activity && <ActivityLog items={message.activity} />}
                     {message.role === 'assistant' ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                         p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
@@ -550,10 +598,29 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     {message.role === 'assistant' && <button type="button" title={copied === String(index) ? 'Copied' : 'Copy response'} aria-label="Copy response" onClick={() => void copy(message.content, String(index))} className={`${iconButton} mt-2`}><FontAwesomeIcon icon={copied === String(index) ? faCheck : faCopy} className="text-xs" /></button>}
                 </div>
             </div>)}
-            {pendingMessage && <><div className="flex justify-end"><div className="max-w-[90%] whitespace-pre-wrap break-words rounded-lg bg-neutral-100 px-4 py-3 text-sm leading-7 [overflow-wrap:anywhere] dark:bg-neutral-800">{pendingMessage}</div></div><div><ActivityLog items={activity} pending />{liveReply && <div className="mb-3 whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">{liveReply}</div>}<div role="status" className="flex items-center gap-2 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin />{progress}</div></div></>}
+            {failedTask?.conversationId === conversation.id && <div id={taskAnchor(failedTask.id)} className="space-y-2">
+                <div className="flex justify-end"><div className={`max-w-[90%] whitespace-pre-wrap break-words rounded-lg border border-amber-400 bg-neutral-100 px-4 py-3 text-sm leading-7 [overflow-wrap:anywhere] dark:border-amber-700 dark:bg-neutral-800 ${highlighted === failedTask.id ? 'ring-2 ring-cyan-500' : ''}`}>{failedTask.text}</div></div>
+                <div className="flex flex-wrap items-center gap-2 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                    <FontAwesomeIcon icon={faTriangleExclamation} />
+                    <p role="alert" className="min-w-0 flex-1 break-words">{failedTask.error}</p>
+                    <button type="button" onClick={() => removeAgentTask(failedTask.id)} className="rounded border border-amber-400 px-3 py-1 text-xs hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900/40">Remove failed action</button>
+                    <button type="button" onClick={() => retryAgentTask(failedTask.id)} className="rounded bg-cyan-700 px-3 py-1 text-xs font-semibold text-white hover:bg-cyan-600">Retry failed action</button>
+                </div>
+            </div>}
+            {sharedQueue.filter(task => task.conversationId === conversation.id && task.status === 'queued').map(task => <div key={task.id} id={taskAnchor(task.id)} className="flex flex-col items-end gap-1">
+                <div className={`max-w-[90%] whitespace-pre-wrap break-words rounded-lg border border-dashed border-neutral-300 px-4 py-3 text-sm leading-7 text-neutral-600 [overflow-wrap:anywhere] dark:border-neutral-700 dark:text-neutral-300 ${highlighted === task.id ? 'ring-2 ring-cyan-500' : ''}`}>{task.text}</div>
+                <div className="flex max-w-[90%] flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-neutral-500">
+                    <span role="status" className="inline-flex items-center gap-1.5"><FontAwesomeIcon icon={faHourglassHalf} />Waiting in the AI queue · #{sharedQueue.filter(item => item.status !== 'running').indexOf(task) + 1}</span>
+                    <details className="text-left"><summary className="cursor-pointer">Request details</summary>
+                        <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">{[...(task.detail ? [['Targets', task.detail]] : []), ...agentScopeEntries(task.context)].map(([label, value]) => <div key={label} className="contents"><dt>{label}</dt><dd className="min-w-0 break-words text-neutral-700 dark:text-neutral-300">{value}</dd></div>)}</dl>
+                    </details>
+                    <button type="button" onClick={() => removeAgentTask(task.id)} className="text-red-700 hover:underline dark:text-red-400">Remove from queue</button>
+                </div>
+            </div>)}
+            {pendingMessage && <><div id={conversation.pendingTaskId ? taskAnchor(conversation.pendingTaskId) : undefined} className="flex justify-end"><div className="max-w-[90%] whitespace-pre-wrap break-words rounded-lg bg-neutral-100 px-4 py-3 text-sm leading-7 [overflow-wrap:anywhere] dark:bg-neutral-800">{pendingMessage}</div></div><div><ActivityLog items={activity} pending />{liveReply && <div className="mb-3 whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">{liveReply}</div>}<div role="status" className="flex items-center gap-2 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin />{progress}</div></div></>}
         </div>
         {awayFromBottom && <button type="button" aria-label="Jump to latest message" title="Jump to latest message" onClick={() => { if (conversationLog.current) conversationLog.current.scrollTop = conversationLog.current.scrollHeight; }} className={`${iconButton} mx-auto mb-2 border border-neutral-200 dark:border-neutral-700`}><FontAwesomeIcon icon={faArrowDown} /></button>}
-        {(error || conversation.error) && <div className="mx-4 mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><p role="alert" className="min-w-0 flex-1 break-words leading-relaxed">{error || conversation.error}</p><button type="button" title="Retry connection" aria-label="Retry connection" disabled={busy} onClick={() => { setError(''); setRefresh(value => value + 1); }} className={iconButton}><FontAwesomeIcon icon={faArrowRotateRight} /></button><button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button></div>}
+        {error && <div className="mx-4 mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><p role="alert" className="min-w-0 flex-1 break-words leading-relaxed">{error}</p><button type="button" title="Retry connection" aria-label="Retry connection" disabled={busy} onClick={() => { setError(''); setRefresh(value => value + 1); }} className={iconButton}><FontAwesomeIcon icon={faArrowRotateRight} /></button><button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button></div>}
 
         {state && (!state.authenticated || showConnections) && <div className="flex shrink-0 items-center justify-between gap-3 border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
             <button type="button" onClick={() => { setDevice(null); setSetupStep(step => step === 3 ? 2 : 1); setCheckState('idle'); setError(''); }} disabled={setupStep === 1 || busy} className="rounded border border-neutral-300 px-4 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800">Back</button>
@@ -565,28 +632,31 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
 
         {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model in the message box to start chatting.</p>}
 
-        {queueOpen && <AgentQueue id={queueId} />}
+        {failedTask && failedTask.conversationId !== conversation.id && <div role="status" className="mx-4 mb-3 flex items-center gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+            <FontAwesomeIcon icon={faTriangleExclamation} />
+            <span className="min-w-0 flex-1 truncate" title={failedTask.title}>AI queue paused: {failedTask.title} failed.</span>
+            <button type="button" onClick={() => showTask(failedTask)} className="shrink-0 font-semibold underline-offset-2 hover:underline">View</button>
+        </div>}
 
         {state?.authenticated && state.configured && !showConnections && <form onSubmit={event => void send(event)} className="shrink-0 space-y-3 border-t border-neutral-200 px-4 pb-4 pt-3 dark:border-neutral-800">
             <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
                 <FontAwesomeIcon icon={faLocationDot} className="shrink-0" />
                 <span className="truncate" title={[pageLabel, scopeLabel].filter(Boolean).join(' / ')}>{pageLabel}{scopeLabel && ` / ${scopeLabel}`}</span>
-                {context.view?.visibleVulnerabilityIds && <span className="ml-auto shrink-0 tabular-nums">{context.view.visibleVulnerabilityIds.length} displayed</span>}
+                {inMain && context.view?.visibleVulnerabilityIds && <span className="ml-auto shrink-0 tabular-nums">{context.view.visibleVulnerabilityIds.length} displayed</span>}
             </div>
-            {(context.view?.openVulnerabilityId || (context.page === 'vulnerabilities' && Boolean(context.view?.visibleVulnerabilityIds?.length))) && <div className="flex flex-wrap gap-3 text-xs">
-                {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} onClick={() => void send(undefined, prompts[0].message)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
+            {inMain && (context.view?.openVulnerabilityId || (context.page === 'vulnerabilities' && Boolean(context.view?.visibleVulnerabilityIds?.length))) && <div className="flex flex-wrap gap-3 text-xs">
+                {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} onClick={() => assessInOwnConversations([context.view!.openVulnerabilityId!])} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
                 {context.page === 'vulnerabilities' && !!context.view?.visibleVulnerabilityIds?.length && <button type="button" onClick={() => {
                     if ((context.view?.visibleVulnerabilityIds?.length ?? 0) > 100) {
                         setError('Narrow the table to 100 vulnerabilities or fewer before assessing every displayed row.');
                     } else {
-                        setError('');
-                        void send(undefined, 'Assess every vulnerability currently displayed in this filtered table. Use the attached list of IDs and current project/variant scope; report the result for each.');
+                        assessInOwnConversations(context.view?.visibleVulnerabilityIds ?? []);
                     }
                 }} disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess displayed</button>}
             </div>}
             <label htmlFor={composerId} className="sr-only">Message the agent</label>
             <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">
-                <textarea ref={composer} id={composerId} rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || Boolean(failedQueuedId)} placeholder="Ask about this view..." className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
+                <textarea ref={composer} id={composerId} rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || Boolean(failedQueuedId) || conversation.archived} placeholder={failedQueuedId ? 'AI queue paused: retry or remove the failed action' : inMain ? 'Ask about this view...' : 'Follow up in this conversation...'} className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
                 <div className="mt-2 flex min-w-0 items-center gap-2">
                     <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || threadBusy || !models.length} className="min-w-0 flex-1 truncate rounded border-0 bg-transparent py-2 pl-1 pr-6 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:bg-neutral-900">
                         {!selectedModel && <option value="">Select a model</option>}
@@ -594,11 +664,12 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                         {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
                     </select>
                     {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
-                    <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || Boolean(failedQueuedId)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
+                    <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || Boolean(failedQueuedId) || conversation.archived} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
                 </div>
             </div>
             {conversation.messages.length > 0 && <details className="text-xs text-neutral-500 dark:text-neutral-400"><summary className="w-fit cursor-pointer">Conversation usage</summary><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 tabular-nums"><span>{conversation.usage.cost == null ? 'Cost not reported' : `SDK cost ${conversation.usage.cost.toFixed(4)}`}</span><span>{conversation.usage.input_tokens?.toLocaleString() ?? '—'} input tokens</span><span>{conversation.usage.output_tokens?.toLocaleString() ?? '—'} output tokens</span></div></details>}
         </form>}
+        </>}
     </div>;
 }
 

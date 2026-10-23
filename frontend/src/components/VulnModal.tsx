@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faWandMagicSparkles, faClock, faCircleNotch } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
@@ -31,8 +31,9 @@ import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
-import AgentChat, { type QueuedAgentMessage } from "./AgentChat";
-import { enqueueAgentMessages } from '../handlers/agentQueue';
+import type { QueuedAgentMessage } from '../types/agent';
+import { agentActionState as queueActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
+import AgentActionButton from './AgentActionButton';
 import useAgentQueue from '../hooks/useAgentQueue';
 import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
 import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
@@ -45,7 +46,6 @@ type Props = {
     isEditing?: boolean;
     readOnly?: boolean;
     onClose: () => void;
-    onOpenAgent?: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
@@ -146,11 +146,7 @@ type VariantScopedSnapshot = {
         const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
-    const [assessmentChatOpen, setAssessmentChatOpen] = useState(false);
-    const [assessmentChatMounted, setAssessmentChatMounted] = useState(false);
-    const [assessmentThreadId, setAssessmentThreadId] = useState(() => crypto.randomUUID());
-    const agentMessageQueue = useAgentQueue(assessmentThreadId);
-    const runningAgentAction = agentMessageQueue.find(item => item.status === 'running');
+    const agentMessageQueue = useAgentQueue();
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
@@ -190,54 +186,37 @@ type VariantScopedSnapshot = {
     const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [reviewToDiscard, setReviewToDiscard] = useState<AssessmentReview | null>(null);
 
-    const closeAssessmentChat = () => {
-        setAssessmentChatOpen(false);
-    };
+    const agentActionState = (key: string): AgentActionState | undefined =>
+        queueActionState(agentMessageQueue, item => item.key === key);
 
-    const discardAssessmentChat = () => {
-        setAssessmentChatMounted(false);
-        setAssessmentChatOpen(false);
-        setAssessmentThreadId(crypto.randomUUID());
-    };
-
-    useEffect(() => {
-        discardAssessmentChat();
-    }, [vuln.id]);
-
-    const agentActionState = (key: string): AgentActionState | undefined => {
-        if (runningAgentAction?.key === key) return { status: 'running' };
-        const index = agentMessageQueue.filter(item => item.id !== runningAgentAction?.id).findIndex(item => item.key === key);
-        return index >= 0 ? { status: 'queued', position: index + 1 } : undefined;
-    };
-
-    const openAssessmentChat = (actions: Omit<QueuedAgentMessage, 'id'>[] = []) => {
-        setAssessmentChatMounted(true);
-        setAssessmentChatOpen(true);
+    /** Queue an AI action in its own conversation of the agent chat, which opens beside this modal. */
+    const queueAgentActions = (actions: Omit<QueuedAgentMessage, 'id'>[]) => {
         setIsEditing(true);
-        // An identical request already queued or running is not queued again.
-        if (actions.length && !agentActionState(actions[0].key)) {
-            enqueueAgentMessages(actions.map(action => ({ ...action, id: crypto.randomUUID() })),
-                assessmentAgentContext, assessmentThreadId, `Vulnerability ${vuln.id}`);
+        const existing = actions.length ? agentActionState(actions[0].key) : undefined;
+        if (existing) {
+            openAgentChat(existing.taskId);
+            return;
         }
+        const queued = actions.map(action => ({
+            ...action, id: crypto.randomUUID(),
+            title: action.kind === 'assess' ? `${vuln.id} · ${action.title}` : action.title,
+        }));
+        enqueueAgentMessages(queued, assessmentAgentContext, `Vulnerability ${vuln.id}`, 'per-action');
+        openAgentChat(queued[0]?.id);
     };
 
-    const toggleAssessmentChat = () => {
-        if (assessmentChatOpen) closeAssessmentChat();
-        else openAssessmentChat();
-    };
-
-    const assessWithAiState = (targets: AssessmentTargetPair[]) => agentActionState(assessmentKey(targets));
+    const assessWithAiState = (targets: AssessmentTargetPair[]) => agentActionState(assessmentKey(vuln.id, targets));
 
     const assessWithAi = (targets: AssessmentTargetPair[]) => {
         try {
-            openAssessmentChat(buildAiAssessmentMessages(vuln.id, targets, availableVariants));
+            queueAgentActions(buildAiAssessmentMessages(vuln.id, targets, availableVariants));
         } catch (error) {
             showMessage(error instanceof Error ? error.message : 'Unable to prepare AI assessment.', 'error');
         }
     };
 
     const reviewWithAi = (assessment: Assessment) => {
-        openAssessmentChat([buildAssessmentReviewAction(assessment)]);
+        queueAgentActions([buildAssessmentReviewAction(assessment)]);
     };
 
     const assessmentAgentContext: AgentContext = {
@@ -1113,6 +1092,7 @@ type VariantScopedSnapshot = {
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             const target = event.target as HTMLElement;
+            if (target.closest?.('#agent-panel')) return;
             const isInTextField =
                 target.tagName === 'INPUT' ||
                 target.tagName === 'TEXTAREA' ||
@@ -1643,13 +1623,12 @@ type VariantScopedSnapshot = {
             )}
             {!readOnly && (
                 <button
-                    onClick={toggleAssessmentChat}
+                    onClick={() => { setIsEditing(true); openAgentChat(); }}
                     type="button"
-                    aria-label={`Toggle AI chat for ${vuln.id}`}
-                    aria-expanded={assessmentChatOpen}
-                    aria-controls="assessment-agent-panel"
-                    title={assessmentChatOpen ? "Close AI chat" : "Open AI chat"}
-                    className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${assessmentChatOpen ? "border-cyan-400 bg-cyan-900/50 text-cyan-100" : "border-cyan-500 text-cyan-200 hover:bg-cyan-900/40"}`}
+                    aria-label={`Open agent chat for ${vuln.id}`}
+                    aria-controls="agent-panel"
+                    title="Open agent chat"
+                    className="rounded-lg border border-cyan-500 px-3 py-2 text-sm font-medium text-cyan-200 transition-colors hover:bg-cyan-900/40"
                 >
                     <FontAwesomeIcon icon={faWandMagicSparkles} className="mr-2" />
                     AI
@@ -2172,26 +2151,17 @@ type VariantScopedSnapshot = {
                                                         {originLabel(row.origin)}
                                                     </span>
                                                 )}
-                                                {!readOnly && row.origin === "custom" && (() => {
-                                                    const reviewState = agentActionState(assessmentReviewKey(row.id));
-                                                    const stateLabel = reviewState?.status === 'running' ? ' (running)'
-                                                        : reviewState ? ` (queued, position ${reviewState.position})` : '';
-                                                    return (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => reviewWithAi(row)}
-                                                            disabled={Boolean(reviewState)}
-                                                            aria-label={`Review assessment ${row.id} with AI${stateLabel}`}
-                                                            title={reviewState?.status === 'running' ? "AI review in progress"
-                                                                : reviewState ? `AI review queued (#${reviewState.position} in the AI chat)` : "Review with AI"}
-                                                            className="inline-flex items-center gap-1 rounded border border-cyan-500 px-2 py-0.5 text-xs font-medium text-cyan-200 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:border-neutral-600 disabled:text-neutral-400 disabled:hover:bg-transparent"
-                                                        >
-                                                            {reviewState?.status === 'running' ? <><FontAwesomeIcon icon={faCircleNotch} spin className="h-3 w-3" />Running…</>
-                                                                : reviewState ? <><FontAwesomeIcon icon={faClock} className="h-3 w-3" />Queued · #{reviewState.position}</>
-                                                                : <><FontAwesomeIcon icon={faWandMagicSparkles} className="h-3 w-3" />Review with AI</>}
-                                                        </button>
-                                                    );
-                                                })()}
+                                                {!readOnly && row.origin === "custom" && (
+                                                    <AgentActionButton
+                                                        state={agentActionState(assessmentReviewKey(row.id))}
+                                                        label="Review with AI"
+                                                        name={`Review assessment ${row.id} with AI`}
+                                                        title="Review this assessment with AI"
+                                                        onRun={() => reviewWithAi(row)}
+                                                        iconClassName="h-3 w-3"
+                                                        className="inline-flex items-center gap-1 rounded border border-cyan-500 px-2 py-0.5 text-xs font-medium text-cyan-200 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:border-neutral-600 disabled:text-neutral-400 disabled:hover:bg-transparent"
+                                                    />
+                                                )}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {targets.map(target => {
@@ -2356,9 +2326,6 @@ type VariantScopedSnapshot = {
                     </div>
 
                     </div>
-                    {assessmentChatMounted && <aside id="assessment-agent-panel" hidden={!assessmentChatOpen} role="complementary" aria-label={`Assessment chat for ${vuln.id}`} className="absolute inset-0 z-20 w-full border-l border-neutral-700 bg-white shadow-2xl lg:static lg:z-auto lg:w-[min(440px,45%)] lg:shrink-0">
-                        <AgentChat key={assessmentThreadId} threadId={assessmentThreadId} active={assessmentChatOpen} context={assessmentAgentContext} onClose={closeAssessmentChat} />
-                    </aside>}
         </ModalShell>
 
             <ConfirmationModal

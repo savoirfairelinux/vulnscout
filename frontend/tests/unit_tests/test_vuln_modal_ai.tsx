@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import React from 'react';
@@ -9,46 +9,28 @@ import React from 'react';
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import type { AssessmentTargetPair } from "../../src/handlers/assessments";
 import VulnModal from '../../src/components/VulnModal';
-import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
+import * as store from '../../src/handlers/agentQueue';
 
-type QueueItem = { id: string; text: string; key: string; kind: string; title: string; detail?: string };
-type ChatProps = {
-    threadId?: string; active?: boolean; queue?: QueueItem[];
-    onQueuedMessageSent?: (id: string) => void; onQueuedMessageDone?: (id: string, success: boolean) => void;
-    onQueueRemove?: (id: string) => void; onQueueClear?: () => void;
-};
-const chatProps: ChatProps[] = [];
-let chatMounts = 0;
+const { getAgentQueue, resetAgentQueue } = store;
 let lastSentId: string | undefined;
-const lastQueue = () => getAgentQueue().filter(item => item.threadId === chatProps[chatProps.length - 1].threadId);
-
-jest.mock('../../src/components/AgentChat', () => ({
-    __esModule: true,
-    default: function MockAgentChat(props: ChatProps & { onClose: () => void }) {
-        const ReactLib = jest.requireActual('react');
-        const store = jest.requireActual('../../src/handlers/agentQueue');
-        const useQueue = jest.requireActual('../../src/hooks/useAgentQueue').default;
-        const queue = useQueue(props.threadId);
-        const mark = (status: 'running' | 'failed') => {
-            const item = queue[0];
-            if (item) {
-                lastSentId = item.id;
-                item.status = status;
-                store.enqueueAgentMessages([], { page: 'vulnerabilities' });
-            }
-        };
-        ReactLib.useEffect(() => { chatMounts += 1; }, []);
-        chatProps.push(props);
-        return <div data-testid="agent-chat">
-            <span data-testid="queued-message">{queue[0]?.text ?? ''}</span>
-            <button type="button" onClick={props.onClose}>Close chat</button>
-            <button type="button" onClick={() => mark('running')}>Accept queued</button>
-            <button type="button" onClick={() => { const item = queue.find((task: QueueItem) => task.id === lastSentId); if (item) item.status = 'queued'; if (lastSentId) store.removeAgentTask(lastSentId); }}>Finish running</button>
-            <button type="button" onClick={() => mark('failed')}>Fail running</button>
-            <button type="button" onClick={store.clearAgentQueue}>Clear queue</button>
-        </div>;
-    },
-}));
+const lastQueue = getAgentQueue;
+const queuedMessage = () => getAgentQueue()[0]?.text ?? '';
+let openedBefore = 0;
+const chatOpenings = () => store.getAgentChatRequest().nonce - openedBefore;
+// The real queue only drains with a connected chat; drive task status directly instead.
+const mark = (status: 'running' | 'failed') => act(() => {
+    const item = getAgentQueue()[0];
+    if (item) {
+        lastSentId = item.id;
+        item.status = status;
+        store.enqueueAgentMessages([], { page: 'vulnerabilities' });
+    }
+});
+const finishRunning = () => act(() => {
+    const item = getAgentQueue().find(task => task.id === lastSentId);
+    if (item) item.status = 'queued';
+    if (lastSentId) store.removeAgentTask(lastSentId);
+});
 
 const defaultAiTargets: AssessmentTargetPair[] = [
     { variant_id: 'v1', package: 'pkg@1.0.0' },
@@ -61,7 +43,10 @@ jest.mock('../../src/components/StatusEditor', () => ({
     default: (props: { onAssessWithAi?: (targets: AssessmentTargetPair[]) => void; aiAssessState?: (targets: AssessmentTargetPair[]) => unknown }) => (
         <div data-testid="status-editor">
             {props.onAssessWithAi && <button type="button" onClick={() => props.onAssessWithAi?.(mockAiTargets)}>Assess with AI</button>}
-            <span data-testid="assess-state">{JSON.stringify(props.aiAssessState?.(mockAiTargets) ?? null)}</span>
+            <span data-testid="assess-state">{(() => {
+                const state = props.aiAssessState?.(mockAiTargets) as { status: string; position?: number } | undefined;
+                return state ? `${state.status}${state.position ? ` #${state.position}` : ''}` : 'idle';
+            })()}</span>
         </div>
     ),
 }));
@@ -111,8 +96,7 @@ function renderModal(props: Partial<React.ComponentProps<typeof VulnModal>> = {}
 describe('VulnModal AI actions', () => {
     beforeEach(() => {
         resetAgentQueue();
-        chatProps.length = 0;
-        chatMounts = 0;
+        openedBefore = store.getAgentChatRequest().nonce;
         lastSentId = undefined;
         mockAiTargets = defaultAiTargets;
         fetchMock.resetMocks();
@@ -127,47 +111,38 @@ describe('VulnModal AI actions', () => {
         });
     });
 
-    test('AI header button toggles the chat and enables edit mode only on open', async () => {
+    test('AI header button opens the main agent chat and enables edit mode without rendering a chat', async () => {
         const user = userEvent.setup();
         renderModal();
 
         expect(screen.queryByRole('button', { name: /^assess .* with ai$/i })).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: /edit$/i })).toHaveTextContent('Edit');
-        const aiButton = screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` });
+        const aiButton = screen.getByRole('button', { name: `Open agent chat for ${vulnerability.id}` });
         expect(aiButton).toHaveTextContent('AI');
-        expect(aiButton).toHaveAttribute('aria-expanded', 'false');
+        expect(aiButton).toHaveAttribute('aria-controls', 'agent-panel');
 
         await user.click(aiButton);
-        expect(screen.getByTestId('agent-chat')).toBeInTheDocument();
-        expect(aiButton).toHaveAttribute('aria-expanded', 'true');
+        expect(chatOpenings()).toBe(1);
         expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
-        expect(screen.getByTestId('queued-message')).toHaveTextContent('');
-
-        await user.click(aiButton);
-        expect(screen.getByTestId('agent-chat')).not.toBeVisible();
-        expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
+        expect(getAgentQueue()).toEqual([]);
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        expect(screen.queryByRole('log', { name: 'Agent conversation' })).not.toBeInTheDocument();
     });
 
-    test('closing the chat from inside the panel keeps edit mode', async () => {
-        const user = userEvent.setup();
-        renderModal({ isEditing: true });
-
-        await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
-        await user.click(screen.getByRole('button', { name: 'Close chat' }));
-        expect(screen.getByTestId('agent-chat')).not.toBeVisible();
-        expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
-    });
-
-    test('Assess with AI opens the chat with the selected targets', async () => {
+    test('Assess with AI queues the selected targets into the main chat and opens it', async () => {
         const user = userEvent.setup();
         renderModal({ isEditing: true });
         await waitFor(() => expect(fetchMock.mock.calls.some(([req]) => String(req instanceof Request ? req.url : req).endsWith('/variants'))).toBe(true));
 
         await waitFor(async () => {
             await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
-            expect(screen.getByTestId('queued-message')).toHaveTextContent('variant "release" (variant_id v2)');
+            expect(queuedMessage()).toContain('variant "release" (variant_id v2)');
         });
-        const message = screen.getByTestId('queued-message').textContent ?? '';
+        expect(chatOpenings()).toBe(1);
+        expect(store.getAgentChatRequest().taskId).toBe(getAgentQueue()[0].id);
+        expect(getAgentQueue()[0]).toMatchObject({ source: `Vulnerability ${vulnerability.id}`, title: `${vulnerability.id} · 2 targets` });
+        expect(store.getAgentConversation(getAgentQueue()[0].conversationId).title).toBe(`Assess ${vulnerability.id} · 2 targets`);
+        const message = queuedMessage();
         expect(message).toContain(`Assess ${vulnerability.id} for exactly these targets (packages listed per variant)`);
         expect(message).toContain('variant "default" (variant_id v1): pkg@1.0.0');
         expect(message).toContain('write_assessment');
@@ -186,8 +161,8 @@ describe('VulnModal AI actions', () => {
         const messages: string[] = [];
         while (lastQueue().length) {
             messages.push(lastQueue()[0].text);
-            await user.click(screen.getByRole('button', { name: 'Accept queued' }));
-            await user.click(screen.getByRole('button', { name: 'Finish running' }));
+            mark('running');
+            finishRunning();
         }
         expect(messages.length).toBeGreaterThan(1);
         messages.forEach((message, index) => {
@@ -215,7 +190,8 @@ describe('VulnModal AI actions', () => {
         await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
 
         expect(await screen.findByText(/Too many packages selected for variant release/)).toBeInTheDocument();
-        expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
+        expect(getAgentQueue()).toEqual([]);
+        expect(chatOpenings()).toBe(0);
     });
 
     test('Review with AI is shown only for user assessments and queues a review', async () => {
@@ -228,26 +204,29 @@ describe('VulnModal AI actions', () => {
         expect(reviewButtons[0].previousElementSibling).toHaveTextContent('User');
 
         await user.click(reviewButtons[0]);
-        const message = screen.getByTestId('queued-message').textContent ?? '';
+        expect(chatOpenings()).toBe(1);
+        const message = queuedMessage();
         expect(message).toContain(`Review the user assessment assessment-1 for ${vulnerability.id}`);
         expect(message).toContain('write_assessment_review');
         expect(screen.getByTitle('Exit editing mode')).toBeInTheDocument();
 
-        // While queued the button shows its position and identical requests are ignored.
+        // While queued the button shows its position and opens the queued request instead of queueing it again.
         const queuedButton = screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (queued, position 1)' });
-        expect(queuedButton).toBeDisabled();
+        expect(queuedButton).toBeEnabled();
         expect(queuedButton).toHaveTextContent('Queued · #1');
         await user.click(queuedButton);
         expect(lastQueue()).toHaveLength(1);
+        expect(chatOpenings()).toBe(2);
+        expect(store.getAgentChatRequest().taskId).toBe(lastQueue()[0].id);
 
-        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
+        mark('running');
         const runningButton = screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (running)' });
-        expect(runningButton).toBeDisabled();
         expect(runningButton).toHaveTextContent('Running…');
+        await user.click(runningButton);
         expect(lastQueue()).toHaveLength(1);
 
         // Once finished the same review can be requested again.
-        await user.click(screen.getByRole('button', { name: 'Finish running' }));
+        finishRunning();
         const idleButton = screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' });
         expect(idleButton).toBeEnabled();
         await user.click(idleButton);
@@ -260,22 +239,22 @@ describe('VulnModal AI actions', () => {
         await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
         await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
         expect(lastQueue()).toHaveLength(1);
-        expect(screen.getByTestId('assess-state')).toHaveTextContent('{"status":"queued","position":1}');
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('queued #1');
 
         await user.click(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' }));
         expect(lastQueue().map(item => item.kind)).toEqual(['assess', 'review']);
-        expect(lastQueue()[0]).toMatchObject({ title: '2 targets', detail: expect.stringContaining('pkg@1.0.0') });
+        expect(lastQueue()[0]).toMatchObject({ title: `${vulnerability.id} · 2 targets`, detail: expect.stringContaining('pkg@1.0.0') });
         expect(lastQueue()[1]).toMatchObject({ title: 'assessment assessme', detail: `${vulnerability.id} · pkg@1.0.0` });
 
-        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
-        expect(screen.getByTestId('assess-state')).toHaveTextContent('{"status":"running"}');
-        expect(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (queued, position 1)' })).toBeDisabled();
+        mark('running');
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('running');
+        expect(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI (queued, position 1)' })).toHaveTextContent('Queued · #1');
 
-        await user.click(screen.getByRole('button', { name: 'Clear queue' }));
+        act(() => store.clearAgentQueue());
         expect(lastQueue()).toHaveLength(1);
         expect(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' })).toBeEnabled();
-        await user.click(screen.getByRole('button', { name: 'Finish running' }));
-        expect(screen.getByTestId('assess-state')).toHaveTextContent('null');
+        finishRunning();
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('idle');
     });
 
     test('keeps a failed action queued and retryable without losing subsequent actions', async () => {
@@ -284,67 +263,34 @@ describe('VulnModal AI actions', () => {
         await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
         await user.click(screen.getByRole('button', { name: 'Review assessment assessment-1 with AI' }));
         const firstId = lastQueue()[0].id;
-        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
-        await user.click(screen.getByRole('button', { name: 'Fail running' }));
+        mark('running');
+        mark('failed');
         expect(lastQueue()).toHaveLength(2);
         expect(lastQueue()[0].id).toBe(firstId);
-        expect(screen.getByTestId('assess-state')).toHaveTextContent('{"status":"queued","position":1}');
-        await user.click(screen.getByRole('button', { name: 'Accept queued' }));
-        await user.click(screen.getByRole('button', { name: 'Finish running' }));
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('failed');
+        mark('running');
+        finishRunning();
         expect(lastQueue().map(item => item.kind)).toEqual(['review']);
     });
 
-    const deleteCalls = () => fetchMock.mock.calls.filter(([req, init]) =>
-        String(req instanceof Request ? req.url : req).endsWith('/api/agent/conversation') && init?.method === 'DELETE');
-
-    test('closing and reopening the chat keeps the same session', async () => {
+    test('navigating to another CVE keeps queued work for the previous one and queues the new CVE separately', async () => {
         const user = userEvent.setup();
-        renderModal();
-        const aiButton = screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` });
-
-        await user.click(aiButton);
-        const threadId = chatProps[chatProps.length - 1].threadId;
-        expect(threadId).toBeTruthy();
-        await user.click(screen.getByRole('button', { name: 'Close chat' }));
-        expect(chatProps[chatProps.length - 1].active).toBe(false);
-        await user.click(aiButton);
-
-        expect(screen.getByTestId('agent-chat')).toBeVisible();
-        expect(chatProps[chatProps.length - 1]).toMatchObject({ threadId, active: true });
-        expect(chatMounts).toBe(1);
-        expect(deleteCalls()).toHaveLength(0);
-    });
-
-    test('navigating to another CVE isolates the new chat without deleting the old session', async () => {
-        const user = userEvent.setup();
-        const { rerender } = renderModal();
-        await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
-        const threadId = chatProps[chatProps.length - 1].threadId;
+        const { rerender } = renderModal({ isEditing: true });
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
 
         const other = { ...vulnerability, id: 'CVE-2010-9999' } as Vulnerability;
-        rerender(<VulnModal vuln={other} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        rerender(<VulnModal vuln={other} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('idle');
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
 
-        expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
-        expect(deleteCalls()).toHaveLength(0);
-
-        await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${other.id}` }));
-        expect(chatProps[chatProps.length - 1].threadId).not.toBe(threadId);
-    });
-
-    test('closing the modal does not delete a session needed by the shared queue', async () => {
-        const user = userEvent.setup();
-        const { unmount } = renderModal();
-        await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
-        await user.click(screen.getByRole('button', { name: 'Close chat' }));
-        expect(deleteCalls()).toHaveLength(0);
-
-        unmount();
-        expect(deleteCalls()).toHaveLength(0);
+        expect(getAgentQueue().map(item => item.source)).toEqual([`Vulnerability ${vulnerability.id}`, `Vulnerability ${other.id}`]);
+        expect(screen.getByTestId('assess-state')).toHaveTextContent('queued #2');
+        expect(fetchMock.mock.calls.some(([req]) => String(req instanceof Request ? req.url : req).includes('/api/agent/'))).toBe(false);
     });
 
     test('read-only modal hides all AI actions', () => {
         renderModal({ readOnly: true });
-        expect(screen.queryByRole('button', { name: /toggle ai chat/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /open agent chat/i })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /with ai/i })).not.toBeInTheDocument();
     });
 });

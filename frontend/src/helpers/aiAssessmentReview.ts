@@ -1,4 +1,4 @@
-import type { QueuedAgentMessage } from '../components/AgentChat';
+import type { QueuedAgentMessage } from '../types/agent';
 import Assessments from '../handlers/assessments';
 import AssessmentReviews from '../handlers/assessmentReviews';
 import type { Variant } from '../handlers/variant';

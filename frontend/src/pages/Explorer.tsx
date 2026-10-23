@@ -27,6 +27,7 @@ import AIContext from './AIContext';
 import type { AiContextScope } from './AIContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import AgentChat from '../components/AgentChat';
+import { getAgentChatRequest, subscribeAgentQueue } from '../handlers/agentQueue';
 import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
@@ -96,7 +97,6 @@ function Explorer() {
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const [agentOpen, setAgentOpen] = useState(false);
     const [agentMounted, setAgentMounted] = useState(false);
-    const [reviewAgentPanelContainer, setReviewAgentPanelContainer] = useState<HTMLDivElement | null>(null);
     const [compactAgent, setCompactAgent] = useState(false);
     const agentPanel = useRef<HTMLElement>(null);
     const mainContent = useRef<HTMLElement>(null);
@@ -120,6 +120,12 @@ function Explorer() {
     const loadGeneration = useRef(0);
     const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
+    const agentChatRequest = useSyncExternalStore(subscribeAgentQueue, getAgentChatRequest).nonce;
+
+    // AI actions anywhere in the app open the single agent chat through the queue store.
+    useEffect(() => {
+        if (agentChatRequest) setAgentOpen(true);
+    }, [agentChatRequest]);
     const queueItems = groupQueueItems(operationEntries);
     const trackedScanCount = queueItems.length;
     const activeScanCount = queueItems.filter(isQueueItemActive).length;
@@ -492,7 +498,8 @@ function Explorer() {
     const tab: RouteKey = tabForPath(location.pathname);
     const activeAgentView = tab === 'vulnerabilities' ? vulnerabilityAgentView : tab === 'review' ? reviewAgentView : tab === 'packages' ? packagesAgentView : tab === 'metrics' ? metricsAgentView : tab === 'scans' ? scansAgentView : tab === 'exports' ? exportsAgentView : tab === 'settings' ? settingsAgentView : tab === 'ai' ? aiAgentView : undefined;
     const openAgentVulnerabilityId = activeAgentView?.openVulnerabilityId;
-    const agentOverlay = compactAgent && !openAgentVulnerabilityId;
+    const agentOverlay = compactAgent;
+    const agentDocked = agentOpen && !compactAgent && Boolean(openAgentVulnerabilityId);
 
     useEffect(() => {
         const update = () => setCompactAgent(window.innerWidth < 1024);
@@ -508,6 +515,12 @@ function Explorer() {
         agentPanel.current?.focus();
         return () => { window.requestAnimationFrame(() => { if (previousFocus?.isConnected) previousFocus.focus(); }); };
     }, [agentOpen]);
+
+    // The chat floats beside an open vulnerability; modal overlays shrink to keep it visible.
+    useEffect(() => {
+        document.body.classList.toggle('agent-docked', agentDocked);
+        return () => document.body.classList.remove('agent-docked');
+    }, [agentDocked]);
 
     useEffect(() => {
         const background = [mainContent.current, navigation.current];
@@ -673,7 +686,6 @@ function Explorer() {
                         appendCVSS={appendCVSS}
                         projectId={currentProjectId}
                         onAgentContextChange={setMetricsAgentView}
-                        onOpenAgent={() => setAgentOpen(true)}
                     />
                 } />
                 <Route path={ROUTES.packages} element={
@@ -717,7 +729,6 @@ function Explorer() {
                         missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
                         onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
                         onAgentContextChange={setVulnerabilityAgentView}
-                        onOpenAgent={() => setAgentOpen(true)}
                     />
                 } />
                 <Route path={ROUTES.scans} element={
@@ -730,7 +741,7 @@ function Explorer() {
                     />
                 } />
                 <Route path={ROUTES.review} element={
-                    <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} onOpenAgent={() => setAgentOpen(true)} agentPanelContainer={reviewAgentPanelContainer} />
+                    <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} />
                 } />
                 <Route path={ROUTES.exports} element={
                     <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} onAgentContextChange={setExportsAgentView} />
@@ -757,7 +768,6 @@ function Explorer() {
                 </Routes>
             </div>
             </main>
-            <div ref={setReviewAgentPanelContainer} className="contents" />
             {(agentOpen || agentMounted) && <aside ref={agentPanel} id="agent-panel" tabIndex={-1} role={agentOverlay ? 'dialog' : 'complementary'} aria-modal={agentOverlay && agentOpen ? true : undefined} aria-label="Agent chat" hidden={!agentOpen} onKeyDown={event => {
                 if (event.target instanceof Element && event.target.closest('dialog[open]')) return;
                 if (event.key === 'Escape') {
@@ -778,7 +788,7 @@ function Explorer() {
                         first?.focus();
                     }
                 }
-            }} className={`fixed inset-0 ${openAgentVulnerabilityId ? 'z-[90]' : 'z-[110]'} h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
+            }} className={`fixed inset-0 z-[110] h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
                 <AgentChat active={agentOpen} context={agentContext} onClose={() => setAgentOpen(false)} />
             </aside>}
             </div>
