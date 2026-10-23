@@ -89,5 +89,11 @@ class VariantContextController:
         )
 
     @staticmethod
+    def save_editor(variant_id: uuid.UUID | str, payload: dict) -> VariantContext:
+        vid = ensure_uuid(variant_id)
+        VariantContextController._get_variant(vid)
+        return VariantContext.save_editor(vid, payload)
+
+    @staticmethod
     def serialize(vc: VariantContext) -> dict:
         return vc.to_dict()

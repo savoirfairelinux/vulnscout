@@ -729,3 +729,341 @@ class TestCodebaseSource:
         assert context.updated_at == updated_at
         assert context.files == []
         assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+# ---------------------------------------------------------------------------
+# Editor-shape saves, legacy writes on STRIDE variants, agent view
+# ---------------------------------------------------------------------------
+
+def _stride_model(**overrides):
+    model = {
+        "components": [
+            {"id": "C1", "name": "OTA updater", "description": "fetches images", "trust_zone": "device"},
+            {"id": "C2", "name": "Update server", "description": "", "trust_zone": "internet"},
+        ],
+        "interactions": [
+            {"id": "I1", "name": "Download", "source_id": "C1", "destination_id": "C2",
+             "interface": "HTTPS", "data": "firmware", "trust_boundary": "device/internet"},
+        ],
+        "threats": [
+            {"id": "T1", "category": "tampering", "description": "Image swapped", "target_ids": ["C1", "I1"]},
+        ],
+        "notes": "",
+        "risks": [
+            {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
+        ],
+        "risk_notes": "",
+    }
+    model.update(overrides)
+    return model
+
+
+def _editor_payload(**overrides):
+    payload = {
+        "variant_description": "Gateway",
+        "environment": "Linux",
+        "other_info": None,
+        "editor_mode": "stride",
+        "codebase_source": "paths",
+        "codebase_path": "/src/a;/src/b",
+        "free": {"threat_model": None, "risks": None},
+        "system": {"scope": "Firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
+        "stride": _stride_model(),
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestVariantEditorSave:
+
+    def test_editor_save_round_trip(self, app, variant):
+        from src.models.variant_context import VariantContext
+        payload = _editor_payload()
+        vc = VariantContext.save_editor(variant.id, payload)
+        editor = VariantContext.get_by_variant(variant.id).to_dict()["editor"]
+        assert vc.updated_at is not None
+        assert editor["editor_mode"] == "stride"
+        assert editor["codebase_source"] == "paths"
+        assert editor["codebase_path"] == "/src/a;/src/b"
+        assert editor["free"] == {"threat_model": None, "risks": None}
+        assert editor["system"] == payload["system"]
+        assert editor["stride"] == payload["stride"]
+        assert editor["files"] == []
+        assert editor["updated_at"] == vc.to_dict()["updated_at"]
+
+    def test_editor_save_blank_text_stored_as_none(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.save_editor(variant.id, _editor_payload(
+            variant_description="", environment="  ", codebase_path="",
+            system={"scope": "Firmware", "actors": "", "entry_points": None, "trust_boundaries": None},
+        ))
+        assert vc.variant_description is None
+        assert vc.environment is None
+        assert vc.codebase_path is None
+        assert vc.system_actors is None
+
+    def test_editor_save_requires_threat_model(self, app, variant):
+        from src.helpers.stride_model import StrideValidationError
+        from src.models.variant_context import VariantContext
+        with pytest.raises(StrideValidationError) as exc:
+            VariantContext.save_editor(variant.id, _editor_payload(
+                editor_mode="free", free={"threat_model": "  ", "risks": "r"},
+            ))
+        assert exc.value.fields["threat_model"] == "A threat model is required."
+        assert VariantContext.get_by_variant(variant.id) is None
+
+    def test_stride_save_requires_rendered_threat_model(self, app, variant):
+        from src.helpers.stride_model import StrideValidationError, empty_stride_model
+        from src.models.variant_context import VariantContext
+        with pytest.raises(StrideValidationError) as exc:
+            VariantContext.save_editor(variant.id, _editor_payload(
+                system={}, stride=empty_stride_model(), free={"threat_model": "ignored", "risks": None},
+            ))
+        assert exc.value.fields["threat_model"] == "A threat model is required."
+
+    @pytest.mark.parametrize("field,value", [("editor_mode", "visual"), ("codebase_source", "git")])
+    def test_editor_save_rejects_unknown_choice(self, app, variant, field, value):
+        from src.helpers.stride_model import StrideValidationError
+        from src.models.variant_context import VariantContext
+        with pytest.raises(StrideValidationError) as exc:
+            VariantContext.save_editor(variant.id, _editor_payload(**{field: value}))
+        assert field in exc.value.fields
+
+    def test_editor_save_rejects_bad_model(self, app, variant):
+        from src.helpers.stride_model import StrideValidationError
+        from src.models.variant_context import VariantContext
+        bad = _stride_model(threats=[{"id": "T1", "category": "tampering", "target_ids": ["C9"]}], risks=[])
+        with pytest.raises(StrideValidationError) as exc:
+            VariantContext.save_editor(variant.id, _editor_payload(stride=bad))
+        assert "threats[0].target_ids" in exc.value.fields
+
+    def test_identical_editor_save_keeps_updated_at(self, app, variant):
+        from src.helpers.stride_model import empty_stride_model
+        from src.models.variant_context import VariantContext
+        legacy = VariantContext.upsert(variant.id, threat_model="Old text", risks="Old risks", codebase_path="/src")
+        first = legacy.updated_at
+        payload = _editor_payload(
+            variant_description=None, environment=None, editor_mode="free", codebase_source="paths",
+            codebase_path="/src", free={"threat_model": "Old text", "risks": "Old risks"},
+            system={"scope": None, "actors": None, "entry_points": None, "trust_boundaries": None},
+            stride=empty_stride_model(),
+        )
+        vc = VariantContext.save_editor(variant.id, payload)
+        assert vc.updated_at == first
+        vc = VariantContext.save_editor(variant.id, payload)
+        assert vc.updated_at == first
+
+    def test_editor_save_bumps_on_hidden_change(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.save_editor(variant.id, _editor_payload(free={"threat_model": "a", "risks": None}))
+        first = vc.updated_at
+        vc = VariantContext.save_editor(variant.id, _editor_payload(free={"threat_model": "b", "risks": None}))
+        assert vc.updated_at > first
+        assert vc.threat_model == "b"
+
+    def test_controller_save_editor_missing_variant(self, app):
+        from src.controllers.context import VariantContextController
+        with pytest.raises(ValueError):
+            VariantContextController.save_editor(uuid.uuid4(), _editor_payload())
+
+
+class TestLegacyWriteOnStride:
+
+    def test_legacy_write_on_stride_with_text_is_conflict(self, app, variant):
+        from src.models.variant_context import StrideWriteConflict, VariantContext
+        vc = VariantContext.save_editor(variant.id, _editor_payload())
+        before = vc.to_dict()
+        with pytest.raises(StrideWriteConflict) as exc:
+            VariantContext.upsert(variant.id, environment="changed", threat_model="text")
+        assert str(exc.value) == (
+            "This variant uses the STRIDE editor; edit its threat model and risks in the AI Context page."
+        )
+        with pytest.raises(StrideWriteConflict):
+            VariantContext.upsert(variant.id, risks="text")
+        assert VariantContext.get_by_variant(variant.id).to_dict() == before
+
+    def test_legacy_write_on_stride_with_null_text_applies_other_fields(self, app, variant):
+        from src.models.variant_context import VariantContext
+        VariantContext.save_editor(variant.id, _editor_payload(free={"threat_model": "kept", "risks": "kept r"}))
+        vc = VariantContext.upsert(variant.id, environment="Yocto", codebase_path="/new")
+        assert vc.environment == "Yocto"
+        assert vc.codebase_path == "/new"
+        assert vc.variant_description is None
+        assert vc.threat_model == "kept"
+        assert vc.risks == "kept r"
+        assert vc.editor_mode == "stride"
+        assert vc.stride_model == _stride_model()
+
+    def test_legacy_write_on_free_keeps_hidden_stride(self, app, variant):
+        from src.models.variant_context import VariantContext
+        system = {"scope": "Firmware", "actors": "Admins", "entry_points": "UART", "trust_boundaries": "LAN"}
+        VariantContext.save_editor(variant.id, _editor_payload(
+            editor_mode="free", codebase_source="references", system=system,
+            free={"threat_model": "free text", "risks": None},
+        ))
+        vc = VariantContext.upsert(variant.id, threat_model="new free text")
+        editor = vc.to_dict()["editor"]
+        assert vc.threat_model == "new free text"
+        assert editor["editor_mode"] == "free"
+        assert editor["codebase_source"] == "references"
+        assert editor["system"] == system
+        assert editor["stride"] == _stride_model()
+
+    def test_legacy_write_echoing_agent_text_is_not_conflict(self, client, project, variant):
+        from src.models.variant_context import VariantContext
+        client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
+        read = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        echoed = {key: read[key] for key in (
+            "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+        )}
+        resp = client.put(f"/api/variants/{variant.id}/context", json={**echoed, "environment": "changed"})
+        assert resp.status_code == 200
+        vc = VariantContext.get_by_variant(variant.id)
+        assert vc.environment == "changed"
+        assert vc.editor_mode == "stride"
+        assert vc.stride_model == _stride_model()
+        assert vc.threat_model is None
+
+    def test_legacy_write_with_different_text_after_read_is_conflict(self, client, project, variant):
+        from src.models.variant_context import StrideWriteConflict, VariantContext
+        VariantContext.save_editor(variant.id, _editor_payload())
+        vc = VariantContext.get_by_variant(variant.id)
+        before = vc.to_dict()
+        with pytest.raises(StrideWriteConflict):
+            VariantContext.upsert(variant.id, threat_model=vc.agent_threat_model() + " edited",
+                                  risks=vc.agent_risks(), environment="changed")
+        assert VariantContext.get_by_variant(variant.id).to_dict() == before
+
+    def test_legacy_write_keeps_hidden_codebase_path_on_references(self, app, variant):
+        from src.models.variant_context import VariantContext
+        VariantContext.save_editor(variant.id, _editor_payload(
+            editor_mode="free", codebase_source="references", codebase_path="src;lib",
+            free={"threat_model": "t", "risks": None},
+        ))
+        vc = VariantContext.upsert(variant.id, codebase_path=None, environment="x", threat_model="t")
+        assert vc.to_dict()["editor"]["codebase_path"] == "src;lib"
+        assert vc.environment == "x"
+        vc = VariantContext.upsert(variant.id, codebase_path="new", threat_model="t")
+        assert vc.to_dict()["editor"]["codebase_path"] == "new"
+
+    def test_legacy_create_defaults_to_free(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, threat_model="x")
+        assert vc.editor_mode == "free"
+        assert vc.codebase_source == "paths"
+        assert vc.stride_model is None
+
+
+class TestAgentView:
+
+    def _with_file(self, variant):
+        from src.models.variant_context import ContextFile, VariantContext
+        vc = VariantContext.get_by_variant(variant.id)
+        ContextFile.create(vc.id, "src.zip", "/tmp/none/src.zip")
+        _db.session.refresh(vc)
+        return vc
+
+    def test_agent_view_paths_vs_references(self, app, variant):
+        from src.models.variant_context import VariantContext
+        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="references"))
+        vc = self._with_file(variant)
+        d = vc.to_dict()
+        assert d["codebase_path"] is None
+        assert [f["original_name"] for f in d["files"]] == ["src.zip"]
+        assert d["editor"]["codebase_path"] == "/src/a;/src/b"
+        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="paths"))
+        d = VariantContext.get_by_variant(variant.id).to_dict()
+        assert d["codebase_path"] == "/src/a;/src/b"
+        assert d["files"] == []
+        assert [f["original_name"] for f in d["editor"]["files"]] == ["src.zip"]
+
+    def test_agent_view_stride_renders(self, app, variant):
+        from src.helpers.stride_model import render_risks, render_threat_model
+        from src.models.variant_context import VariantContext
+        payload = _editor_payload(free={"threat_model": "hidden", "risks": "hidden"})
+        vc = VariantContext.save_editor(variant.id, payload)
+        d = vc.to_dict()
+        assert d["threat_model"] == render_threat_model(payload["system"], payload["stride"])
+        assert "Threats:\nTampering\n- T1" in d["threat_model"]
+        assert d["risks"] == render_risks(payload["stride"])
+        assert d["editor"]["free"] == {"threat_model": "hidden", "risks": "hidden"}
+
+    def test_agent_view_free_uses_stored_text(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.save_editor(variant.id, _editor_payload(
+            editor_mode="free", free={"threat_model": "free tm", "risks": "free r"},
+        ))
+        assert vc.agent_threat_model() == "free tm"
+        assert vc.agent_risks() == "free r"
+
+    def test_put_route_400_carries_fields(self, client, variant):
+        bad = _stride_model(threats=[{"id": "T1", "category": "tampering", "target_ids": ["C9"]}], risks=[])
+        resp = client.put(f"/api/variants/{variant.id}/context", json=_editor_payload(stride=bad))
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["error"]
+        assert "threats[0].target_ids" in body["fields"]
+
+    def test_put_route_editor_save(self, client, variant):
+        resp = client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["editor"]["editor_mode"] == "stride"
+        assert "Tampering" in body["threat_model"]
+
+    def test_put_route_editor_save_404(self, client):
+        resp = client.put(f"/api/variants/{uuid.uuid4()}/context", json=_editor_payload())
+        assert resp.status_code == 404
+
+    def test_put_route_409(self, client, variant):
+        client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
+        resp = client.put(f"/api/variants/{variant.id}/context", json={"threat_model": "legacy"})
+        assert resp.status_code == 409
+        assert resp.get_json() == {
+            "error": "This variant uses the STRIDE editor; edit its threat model and risks in the AI Context page."
+        }
+
+    def test_first_upload_creates_references_row(self, client, project, variant, tmp_path):
+        from io import BytesIO
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"code"), "main.c")},
+            )
+        assert resp.status_code == 201
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert [f["id"] for f in data["files"]] == [resp.get_json()["id"]]
+        assert data["codebase_path"] is None
+        assert data["editor"]["codebase_source"] == "references"
+        assert data["editor"]["editor_mode"] == "free"
+
+    def test_upload_keeps_existing_row_source(self, client, project, variant, tmp_path):
+        from io import BytesIO
+        client.put(f"/api/variants/{variant.id}/context", json={"codebase_path": "/src"})
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"code"), "main.c")},
+            )
+        assert resp.status_code == 201
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert data["editor"]["codebase_source"] == "paths"
+        assert data["codebase_path"] == "/src"
+        assert data["files"] == []
+
+    def test_get_context_default_editor_block(self, client, project, variant):
+        from src.models.variant_context import default_editor_block
+        resp = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}")
+        data = resp.get_json()
+        assert data["editor"] == default_editor_block()
+        assert data["editor"]["editor_mode"] == "stride"
+        assert data["threat_model"] is None
+        assert data["codebase_path"] is None
+
+    def test_get_context_returns_agent_view_and_editor(self, client, project, variant):
+        client.put(f"/api/variants/{variant.id}/context", json=_editor_payload(variant_description="Desc"))
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert data["variant_description"] == "Desc"
+        assert "Tampering" in data["threat_model"]
+        assert "Likelihood: High" in data["risks"]
+        assert data["editor"]["stride"] == _stride_model()
+        assert {"project_id", "description", "variant_id", "variant_description", "codebase_path",
+                "environment", "threat_model", "risks", "other_info", "files"} <= set(data)
