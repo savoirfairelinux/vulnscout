@@ -538,3 +538,76 @@ class TestExportImportV2:
         }]).data)
         assert result["failed"][0]["reason"] .endswith("A threat model is required.")
         assert result["imported"] == []
+
+
+# ===========================================================================
+# End-to-end STRIDE flow
+# ===========================================================================
+
+def _stride_editor_payload():
+    return {
+        "variant_description": "Flow gateway",
+        "environment": "Linux",
+        "other_info": None,
+        "editor_mode": "stride",
+        "codebase_source": "references",
+        "codebase_path": "/src/kept",
+        "free": {"threat_model": None, "risks": None},
+        "system": {"scope": "Firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
+        "stride": _STRIDE_MODEL,
+    }
+
+
+def _flow_editor(client, project_id, variant_id):
+    response = client.get(f"/api/context?project_id={project_id}&variant_id={variant_id}")
+    assert response.status_code == 200
+    return json.loads(response.data)
+
+
+def test_stride_flow_end_to_end(app_with_data, tmp_path, monkeypatch):
+    from io import BytesIO
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.variant_context import VariantContext
+
+    monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+    app, _ = app_with_data
+    client = app.test_client()
+    with app.app_context():
+        project = Project.create("FlowProject")
+        variant = Variant.create("FlowVariant", project.id)
+        project_id, variant_id = str(project.id), str(variant.id)
+
+    assert client.put(f"/api/projects/{project_id}/context",
+                      json={"description": "Flow project"}).status_code == 200
+    assert client.put(f"/api/variants/{variant_id}/context", json=_stride_editor_payload()).status_code == 200
+    upload = client.post(f"/api/variants/{variant_id}/context/files",
+                         data={"file": (BytesIO(b"int main(void) { return 0; }"), "main.c")})
+    assert upload.status_code == 201
+
+    merged = _flow_editor(client, project_id, variant_id)
+    assert "Threats:\nTampering\n- T1" in merged["threat_model"]
+    assert "Likelihood: High" in merged["risks"]
+    assert merged["codebase_path"] is None
+    assert [f["id"] for f in merged["files"]] == [json.loads(upload.data)["id"]]
+
+    legacy = client.put(f"/api/variants/{variant_id}/context", json={"threat_model": "legacy"})
+    assert legacy.status_code == 409
+
+    exported = json.loads(client.get("/api/context/export").data)
+    with app.app_context():
+        for vc in db.session.execute(db.select(VariantContext)).scalars().all():
+            db.session.delete(vc)
+        db.session.commit()
+    result = json.loads(_post_json(client, exported).data)
+    assert result["failed"] == []
+    assert {"project_name": "FlowProject", "variant_name": "FlowVariant"} in result["imported"]
+
+    def without_files(editor):
+        return {k: v for k, v in editor.items() if k not in ("files", "updated_at")}
+
+    after = _flow_editor(client, project_id, variant_id)
+    assert after["files"] == []
+    assert without_files(after["editor"]) == without_files(merged["editor"])
+    assert after["editor"]["stride"] == _STRIDE_MODEL
