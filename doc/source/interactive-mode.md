@@ -427,10 +427,28 @@ VulnScout lets you export scan data as JSON files for archiving, reporting, or s
 
 **Per-scan export:** each scan entry has a download button that opens a small menu with two choices:
 
-- **Export Diff** — downloads a JSON file containing only what changed compared to the previous scan (added, removed, upgraded, and unchanged packages, findings, and vulnerabilities). For tool scans the export also includes newly-detected findings and assessments.
+- **Export Diff** — downloads a JSON file containing changes compared to the previous scan (added, removed, upgraded, and unchanged packages, findings, and vulnerabilities). SBOM exports also carry the complete current package set, including upgraded versions, for reimport. For tool scans the export also includes newly-detected findings and assessments.
 - **Export Scan Result** — downloads a JSON file with the complete global result at that point in time, including full package, finding, and vulnerability lists with source attribution.
 
 Both files include scan metadata (timestamp, scan type, project, and variant) and strip internal identifiers so the output is portable.
+
+Package entries also carry `sbom_evidence`: document-scoped CPEs, PURLs, source URLs,
+source revisions, and component types. Importing these exports preserves the inputs
+needed to run package advisory scans again, including for Zephyr SBOMs. Evidence
+comes only from the SBOM contributing to the exported scan, not from other variants
+or newer imports. Separate association records preserve component classifications;
+`null` identifiers remain unknown, while empty arrays mean identifiers were recorded
+but none were present. Older exports without this evidence can still be imported
+for their scan history, but require reimporting the original SBOM before rescanning.
+Tool-scan imports remain findings-only and do not replace the active SBOM.
+Imports and exports accept at most 1,000 evidence records per package in each
+scan and 10,000 across the entire archive, counting duplicates before
+deduplication. Exceeding either limit rejects the whole request; imports write
+no scans and exports produce no download. Bulk archives also allow at most
+200 scans. For a history exceeding the evidence budget, narrow the project or
+variant scope, or download individual scans instead. Each imported archive is
+atomic. Multiple imported association records remain one logical SBOM source
+in dependency graphs and scan-result source labels.
 
 **Export All:** an **Export** button in the toolbar lets you download the entire visible scan history at once. A dropdown offers two modes — **Export All Diffs** and **Export All Scan Results** — which produce a single JSON array grouping all scans by variant. The export respects the current project/variant scope.
 
