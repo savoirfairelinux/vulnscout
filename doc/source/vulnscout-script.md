@@ -562,6 +562,18 @@ hold exactly one entry. `-v` without `-p` is rejected.
 
 Persistent configuration is stored in `.vulnscout/cache/config.env` and is automatically loaded on each run.
 
+Rootless Podman maps the host owner to container root with
+`--userns=keep-id:uid=0,gid=0 --user=0:0`. The entrypoint uses this same identity
+for ownership changes when the launcher sets `VULNSCOUT_ROOTLESS_PODMAN=true`.
+This lets startup read the private configuration and keeps mounted paths
+host-owned. Both launcher and entrypoint must include this fix: rebuild your
+container image, or use `--dev` to mount the updated local entrypoint.
+If an older container left the cache or `config.env` owned by a subordinate host
+UID, the launcher restores ownership through `podman unshare` before loading
+the configuration, including when the cache is private (mode `700`). The
+configuration stays private (mode `600`); do not make it world-readable to
+work around a permission error.
+
 ```bash
 # Set a config value
 ./vulnscout config set <key> <value>

@@ -7,6 +7,33 @@ import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 
+let mockRealAgentChat = false;
+
+jest.mock('../../src/components/AgentChat', () => ({
+    __esModule: true,
+    default: (props: any) => {
+        if (mockRealAgentChat) {
+            const RealAgentChat = jest.requireActual('../../src/components/AgentChat').default;
+            return <RealAgentChat {...props} />;
+        }
+        const ReactMock = require('react');
+        const [sentId, setSentId] = ReactMock.useState('');
+        return <div data-testid="review-agent-chat" data-context={JSON.stringify(props.context)}
+            data-thread={props.threadId} data-queue={JSON.stringify(props.queue)}>
+            <button onClick={props.onClose}>hide-review-chat</button>
+            <button onClick={() => {
+                const id = props.queue[0].id;
+                setSentId(id);
+                props.onQueuedMessageSent(id);
+            }}>send-review-head</button>
+            <button onClick={() => props.onQueuedMessageDone(sentId, true)}>finish-review</button>
+            <button onClick={() => props.onQueuedMessageDone(sentId, false)}>fail-review</button>
+            <button onClick={() => props.onQueueRemove(props.queue[0].id)}>remove-review-head</button>
+            <button onClick={props.onQueueClear}>clear-review-queue</button>
+        </div>;
+    },
+}));
+
 jest.mock('../../src/components/TableGeneric', () => {
     const ReactMock = require('react');
     return {
@@ -120,6 +147,8 @@ jest.mock('../../src/helpers/exportJson', () => ({
 import Review from '../../src/pages/Review';
 import { downloadJson } from '../../src/helpers/exportJson';
 import { STATUS_VEX_TO_GRAPH } from '../../src/handlers/assessments';
+import { buildAssessmentReviewAction } from '../../src/helpers/aiAssessmentReview';
+import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT } from '../../src/types/agent';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
 
@@ -292,6 +321,7 @@ type NetworkOpts = {
     vulnOk?: boolean;
     /** Keyed by assessment id — served from the AI-review-verdict endpoint. */
     reviews?: Record<string, unknown>;
+    assessmentDetails?: Record<string, unknown>;
 };
 
 /**
@@ -315,6 +345,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         vulnDetail = { id: 'CVE-2020-1111', version: '4.0', base_score: 5 },
         vulnOk = true,
         reviews = {},
+        assessmentDetails = {},
     } = opts;
 
     fetchMock.resetMocks();
@@ -343,6 +374,13 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
             if (url.includes('/api/assessment-reviews')) return JSON.stringify(reviews);
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
+            const assessmentId = /\/api\/assessments\/([^/]+)$/.exec(url)?.[1];
+            if (assessmentId) {
+                if (assessmentId in assessmentDetails) return JSON.stringify(assessmentDetails[assessmentId]);
+                const assessment = toAssessments([...reviewList, ...aiReviewList], {})
+                    .find(item => item.id === decodeURIComponent(assessmentId));
+                return JSON.stringify(assessment ?? {});
+            }
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
             if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) {
                 if (variantsGate) await variantsGate;
@@ -397,6 +435,344 @@ const fileInput = (): HTMLInputElement =>
 
 beforeEach(() => {
     mockedDownloadJson.mockClear();
+    mockRealAgentChat = false;
+});
+
+describe('Review — bulk AI reviews', () => {
+    beforeEach(() => {
+        let nextId = 0;
+        Object.defineProperty(global.crypto, 'randomUUID', {
+            configurable: true,
+            value: () => `review-uuid-${++nextId}`,
+        });
+    });
+
+    const queue = (): Array<{ id: string; key: string; text: string; kind: string }> =>
+        JSON.parse(screen.getByTestId('review-agent-chat').getAttribute('data-queue') ?? '[]');
+
+    test.each([
+        { projectId: 'proj1' },
+        { variantId: 'v1' },
+        {},
+    ])('resolves complete target scope instead of copying the displayed scope %j', async scope => {
+        const multi = makeMultiTargetAssessment('multi', 'CVE-MULTI', [
+            { variantId: 'v1', pkg: 'pkgA@1' },
+            { variantId: 'v2', pkg: 'pkgB@2' },
+        ]);
+        mockNetwork([
+            multi,
+            { ...makeAssessment('scan', 'v1'), origin: 'scan' },
+            { ...makeAssessment('pending', 'v1'), origin: 'ai' },
+            { ...makeAssessment('unselected', 'v1'), vuln_id: 'CVE-UNSELECTED' },
+        ]);
+        render(<Review {...scope} />);
+        const user = userEvent.setup();
+        expect(screen.queryByRole('button', { name: /Review selected with AI/ })).not.toBeInTheDocument();
+        const checkboxes = await screen.findAllByTitle('Select');
+        await user.click(checkboxes[0]);
+        await user.click(checkboxes[1]);
+        await user.click(checkboxes[2]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+
+        const actions = queue();
+        expect(actions).toHaveLength(1);
+        expect(actions[0]).toMatchObject(buildAssessmentReviewAction(multi));
+        expect(actions[0].text).toContain('get_custom_assessment');
+        expect(actions[0].text).toContain('for each of its targets');
+        expect(actions[0].text).toContain('write_assessment_review. Do not modify the assessment itself.');
+        expect(actions[0].text.length).toBeLessThanOrEqual(AGENT_MESSAGE_MAX_LENGTH);
+        expect(JSON.parse(screen.getByTestId('review-agent-chat').getAttribute('data-context')!))
+            .toEqual({ page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'], view: { section: 'assessments' } });
+        expect(actions[0]).toMatchObject({
+            context: { page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'] },
+        });
+        expect(screen.getByText('Delete selected (3)')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'AI reviews queued' })).toBeDisabled();
+    });
+
+    test('select-all queues separate bounded requests; running or queued IDs are not added twice', async () => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        expect(queue().map(action => action.key)).toEqual(['review:a1', 'review:a2']);
+        expect(queue().every(action => action.kind === 'review' && action.text.length <= AGENT_MESSAGE_MAX_LENGTH)).toBe(true);
+        await user.click(screen.getByRole('button', { name: 'AI reviews queued' }));
+        expect(queue()).toHaveLength(2);
+        await user.click(screen.getByText('send-review-head'));
+        expect(queue().map(action => action.key)).toEqual(['review:a1', 'review:a2']);
+        expect(screen.getByRole('button', { name: 'AI review running…' })).toBeDisabled();
+        await user.click(screen.getByText('finish-review'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        expect(queue().map(action => action.key)).toEqual(['review:a2', 'review:a1']);
+    });
+
+    test('retrieves targets hidden by the table scope from the full assessment detail', async () => {
+        const full = makeMultiTargetAssessment('a1', 'CVE-MULTI', [
+            { variantId: 'v1', pkg: 'pkgA@1' }, { variantId: 'v2', pkg: 'pkgB@2' },
+        ]);
+        mockNetwork([makeAssessment('a1', 'v1')], {
+            assessmentDetails: { a1: full },
+        });
+        render(<Review variantId="v1" />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        await screen.findByTestId('review-agent-chat');
+        expect(queue()[0]).toMatchObject({
+            context: { page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'] },
+        });
+        expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/assessments/a1'))).toBe(true);
+    });
+
+    test.each([
+        {},
+        { ...makeAssessment('a2', 'v1'), origin: 'ai' },
+        { ...makeAssessment('a2', 'v1'), targets: [{ variant_id: 'missing', package: 'pkg@1' }] },
+        { ...makeAssessment('a2', 'v1'), targets: [{ variant_id: null, package: 'pkg@1' }] },
+        makeMultiTargetAssessment('a2', 'CVE-MULTI', [
+            { variantId: 'v1', pkg: 'pkgA@1' }, { variantId: 'v3', pkg: 'pkgB@2' },
+        ]),
+    ])('does not open a chat or enqueue a partial batch when full scope is invalid: %j', async detail => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1')], {
+            assessmentDetails: { a2: detail },
+            variants: [...VARIANTS, { id: 'v3', name: 'Other project', project_id: 'proj2' }],
+        });
+        render(<Review variantId="v1" />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        expect(await screen.findByText(/Unable to queue AI reviews/)).toBeInTheDocument();
+        expect(screen.queryByTestId('review-agent-chat')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Review selected with AI (2)' })).toBeEnabled();
+        expect(screen.getByText('Delete selected (2)')).toBeInTheDocument();
+    });
+
+    test('removing or clearing queued requests re-enables them without altering selection', async () => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1')]);
+        render(<Review />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        await user.click(screen.getByText('remove-review-head'));
+        expect(queue().map(action => action.key)).toEqual(['review:a2']);
+        expect(screen.getByRole('button', { name: 'Review selected with AI (1)' })).toBeEnabled();
+        await user.click(screen.getByText('clear-review-queue'));
+        expect(queue()).toEqual([]);
+        expect(screen.getByRole('button', { name: 'Review selected with AI (2)' })).toBeEnabled();
+        expect(screen.getByText('Delete selected (2)')).toBeInTheDocument();
+    });
+
+    test('hiding and reopening preserves the thread, queue and selection', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        const threadId = screen.getByTestId('review-agent-chat').getAttribute('data-thread');
+        await user.click(screen.getByText('hide-review-chat'));
+        expect(screen.getByTestId('review-agent-chat')).not.toBeVisible();
+        expect(screen.getByRole('button', { name: 'AI review chat' })).toHaveAttribute('aria-expanded', 'false');
+        await user.click(screen.getByRole('button', { name: 'AI review chat' }));
+        expect(screen.getByTestId('review-agent-chat')).toBeVisible();
+        expect(screen.getByTestId('review-agent-chat')).toHaveAttribute('data-thread', threadId);
+        expect(queue()).toHaveLength(1);
+        expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
+    });
+
+    test.each(['remove-review-head', 'clear-review-queue'])('%s releases a failed review for requeueing', async control => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1')]);
+        render(<Review />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        await user.click(screen.getByText('send-review-head'));
+        await user.click(screen.getByText('fail-review'));
+        expect(screen.getByRole('button', { name: 'AI review paused — retry in chat' })).toBeDisabled();
+        await user.click(screen.getByText(control));
+        const remaining = control === 'remove-review-head' ? ['review:a2'] : [];
+        expect(queue().map(action => action.key)).toEqual(remaining);
+        await user.click(screen.getByRole('button', { name: `Review selected with AI (${2 - remaining.length})` }));
+        expect(queue().map(action => action.key)).toEqual(control === 'remove-review-head'
+            ? ['review:a2', 'review:a1'] : ['review:a1', 'review:a2']);
+        expect(screen.getByText('Delete selected (2)')).toBeInTheDocument();
+    });
+
+    test('docks the chat in the right sidebar outside the review table content', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        const sidebar = document.createElement('div');
+        document.body.appendChild(sidebar);
+        const { container, unmount } = render(<Review agentPanelContainer={sidebar} />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        const panel = screen.getByRole('complementary', { name: 'Bulk assessment review chat' });
+        expect(sidebar).toContainElement(panel);
+        expect(container).not.toContainElement(panel);
+        expect(panel).toHaveClass('right-0', 'h-dvh', 'w-full', 'lg:static', 'lg:h-auto', 'lg:shrink-0', 'lg:w-[400px]', 'xl:w-[440px]', '2xl:w-[480px]');
+        const threadId = screen.getByTestId('review-agent-chat').getAttribute('data-thread');
+        await user.click(screen.getByText('hide-review-chat'));
+        expect(panel).not.toBeVisible();
+        await user.click(screen.getByRole('button', { name: 'AI review chat' }));
+        expect(panel).toBeVisible();
+        expect(screen.getByTestId('review-agent-chat')).toHaveAttribute('data-thread', threadId);
+        expect(queue()).toHaveLength(1);
+        unmount();
+        expect(sidebar).toBeEmptyDOMElement();
+        sidebar.remove();
+    });
+
+    test('switching scope discards its thread and pending requests; unmount cleans up the new thread', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        const { rerender, unmount } = render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        const oldThread = screen.getByTestId('review-agent-chat').getAttribute('data-thread');
+        rerender(<Review variantId="v1" />);
+        await waitFor(() => expect(screen.queryByTestId('review-agent-chat')).not.toBeInTheDocument());
+        expect(fetchMock).toHaveBeenCalledWith('/api/agent/conversation', expect.objectContaining({
+            method: 'DELETE', headers: { 'X-Agent-Thread': oldThread },
+        }));
+        await user.click(await screen.findByRole('button', { name: 'Review selected with AI (1)' }));
+        const newThread = screen.getByTestId('review-agent-chat').getAttribute('data-thread');
+        expect(newThread).not.toBe(oldThread);
+        expect(queue()).toHaveLength(1);
+        unmount();
+        expect(fetchMock).toHaveBeenCalledWith('/api/agent/conversation', expect.objectContaining({
+            method: 'DELETE', headers: { 'X-Agent-Thread': newThread },
+        }));
+    });
+
+    test('does not expose bulk review in the pending AI, time estimate or CVSS tabs', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], {
+            aiReviewList: [{ ...makeAssessment('ai1', 'v1'), origin: 'ai' }],
+            te: TIME_ESTIMATES, cvss: CUSTOM_CVSS,
+        });
+        render(<Review />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        for (const tab of ['AI assessments', 'Time Estimates', 'Custom CVSS']) {
+            await user.click(screen.getByRole('button', { name: new RegExp(`^${tab}`, 'i') }));
+            await user.click(screen.getAllByTitle('Select')[0]);
+            expect(screen.queryByRole('button', { name: /Review selected with AI/ })).not.toBeInTheDocument();
+        }
+    });
+
+    test('rejects an oversized request before opening a chat or queueing a partial selection', async () => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('x'.repeat(AGENT_MESSAGE_MAX_LENGTH), 'v1')]);
+        render(<Review />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (2)' }));
+        expect(screen.getByText(/exceeds the AI message limit/)).toBeInTheDocument();
+        expect(screen.queryByTestId('review-agent-chat')).not.toBeInTheDocument();
+        expect(screen.getByText('Delete selected (2)')).toBeInTheDocument();
+    });
+
+    test('refreshes reviews after an agent write without losing the queue or selection', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        const requestsBefore = fetchMock.mock.calls.length;
+        act(() => { window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'write_assessment_review' } })); });
+        await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(requestsBefore));
+        expect(queue()).toHaveLength(1);
+        expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
+    });
+
+    test('real chat sends selected reviews sequentially with thread and scope, and exposes failures for retry', async () => {
+        mockRealAgentChat = true;
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                { variantId: 'v1', pkg: 'pkgA@1' }, { variantId: 'v2', pkg: 'pkgB@2' },
+            ]),
+            makeAssessment('a2', 'v1'), makeAssessment('a3', 'v3'),
+        ], { variants: [...VARIANTS, { id: 'v3', name: 'Other project', project_id: 'proj2' }] });
+        const serveReview = fetchMock.getMockImplementation()!;
+        const sent: Array<{ message: string; context: unknown; thread: string }> = [];
+        const savedReviews: Record<string, unknown[]> = {};
+        const saveReviews = (id: string) => {
+            const targets = id === 'a1' ? [{ variant_id: 'v1', package: 'pkgA@1' }, { variant_id: 'v2', package: 'pkgB@2' }]
+                : [{ variant_id: id === 'a2' ? 'v1' : 'v3', package: 'pkgA@1.0.0' }];
+            savedReviews[id] = targets.map((target, index) => ({
+                ...target, id: `${id}-${index}`, assessment_id: id, is_stale: false, timestamp: '2026-10-21T12:00:00Z',
+            }));
+        };
+        const json = (data: unknown, ok = true) => ({
+            ok, headers: { get: () => 'application/json' }, json: async () => data,
+        }) as unknown as Response;
+        let finishFirst: (response: Response) => void = () => {};
+        fetchMock.mockImplementation((input, init) => {
+            const path = String(input);
+            const reviewMatch = path.match(/\/api\/assessments\/(a\d)\/reviews$/);
+            if (reviewMatch) return Promise.resolve(json({ reviews: savedReviews[reviewMatch[1]] ?? [] }));
+            if (!path.startsWith('/api/agent')) return serveReview(input, init);
+            if (path.endsWith('/models')) return Promise.resolve(json({ models: [{ id: 'auto', name: 'Auto' }] }));
+            if (path.endsWith('/messages')) {
+                sent.push({ ...JSON.parse(String(init?.body)), thread: (init?.headers as Record<string, string>)['X-Agent-Thread'] });
+                if (sent.length >= 4) saveReviews(sent[sent.length - 1].message.includes('assessment a2') ? 'a2' : 'a3');
+                return sent.length === 1 ? new Promise(resolve => { finishFirst = resolve; })
+                    : sent.length <= 3 ? Promise.resolve(json({ error: 'Review provider unavailable' }, false))
+                        : Promise.resolve(json({
+                            reply: 'Review recorded', model: 'auto',
+                            usage: { cost: null, input_tokens: null, output_tokens: null },
+                        }));
+            }
+            return Promise.resolve(json({
+                authenticated: true, configured: true, provider: 'local', login: null, messages: [],
+                model: 'auto', usage: { cost: null, input_tokens: null, output_tokens: null },
+            }));
+        });
+        render(<Review variantId="v1" />);
+        const user = userEvent.setup();
+        await screen.findAllByTitle('Select');
+        await user.click(screen.getByTitle('Select all'));
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (3)' }));
+        await waitFor(() => expect(sent).toHaveLength(1));
+        expect(screen.getByRole('button', { name: 'AI review running…' })).toBeDisabled();
+        expect(sent[0]).toMatchObject({
+            message: buildAssessmentReviewAction({ ...makeAssessment('a1', 'v1'), vuln_id: 'CVE-2020-1111' }).text,
+            context: { page: 'review', projectId: 'proj1', variantIds: ['v1', 'v2'] },
+        });
+        expect(sent[0].thread).toBeTruthy();
+        saveReviews('a1');
+        await act(async () => finishFirst(json({
+            reply: 'Review recorded', model: 'auto',
+            usage: { cost: null, input_tokens: null, output_tokens: null },
+        })));
+        await waitFor(() => expect(sent).toHaveLength(2));
+        expect(sent[1].message).toContain('Review the user assessment a2');
+        expect(sent[1].thread).toBe(sent[0].thread);
+        expect(await screen.findByText('Review provider unavailable')).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
+        expect(screen.getByRole('button', { name: 'Review selected with AI (1)' })).toBeEnabled();
+        expect(screen.getByText('Delete selected (3)')).toBeInTheDocument();
+        expect(screen.getByText(/Queue paused/)).toBeInTheDocument();
+        expect(sent).toHaveLength(2);
+        await user.click(screen.getByRole('button', { name: 'Retry failed action' }));
+        await waitFor(() => expect(sent).toHaveLength(3));
+        expect(sent[2]).toEqual(sent[1]);
+        expect(await screen.findByText('Review provider unavailable')).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(sent[1].message);
+        expect(sent).toHaveLength(3);
+        await user.click(screen.getByRole('button', { name: 'Retry failed action' }));
+        await waitFor(() => expect(sent).toHaveLength(5));
+        expect(sent[3]).toEqual(sent[1]);
+        expect(sent[4]).toMatchObject({
+            message: expect.stringContaining('Review the user assessment a3'),
+            context: { projectId: 'proj2', variantIds: ['v3'] },
+        });
+        await waitFor(() => expect(screen.queryByText(/Queue paused/)).not.toBeInTheDocument());
+    });
 });
 
 describe('Review — editing "Apply to variants"', () => {

@@ -25,7 +25,19 @@ def config_environment(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     engine = fake_bin / "podman"
-    engine.write_text('#!/bin/bash\nprintf "%s\\n" "$@" >> "$ENGINE_LOG"\n')
+    engine.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$@" >> "$ENGINE_LOG"\n'
+        'if [[ "$1" = info ]]; then\n'
+        '    printf "%s\\n" "${TEST_ROOTLESS:-false}"\n'
+        'elif [[ "$1" = unshare ]]; then\n'
+        '    [[ "${TEST_RECOVER_CONFIG:-false}" = true ]] || exit 1\n'
+        '    if [[ "$#" = 4 ]]; then\n'
+        '        chmod 700 "$4"\n'
+        '    else\n'
+        '        chmod 600 "$VULNSCOUT_CONFIG"\n'
+        '    fi\n'
+        'fi\n'
+    )
     engine.chmod(0o755)
     return config, {
         **os.environ,
@@ -60,6 +72,70 @@ def test_wrapper_uses_mounted_file_instead_of_agent_environment(config_environme
     assert not any(arg.startswith(("AI_PROVIDER=", "AI_AUTH_CREDENTIALS=", "AI_MODEL=", "AI_BASE_URL="))
                    for arg in arguments)
     assert config.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("rootless", ["true", "false"])
+def test_wrapper_preserves_host_ids_for_rootless_podman(config_environment, rootless):
+    _, environment = config_environment
+    environment["TEST_ROOTLESS"] = rootless
+    subprocess.run(
+        ["bash", str(WRAPPER), "start"], env=environment,
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    )
+    arguments = Path(environment["ENGINE_LOG"]).read_text().splitlines()
+    assert ("--userns=keep-id:uid=0,gid=0" in arguments) == (rootless == "true")
+    assert ("--user=0:0" in arguments) == (rootless == "true")
+    assert ("VULNSCOUT_ROOTLESS_PODMAN=true" in arguments) == (rootless == "true")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="Root can read files without owner read permission")
+@pytest.mark.parametrize("recover", [True, False])
+def test_wrapper_recovers_unreadable_config_before_sourcing(config_environment, recover):
+    config, environment = config_environment
+    original = config.read_bytes()
+    config.chmod(0o000)
+    environment["TEST_RECOVER_CONFIG"] = str(recover).lower()
+    try:
+        result = subprocess.run(
+            ["bash", str(WRAPPER), "--help"], env=environment,
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        arguments = Path(environment["ENGINE_LOG"]).read_text().splitlines()
+        assert arguments == ["unshare", "chown", "0:0", str(config.parent), str(config)]
+        assert result.returncode == (0 if recover else 1)
+        assert "private key" not in result.stdout + result.stderr
+        if recover:
+            assert "Usage: vulnscout" in result.stdout
+            assert config.stat().st_mode & 0o777 == 0o600
+        else:
+            assert "cannot restore host ownership" in result.stderr
+    finally:
+        config.chmod(0o600)
+    assert config.read_bytes() == original
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="Root can traverse private directories")
+@pytest.mark.parametrize("recover", [True, False])
+def test_wrapper_recovers_cache_before_testing_config(config_environment, recover):
+    config, environment = config_environment
+    original = config.read_bytes()
+    config.parent.chmod(0o000)
+    environment["TEST_RECOVER_CONFIG"] = str(recover).lower()
+    try:
+        result = subprocess.run(
+            ["bash", str(WRAPPER), "--help"], env=environment,
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        arguments = Path(environment["ENGINE_LOG"]).read_text().splitlines()
+        assert arguments == ["unshare", "chown", "0:0", str(config.parent)]
+        assert result.returncode == (0 if recover else 1)
+        if recover:
+            assert "Usage: vulnscout" in result.stdout
+        else:
+            assert "cannot restore host ownership" in result.stderr
+    finally:
+        config.parent.chmod(0o700)
+    assert config.read_bytes() == original
 
 
 @pytest.mark.parametrize("signed_out", [False, True])

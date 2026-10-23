@@ -212,15 +212,21 @@ EOF
 }
 
 setup_user() {
-    if [ -n "${USER_UID:-}" ] && [ -n "${USER_GID:-}" ]; then
-        groupadd -og "$USER_GID" -f builders 2>/dev/null || true
+    local uid="${USER_UID:-}" gid="${USER_GID:-}"
+    if [[ "${VULNSCOUT_ROOTLESS_PODMAN:-false}" = true ]]; then
+        # The wrapper maps container root to the host owner, not a subordinate UID.
+        uid=0
+        gid=0
+    fi
+    if [ -n "$uid" ] && [ -n "$gid" ]; then
+        groupadd -og "$gid" -f builders 2>/dev/null || true
         if ! id -u builder &>/dev/null; then
-            useradd -s /bin/sh -oN -u "$USER_UID" -g "$USER_GID" -d /builder builder
+            useradd -s /bin/sh -oN -u "$uid" -g "$gid" -d /builder builder
         fi
         mkdir -p /builder
         # Source trees under /scan may be bind-mounted from the host in dev mode.
-        chown -f "$USER_UID:$USER_GID" /scan
-        chown -Rf "$USER_UID:$USER_GID" /builder /scan/inputs /scan/tmp /scan/outputs /cache
+        chown -f "$uid:$gid" /scan
+        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs /cache
     fi
 }
 

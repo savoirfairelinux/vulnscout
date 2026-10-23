@@ -878,7 +878,7 @@ def handle_sbom_exports(
     ctrls: ControllersCache,
     expected_mime: Optional[str],
     metadata: Dict[str, str | float],
-) -> ResponseReturnValue:
+) -> tuple[str, int, dict[str, str]] | tuple[dict[str, str], int]:
     author = str(metadata["author"])
     if doc_name.startswith("CycloneDX"):
         cdx = CycloneDx(ctrls)

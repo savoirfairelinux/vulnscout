@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
@@ -10,7 +11,7 @@ import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation, faRobot, faCircleNotch, faClock } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
@@ -28,7 +29,9 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
-import { AGENT_WRITE_EVENT, type AgentViewContext } from '../types/agent';
+import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
+import AgentChat, { type QueuedAgentMessage } from '../components/AgentChat';
+import { assessmentReviewKey, resolveAssessmentReviewAction } from '../helpers/aiAssessmentReview';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -50,6 +53,7 @@ type Props = {
     onAssessmentChanged?: (mutation: AssessmentMutation) => void;
     onAgentContextChange?: (context: AgentViewContext) => void;
     onOpenAgent?: () => void;
+    agentPanelContainer?: HTMLElement | null;
 };
 
 export type { AssessmentMutation };
@@ -229,7 +233,7 @@ function hasOutdatedAssessment(row: ReviewRow): boolean {
     return row.targets.some(t => t.outdated) || row.context_outdated;
 }
 
-function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
+function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange, onOpenAgent, agentPanelContainer }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<ReviewRow[]>([]);
@@ -268,6 +272,35 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [selectedAiAssessments, setSelectedAiAssessments] = useState<RowSelectionState>({});
     const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<RowSelectionState>({});
     const [selectedCustomCvss, setSelectedCustomCvss] = useState<RowSelectionState>({});
+    const [reviewChatOpen, setReviewChatOpen] = useState(false);
+    const [reviewThreadId, setReviewThreadId] = useState<string>();
+    const reviewThreadRef = useRef<string>();
+    const reviewContextRef = useRef<AgentContext>({ page: 'review' });
+    const reviewScopeVersion = useRef(0);
+    const reviewPreparingRef = useRef(false);
+    const [reviewPreparing, setReviewPreparing] = useState(false);
+    const [reviewActions, setReviewActions] = useState<{
+        queue: QueuedAgentMessage[];
+        running: QueuedAgentMessage | null;
+        failed: QueuedAgentMessage | null;
+    }>({ queue: [], running: null, failed: null });
+
+    // Keep a hidden chat alive, but never reuse a conversation across scopes.
+    useEffect(() => {
+        setReviewChatOpen(false);
+        setReviewThreadId(undefined);
+        setReviewActions({ queue: [], running: null, failed: null });
+        reviewPreparingRef.current = false;
+        setReviewPreparing(false);
+        return () => {
+            reviewScopeVersion.current += 1;
+            const threadId = reviewThreadRef.current;
+            reviewThreadRef.current = undefined;
+            if (threadId) void fetch('/api/agent/conversation', {
+                method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
+            }).catch(() => {});
+        };
+    }, [variantId, projectId]);
     const [bulkDeleteTab, setBulkDeleteTab] = useState<ReviewTab | null>(null);
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("success");
@@ -908,6 +941,49 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 ? selectedTimeEstimates
                 : selectedCustomCvss;
     const selectedRowCount = Object.keys(selectedRows).length;
+    const selectedReviewRows = assessments.filter(row => selectedAssessments[row.id] && row.origin === 'custom');
+    const pendingReviewKeys = new Set([
+        ...reviewActions.queue.map(action => action.key),
+        ...(reviewActions.running ? [reviewActions.running.key] : []),
+        ...(reviewActions.failed ? [reviewActions.failed.key] : []),
+    ]);
+    const reviewableRows = selectedReviewRows.filter(row => !pendingReviewKeys.has(assessmentReviewKey(row.id)));
+    const selectedReviewRunning = selectedReviewRows.some(row => reviewActions.running?.key === assessmentReviewKey(row.id));
+
+    const reviewSelectedWithAi = async () => {
+        if (reviewPreparingRef.current || !reviewableRows.length) return;
+        const version = reviewScopeVersion.current;
+        reviewPreparingRef.current = true;
+        setReviewPreparing(true);
+        try {
+            const variants = await Variants.listAll();
+            const actions = await Promise.all(reviewableRows.map(row => resolveAssessmentReviewAction(row.id, variants)));
+            if (version !== reviewScopeVersion.current) return;
+            if (actions.some(action => action.text.length > AGENT_MESSAGE_MAX_LENGTH)) {
+                showMessage('An assessment review request exceeds the AI message limit. Check the selected assessment identifiers.', 'error');
+                return;
+            }
+            if (!reviewThreadRef.current) {
+                reviewContextRef.current = actions[0].context!;
+                reviewThreadRef.current = crypto.randomUUID();
+                setReviewThreadId(reviewThreadRef.current);
+            }
+            setReviewChatOpen(true);
+            setReviewActions(previous => {
+                const keys = new Set([...previous.queue.map(action => action.key), previous.running?.key, previous.failed?.key]);
+                return { ...previous, queue: [...previous.queue, ...actions
+                    .filter(action => !keys.has(action.key))
+                    .map(action => ({ ...action, id: crypto.randomUUID() }))] };
+            });
+        } catch (error) {
+            if (version === reviewScopeVersion.current) showMessage(`Unable to queue AI reviews: ${String(error)}`, 'error');
+        } finally {
+            if (version === reviewScopeVersion.current) {
+                reviewPreparingRef.current = false;
+                setReviewPreparing(false);
+            }
+        }
+    };
 
     const clearSelectedRows = useCallback((tab: ReviewTab) => {
         if (tab === 'assessments') setSelectedAssessments({});
@@ -1716,6 +1792,29 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         Reset Filters
                     </button>
 
+                    {activeTab === 'assessments' && selectedReviewRows.length > 0 && (
+                        <button
+                            type="button"
+                            onClick={reviewSelectedWithAi}
+                            disabled={reviewPreparing || reviewableRows.length === 0}
+                            className="bg-cyan-700 hover:bg-cyan-600 px-3 py-1 rounded text-white border border-cyan-500 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={reviewableRows.length > 0 ? "Review selected custom assessments with AI"
+                                : selectedReviewRunning ? "AI review in progress" : "AI reviews queued in the review chat"}
+                        >
+                            <FontAwesomeIcon icon={reviewableRows.length > 0 ? faRobot : selectedReviewRunning ? faCircleNotch : faClock}
+                                spin={reviewableRows.length === 0 && selectedReviewRunning} />
+                            {reviewPreparing ? 'Preparing AI reviews…' : reviewableRows.length > 0 ? `Review selected with AI (${reviewableRows.length})`
+                                : reviewActions.failed ? 'AI review paused — retry in chat'
+                                : selectedReviewRunning ? 'AI review running…' : 'AI reviews queued'}
+                        </button>
+                    )}
+                    {reviewThreadId && (
+                        <button type="button" onClick={() => setReviewChatOpen(open => !open)}
+                            aria-expanded={reviewChatOpen} aria-controls="bulk-review-agent-panel"
+                            className="bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700">
+                            AI review chat
+                        </button>
+                    )}
                     {selectedRowCount > 0 && (
                         <button
                             onClick={() => setBulkDeleteTab(activeTab)}
@@ -1753,6 +1852,35 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                     </button>
                 </div>
             </div>
+
+            {reviewThreadId && createPortal(
+                <aside id="bulk-review-agent-panel" hidden={!reviewChatOpen}
+                    aria-label="Bulk assessment review chat"
+                    className={`fixed inset-y-0 right-0 z-[110] h-dvh w-full max-w-full overflow-hidden border-l border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentPanelContainer ? 'lg:static lg:h-auto' : ''}`}>
+                    <AgentChat key={reviewThreadId} threadId={reviewThreadId} active={reviewChatOpen}
+                        context={reviewContextRef.current}
+                        onClose={() => setReviewChatOpen(false)} queue={reviewActions.queue}
+                        onQueuedMessageSent={id => setReviewActions(previous => ({
+                            ...previous,
+                            running: previous.queue.find(action => action.id === id) ?? previous.failed ?? previous.running,
+                            failed: null,
+                        }))}
+                        onQueuedMessageDone={(id, success) => setReviewActions(previous => ({
+                            ...previous, running: previous.running?.id === id ? null : previous.running,
+                            queue: success ? previous.queue.filter(action => action.id !== id) : previous.queue,
+                            failed: previous.running?.id === id && !success ? previous.running : null,
+                        }))}
+                        onQueueRemove={id => setReviewActions(previous => ({
+                            ...previous, queue: previous.queue.filter(action => action.id !== id),
+                            failed: previous.failed?.id === id ? null : previous.failed,
+                        }))}
+                        onQueueClear={() => setReviewActions(previous => ({
+                            ...previous, queue: previous.queue.filter(action => action.id === previous.running?.id), failed: null,
+                        }))}
+                    />
+                </aside>,
+                agentPanelContainer ?? document.body
+            )}
 
             {transferMode && (
                 <ReviewTransferModal

@@ -92,6 +92,7 @@ function Explorer() {
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const [agentOpen, setAgentOpen] = useState(false);
     const [agentMounted, setAgentMounted] = useState(false);
+    const [reviewAgentPanelContainer, setReviewAgentPanelContainer] = useState<HTMLDivElement | null>(null);
     const [compactAgent, setCompactAgent] = useState(false);
     const agentPanel = useRef<HTMLElement>(null);
     const mainContent = useRef<HTMLElement>(null);
@@ -697,7 +698,7 @@ function Explorer() {
                     />
                 } />
                 <Route path={ROUTES.review} element={
-                    <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} onOpenAgent={() => setAgentOpen(true)} />
+                    <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} onOpenAgent={() => setAgentOpen(true)} agentPanelContainer={reviewAgentPanelContainer} />
                 } />
                 <Route path={ROUTES.exports} element={
                     <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} onAgentContextChange={setExportsAgentView} />
@@ -724,6 +725,7 @@ function Explorer() {
                 </Routes>
             </div>
             </main>
+            <div ref={setReviewAgentPanelContainer} className="contents" />
             {(agentOpen || agentMounted) && <aside ref={agentPanel} id="agent-panel" tabIndex={-1} role={agentOverlay ? 'dialog' : 'complementary'} aria-modal={agentOverlay && agentOpen ? true : undefined} aria-label="Agent chat" hidden={!agentOpen} onKeyDown={event => {
                 if (event.target instanceof Element && event.target.closest('dialog[open]')) return;
                 if (event.key === 'Escape') {
