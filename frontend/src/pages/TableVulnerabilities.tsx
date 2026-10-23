@@ -101,7 +101,6 @@ type Props = {
     missingPublishedDateDataBannerDismissed?: boolean;
     onMissingPublishedDateDataBannerDismissedChange?: (dismissed: boolean) => void;
     onAgentContextChange?: (context: AgentViewContext) => void;
-    onOpenAgent?: () => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -384,7 +383,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
     'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed',
 ];
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange, onAgentContextChange }: Readonly<Props>) {
     const preferenceKey = `vulnscout.tables.vulnerabilities.${encodeURIComponent(preferenceScopeKey)}`;
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
@@ -2000,7 +1999,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
-            onOpenAgent={onOpenAgent}
             detailsLoading={modalDetailsLoading}
             detailsError={modalDetailsError}
             isEditing={isEditing}

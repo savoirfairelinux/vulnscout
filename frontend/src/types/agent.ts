@@ -3,7 +3,7 @@ export const AGENT_WRITE_EVENT = 'vulnscout:agent-write';
 export const AGENT_MESSAGE_MAX_LENGTH = 8000;
 
 export type Activity = { id: string; name: string; status: 'running' | 'done' | 'failed' };
-export type AgentMessage = { role: 'user' | 'assistant'; content: string; activity?: Activity[] };
+export type AgentMessage = { role: 'user' | 'assistant'; content: string; activity?: Activity[]; taskId?: string };
 export type AgentUsage = { cost: number | null; input_tokens: number | null; output_tokens: number | null };
 export type AgentStreamEvent =
     | { type: 'delta'; message_id: string; text: string }
@@ -25,8 +25,10 @@ export type QueuedAgentMessage = {
     assessmentId?: string;
 };
 
-/** Where a queued AI action (Assess/Review with AI) currently stands. */
-export type AgentActionState = { status: 'running' } | { status: 'queued'; position: number };
+/** Where a queued AI action (Assess/Review with AI) currently stands in the AI queue. */
+export type AgentActionState =
+    | { status: 'running' | 'failed'; taskId: string }
+    | { status: 'queued'; taskId: string; position: number };
 
 export type AgentViewContext = {
     visibleVulnerabilityIds?: string[];

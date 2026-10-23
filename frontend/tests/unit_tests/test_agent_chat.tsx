@@ -2,15 +2,14 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import '@testing-library/jest-dom';
 import { ReadableStream, TextDecoderStream } from 'node:stream/web';
 import { TextEncoder } from 'node:util';
-import { useState } from 'react';
 // @ts-expect-error TS6133
 import React from 'react';
 
-import AgentChat, { type QueuedAgentMessage } from '../../src/components/AgentChat';
+import AgentChat from '../../src/components/AgentChat';
 import { buildAssessmentReviewAction } from '../../src/helpers/aiAssessmentReview';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type { AgentContext } from '../../src/types/agent';
-import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
+import { clearAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentHistory, getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
 const signedIn = { authenticated: true, login: 'tester', configured: true, device_login: true,
@@ -280,11 +279,16 @@ test('reset discards messages but retains the connection', async () => {
     expect(screen.getByRole('button', { name: 'Configure model provider' })).toBeInTheDocument();
 });
 
-test('interrupted response restores the draft', async () => {
+test('an interrupted response stays in the conversation with retry and pauses the composer', async () => {
+    let attempts = 0;
     global.fetch = async input => {
         const path = String(input);
         if (path.endsWith('/models')) return jsonResponse(models);
-        if (path.endsWith('/messages')) return streamResponse(['{"type":"delta","message_id":"one","text":"Partial"}\n']);
+        if (path.endsWith('/messages')) {
+            attempts++;
+            return attempts === 1 ? streamResponse(['{"type":"delta","message_id":"one","text":"Partial"}\n'])
+                : jsonResponse({ reply: 'Recovered', model: 'auto', usage });
+        }
         return jsonResponse(signedIn);
     };
 
@@ -293,7 +297,18 @@ test('interrupted response restores the draft', async () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Continue' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Response interrupted');
-    expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('Continue');
+    expect(within(screen.getByRole('log', { name: 'Agent conversation' })).getByText('Continue')).toBeInTheDocument();
+    const composer = screen.getByRole('textbox', { name: 'Message the agent' });
+    expect(composer).toHaveValue('');
+    expect(composer).toBeDisabled();
+    expect(composer).toHaveAttribute('placeholder', expect.stringContaining('paused'));
+    expect(screen.getByRole('button', { name: 'AI queue (1), paused' })).toBeInTheDocument();
+    // The queue does not open on its own; it is only shown from the header button.
+    expect(screen.queryByRole('navigation', { name: 'Conversations' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
+    await screen.findByText('Recovered');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled();
 });
 
 test('large vulnerability view disables the unavailable summary action', async () => {
@@ -452,7 +467,7 @@ test('scrolling away from the latest message exposes a return control', async ()
     fireEvent.click(screen.getByRole('button', { name: 'Jump to latest message' }));
     expect(log.scrollTop).toBe(300);
 });
-test('sends a queued message once when ready and again only for a new queued id', async () => {
+test('sends queued actions when connected and accepts subsequent actions through the shared store', async () => {
     const sent: string[] = [];
     global.fetch = async (input, options) => {
         const path = String(input);
@@ -466,61 +481,81 @@ test('sends a queued message once when ready and again only for a new queued id'
     };
 
     const first = { id: 'q1', text: 'Assess the selected targets', key: 'assess:a', kind: 'assess' as const, title: '1 target' };
-    const accepted: string[] = [];
-    const done: string[] = [];
-    const onQueuedMessageSent = (id: string) => { accepted.push(id); };
-    const onQueuedMessageDone = (id: string) => { done.push(id); };
-    const { rerender } = render(<AgentChat onClose={() => undefined} context={context} queue={[first]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
+    enqueueAgentMessages([first], context);
+    enqueueAgentMessages([{ ...first }], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByText('Reply 1');
-    expect(accepted).toEqual(['q1']);
-    await waitFor(() => expect(done).toEqual(['q1']));
-    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ ...first }]} />);
-    await act(async () => { await Promise.resolve(); });
+    await waitFor(() => expect(getAgentQueue()).toEqual([]));
     expect(sent).toEqual(['Assess the selected targets']);
 
-    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q2', text: 'Review assessment', key: 'assess:x', kind: 'assess', title: 'assessment x' }]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
+    act(() => enqueueAgentMessages([{ id: 'q2', text: 'Review assessment', key: 'assess:x', kind: 'assess', title: 'assessment x' }], context));
     await screen.findByText('Reply 2');
     expect(sent).toEqual(['Assess the selected targets', 'Review assessment']);
-    expect(accepted).toEqual(['q1', 'q2']);
 });
 
-test('all chat windows see the same queue and work continues after the originating window unmounts', async () => {
-    const sent: string[] = [];
+test('the conversations view lists every conversation and opens each one in the chat, waiting ones included', async () => {
+    const sent: Array<{ message: string; thread: string | null }> = [];
     let finish: (response: Response) => void = () => {};
     global.fetch = async (input, options) => {
         const path = String(input);
         if (path.endsWith('/models')) return jsonResponse(models);
         if (path.endsWith('/messages')) {
-            sent.push(JSON.parse(String(options?.body)).message);
+            sent.push({ message: JSON.parse(String(options?.body)).message, thread: new Headers(options?.headers).get('X-Agent-Thread') });
             if (sent.length === 1) return new Promise(resolve => { finish = resolve; });
             return jsonResponse({ reply: 'Second completed', model: 'auto', usage });
         }
         return jsonResponse(signedIn);
     };
-    const source = render(<AgentChat context={context} threadId="bulk" onClose={() => undefined} />);
-    const globalChat = render(<AgentChat context={{ page: 'metrics' }} onClose={() => undefined} />);
-    const sourceView = within(source.container);
-    const globalView = within(globalChat.container);
-    await waitFor(() => expect(sourceView.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
-    await waitFor(() => expect(globalView.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
-    fireEvent.change(sourceView.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'First request' } });
-    fireEvent.click(sourceView.getByRole('button', { name: 'Send message' }));
-    await waitFor(() => expect(sent).toEqual(['First request']));
-    fireEvent.change(globalView.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Second request' } });
-    fireEvent.click(globalView.getByRole('button', { name: 'Send message' }));
-    fireEvent.click(sourceView.getByRole('button', { name: 'AI queue (2)' }));
-    fireEvent.click(globalView.getByRole('button', { name: 'AI queue (2)' }));
-    for (const view of [sourceView, globalView]) {
-        const queue = within(view.getByRole('region', { name: 'Queued AI actions' }));
-        expect(queue.getAllByRole('listitem')).toHaveLength(2);
-        expect(queue.getByText('Bulk assessment chat · running')).toBeInTheDocument();
-        expect(queue.getByText('Global chat · queued')).toBeInTheDocument();
-    }
-    source.unmount();
+    const chat = render(<AgentChat context={context} onClose={() => undefined} />);
+    expect(screen.getByRole('heading', { name: 'Agent chat' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
+    act(() => enqueueAgentMessages([
+        { id: 'bulk', key: 'assess:bulk', kind: 'assess', text: 'First request', title: 'CVE-1 · 1 target' },
+        { id: 'next', key: 'assess:next', kind: 'assess', text: 'Next request', title: 'CVE-2 · 1 target', detail: 'default · pkg@2' },
+    ], context, 'Vulnerability selection', 'per-action'));
+    await waitFor(() => expect(sent.map(item => item.message)).toEqual(['First request']));
+    expect(screen.getByTestId('ai-queue-walking')).toBeInTheDocument();
+
+    // The walking person switches the panel to the conversation list, like a chat history.
+    const toggle = screen.getByRole('button', { name: 'AI queue (2)' });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('heading', { name: 'Conversations' })).toBeInTheDocument();
+    expect(screen.queryByRole('log', { name: 'Agent conversation' })).not.toBeInTheDocument();
+    const list = within(screen.getByRole('navigation', { name: 'Conversations' }));
+    expect(list.getByRole('button', { name: 'Open main conversation' })).toHaveAttribute('aria-current', 'true');
+    expect(within(list.getByRole('region', { name: 'Running' })).getByText('Vulnerability selection · running')).toBeInTheDocument();
+    expect(within(list.getByRole('region', { name: 'Waiting' })).getByText('Vulnerability selection · waiting · #1')).toBeInTheDocument();
+
+    // A waiting action opens as a conversation showing its pending request.
+    fireEvent.click(list.getByRole('button', { name: 'Open conversation Assess CVE-2 · 1 target' }));
+    expect(screen.getByRole('heading', { name: 'Assess CVE-2 · 1 target' })).toBeInTheDocument();
+    const log = within(screen.getByRole('log', { name: 'Agent conversation' }));
+    expect(log.getByText('Next request')).toBeInTheDocument();
+    expect(log.getByRole('status')).toHaveTextContent('Waiting in the AI queue · #1');
+    expect(log.getByText('Request details').closest('details')).toHaveTextContent('Targetsdefault · pkg@2');
+
+    // The back arrow returns to the list; Escape returns to the conversation.
+    fireEvent.click(screen.getByRole('button', { name: 'All conversations' }));
+    fireEvent.keyDown(screen.getByRole('navigation', { name: 'Conversations' }), { key: 'Escape' });
+    expect(screen.getByRole('heading', { name: 'Assess CVE-2 · 1 target' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'AI queue (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open conversation Assess CVE-1 · 1 target' }));
+    expect(within(screen.getByRole('log', { name: 'Agent conversation' })).getByText('First request')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveAttribute('placeholder', 'Follow up in this conversation...');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    chat.unmount();
     await act(async () => finish(jsonResponse({ reply: 'First completed', model: 'auto', usage })));
-    await globalView.findByText('Second completed');
-    expect(sent).toEqual(['First request', 'Second request']);
-    expect(getAgentQueue()).toEqual([]);
+    await waitFor(() => expect(getAgentQueue()).toEqual([]));
+    const [first, second] = getAgentHistory().map(task => task.conversationId);
+    expect(sent).toEqual([
+        { message: 'First request', thread: first }, { message: 'Next request', thread: second }, { message: 'Follow-up', thread: first },
+    ]);
+    expect(getAgentConversation(first).messages.map(message => message.content))
+        .toEqual(['First request', 'First completed', 'Follow-up', 'Second completed']);
+    expect(getAgentConversation().messages).toEqual([]);
 });
 
 test.each(['missing', 'partial', 'unchanged', 'stale', 'read failure', 'changed targets'])(
@@ -557,29 +592,21 @@ test.each(['missing', 'partial', 'unchanged', 'stale', 'read failure', 'changed 
             });
             return jsonResponse(signedIn);
         };
-        const done = jest.fn<void, [string, boolean]>(() => { finishedTurn = false; });
         const first = { ...buildAssessmentReviewAction(assessment), id: 'first' };
-        function QueueHarness() {
-            const [queue, setQueue] = useState<QueuedAgentMessage[]>([first, {
-                id: 'second', key: 'assess:next', kind: 'assess', text: 'Next assessment', title: 'next',
-            }]);
-            return <AgentChat context={context} onClose={() => undefined} queue={queue}
-                onQueuedMessageDone={(id, success) => {
-                    done(id, success);
-                    if (success) setQueue(items => items.filter(item => item.id !== id));
-                }} />;
-        }
-        render(<QueueHarness />);
-        await waitFor(() => expect(done).toHaveBeenCalledWith('first', false));
+        enqueueAgentMessages([first, {
+            id: 'second', key: 'assess:next', kind: 'assess', text: 'Next assessment', title: 'next',
+        }], context);
+        render(<AgentChat context={context} onClose={() => undefined} />);
+        await waitFor(() => expect(getAgentQueue()[0].status).toBe('failed'));
         expect(attempts).toBe(1);
-        expect(screen.getByText(/Queue paused/)).toBeInTheDocument();
-        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(first.text);
+        expect(screen.getByRole('button', { name: 'AI queue (2), paused' })).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveAttribute('placeholder', expect.stringContaining('paused'));
         expect(screen.getByRole('alert')).toBeInTheDocument();
+        finishedTurn = false;
         fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
-        await waitFor(() => expect(done).toHaveBeenCalledWith('first', true));
-        await waitFor(() => expect(done).toHaveBeenCalledWith('second', true));
+        await waitFor(() => expect(getAgentQueue()).toEqual([]));
         expect(attempts).toBe(3);
-        expect(screen.queryByText(/Queue paused/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /paused/ })).not.toBeInTheDocument();
     },
 );
 
@@ -591,16 +618,15 @@ test('does not send a queued message while signed out', async () => {
         return jsonResponse(signedOut);
     };
 
-    const onQueuedMessageSent = jest.fn();
-    render(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '1 target' }]} onQueuedMessageSent={onQueuedMessageSent} />);
+    enqueueAgentMessages([{ id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '1 target' }], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByText('Step 1 of 3');
     expect(sent).toEqual([]);
-    expect(onQueuedMessageSent).not.toHaveBeenCalled();
+    expect(getAgentQueue()[0].status).toBe('queued');
 });
 
 test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action queue on %s failure and retries the same item', async failure => {
     const sent: string[] = [];
-    const done = jest.fn();
     global.fetch = async (input, options) => {
         const path = String(input);
         if (path.endsWith('/models')) return jsonResponse(models);
@@ -616,39 +642,33 @@ test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action q
         }
         return jsonResponse(signedIn);
     };
-    function QueueChat() {
-        const [queue, setQueue] = useState([
-            { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess' as const, title: 'CVE-1' },
-            { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess' as const, title: 'CVE-2' },
-        ]);
-        return <AgentChat onClose={() => undefined} context={context} queue={queue}
-            onQueuedMessageDone={(id, success) => {
-                done(id, success);
-                if (success) setQueue(current => current.filter(item => item.id !== id));
-            }} />;
-    }
-
-    render(<QueueChat />);
-    await screen.findByText('Queue paused. Retry or remove the failed action to continue.');
-    expect(done).toHaveBeenLastCalledWith('q1', false);
+    enqueueAgentMessages([
+        { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess', title: 'CVE-1' },
+        { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess', title: 'CVE-2' },
+    ], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    await screen.findByRole('button', { name: 'Retry failed action' });
+    expect(getAgentQueue()[0].status).toBe('failed');
     expect(sent).toEqual(['Assess CVE-1']);
-    expect(screen.getByLabelText('Message the agent')).toHaveValue('Assess CVE-1');
+    expect(screen.getByLabelText('Message the agent')).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Assess displayed' })).toBeDisabled();
     expect(screen.getByRole('alert')).toHaveTextContent(failure === 'interrupted stream' ? 'Response interrupted' : 'Provider unavailable');
-    expect(screen.getByRole('region', { name: 'Queued AI actions' })).toHaveTextContent('AI queue · 1 queued');
+    expect(within(screen.getByRole('log', { name: 'Agent conversation' })).getByText('Assess CVE-1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'AI queue (2), paused' })).toBeInTheDocument();
+    expect(screen.getByTestId('ai-queue-idle')).toBeInTheDocument();
     await act(async () => { await Promise.resolve(); });
     expect(sent).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
-    await waitFor(() => expect(done).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    await waitFor(() => expect(getAgentQueue()[0].status).toBe('failed'));
     expect(sent).toEqual(['Assess CVE-1', 'Assess CVE-1']);
-    expect(screen.getByLabelText('Message the agent')).toHaveValue('Assess CVE-1');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry failed action' }));
     await screen.findByText('Reply 4');
     expect(sent).toEqual(['Assess CVE-1', 'Assess CVE-1', 'Assess CVE-1', 'Assess CVE-2']);
-    expect(done.mock.calls).toEqual([['q1', false], ['q1', false], ['q1', true], ['q2', true]]);
-    expect(screen.getByText('No AI requests queued.')).toBeInTheDocument();
+    expect(getAgentQueue()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'AI queue (0)' })).toBeInTheDocument();
 });
 
 test.each(['remove', 'clear'])('%s releases a failed action without retrying it', async action => {
@@ -663,47 +683,120 @@ test.each(['remove', 'clear'])('%s releases a failed action without retrying it'
         }
         return jsonResponse(signedIn);
     };
-    function QueueChat() {
-        const [queue, setQueue] = useState([
-            { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess' as const, title: 'CVE-1' },
-            { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess' as const, title: 'CVE-2' },
-        ]);
-        return <AgentChat onClose={() => undefined} context={context} queue={queue}
-            onQueuedMessageDone={(id, success) => {
-                if (success) setQueue(current => current.filter(item => item.id !== id));
-            }}
-            onQueueRemove={id => setQueue(current => current.filter(item => item.id !== id))}
-            onQueueClear={() => setQueue([])} />;
-    }
-    render(<QueueChat />);
-    await screen.findByText('Queue paused. Retry or remove the failed action to continue.');
+    enqueueAgentMessages([
+        { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess', title: 'CVE-1' },
+        { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess', title: 'CVE-2' },
+    ], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    await screen.findByRole('button', { name: 'Retry failed action' });
     expect(sent).toEqual(['Assess CVE-1']);
-    fireEvent.click(screen.getByRole('button', { name: action === 'remove' ? 'Remove assess CVE-1 from queue' : 'Clear all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'AI queue (2), paused' }));
+    const list = within(screen.getByRole('navigation', { name: 'Conversations' }));
+    expect(list.getByRole('status')).toHaveTextContent('Queue paused. Open the failed conversation to retry or remove it.');
+    expect(list.getByRole('button', { name: 'Open main conversation' })).toHaveTextContent('failed');
+    if (action === 'remove') fireEvent.click(screen.getByRole('button', { name: 'AI queue (2), paused' }));
+    fireEvent.click(action === 'remove' ? screen.getByRole('button', { name: 'Remove failed action' }) : list.getByRole('button', { name: 'Clear waiting' }));
     if (action === 'remove') await screen.findByText('Second done');
-    else expect(screen.getByText('No AI requests queued.')).toBeInTheDocument();
+    else {
+        expect(getAgentQueue()).toEqual([]);
+        fireEvent.click(list.getByRole('button', { name: 'Open main conversation' }));
+    }
     expect(sent).toEqual(action === 'remove' ? ['Assess CVE-1', 'Assess CVE-2'] : ['Assess CVE-1']);
     expect(screen.getByLabelText('Message the agent')).toHaveValue('');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
 
-test('lists queued actions with remove and clear controls', async () => {
+test('lists conversations by status with remove, clear and delete controls', async () => {
     global.fetch = async input => String(input).endsWith('/models') ? jsonResponse(models) : jsonResponse(signedOut);
-    const onQueueRemove = jest.fn();
-    const onQueueClear = jest.fn();
-    render(<AgentChat onClose={() => undefined} context={context} onQueueRemove={onQueueRemove} onQueueClear={onQueueClear} queue={[
+    enqueueAgentMessages([
         { id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '2 targets', detail: 'default · pkg@1.0.0' },
         { id: 'q2', text: 'Review', key: 'review:x', kind: 'review', title: 'assessment 1a2b3c4d' },
-    ]} />);
+    ], context, 'Vulnerability CVE-1', 'per-action');
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    await screen.findByText('Step 1 of 3');
+    expect(screen.getByTestId('ai-queue-walking')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'AI queue (2)' }));
 
-    const queue = await screen.findByRole('region', { name: 'Queued AI actions' });
-    expect(queue).toHaveTextContent('AI queue · 2 queued');
-    const items = within(queue).getAllByRole('listitem');
-    expect(items[0]).toHaveTextContent('1Assess 2 targets');
-    expect(items[0]).toHaveTextContent('default · pkg@1.0.0');
-    expect(items[1]).toHaveTextContent('2Review assessment 1a2b3c4d');
+    const list = within(screen.getByRole('navigation', { name: 'Conversations' }));
+    expect(list.getByText('0 running · 2 waiting · requests run one at a time')).toBeInTheDocument();
+    const items = within(list.getByRole('region', { name: 'Waiting' })).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('Assess 2 targets');
+    expect(items[0]).toHaveTextContent('waiting · #1');
+    expect(items[1]).toHaveTextContent('Review assessment 1a2b3c4d');
 
-    fireEvent.click(within(queue).getByRole('button', { name: 'Remove review assessment 1a2b3c4d from queue' }));
-    expect(getAgentQueue().map(item => item.id)).toEqual(['q1']);
-    fireEvent.click(within(queue).getByRole('button', { name: 'Clear all' }));
+    fireEvent.click(list.getByRole('button', { name: 'Remove Assess 2 targets from queue' }));
+    expect(getAgentQueue().map(item => item.id)).toEqual(['q2']);
+    expect(list.queryByText('Assess 2 targets')).not.toBeInTheDocument();
+    fireEvent.click(list.getByRole('button', { name: 'Clear waiting' }));
     expect(getAgentQueue()).toEqual([]);
+    expect(list.getByText(/start their own conversations here/)).toBeInTheDocument();
+    expect(screen.getByTestId('ai-queue-idle')).toBeInTheDocument();
+    expect(screen.queryByTestId('ai-queue-walking')).not.toBeInTheDocument();
+    fireEvent.click(list.getByRole('button', { name: 'Open main conversation' }));
+    expect(screen.getByRole('heading', { name: 'Agent chat' })).toBeInTheDocument();
+});
+
+test('finished conversations can be reopened and deleted from the list', async () => {
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) return jsonResponse({ reply: `Done: ${JSON.parse(String(options?.body)).message}`, model: 'auto', usage });
+        return jsonResponse(signedIn);
+    };
+    enqueueAgentMessages([
+        { id: 'a', key: 'assess:a', kind: 'assess', text: 'Assess A', title: 'CVE-A' },
+        { id: 'b', key: 'assess:b', kind: 'assess', text: 'Assess B', title: 'CVE-B' },
+    ], context, 'Vulnerability selection', 'per-action');
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    await waitFor(() => expect(getAgentHistory()).toHaveLength(2));
+    fireEvent.click(screen.getByRole('button', { name: 'AI queue (0)' }));
+    const list = within(screen.getByRole('navigation', { name: 'Conversations' }));
+    const finished = within(list.getByRole('region', { name: 'Finished' })).getAllByRole('listitem');
+    expect(finished).toHaveLength(2);
+    expect(finished[0]).toHaveTextContent('1 request');
+    fireEvent.click(list.getByRole('button', { name: 'Open conversation Assess CVE-A' }));
+    expect(await screen.findByText('Done: Assess A')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete conversation Assess CVE-A' }));
+    expect(screen.queryByRole('button', { name: 'Open conversation Assess CVE-A' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all' }));
+    expect(screen.queryByRole('region', { name: 'Finished' })).not.toBeInTheDocument();
+});
+
+test('Assess displayed and Assess vulnerability queue one conversation per vulnerability', async () => {
+    let finish: (response: Response) => void = () => {};
+    global.fetch = async input => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) return new Promise(resolve => { finish = resolve; });
+        return jsonResponse(signedIn);
+    };
+    const displayed = { ...context, view: { visibleVulnerabilityIds: ['CVE-1', 'CVE-2'] } };
+    const { rerender } = render(<AgentChat context={displayed} onClose={() => undefined} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Assess displayed' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Assess displayed' }));
+    await waitFor(() => expect(getAgentQueue()).toHaveLength(2));
+    const [first, second] = getAgentQueue();
+    expect([first.text, second.text]).toEqual([
+        'Assess CVE-1 in the current scope. Retrieve its details with VulnScout MCP first.',
+        'Assess CVE-2 in the current scope. Retrieve its details with VulnScout MCP first.',
+    ]);
+    expect(first.context.view?.selectedVulnerabilityIds).toEqual(['CVE-1']);
+    expect(first.conversationId).not.toBe(second.conversationId);
+    expect(first.source).toBe('Displayed vulnerabilities');
+    // The chat follows the first request into its conversation.
+    expect(await screen.findByRole('heading', { name: 'Assess CVE-1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Assess displayed' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open main conversation' }));
+
+    rerender(<AgentChat context={{ ...context, view: { openVulnerabilityId: 'CVE-3' } }} onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Assess vulnerability' }));
+    expect(getAgentQueue().map(task => task.title)).toEqual(['CVE-1', 'CVE-2', 'CVE-3']);
+    expect(getAgentConversation(getAgentQueue()[2].conversationId).title).toBe('Assess CVE-3');
+    // A waiting request opens its own conversation, showing the pending request and its place in line.
+    expect(screen.getByRole('heading', { name: 'Assess CVE-3' })).toBeInTheDocument();
+    expect(within(screen.getByRole('log', { name: 'Agent conversation' })).getByRole('status')).toHaveTextContent('Waiting in the AI queue · #2');
+    act(() => clearAgentQueue());
+    await act(async () => finish(jsonResponse({ reply: 'Done', model: 'auto', usage })));
 });

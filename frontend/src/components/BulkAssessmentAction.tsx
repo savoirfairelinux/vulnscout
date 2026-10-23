@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleNotch, faWandMagicSparkles } from '@fortawesome/free-solid-svg-icons';
-import AgentChat, { type QueuedAgentMessage } from './AgentChat';
 import type { Vulnerability } from '../handlers/vulnerabilities';
-import type { AgentContext } from '../types/agent';
-import { buildAiAssessmentMessages, loadAiAssessmentTargets } from '../helpers/aiAssessment';
-import { enqueueAgentMessages } from '../handlers/agentQueue';
+import type { AgentContext, QueuedAgentMessage } from '../types/agent';
+import { buildAiAssessmentMessages, bulkAssessmentKeyPrefix, loadAiAssessmentTargets } from '../helpers/aiAssessment';
+import { agentActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
 import useAgentQueue from '../hooks/useAgentQueue';
+import AgentActionButton from './AgentActionButton';
 
-type BulkMessage = QueuedAgentMessage & { vulnerabilityId: string };
+const BULK_SOURCE = 'Vulnerability selection';
+
 type Props = {
     vulnerabilities: Vulnerability[];
     selectedVulns: string[];
@@ -18,19 +17,19 @@ type Props = {
     onPrepare: () => void;
 };
 
-/** The owning bar keys this component by scope; selections do not discard a conversation. */
+/** Queues one agent conversation per selected vulnerability and opens the chat; the owning bar keys this component by scope. */
 export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, context, disabled, onError, onPrepare }: Readonly<Props>) {
-    const [threadId] = useState(() => crypto.randomUUID());
     const preparation = useRef<AbortController | null>(null);
     const [preparing, setPreparing] = useState(false);
-    const [mounted, setMounted] = useState(false);
-    const [open, setOpen] = useState(false);
-    const queue = useAgentQueue(threadId);
-    const running = queue.find(item => item.status === 'running');
+    // Scope the dedupe key so the same CVE can still be assessed from another table scope.
+    const keyPrefix = bulkAssessmentKeyPrefix(context);
+    const agentQueue = useAgentQueue();
+    const queue = agentQueue.filter(item => item.key.startsWith(keyPrefix));
     const selectionKey = JSON.stringify([...selectedVulns].sort());
     const activeIds = new Set(queue.flatMap(item => item.context.view?.selectedVulnerabilityIds ?? []));
     const selectionActive = selectedVulns.length > 0 && selectedVulns.every(id => activeIds.has(id));
-    const selectionRunning = selectionActive && running?.context.view?.selectedVulnerabilityIds?.some(id => selectedVulns.includes(id));
+    const selectionState = selectionActive ? agentActionState(agentQueue, item => item.key.startsWith(keyPrefix) &&
+        (item.context.view?.selectedVulnerabilityIds?.some(id => selectedVulns.includes(id)) ?? false)) : undefined;
 
     useEffect(() => {
         preparation.current?.abort();
@@ -50,7 +49,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                 if (!vulnerability) throw new Error(`Selected vulnerability ${id} is no longer available. Refresh the table and try again.`);
                 return vulnerability;
             });
-            const messages: BulkMessage[][] = [];
+            const messages: QueuedAgentMessage[][] = [];
             // Bound compatibility lookups instead of issuing one concurrent request per selected row.
             let next = 0;
             await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
@@ -65,17 +64,16 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                         throw new Error(`${vulnerability.id}: ${error instanceof Error ? error.message : 'Unable to prepare assessment.'} Open its details to refine the package selection.`);
                     }
                     messages[index] = actions.map(message => ({
-                        ...message, id: crypto.randomUUID(), key: `assess:${vulnerability.id}`,
-                        vulnerabilityId: vulnerability.id,
+                        ...message, id: crypto.randomUUID(), key: `${keyPrefix}${vulnerability.id}`,
                         title: `${vulnerability.id} · ${message.title}`,
                         context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [vulnerability.id], selectionCount: 1 } },
                     }));
                 }
             }));
             if (controller.signal.aborted) return;
-            enqueueAgentMessages(messages.flat(), context, threadId, 'Bulk assessment chat');
-            setMounted(true);
-            setOpen(true);
+            const queued = messages.flat();
+            enqueueAgentMessages(queued, context, BULK_SOURCE, 'per-action');
+            openAgentChat(queued[0]?.id);
         } catch (error) {
             if (!controller.signal.aborted) {
                 onError(error instanceof Error ? error.message : 'Unable to prepare AI assessments. Try again.');
@@ -89,25 +87,13 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
         }
     };
 
-    return <>
-        <button
-            type="button"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-semibold text-cyan-50 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={disabled || !selectedVulns.length || preparing || selectionActive}
-            aria-label={`Assess with AI${preparing ? ' (preparing)' : selectionRunning ? ' (running)' : selectionActive ? ' (queued)' : ''}`}
-            aria-controls={mounted ? 'bulk-assessment-agent-panel' : undefined}
-            aria-busy={preparing || Boolean(selectionRunning)}
-            onClick={() => void assess()}
-        >
-            <FontAwesomeIcon icon={preparing || selectionRunning ? faCircleNotch : faWandMagicSparkles} spin={preparing || Boolean(selectionRunning)} />
-            {preparing ? 'Preparing AI assessments…' : selectionRunning ? 'Assess with AI · Running…' : selectionActive ? 'Assess with AI · Queued' : 'Assess with AI'}
-        </button>
-        {mounted && <aside id="bulk-assessment-agent-panel" hidden={!open} aria-label="Bulk AI assessment chat"
-            className="fixed inset-y-0 right-0 z-50 w-full border-l border-neutral-700 bg-white shadow-2xl sm:w-[min(480px,100%)]">
-            <AgentChat threadId={threadId} active={open}
-                context={{ ...context, view: { selectedVulnerabilityIds: [...activeIds], selectionCount: activeIds.size } }}
-                onClose={() => setOpen(false)}
-            />
-        </aside>}
-    </>;
+    return <AgentActionButton
+        state={selectionState}
+        label="Assess with AI"
+        onRun={() => void assess()}
+        disabled={disabled || !selectedVulns.length}
+        title="Assess each selected vulnerability with AI in its own conversation"
+        preparing={preparing ? 'Preparing AI assessments…' : undefined}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-semibold text-cyan-50 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+    />;
 }

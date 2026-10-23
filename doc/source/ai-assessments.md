@@ -358,9 +358,9 @@ review an existing **user-authored** assessment (`origin = "custom"`). The
 skill does not review scan-imported assessments or pending AI suggestions.
 In the UI, use **Review with AI** on a custom assessment in the vulnerability
 modal, or select assessments on the **Review** page and click **Review selected
-with AI**. Bulk requests run sequentially in their own chat, one complete
-assessment per request; every target is reviewed even when the table is scoped
-to one variant. You can hide and reopen the chat while it works, inspect errors,
+with AI**. Requests run sequentially in the agent chat, one complete
+assessment per request and per conversation; every target is reviewed even when the table is scoped
+to one variant. You can close and reopen the chat while it works, inspect errors,
 and remove queued requests without altering your selection.
 For example:
 

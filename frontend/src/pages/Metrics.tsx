@@ -59,7 +59,6 @@ import { useMemo, useState, useCallback, useEffect } from "react";
             appendCVSS: (vulnId: string, vector: string) => CVSS | null;
             projectId?: string;
             onAgentContextChange?: (context: AgentViewContext) => void;
-            onOpenAgent?: () => void;
         };
 
         const pieOptions = {
@@ -153,7 +152,7 @@ import { useMemo, useState, useCallback, useEffect } from "react";
 
 
 
-function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab, projectId, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab, projectId, onAgentContextChange }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
             const [timeScale, setTimeScale] = useState<string>("6_months")
@@ -709,7 +708,6 @@ const packageColumns = [
         {modalVuln && (
           <VulnModal
             vuln={modalVuln}
-            onOpenAgent={onOpenAgent}
             isEditing={isEditing}
             onClose={() => {
               setModalVuln(undefined);

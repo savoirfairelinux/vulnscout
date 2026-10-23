@@ -125,13 +125,7 @@ type ContextExport = {
 };
 
 export type {
-    ProjectContext,
-    VariantContext,
     VariantContextData,
-    MergedContext,
-    VariantEntry,
-    ProjectEntry,
-    ImportResultItem,
     ImportResult,
     ContextExport,
     ContextFile,

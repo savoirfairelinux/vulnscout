@@ -1,11 +1,15 @@
-import type { QueuedAgentMessage } from '../components/AgentChat';
+import type { QueuedAgentMessage } from '../types/agent';
 import type { AssessmentTargetPair } from '../handlers/assessments';
 import type { Variant } from '../handlers/variant';
 import type { Vulnerability } from '../handlers/vulnerabilities';
 import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext } from '../types/agent';
 
-export const assessmentKey = (targets: AssessmentTargetPair[]) =>
-    `assess:${targets.map(target => `${target.variant_id}|${target.package}`).sort().join(',')}`;
+export const assessmentKey = (vulnerabilityId: string, targets: AssessmentTargetPair[]) =>
+    `assess:${vulnerabilityId}:${targets.map(target => `${target.variant_id}|${target.package}`).sort().join(',')}`;
+
+/** Dedupe prefix for per-vulnerability assessments queued from a table scope. */
+export const bulkAssessmentKeyPrefix = ({ projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation }: AgentContext) =>
+    `assess:${JSON.stringify([projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation])}:`;
 
 /** Keep each variant whole so its packages are assessed together. */
 export function buildAiAssessmentMessages(
@@ -48,7 +52,7 @@ export function buildAiAssessmentMessages(
         const unique = (values: string[]) => [...new Set(values)].join(', ');
         const batchLabel = batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '';
         return {
-            key: assessmentKey(targets), kind: 'assess',
+            key: assessmentKey(vulnerabilityId, targets), kind: 'assess',
             text: prompt(indexes.map(i => lines[i]), batchLabel),
             title: `${batchTargets.length} target${batchTargets.length === 1 ? '' : 's'}${batches.length > 1 ? ` · batch ${index + 1} of ${batches.length}` : ''}`,
             detail: `${unique(batchTargets.map(target => variantName(target.variant_id) ?? target.variant_id ?? ''))} · ${unique(batchTargets.map(target => target.package))}`,

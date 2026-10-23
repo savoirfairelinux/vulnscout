@@ -487,16 +487,20 @@ The columns include:
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state. A **Reset Filters** button clears everything back to defaults. See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
 
 Select rows in **Assessments**, then click **Review selected with AI** to queue
-an independent review of each selected custom assessment. The bulk review chat
-uses the same workflow as **Review with AI** in the vulnerability modal: it
+an independent review of each selected custom assessment, each in its own
+conversation of the agent chat, which opens automatically. It uses the same workflow as **Review with AI** in the vulnerability modal: it
 retrieves each complete assessment and writes one review per target, including
 targets outside the current project or variant view, without changing the
 assessment. Scan-imported assessments and pending AI suggestions are not eligible.
 Selection is preserved; already queued or running assessments are not queued
-again. Use **AI review chat** to hide or reopen the conversation without stopping
-it, or remove pending requests from its queue. Connection setup, errors and retry
-are handled in the chat. Leaving the Review page or changing project/variant
-discards this conversation and its remaining queue; reviews already saved remain.
+again; while queued the button shows the request's state and opens it in the
+chat. Closing the agent chat does not stop queued reviews. Its **AI queue**
+button lists every conversation, like a chat history, wherever its request was
+started; select one to open it in the chat, including reviews still waiting. Remove waiting requests there, or retry a
+failed request to resume the queue.
+Connection setup is available through the plug button; model selection is at the
+bottom of the message box. Leaving the Review page or changing project/variant
+does not cancel queued reviews; reviews already saved remain.
 
 ### Import and Export
 

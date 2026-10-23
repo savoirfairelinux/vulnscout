@@ -4,8 +4,7 @@ import type { Variant } from '../handlers/variant';
 import type { AssessmentTargetPair } from '../handlers/assessments';
 import { formatPkgId } from '../helpers/pkgId';
 import TargetPairSelector from './TargetPairSelector';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleNotch, faClock } from '@fortawesome/free-solid-svg-icons';
+import AgentActionButton from './AgentActionButton';
 import type { AgentActionState } from '../types/agent';
 
 const targetKeys = (targets: AssessmentTargetPair[]) => targets
@@ -510,19 +509,15 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             type="button"
             className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
         >Add assessment</button>
-        {onAssessWithAi && <button
-            onClick={() => onAssessWithAi(aiTargets)}
-            type="button"
-            disabled={aiTargets.length === 0 || Boolean(aiState)}
-            aria-label={`Assess with AI${aiState?.status === 'running' ? ' (running)' : aiState ? ` (queued, position ${aiState.position})` : ''}`}
-            title={aiTargets.length === 0 ? "Select at least one variant and one package"
-                : aiState?.status === 'running' ? "These targets are being assessed by AI"
-                : aiState ? `These targets are queued for AI assessment (#${aiState.position} in the AI chat)`
-                : "Assess the selected targets with AI"}
+        {onAssessWithAi && <AgentActionButton
+            state={aiState}
+            label="Assess with AI"
+            onRun={() => onAssessWithAi(aiTargets)}
+            disabled={aiTargets.length === 0}
+            title={aiTargets.length === 0 ? "Select at least one variant and one package" : "Assess the selected targets with AI"}
+            iconClassName="mr-2"
             className="mt-2 ml-2 rounded-lg border border-cyan-500 px-4 py-2 text-center font-medium text-cyan-200 hover:bg-cyan-900/40 focus:outline-none focus:ring-4 focus:ring-cyan-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-        >{aiState?.status === 'running' ? <><FontAwesomeIcon icon={faCircleNotch} spin className="mr-2" />Assessing…</>
-            : aiState ? <><FontAwesomeIcon icon={faClock} className="mr-2" />Queued · #{aiState.position}</>
-            : 'Assess with AI'}</button>}
+        />}
 
         {progressBar !== undefined && <div className="p-4 pb-1 w-full">
              <progress max={1} value={progressBar} className="w-full h-2"></progress>
