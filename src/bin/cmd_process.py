@@ -25,6 +25,7 @@ from ..extensions import batch_session, db as _db
 import click
 import json
 import os
+from itertools import chain
 from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
@@ -198,8 +199,9 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     pkgCtrl: PackagesController = controllers.packages
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
+    detached_cdx_documents: list[SBOMDocument] = []
 
-    for doc in docs:
+    for doc in chain(docs, detached_cdx_documents):
         document_path = doc.path
         pkgCtrl.current_sbom_document = doc
         try:
@@ -238,6 +240,12 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 )
             ):
                 cdx.load_from_dict(data)
+                # Paths, not CLI argument order, determine document order. Index BOM
+                # inventories before importing detached VEX BOM-Link references.
+                if (getattr(cdx, "sbom", None) is not None
+                        and not any(cdx._inventory_components()) and doc not in detached_cdx_documents):
+                    detached_cdx_documents.append(doc)
+                    continue
                 cdx.parse_and_merge()
             elif fmt == "openvex" or (fmt is None and "statements" in data):
                 openvex.load_from_dict(data)
