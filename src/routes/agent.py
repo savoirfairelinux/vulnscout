@@ -711,6 +711,11 @@ async def _reply(conversation, message, path, model, scope, publish=None):
 
 @agent_blueprint.route("/api/agent", methods=["GET"])
 def agent_status():
+    """Return the localhost-only agent session and authentication state.
+
+    OpenAPI:
+    response 200 AgentStatus Current provider, model, history, usage, and authentication state.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()
@@ -736,6 +741,15 @@ def agent_status():
 
 @agent_blueprint.route("/api/agent/provider", methods=["POST", "DELETE"])
 def agent_provider():
+    """Connect a custom AI provider, or disconnect the current provider.
+
+    OpenAPI:
+    POST body AgentProviderRequest required Provider connection and model configuration.
+    response 200 AgentProviderStatus Current provider and model.
+    response 409 Error Another request is using this conversation.
+    response 500 Error Credentials could not be persisted.
+    response 503 Error Previous conversation could not be cleared.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()
@@ -786,6 +800,14 @@ def _sign_out(root, key):
 
 @agent_blueprint.route("/api/agent/auth", methods=["POST", "DELETE"])
 def agent_auth():
+    """Start GitHub device sign-in, or clear stored agent credentials.
+
+    OpenAPI:
+    POST response 200 AgentDeviceLogin Device code, verification URL, and polling interval.
+    POST response 503 Error GitHub device sign-in is unavailable.
+    DELETE response 200 AgentAuthStatus Signed-out state and any conversation cleanup error.
+    DELETE response 500 Error Credentials could not be cleared.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()
@@ -819,6 +841,15 @@ def agent_auth():
 
 @agent_blueprint.route("/api/agent/auth/poll", methods=["POST"])
 def agent_auth_poll():
+    """Poll a previously started GitHub device sign-in.
+
+    OpenAPI:
+    response 200 AgentAuthStatus Pending or connected authentication state.
+    response 401 Error Sign-in denied or Copilot access unavailable.
+    response 410 Error Device sign-in code expired or missing.
+    response 500 Error Credentials could not be persisted.
+    response 503 Error GitHub or Copilot verification unavailable.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()
@@ -864,6 +895,12 @@ def agent_auth_poll():
 
 @agent_blueprint.route("/api/agent/models", methods=["GET"])
 def agent_models():
+    """List models available to the configured agent provider.
+
+    OpenAPI:
+    response 200 AgentModels Available model identifiers and display names.
+    response 503 Error Copilot models could not be loaded.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()
@@ -883,6 +920,15 @@ def agent_models():
 
 @agent_blueprint.route("/api/agent/model", methods=["POST"])
 def agent_model():
+    """Select and persist a model for the current agent conversation.
+
+    OpenAPI:
+    body AgentModelRequest required Available model identifier.
+    response 200 AgentModelStatus Selected model.
+    response 409 Error Another request is using this conversation.
+    response 500 Error Model selection could not be persisted.
+    response 503 Error Copilot models could not be verified.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()
@@ -921,6 +967,12 @@ def agent_model():
 
 @agent_blueprint.route("/api/agent/conversation", methods=["DELETE"])
 def agent_reset():
+    """Clear the current agent conversation and its usage counters.
+
+    OpenAPI:
+    response 200 AgentConversation Cleared message history and usage counters.
+    response 503 Error Stored Copilot conversation could not be deleted.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()
@@ -944,6 +996,20 @@ def agent_reset():
 
 @agent_blueprint.route("/api/agent/messages", methods=["POST"])
 def agent_message():
+    """Send a message to the agent, optionally streaming newline-delimited JSON.
+
+    Set Accept to application/x-ndjson for streaming; otherwise the response
+    is JSON. Streaming events include status, heartbeat, tool activity, text deltas,
+    and a final done or error event. Errors after streaming starts are
+    reported in the stream rather than by changing the HTTP status.
+
+    OpenAPI:
+    body AgentMessageRequest required Message and optional model and browser context.
+    response 200 AgentReply Completed reply, selected model, and usage.
+    response 200 ndjson Newline-delimited agent events when Accept is application/x-ndjson.
+    response 409 Error Another request is using this conversation.
+    response 503 Error MCP server or AI provider unavailable.
+    """
     if error := _access_error():
         return error
     key, conversation = _conversation()

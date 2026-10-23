@@ -388,8 +388,8 @@ def init_app(app: Flask) -> None:
         ``/api/events/stream``; there is no status endpoint to poll.
 
         OpenAPI:
-        body JsonObject optional Batch of jobs to queue.
-        response 202 JsonObject Queue accepted with the created operations.
+        body OperationBatch required Batch of jobs to queue.
+        response 202 QueueAccepted Queue accepted with the created operations.
         response 400 Error Invalid job specification.
         response 404 Error Referenced variant not found.
         response 409 Error One of the requested operations is already active.
@@ -439,7 +439,7 @@ def init_app(app: Flask) -> None:
         exists for clients that cannot hold a stream open and for diagnostics.
 
         OpenAPI:
-        response 200 JsonObject Current operation snapshot.
+        response 200 OperationSnapshot Current operation snapshot.
         """
         return jsonify({"operations": registry.snapshot()})
 
@@ -451,7 +451,7 @@ def init_app(app: Flask) -> None:
         cooperative stop signal that its job body honours at the next checkpoint.
 
         OpenAPI:
-        response 200 JsonObject Cancellation accepted.
+        response 200 OperationCancellation Cancellation accepted.
         response 404 Error No such active operation.
         """
         return _cancel_operation_response(op_id)
@@ -461,7 +461,7 @@ def init_app(app: Flask) -> None:
         """Cancel every still-active operation in a batch.
 
         OpenAPI:
-        response 200 JsonObject Number of operations cancelled.
+        response 200 QueueCancellation Number of operations cancelled.
         """
         return jsonify({"cancelled": queue.cancel_queue(queue_id)}), 200
 
@@ -470,7 +470,7 @@ def init_app(app: Flask) -> None:
         """Forget a finished operation so it disappears from every client.
 
         OpenAPI:
-        response 200 JsonObject Operation dismissed.
+        response 200 OperationDismissal Operation dismissed.
         response 409 Error Operation is still active.
         """
         if registry.remove(op_id):

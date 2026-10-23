@@ -9,15 +9,19 @@ Vulnerability IDs are strings such as `CVE-2024-1234` or `GHSA-xxxx-xxxx-xxxx`; 
 The backend also exposes a machine-readable OpenAPI document at `GET /api/openapi`.
 For compatibility, the same document is also available at `GET /api` and `GET /api/openapi.json`.
 An interactive Swagger UI is available at `GET /api/openapi/ui` and is preconfigured to load the canonical spec from `/api/openapi`.
+The navigation bar's **API documentation** link opens it in a new tab.
+Swagger UI assets are bundled with the backend using a pinned dependency; viewing the API documentation needs no CDN or external validator.
 This JSON document is generated from the registered Flask routes. Every registered `GET`, `POST`, `PUT`, `PATCH`, and `DELETE` operation under `/api` is included; descriptions and explicitly annotated metadata come from route docstrings.
-It is useful for route discovery, but is not a complete or fully accurate request/response schema:
-
-- Bodies and responses generally use free-form object schemas, not validated field definitions. Field-style `body` annotations are not parsed as object properties and may overwrite preceding body metadata.
-- A default success response (`201` for POST, `200` otherwise) is added even when another success status is explicitly annotated; do not assume every advertised success status is returned.
-- Parameters ending in `_id` are inferred as UUIDs, even for vulnerability and operation IDs.
-- Stream and download media types may be generic or incorrect; for example, the event stream is advertised as JSON instead of `text/event-stream`.
-
-Use the contracts below and the implementation when generated metadata is ambiguous. Swagger UI loads the canonical *spec URL*, not a separately curated specification.
+The specification includes reusable domain schemas, required request fields,
+multipart file controls, collection shapes, explicit success statuses, and
+stream/download media types. Bodyless responses have no content schema.
+Vulnerability, operation, and queue identifiers remain strings rather than being
+inferred as UUIDs from their names. Agent operations describe their localhost
+restrictions, session cookie, optional conversation header, and JSON/NDJSON replies.
+Schemas remain extensible where responses carry computed enrichment or external
+SBOM/VEX fields. These are documentation contracts, not additional runtime validation.
+Swagger UI loads the canonical *spec URL*, not a separately curated specification;
+the UI's spec and asset URLs also respect a WSGI deployment prefix.
 
 ---
 

@@ -219,7 +219,7 @@ def create_app():
         """Return the running VulnScout backend version.
 
         OpenAPI:
-        response 200 JsonObject Backend version payload.
+        response 200 ServerVersion Backend version payload.
         """
         return {"version": os.getenv("VULNSCOUT_VERSION", "unknown")}
 
@@ -232,7 +232,7 @@ def create_app():
         scan-completion middleware.
 
         OpenAPI:
-        response 200 JsonObject Scan bootstrap progress payload.
+        response 200 ScanStatus Scan bootstrap progress payload.
         """
         with open(app.config["SCAN_FILE"], "r") as f:
             text = f.read()

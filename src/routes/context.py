@@ -38,7 +38,7 @@ def init_app(app):
         OpenAPI:
         query project_id uuid required Project UUID.
         query variant_id uuid required Variant UUID belonging to the project.
-        response 200 JsonObject Merged project and variant context.
+        response 200 MergedContext Merged project and variant context.
         response 400 Error Invalid identifiers or mismatched project and variant.
         response 404 Error Project or variant not found.
         """
@@ -85,7 +85,7 @@ def init_app(app):
         """Return context for a project.
 
         OpenAPI:
-        response 200 JsonObject Project context.
+        response 200 ProjectContext Project context.
         response 400 Error Invalid project identifier.
         response 404 Error Project not found.
         """
@@ -108,8 +108,8 @@ def init_app(app):
         """Create or update context for a project.
 
         OpenAPI:
-        body JsonObject required Project context fields.
-        response 200 JsonObject Updated project context.
+        body ProjectContextUpdate required Project context fields.
+        response 200 ProjectContext Updated project context.
         response 400 Error Invalid project identifier.
         response 404 Error Project not found.
         """
@@ -131,8 +131,8 @@ def init_app(app):
         """Create or update context for a variant.
 
         OpenAPI:
-        body JsonObject required Variant context fields.
-        response 200 JsonObject Updated variant context.
+        body VariantContextUpdate required Variant context fields.
+        response 200 VariantContext Updated variant context.
         response 400 Error Invalid variant identifier.
         response 404 Error Variant not found.
         """
@@ -167,7 +167,7 @@ def init_app(app):
         query project_id uuid optional Project UUID for a single-variant export.
         query variant_id uuid optional Variant UUID for a single-variant export.
         query variant_ids string optional Comma-separated variant UUIDs.
-        response 200 JsonObject Exported context document.
+        response 200 ContextExport Exported context document.
         response 400 Error Invalid or inconsistent filters.
         response 404 Error Requested project or variant not found.
         """
@@ -213,8 +213,8 @@ def init_app(app):
         """Import project and variant context atomically.
 
         OpenAPI:
-        body JsonObject required Context export document to import.
-        response 200 JsonObject Import result.
+        body ContextExport required Context export document to import.
+        response 200 ContextImportResult Import result.
         response 400 Error Invalid context document.
         response 500 Error Context could not be persisted.
         """
@@ -246,7 +246,9 @@ def init_app(app):
 
         OpenAPI:
         body multipart required Supplemental file and optional description.
-        response 201 JsonObject Uploaded context-file metadata.
+        form file binary required Codebase reference file or ZIP/TAR archive.
+        form description string optional Description of this reference.
+        response 201 ContextFile Uploaded context-file metadata.
         response 400 Error Invalid identifier or missing file.
         response 404 Error Variant not found.
         response 500 Error File could not be stored.
@@ -321,7 +323,7 @@ def init_app(app):
         query max_lines integer optional Read line count, 1-200 (default 200).
         query query string optional Literal case-sensitive search text, required for search.
         query max_results integer optional Search limit, 1-100 (default 100).
-        response 200 JsonObject Source files, line-numbered content, or search matches.
+        response 200 SourceReferenceResult Source files, line-numbered content, or search matches.
         response 400 Error Invalid parameters or unreadable reference.
         response 404 Error Variant, reference, or source member not found.
         response 500 Error Stored reference is unavailable.
@@ -387,7 +389,7 @@ def init_app(app):
         """Delete an uploaded codebase reference.
 
         OpenAPI:
-        response 204 string Context file deleted.
+        response 204 empty Context file deleted.
         response 400 Error Invalid variant or file identifier.
         response 404 Error Variant or context file not found.
         """

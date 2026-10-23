@@ -348,8 +348,8 @@ def init_app(app: Flask) -> None:
         """Evaluate a condition against supplied data objects.
 
         OpenAPI:
-        body JsonObject required Condition string and items containing id and data fields.
-        response 200 JsonObject IDs of items matching the condition.
+        body MatchConditionRequest required Condition string and items containing id and data fields.
+        response 200 MatchConditionResult IDs of items matching the condition.
         response 400 Error Invalid request or condition.
         """
         payload = request.get_json(silent=True)
@@ -398,7 +398,7 @@ def init_app(app: Flask) -> None:
         query variant_ids string optional Comma-separated list of variant IDs.
         query operation string optional Comparison mode such as difference, intersection, or union.
         query format string optional Response format such as list or dict.
-        response 200 JsonObject Vulnerability collection.
+        response 200 VulnerabilityCollection Vulnerability collection; list/compact arrays or a map with format=dict.
         """
         response_format = request.args.get('format', 'list')
         variant_id = request.args.get('variant_id')
@@ -950,8 +950,8 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_id uuid optional Restrict descriptions to a variant's active scans.
         query project_id uuid optional Restrict descriptions to a project's active scans.
-        body JsonObject required Vulnerability ID and search-term arrays.
-        response 200 JsonObject Matching vulnerability IDs grouped by normalized term.
+        body DescriptionSearchRequest required Vulnerability ID and search-term arrays.
+        response 200 DescriptionSearchResult Matching vulnerability IDs grouped by normalized term.
         response 400 Error Invalid identifiers, arrays, or size limits.
         """
         payload = request.get_json(silent=True)
@@ -1036,9 +1036,11 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query variant_id uuid optional Apply variant-scoped CVSS and effort overrides.
+        query project_id uuid optional Scope vulnerability texts to one project when variant_id is absent.
         query agent_scoped string optional When '1', require active variant membership and return scoped packages.
-        response 200 JsonObject Vulnerability payload.
+        response 200 Vulnerability Vulnerability payload.
         response 404 Error Vulnerability not found.
+        response 404 html Missing vulnerability record.
         """
         record = Vulnerability.get_by_id(id)
         if not record:
@@ -1130,8 +1132,8 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query project_id uuid optional Restrict snapshots to variants from one project.
-        response 200 JsonObject Variant-scoped vulnerability snapshots.
-        response 404 Error Vulnerability not found.
+        response 200 VariantSnapshots Variant-scoped vulnerability snapshots.
+        response 404 html Vulnerability not found.
         """
         record = Vulnerability.get_by_id(id)
         if not record:
@@ -1174,10 +1176,10 @@ def init_app(app: Flask) -> None:
         """Update variant-scoped effort or custom CVSS data for a vulnerability.
 
         OpenAPI:
-        body JsonObject optional Vulnerability update payload.
-        response 200 JsonObject Updated vulnerability payload.
+        body VulnerabilityUpdate required Variant-scoped effort or custom CVSS update.
+        response 200 Vulnerability Updated vulnerability payload.
         response 400 Error Invalid update payload.
-        response 404 Error Vulnerability not found.
+        response 404 html Vulnerability not found.
         """
         record = Vulnerability.get_by_id(id)
         if not record:
@@ -1262,8 +1264,8 @@ def init_app(app: Flask) -> None:
         """Update multiple vulnerabilities in a single request.
 
         OpenAPI:
-        body JsonObject optional Batch vulnerability update payload.
-        response 200 JsonObject Batch update summary.
+        body VulnerabilityBatchUpdate required Batch vulnerability updates.
+        response 200 VulnerabilityBatchResult Batch update summary.
         response 400 Error Invalid batch payload.
         """
         payload_data = request.get_json()
@@ -1382,9 +1384,11 @@ def init_app(app: Flask) -> None:
         """Refresh NVD data for a single CVE.
 
         OpenAPI:
-        body JsonObject optional Request body containing mode: local or api.
-        response 200 JsonObject Refreshed vulnerability payload.
+        body NvdRefreshRequest optional Request body containing mode: local or api.
+        response 200 Vulnerability Refreshed vulnerability payload.
         response 404 Error CVE not found.
+        response 401 Error NVD API key rejected.
+        response 403 Error NVD API credentials forbidden.
         response 429 Error NVD API rate limit exceeded.
         response 503 Error NVD data source unavailable.
         """
@@ -1497,7 +1501,7 @@ def init_app(app: Flask) -> None:
         """Refresh EPSS data for a single CVE.
 
         OpenAPI:
-        response 200 JsonObject Refreshed vulnerability payload.
+        response 200 Vulnerability Refreshed vulnerability payload.
         response 404 Error CVE not found.
         response 503 Error EPSS data source unavailable.
         """
@@ -1539,7 +1543,7 @@ def init_app(app: Flask) -> None:
         """Refresh GitHub advisory metadata for a single GHSA identifier.
 
         OpenAPI:
-        response 200 JsonObject Refreshed vulnerability payload.
+        response 200 Vulnerability Refreshed vulnerability payload.
         response 400 Error Invalid GHSA identifier.
         response 404 Error GHSA advisory not found.
         response 502 Error Upstream GitHub advisory error.

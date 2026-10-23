@@ -48,6 +48,43 @@ The container only adjusts ownership of runtime directories, not the mounted
 `src/` or `vulnscout_mcp/` trees. If an earlier run changed their host
 ownership, restore it once before editing.
 
+#### Maintaining the OpenAPI contract
+
+`src/helpers/openapi.py` discovers API operations from the Flask route map.
+Keep route docstrings and the reusable schemas in
+`src/helpers/openapi_schemas.py` aligned with request validation and serializers.
+Annotations after `OpenAPI:` use the following forms:
+
+```text
+query variant_id uuid optional Restrict results to one variant.
+body NameRequest required JSON object containing a name.
+body allowed_variant_ids uuid[] optional Optional guard on the assessment scope.
+form file binary required Uploaded file.
+response 200 Project[] Project collection.
+response 202 QueueAccepted Accepted batch.
+response 204 empty Deleted successfully.
+```
+
+Use either a named whole-body schema or field-level `body` annotations; fields
+accumulate instead of replacing each other. `form` fields build a multipart
+schema, including binary upload controls. Use `Type[]` for arrays and `TypeMap`
+for maps keyed by identifiers. Multiple response annotations for one status
+combine media types; tokens such as `sse`, `ndjson`, `zip`, `pdf`, and `html`
+describe non-JSON content. Prefix an annotation with a method (for example,
+`PUT body ScanConfiguration required Scan settings.`) when one view handles
+methods with different contracts. Do not document a body for a bodyless action.
+Unknown schema names fail generation rather than silently becoming free-form
+objects.
+
+The Swagger UI asset dependency is pinned in both backend requirements files.
+Rebuild the container after changing it, including when developing with mounted
+backend sources. Keep the OpenAPI and local-asset regression tests passing:
+
+```bash
+python -m pytest tests/webapp_tests/test_openapi_spec.py \
+  tests/webapp_tests/test_swagger_ui.py
+```
+
 #### Database changes
 
 When editing the database schema, it is necessary to generate **migrations**. We use Alembic for that.
