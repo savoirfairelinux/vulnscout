@@ -17,12 +17,24 @@ from ..helpers.context_io import (
     extract_entries,
     import_entries,
 )
+from ..helpers.stride_model import StrideValidationError
 from ..models.project import Project
 from ..models.variant import Variant
-from ..models.variant_context import VariantContext, ContextFile
+from ..models.variant_context import (
+    ContextFile,
+    StrideWriteConflict,
+    VariantContext,
+    default_editor_block,
+)
 from ..routes._scan_helpers import parse_uuid_or_400
 
 logger = logging.getLogger(__name__)
+
+
+# Agent-facing variant keys of GET /api/context (besides ``files``).
+_AGENT_VARIANT_KEYS = (
+    "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+)
 
 
 def _get_cache_dir() -> str:
@@ -67,17 +79,14 @@ def init_app(app):
         pc = ProjectContext.get_by_project(project_uuid)
         vc = VariantContext.get_by_variant(variant_uuid)
 
+        variant_part = vc.to_dict() if vc else {"files": [], "editor": default_editor_block()}
         return jsonify({
             "project_id": str(project_uuid),
             "description": pc.description if pc else None,
             "variant_id": str(variant_uuid),
-            "variant_description": vc.variant_description if vc else None,
-            "codebase_path": vc.codebase_path if vc else None,
-            "environment": vc.environment if vc else None,
-            "threat_model": vc.threat_model if vc else None,
-            "risks": vc.risks if vc else None,
-            "other_info": vc.other_info if vc else None,
-            "files": [f.to_dict() for f in vc.files] if vc else [],
+            **{key: variant_part.get(key) for key in _AGENT_VARIANT_KEYS},
+            "files": variant_part["files"],
+            "editor": variant_part["editor"],
         })
 
     @app.route('/api/projects/<project_id>/context', methods=['GET'])
@@ -130,11 +139,15 @@ def init_app(app):
     def put_variant_context(variant_id):
         """Create or update context for a variant.
 
+        A body with ``editor_mode`` is an editor-shape save (both modes' data);
+        otherwise it is a legacy full-replacement write of the text fields.
+
         OpenAPI:
         body VariantContextUpdate required Variant context fields.
         response 200 VariantContext Updated variant context.
-        response 400 Error Invalid variant identifier.
+        response 400 Error Invalid variant identifier or context fields.
         response 404 Error Variant not found.
+        response 409 Error Legacy threat model or risks write on a STRIDE variant.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:
@@ -142,15 +155,22 @@ def init_app(app):
         assert variant_uuid is not None
         body = request.get_json(silent=True) or {}
         try:
-            vc = VariantContextController.upsert(
-                variant_uuid,
-                variant_description=body.get('variant_description'),
-                codebase_path=body.get('codebase_path'),
-                environment=body.get('environment'),
-                threat_model=body.get('threat_model'),
-                risks=body.get('risks'),
-                other_info=body.get('other_info'),
-            )
+            if 'editor_mode' in body:
+                vc = VariantContextController.save_editor(variant_uuid, body)
+            else:
+                vc = VariantContextController.upsert(
+                    variant_uuid,
+                    variant_description=body.get('variant_description'),
+                    codebase_path=body.get('codebase_path'),
+                    environment=body.get('environment'),
+                    threat_model=body.get('threat_model'),
+                    risks=body.get('risks'),
+                    other_info=body.get('other_info'),
+                )
+        except StrideValidationError as exc:
+            return jsonify({"error": str(exc), "fields": exc.fields}), 400
+        except StrideWriteConflict as exc:
+            return jsonify({"error": str(exc)}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))
@@ -283,7 +303,10 @@ def init_app(app):
 
         vc = VariantContext.get_by_variant(variant_uuid)
         if vc is None:
-            vc = VariantContext.upsert(variant_uuid)
+            # A variant whose first context is an upload uses its references.
+            vc = VariantContext.upsert(variant_uuid, commit=False)
+            vc.codebase_source = "references"
+            db.session.commit()
 
         dest_dir = os.path.join(_get_cache_dir(), "context-files", str(vc.id))
         file_path = os.path.join(dest_dir, str(file_id))
