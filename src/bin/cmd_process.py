@@ -199,6 +199,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
     detached_cdx_documents: list[SBOMDocument] = []
+    detached_cdx_refs: dict[SBOMDocument, dict[str, str]] = {}
 
     for doc in chain(docs, detached_cdx_documents):
         document_path = doc.path
@@ -238,14 +239,23 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                     or doc.source_name.endswith(".cdx.json")
                 )
             ):
-                cdx.load_from_dict(data)
-                # Paths, not CLI argument order, determine document order. Index BOM
-                # inventories before importing detached VEX BOM-Link references.
-                if (getattr(cdx, "sbom", None) is not None
-                        and not any(cdx._inventory_components()) and doc not in detached_cdx_documents):
+                document_cdx = cdx
+                if doc in detached_cdx_refs:
+                    document_cdx = CycloneDx(controllers)
+                    # Only BOM-Links may see later inventories; local refs keep
+                    # the mapping from this document's original path position.
+                    document_cdx.ref_dict = detached_cdx_refs[doc] | {
+                        ref: package for ref, package in cdx.ref_dict.items() if ref.startswith("urn:cdx:")
+                    }
+                document_cdx.load_from_dict(data)
+                if (document_cdx is cdx and getattr(cdx, "sbom", None) is not None
+                        and not any(cdx._inventory_components())
+                        and any(affect.ref.startswith("urn:cdx:")
+                                for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects)):
                     detached_cdx_documents.append(doc)
+                    detached_cdx_refs[doc] = dict(cdx.ref_dict)
                     continue
-                cdx.parse_and_merge()
+                document_cdx.parse_and_merge()
             elif fmt == "openvex" or (fmt is None and "statements" in data):
                 openvex.load_from_dict(data)
             elif fmt == "yocto_vex" or (
