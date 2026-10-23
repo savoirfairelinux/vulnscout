@@ -1033,12 +1033,8 @@ def _persist_import_assessments(
     return created
 
 
-def _import_scan_exports(exports: Sequence[object]) -> tuple[list[_ImportSummary], int]:
-    """Validate exports and persist only scans absent from their destination."""
-    parsed: list[_ScanImport] = []
-    batch_keys: set[tuple[uuid_module.UUID, str, str | None, str]] = set()
-    skipped_count = 0
-
+def _validate_archive_evidence_budget(exports: Sequence[object]) -> None:
+    """Apply the same evidence budget to downloaded and uploaded archives."""
     evidence_count = 0
     for export in exports:
         packages = export.get("packages") if isinstance(export, dict) else None
@@ -1047,11 +1043,24 @@ def _import_scan_exports(exports: Sequence[object]) -> tuple[list[_ImportSummary
         for package in packages:
             evidence = package.get("sbom_evidence") if isinstance(package, dict) else None
             if isinstance(evidence, list):
+                if len(evidence) > _MAX_IMPORT_EVIDENCE_PER_PACKAGE:
+                    raise ValueError(
+                        f"'sbom_evidence' exceeds {_MAX_IMPORT_EVIDENCE_PER_PACKAGE} records per package per export"
+                    )
                 evidence_count += len(evidence)
                 if evidence_count > _MAX_IMPORT_EVIDENCE:
                     raise ValueError(
                         f"'sbom_evidence' exceeds {_MAX_IMPORT_EVIDENCE} records per request"
                     )
+
+
+def _import_scan_exports(exports: Sequence[object]) -> tuple[list[_ImportSummary], int]:
+    """Validate exports and persist only scans absent from their destination."""
+    parsed: list[_ScanImport] = []
+    batch_keys: set[tuple[uuid_module.UUID, str, str | None, str]] = set()
+    skipped_count = 0
+
+    _validate_archive_evidence_budget(exports)
 
     for index, export in enumerate(exports):
         try:
@@ -1854,7 +1863,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         response 200 JsonObject JSON download containing the scan diff.
-        response 400 Error Invalid scan identifier.
+        response 400 Error Invalid scan identifier or archive evidence budget exceeded.
         response 404 Error Scan not found.
         """
         try:
@@ -1871,6 +1880,10 @@ def init_app(app: Flask) -> None:
 
         diff = _compute_diff_dict(scan)
         export_data = _build_diff_export(scan, diff, vname, pname)
+        try:
+            _validate_archive_evidence_budget([export_data])
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         proj = _sanitize_filename(pname or "project")
         variant = _sanitize_filename(vname or str(scan.variant_id))
@@ -1887,7 +1900,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         response 200 JsonObject JSON download containing the global scan result.
-        response 400 Error Invalid scan identifier.
+        response 400 Error Invalid scan identifier or archive evidence budget exceeded.
         response 404 Error Scan not found.
         """
         try:
@@ -1905,6 +1918,10 @@ def init_app(app: Flask) -> None:
         all_variant_scans = ScanController.get_by_variant(scan.variant_id)
         result = _global_result_full(scan, all_variant_scans)
         export_data = _build_global_result_export(scan, result, vname, pname)
+        try:
+            _validate_archive_evidence_budget([export_data])
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         proj = _sanitize_filename(pname or "project")
         variant = _sanitize_filename(vname or str(scan.variant_id))
@@ -1931,7 +1948,7 @@ def init_app(app: Flask) -> None:
                 query project_id uuid optional Restrict export to a single project.
                 query type string optional Export type: diff or total.
                 response 200 JsonObject JSON export payload.
-                response 400 Error Invalid filter or export type.
+                response 400 Error Invalid filter, export type, or archive budget exceeded.
                 response 404 Error Project not found.
         """
         export_type = flask_request.args.get("type", "diff")
@@ -1962,11 +1979,10 @@ def init_app(app: Flask) -> None:
         if not scans:
             return jsonify([])
 
-        MAX_EXPORT_SCANS = 200
-        if len(scans) > MAX_EXPORT_SCANS:
+        if len(scans) > _MAX_IMPORT_EXPORTS:
             return jsonify({
                 "error": f"Too many scans ({len(scans)}). "
-                         f"Maximum is {MAX_EXPORT_SCANS}. "
+                         f"Maximum is {_MAX_IMPORT_EXPORTS}. "
                          "Filter by variant_id or project_id to reduce the set."
             }), 400
 
@@ -1995,6 +2011,14 @@ def init_app(app: Flask) -> None:
                     result = _global_result_full(loaded, all_variant_scans)
                     group_data.append(_build_global_result_export(loaded, result, vname, pname))
             all_exports.extend(group_data)
+
+        try:
+            _validate_archive_evidence_budget(all_exports)
+        except ValueError as exc:
+            return jsonify({
+                "error": f"{exc}. Filter by variant_id or project_id, "
+                         "or download individual scans to reduce the archive."
+            }), 400
 
         ts = _format_timestamp_for_filename()
         filename = f"scans_{export_type}_{ts}.json"

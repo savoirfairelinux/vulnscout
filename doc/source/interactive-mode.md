@@ -441,9 +441,14 @@ or newer imports. Separate association records preserve component classification
 but none were present. Older exports without this evidence can still be imported
 for their scan history, but require reimporting the original SBOM before rescanning.
 Tool-scan imports remain findings-only and do not replace the active SBOM.
-Imports accept at most 1,000 evidence records per package in each export and
-10,000 across the entire request, counting duplicates before deduplication.
-Exceeding either limit rejects the whole request without writing any scans.
+Imports and exports accept at most 1,000 evidence records per package in each
+scan and 10,000 across the entire archive, counting duplicates before
+deduplication. Exceeding either limit rejects the whole request; imports write
+no scans and exports produce no download. Bulk archives also allow at most
+200 scans. For a history exceeding the evidence budget, narrow the project or
+variant scope, or download individual scans instead. Each imported archive is
+atomic. Multiple imported association records remain one logical SBOM source
+in dependency graphs and scan-result source labels.
 
 **Export All:** an **Export** button in the toolbar lets you download the entire visible scan history at once. A dropdown offers two modes — **Export All Diffs** and **Export All Scan Results** — which produce a single JSON array grouping all scans by variant. The export respects the current project/variant scope.
 
