@@ -3,8 +3,12 @@ set -euo pipefail
 
 print_completion() {
     cat <<'EOF'
+_vulnscout_files() {
+    compopt -o filenames 2>/dev/null || true
+    mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -f -- "$1")
+}
 _vulnscout_complete() {
-    local cur prev word verb="" i
+    local cur prev word verb="" i k
     local data_verbs="add scan match-condition report export import refresh"
     local all_verbs="add scan match-condition report export import refresh delete list config asset start stop restart update version serve"
     COMPREPLY=()
@@ -26,7 +30,7 @@ _vulnscout_complete() {
         --format) mapfile -t COMPREPLY < <(compgen -W "pdf html" -- "$cur"); return 0 ;;
         --timestamps) mapfile -t COMPREPLY < <(compgen -W "original current" -- "$cur"); return 0 ;;
         --spdx|--cdx|--cve-check|--yocto-vex|--openvex|--grype)
-            mapfile -t COMPREPLY < <(compgen -f -- "$cur"); return 0 ;;
+            _vulnscout_files "$cur"; return 0 ;;
     esac
 
     local globals="--dev -h --help --version"
@@ -58,15 +62,32 @@ _vulnscout_complete() {
         report)
             words="--format --condition"
             mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
-            mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -f -- "$cur")
+            _vulnscout_files "$cur"
             return 0 ;;
         export)
             words="spdx cdx openvex custom-data custom-openvex context --amend" ;;
         import)
-            words="custom-data custom-openvex context --timestamps"
+            # The kind is the first positional word; --timestamps and -v depend on it.
+            local kind="" k
+            for ((k = i + 1; k < COMP_CWORD; k++)); do
+                case "${COMP_WORDS[k]}" in
+                    -p|--project|-v|--variant) k=$((k + 1)) ;;
+                    -*) ;;
+                    *) kind="${COMP_WORDS[k]}"; break ;;
+                esac
+            done
+            if [ -z "$kind" ]; then
+                words="custom-data custom-openvex context"
+            else
+                case "$kind" in
+                    custom-data) words="--timestamps"; scope="-p --project" ;;
+                    custom-openvex) words="--timestamps" ;;
+                    context) words="" ;;
+                esac
+            fi
             mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
-            if [ "$prev" != "import" ]; then
-                mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -f -- "$cur")
+            if [ -n "$kind" ]; then
+                _vulnscout_files "$cur"
             fi
             return 0 ;;
         delete)
@@ -76,10 +97,14 @@ _vulnscout_complete() {
         config)
             words="get set unset list" ;;
         asset)
-            words="add"
-            mapfile -t COMPREPLY < <(compgen -W "$words $globals" -- "$cur")
-            if [ "$prev" = "add" ]; then
-                mapfile -t COMPREPLY < <(compgen -f -- "$cur")
+            local seen_add=false
+            for ((k = i + 1; k < COMP_CWORD; k++)); do
+                [ "${COMP_WORDS[k]}" = "add" ] && seen_add=true
+            done
+            if [ "$seen_add" = true ]; then
+                _vulnscout_files "$cur"
+            else
+                mapfile -t COMPREPLY < <(compgen -W "add $globals" -- "$cur")
             fi
             return 0 ;;
         match-condition|refresh)
