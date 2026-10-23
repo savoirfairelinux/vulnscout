@@ -62,9 +62,9 @@ const sameText = (a: string, b: string) => a === b;
 
 /** The variant tab that owns a server field path (e.g. "components[0].name", "system.actors"). */
 function tabForField(path: string): VariantTab {
-    if (/^(system\.|components|interactions)/.test(path)) return 'system';
-    if (/^(threats|notes)/.test(path)) return 'threat_model';
-    if (/^(risks|risk_notes)/.test(path)) return 'risks';
+    if (/^(system\.|components(\.|\[|$)|interactions(\.|\[|$))/.test(path)) return 'system';
+    if (/^(threats|notes|threat_model)(\.|\[|$)/.test(path)) return 'threat_model';
+    if (/^(risks|risk_notes)(\.|\[|$)/.test(path)) return 'risks';
     return 'context';
 }
 
