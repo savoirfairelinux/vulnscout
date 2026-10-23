@@ -5,6 +5,7 @@
 
 import json
 import os
+import sqlite3
 import uuid
 import pytest
 from unittest.mock import patch, MagicMock
@@ -78,10 +79,14 @@ def _build_db(app):
 
 
 @pytest.fixture()
-def app(tmp_path):
+def app(tmp_path, request):
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
-    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    database_uri = (
+        f"sqlite:///{tmp_path / 'scans.db'}"
+        if getattr(request, "param", None) == "wal" else "sqlite:///:memory:"
+    )
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = database_uri
     try:
         application = create_app()
         application.config.update({
@@ -261,6 +266,60 @@ def test_failed_local_scan_rolls_back_flushed_assessments(app, ids, command, err
         )).all() == original_targets
         assert all(scan.scan_type == "sbom" for scan in Scan.get_all())
     assert app.test_client().get(endpoint).json == before.json
+
+
+@pytest.mark.parametrize("app", ["wal"], indirect=True)
+@pytest.mark.parametrize("command", ["nvd-scan", "sbom-cve-check-scan"])
+@pytest.mark.parametrize("fail_after_flush", [False, True])
+def test_local_scan_releases_sqlite_writer_after_each_chunk(app, ids, command, fail_after_flush):
+    from src.bin.cmd_vuln_scan import _SccBulkWriter
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from tests.webapp_tests.test_scc_bulk_writer import _Computed
+
+    with app.app_context():
+        database = _db.engine.url.database
+        original_findings = set(_db.session.scalars(_db.select(Finding.id)))
+        original_assessments = set(_db.session.scalars(_db.select(Assessment.id)))
+        with sqlite3.connect(database) as connection:
+            assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = [(_Computed("CVE-2026-1234"), "affected")]
+    real_flush = _SccBulkWriter.flush
+    concurrent_writes = []
+
+    def flush_and_write(writer):
+        real_flush(writer)
+        with sqlite3.connect(database, timeout=0.1) as connection:
+            connection.execute(
+                "UPDATE scans SET description = 'concurrent write' WHERE scan_type = 'sbom'"
+            )
+        concurrent_writes.append(True)
+        if fail_after_flush:
+            raise RuntimeError("after concurrent write")
+
+    with patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine), \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch.object(_SccBulkWriter, "FLUSH_THRESHOLD", 1), \
+            patch.object(_SccBulkWriter, "flush", flush_and_write):
+        result = app.test_cli_runner().invoke(args=[command, *_scan_args(ids)])
+
+    if fail_after_flush:
+        assert isinstance(result.exception, RuntimeError), (result.output, result.exception)
+        assert str(result.exception) == "after concurrent write"
+        assert len(concurrent_writes) == 1
+    else:
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert len(concurrent_writes) >= 2
+    with app.app_context():
+        if fail_after_flush:
+            assert set(_db.session.scalars(_db.select(Finding.id))) == original_findings
+            assert set(_db.session.scalars(_db.select(Assessment.id))) == original_assessments
+            assert not _db.session.scalars(_db.select(Scan).where(Scan.scan_type == "tool")).all()
+        assert _db.session.scalar(
+            _db.select(Scan.description).where(Scan.scan_type == "sbom")
+        ) == "concurrent write"
 
 
 @pytest.mark.parametrize("command", ["nvd-scan", "sbom-cve-check-scan"])
