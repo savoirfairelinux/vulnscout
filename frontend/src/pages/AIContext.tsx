@@ -4,9 +4,9 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBook } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
-import Context from "../handlers/context";
+import Context, { ContextSaveError } from "../handlers/context";
 import Assessments from "../handlers/assessments";
-import type { ImportResult, VariantDraft } from "../handlers/context";
+import type { ContextFile, ImportResult, VariantDraft } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
@@ -17,6 +17,7 @@ import ContextSidebar from "../components/aiContext/ContextSidebar";
 import type { SidebarSelection } from "../components/aiContext/ContextSidebar";
 import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionPanel";
 import ContextTransferControls, { ImportDetails } from "../components/aiContext/ContextTransferControls";
+import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
 import { ERROR } from "../components/aiContext/styles";
 import { AGENT_WRITE_EVENT, type AgentViewContext } from "../types/agent";
 
@@ -49,8 +50,6 @@ async function fetchVariantList(projectId: string): Promise<Variant[]> {
  */
 export type AiContextScope = { projectId?: string; variantIds?: string[]; revision?: number };
 
-export type VariantTab = 'context' | 'system' | 'threat' | 'risks';
-
 type SaveTarget =
     | { kind: 'project'; projectId: string; description: string; sent: string }
     | { kind: 'variant'; projectId: string; variantId: string; draft: VariantDraft };
@@ -58,6 +57,7 @@ type SaveTarget =
 const DIRTY_PROJECT_AGENT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
 const DIRTY_VARIANT_AGENT_TEXT = "The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.";
 const EMPTY_VARIANT_DRAFT = emptyDraft();
+const NO_FILES: ContextFile[] = [];
 const sameText = (a: string, b: string) => a === b;
 
 async function hasPendingAi(target: SaveTarget): Promise<boolean> {
@@ -98,7 +98,10 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     // UI state
     const [busy, setBusy] = useState(false);
     const [fieldError, setFieldError] = useState('');
+    const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
     const [variantTab, setVariantTab] = useState<VariantTab>('context');
+    // Uploaded references are saved on their own, outside the draft; tagged with the draft key they belong to.
+    const [variantFiles, setVariantFiles] = useState<{ key: string | null; files: ContextFile[] }>({ key: null, files: [] });
     const [announcement, setAnnouncement] = useState('');
     const [confirmOutdate, setConfirmOutdate] = useState(false);
     // The save a pending confirmation belongs to, and who waits for its outcome.
@@ -153,7 +156,10 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     );
     const variantDraft = useLoadedDraft<VariantDraft>(
         variantKey,
-        () => Context.get(projectId ?? '', selected?.kind === 'variant' ? selected.id : '').then(draftFromContext),
+        () => Context.get(projectId ?? '', selected?.kind === 'variant' ? selected.id : '').then(ctx => {
+            setVariantFiles({ key: variantKey, files: ctx.editor?.files ?? ctx.files ?? [] });
+            return draftFromContext(ctx);
+        }),
         EMPTY_VARIANT_DRAFT, draftsEqual, showLoadError,
     );
     const openKey = projectKey ?? variantKey;
@@ -212,7 +218,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (variantDraft.baseline === null) return null;
         if (!hasThreatModel(variantDraft.draft)) {
             setFieldError("A threat model is required.");
-            setVariantTab('threat');
+            setVariantTab('threat_model');
             return null;
         }
         return { kind: 'variant', projectId, variantId: selected.id, draft: variantDraft.draft };
@@ -235,6 +241,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             if (!unmountedRef.current) setAnnouncement("Saved.");
             return true;
         } catch (e: any) {
+            if (e instanceof ContextSaveError && !unmountedRef.current && openKeyRef.current === key) setFieldErrors(e.fields);
             showBanner(e?.message || "Failed to save context.", "error");
             return false;
         } finally {
@@ -248,6 +255,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const requestSave = async (): Promise<boolean> => {
         if (busy) return false;
         setFieldError('');
+        setFieldErrors({});
         setAnnouncement('');
         const target = buildSaveTarget();
         if (!target) return false;
@@ -293,6 +301,8 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         const same = next.kind === selected?.kind && (next.kind === 'project' || (selected?.kind === 'variant' && next.id === selected.id));
         if (!projectId || same || !(await confirmLeave())) return;
         setFieldError('');
+        setFieldErrors({});
+        setVariantTab('context');
         setSelection({ projectId, item: next });
     };
 
@@ -388,8 +398,24 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                         {selected?.kind === 'variant' && (
                             <>
                                 {fieldError && <p role="alert" className={`${ERROR} mb-2`}>{fieldError}</p>}
-                                {/* Filled by the variant editor (tabs) in the next step. */}
-                                <section aria-label="Variant editor" data-active-tab={variantTab} />
+                                {variantDraft.baseline === null ? (
+                                    <p className="text-sm text-zinc-400">{variantDraft.loading ? 'Loading variant context…' : ''}</p>
+                                ) : (
+                                    <VariantEditor
+                                        variantId={selected.id}
+                                        variantName={openVariant?.name ?? ''}
+                                        draft={variantDraft.draft}
+                                        onDraftChange={variantDraft.setDraft}
+                                        files={variantFiles.key === variantKey ? variantFiles.files : NO_FILES}
+                                        onSave={() => { void requestSave(); }}
+                                        saving={busy}
+                                        dirty={variantDraft.dirty}
+                                        fieldErrors={fieldErrors}
+                                        notify={showBanner}
+                                        tab={variantTab}
+                                        onTabChange={setVariantTab}
+                                    />
+                                )}
                             </>
                         )}
                     </div>
