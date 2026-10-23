@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
-import { MemoryRouter, Link } from 'react-router-dom';
+import { MemoryRouter, Link, Routes, Route, useLocation } from 'react-router-dom';
 
 import Explorer from '../../src/pages/Explorer';
 import { ROUTES } from '../../src/routes';
@@ -15,6 +15,7 @@ import Vulnerabilities from '../../src/handlers/vulnerabilities';
 import Assessments from '../../src/handlers/assessments';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
+import { UnsavedGuardProvider, useUnsavedGuard } from '../../src/hooks/useUnsavedGuard';
 
 class TestEventSource {
     static current: TestEventSource;
@@ -82,15 +83,19 @@ jest.mock('../../src/handlers/assessments', () => ({
 
 jest.mock('../../src/components/NavigationBar', () => ({
     __esModule: true,
-    default: ({ defaultProject, defaultScope, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
+    default: ({ defaultProject, defaultScope, onApply, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
         defaultProject?: { id: string } | null;
         defaultScope?: { project_id: string } | null;
+        onApply: (...args: [string, string, string, string, string[], string]) => void | Promise<boolean | void> | boolean;
         onOpenOperationQueue: () => void;
         trackedScanCount: number;
         finishedScanCount: number;
         activeScanCount: number;
     }) => (
         <div>
+            <button onClick={() => { void Promise.resolve(onApply('p2', 'v9', '', '', [], '')).then(result => {
+                document.body.dataset.applyResult = String(result);
+            }); }}>apply other scope</button>
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
             <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
@@ -196,7 +201,23 @@ jest.mock('../../src/pages/Settings', () => {
 });
 jest.mock('../../src/pages/Transfer', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../src/pages/Exports', () => ({ __esModule: true, default: () => <div>exports page</div> }));
-jest.mock('../../src/pages/AIContext', () => ({ __esModule: true, default: () => <div>ai context page</div> }));
+jest.mock('../../src/pages/AIContext', () => {
+    const { useUnsavedGuard: useGuard } = jest.requireActual<typeof import('../../src/hooks/useUnsavedGuard')>(
+        '../../src/hooks/useUnsavedGuard',
+    );
+    function MockAIContext({ scope }: { scope: { projectId?: string; variantIds?: string[] } }) {
+        const { registerGuard } = useGuard();
+        return <div>
+            ai context page
+            <span data-testid="ai-scope">{JSON.stringify(scope)}</span>
+            <button onClick={() => registerGuard({ label: 'Variant 1', save: async () => true })}>make dirty</button>
+        </div>;
+    }
+    return { __esModule: true, default: MockAIContext };
+});
+const { default: RealNavigationBar } = jest.requireActual<typeof import('../../src/components/NavigationBar')>(
+    '../../src/components/NavigationBar',
+);
 
 const mockConfigGet = Config.get as jest.MockedFunction<typeof Config.get>;
 const mockGetFrontendScope = Config.getFrontendScope as jest.MockedFunction<typeof Config.getFrontendScope>;
@@ -588,5 +609,138 @@ describe('Explorer saved-scope validation', () => {
         expect(screen.getByRole('heading', { name: '404' })).toBeInTheDocument();
         expect(screen.queryByTestId('setup-required-popup')).not.toBeInTheDocument();
         expect(screen.getByRole('main')).toHaveAttribute('aria-label', 'Page not found');
+    });
+});
+
+const aiScope = () => JSON.parse(screen.getByTestId('ai-scope').textContent ?? '{}');
+
+describe('Explorer unsaved-changes guard', () => {
+    let restoreStream: () => void;
+    beforeEach(() => {
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
+        mockConfigGet.mockResolvedValue(SERVER_CONFIG);
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([]);
+        mockVariantsList.mockResolvedValue([]);
+        mockPackagesList.mockResolvedValue([]);
+        mockVulnerabilitiesList.mockResolvedValue([]);
+        mockAssessmentsList.mockResolvedValue([]);
+        mockVariantsListAll.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        __reset();
+        restoreStream();
+        jest.clearAllMocks();
+        delete document.body.dataset.applyResult;
+    });
+
+    test('without a saved scope the AI context covers the whole project; cancelling the unsaved prompt keeps the previous scope applied', async () => {
+        render(<Explorer />, { wrapper: ({ children }) => (
+            <MemoryRouter initialEntries={[ROUTES.ai]}><UnsavedGuardProvider>{children}</UnsavedGuardProvider></MemoryRouter>
+        ) });
+        await waitFor(() => expect(screen.getByTestId('default-project')).toHaveTextContent('default-project'));
+        await waitFor(() => expect(aiScope()).toEqual({ projectId: 'default-project', revision: 0 }));
+        const scopeBefore = screen.getByTestId('ai-scope').textContent;
+        const loadsBefore = mockPackagesList.mock.calls.length;
+        fireEvent.click(screen.getByRole('button', { name: 'make dirty' }));
+
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+        await waitFor(() => expect(document.body.dataset.applyResult).toBe('false'));
+        expect(screen.getByTestId('ai-scope').textContent).toBe(scopeBefore);
+        expect(Config.setFrontendScope).not.toHaveBeenCalled();
+        expect(mockPackagesList.mock.calls.length).toBe(loadsBefore);
+
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(aiScope()).toEqual({ projectId: 'p2', variantIds: ['v9'], revision: 1 }));
+        expect(document.body.dataset.applyResult).toBe('true');
+        expect(Config.setFrontendScope).toHaveBeenCalledTimes(1);
+
+        // Re-applying the identical scope still counts as a new scope.
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(aiScope()).toEqual({ projectId: 'p2', variantIds: ['v9'], revision: 2 }));
+    });
+
+    test.each([
+        ['multi-select', savedScope('saved-project', ['v1', 'v2']), ['v1', 'v2']],
+        ['single variant', savedScope('saved-project', ['v2']), ['v2']],
+        ['compare', {
+            project_id: 'saved-project', mode: 'compare' as const, variant_ids: [],
+            compare_base_id: 'v1', compare_operation: 'difference' as const, compare_variant_id: 'v2',
+        }, ['v1', 'v2']],
+    ])('AI context scope follows a saved %s scope', async (_label, scope, variantIds) => {
+        mockGetFrontendScope.mockReturnValue(scope);
+        mockProjectsList.mockResolvedValue([{ id: 'saved-project', name: 'Saved Project' }]);
+        mockVariantsList.mockResolvedValue([
+            { id: 'v1', name: 'V1', project_id: 'saved-project' },
+            { id: 'v2', name: 'V2', project_id: 'saved-project' },
+        ]);
+        render(<Explorer />, { wrapper: ({ children }) => (
+            <MemoryRouter initialEntries={[ROUTES.ai]}><UnsavedGuardProvider>{children}</UnsavedGuardProvider></MemoryRouter>
+        ) });
+
+        await waitFor(() => expect(aiScope()).toEqual({ projectId: 'saved-project', variantIds, revision: 0 }));
+    });
+
+    test('nav link click with unsaved edits prompts before navigating', async () => {
+        function Dirty() {
+            const { registerGuard } = useUnsavedGuard();
+            return <button onClick={() => registerGuard({ label: 'Project A', save: async () => true })}>make dirty</button>;
+        }
+        function Where() {
+            return <span data-testid="path">{useLocation().pathname}</span>;
+        }
+        render(
+            <MemoryRouter initialEntries={[ROUTES.ai]}>
+                <UnsavedGuardProvider>
+                    <RealNavigationBar onApply={jest.fn()} isAgentOpen={false} onToggleAgent={jest.fn()} />
+                    <Routes><Route path="*" element={<><Dirty /><Where /></>} /></Routes>
+                </UnsavedGuardProvider>
+            </MemoryRouter>,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'make dirty' }));
+
+        fireEvent.click(screen.getByRole('link', { name: /Vulnerabilities/ }));
+        const dialog = await screen.findByRole('alertdialog', { name: 'Unsaved changes' });
+        expect(dialog).toHaveTextContent('You have unsaved changes in Project A.');
+        expect(screen.getByTestId('path')).toHaveTextContent(ROUTES.ai);
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+        expect(screen.getByTestId('path')).toHaveTextContent(ROUTES.ai);
+
+        fireEvent.click(screen.getByRole('link', { name: /Vulnerabilities/ }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(screen.getByTestId('path')).toHaveTextContent(ROUTES.vulnerabilities));
+    });
+
+    test.each([
+        ['ctrl-click', { ctrlKey: true }],
+        ['cmd-click', { metaKey: true }],
+        ['shift-click', { shiftKey: true }],
+        ['alt-click', { altKey: true }],
+        ['middle click', { button: 1 }],
+    ])('a %s on a nav link is left to the browser despite unsaved edits', (_label, init) => {
+        function Dirty() {
+            const { registerGuard } = useUnsavedGuard();
+            return <button onClick={() => registerGuard({ label: 'Project A', save: async () => true })}>make dirty</button>;
+        }
+        render(
+            <MemoryRouter initialEntries={[ROUTES.ai]}>
+                <UnsavedGuardProvider>
+                    <RealNavigationBar onApply={jest.fn()} isAgentOpen={false} onToggleAgent={jest.fn()} />
+                    <Dirty />
+                </UnsavedGuardProvider>
+            </MemoryRouter>,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'make dirty' }));
+
+        const notPrevented = fireEvent.click(screen.getByRole('link', { name: /Vulnerabilities/ }), init);
+
+        expect(notPrevented).toBe(true);
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { useLocation, useNavigate, Routes, Route } from "react-router-dom";
 import { ROUTES, settingsProjectPath, tabForPath } from "../routes";
 import type { RouteKey, TabKey } from "../routes";
@@ -24,6 +24,8 @@ import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
 import type { SettingsNavState } from './Settings';
 import AIContext from './AIContext';
+import type { AiContextScope } from './AIContext';
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import AgentChat from '../components/AgentChat';
 import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
@@ -89,6 +91,8 @@ function Explorer() {
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
+    // Bumped on every applied scope, so the AI context page can drop discarded edits.
+    const [scopeRevision, setScopeRevision] = useState(0);
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const [agentOpen, setAgentOpen] = useState(false);
     const [agentMounted, setAgentMounted] = useState(false);
@@ -280,11 +284,12 @@ function Explorer() {
         return () => { cancelled = true; scopeReady.current = false; };
     }, [loadData]);
 
-    const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
+    const applyScope = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
         // A new scope invalidates any filter the previous page navigated with.
         navigate(location.pathname, { replace: true, state: null });
+        setScopeRevision(revision => revision + 1);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
         // Track origin variant and operation separately for MultiEditBar intersection logic
@@ -315,6 +320,31 @@ function Explorer() {
             multiActive ? (multiOperation || undefined) : undefined,
         );
     }, [loadData, navigate, location.pathname]);
+
+    // Changing the scope leaves the open AI context item, so unsaved edits are
+    // confirmed first; false tells the selector to keep its previous scope.
+    const { hasGuard, confirmLeave } = useUnsavedGuard();
+    const handleApply = useCallback((...args: Parameters<typeof applyScope>): boolean | Promise<boolean> => {
+        if (!hasGuard) {
+            applyScope(...args);
+            return true;
+        }
+        return confirmLeave().then(proceed => {
+            if (proceed) applyScope(...args);
+            return proceed;
+        });
+    }, [applyScope, hasGuard, confirmLeave]);
+
+    // Mirrors what the selector shows: without a saved or applied scope it reads
+    // "All variants", even though data loads for the server's default variant.
+    const aiContextScope = useMemo<AiContextScope>(() => {
+        const revision = scopeRevision;
+        if (!frontendScope && revision === 0) return { projectId: currentProjectId, revision };
+        const pairOrSingle = currentBaseVariantId && currentVariantId
+            ? [currentBaseVariantId, currentVariantId]
+            : currentVariantId ? [currentVariantId] : undefined;
+        return { projectId: currentProjectId, variantIds: currentVariantIds ?? pairOrSingle, revision };
+    }, [frontendScope, scopeRevision, currentProjectId, currentVariantId, currentBaseVariantId, currentVariantIds]);
 
     const handleScanComplete = useCallback(() => {
         loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
@@ -720,7 +750,7 @@ function Explorer() {
                         }
                     }} />
                 } />
-                <Route path={ROUTES.ai} element={<AIContext onAgentContextChange={setAiAgentView} />} />
+                <Route path={ROUTES.ai} element={<AIContext scope={aiContextScope} onAgentContextChange={setAiAgentView} />} />
                 <Route path="*" element={<NotFound />} />
                 </Routes>
             </div>
