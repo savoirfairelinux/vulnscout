@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
+import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, Text, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +18,9 @@ if typing.TYPE_CHECKING:
     from .variant import Variant
 
 logger = logging.getLogger(__name__)
+
+EDITOR_MODES = ("stride", "free")
+CODEBASE_SOURCES = ("paths", "references")
 
 
 def _get_cache_dir() -> str:
@@ -114,6 +118,18 @@ class VariantContext(Base):
     # Bumped only when a field's value actually changes; AI assessments older
     # than this were written against a previous context.  NULL = never modified.
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    editor_mode: Mapped[str] = mapped_column(
+        sa.String, nullable=False, default="free", server_default="free"
+    )
+    codebase_source: Mapped[str] = mapped_column(
+        sa.String, nullable=False, default="paths", server_default="paths"
+    )
+    system_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_actors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_entry_points: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_trust_boundaries: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stride_model: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
 
     variant: Mapped["Variant"] = relationship(back_populates="context")
     files: Mapped[list["ContextFile"]] = relationship(
