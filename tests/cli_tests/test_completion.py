@@ -38,20 +38,21 @@ def completion_script(tmp_path):
     return path
 
 
-def complete(script, words, tmp_path=None):
+def complete(script, words, cwd=None, compopt_log=None):
     """Return the COMPREPLY candidates for `words` (last word = current word)."""
     quoted = " ".join(f"'{w}'" for w in words)
     code = (
         f"source '{script}'\n"
-        f"COMP_WORDS=({quoted})\n"
+        + (f'compopt() {{ echo "$*" >> \'{compopt_log}\'; }}\n' if compopt_log else "")
+        + f"COMP_WORDS=({quoted})\n"
         f"COMP_CWORD=$(( ${{#COMP_WORDS[@]}} - 1 ))\n"
         "_vulnscout_complete\n"
         'printf "%s\\n" "${COMPREPLY[@]}"\n'
     )
     res = subprocess.run(["bash", "-c", code], capture_output=True, text=True,
-                         cwd=str(script.parent))
+                         cwd=str(cwd or script.parent))
     assert res.returncode == 0, res.stderr
-    return res.stdout.split()
+    return res.stdout.splitlines()
 
 
 def test_completion_requires_bash_shell(tmp_path):
@@ -107,7 +108,7 @@ def test_scan_types_and_comma_lists(completion_script):
 
 def test_fixed_values(completion_script):
     assert set(complete(completion_script, ["vulnscout", "report", "--format", ""])) == {"pdf", "html"}
-    assert set(complete(completion_script, ["vulnscout", "import", "context", "--timestamps", ""])) == {"original", "current"}
+    assert set(complete(completion_script, ["vulnscout", "import", "custom-data", "--timestamps", ""])) == {"original", "current"}
     assert set(complete(completion_script, ["vulnscout", "delete", ""])) >= {"scan", "outdated", "empty-scans", "orphaned-vulns", "--dry-run", "--yes"}
     assert set(complete(completion_script, ["vulnscout", "config", ""])) >= {"get", "set", "unset", "list"}
     assert set(complete(completion_script, ["vulnscout", "list", ""])) >= {"projects", "scans", "--json"}
@@ -123,6 +124,41 @@ def test_completion_matches_help(tmp_path, completion_script):
         assert verb in offered, verb
         help_text = _run([verb, "--help"], tmp_path).stdout
         flags = set(re.findall(r"^    (--[a-z-]+)", help_text, re.M)) - {"--project", "--variant"}
-        reply = complete(completion_script, ["vulnscout", verb, "-"])
+        prefix = ["vulnscout", verb] + (["custom-openvex"] if verb == "import" else [])
+        reply = complete(completion_script, [*prefix, "-"])
         for flag in flags:
             assert flag in reply, f"{verb} {flag}"
+
+
+def test_import_options_follow_the_kind(completion_script):
+    ctx = complete(completion_script, ["vulnscout", "import", "context", "-"])
+    assert "--timestamps" not in ctx and "-p" in ctx
+    data = complete(completion_script, ["vulnscout", "import", "custom-data", "-"])
+    assert "--timestamps" in data and "-p" in data
+    assert "-v" not in data and "--variant" not in data
+    openvex = complete(completion_script, ["vulnscout", "-p", "x", "import", "custom-openvex", "-"])
+    assert {"--timestamps", "-v", "--variant"} <= set(openvex)
+    assert set(complete(completion_script, ["vulnscout", "import", ""])) >= {"custom-data", "custom-openvex", "context"}
+
+
+def test_asset_add_completes_every_path(tmp_path, completion_script):
+    (tmp_path / "logo.png").write_text("")
+    (tmp_path / "icon.svg").write_text("")
+    first = complete(completion_script, ["vulnscout", "asset", "add", "l"], cwd=tmp_path)
+    second = complete(completion_script, ["vulnscout", "asset", "add", "logo.png", "i"], cwd=tmp_path)
+    assert first == ["logo.png"] and second == ["icon.svg"]
+    assert complete(completion_script, ["vulnscout", "asset", "a"], cwd=tmp_path) == ["add"]
+
+
+def test_file_candidates_enable_filename_handling(tmp_path, completion_script):
+    (tmp_path / "my logo.png").write_text("")
+    (tmp_path / "nested dir").mkdir()
+    (tmp_path / "nested dir" / "a b.json").write_text("")
+    log = tmp_path.parent / f"{tmp_path.name}.compopt"
+    out = complete(completion_script, ["vulnscout", "asset", "add", "my"],
+                   cwd=tmp_path, compopt_log=log)
+    assert out == ["my logo.png"]
+    assert "-o filenames" in log.read_text()
+    nested = complete(completion_script, ["vulnscout", "import", "context", "nested dir/"],
+                      cwd=tmp_path, compopt_log=log)
+    assert nested == ["nested dir/a b.json"]
