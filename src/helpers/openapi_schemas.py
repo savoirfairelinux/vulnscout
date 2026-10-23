@@ -838,17 +838,48 @@ SCHEMAS["ScanExport"] = {"anyOf": [
     }, ("export_version", "export_format", "scan_id", "scan_type", "timestamp", "variant_id",
         "packages", "findings", "vulnerabilities", "assessments")),
 ]}
-SCHEMAS["LegacyScanExport"] = _object({
-    **{key: value for key, value in _EXPORT_META.items() if key != "export_version"},
-    "packages": _array(_object(_EXPORT_PACKAGE_FIELDS)),
-    "findings": _array(_EXPORT_FINDING),
-    "vulnerabilities": _array(_object({"vulnerability_id": _VULN_ID, "sources": _STRINGS})),
-    "assessments": _array(_EXPORT_ASSESSMENT),
-}, ("scan_id", "scan_type", "timestamp", "project_name", "variant_name", "packages", "findings"),
-    description="Legacy full-result import without export_version or export_format markers.")
-_SCAN_IMPORT_ITEM = {"anyOf": [_ref("ScanExport"), _ref("LegacyScanExport")]}
+_IMPORT_NONEMPTY_STRING = {"type": "string", "pattern": r"\S"}
+_IMPORT_PACKAGE = _object({
+    "package_name": _IMPORT_NONEMPTY_STRING, "package_version": _TEXT, "supplier": _TEXT,
+}, ("package_name",))
+_IMPORT_FINDING = _object({
+    **_IMPORT_PACKAGE["properties"], "vulnerability_id": _IMPORT_NONEMPTY_STRING,
+}, ("package_name", "vulnerability_id"))
+_IMPORT_ASSESSMENT = _object({
+    "vulnerability_id": _IMPORT_NONEMPTY_STRING, "status": _IMPORT_NONEMPTY_STRING,
+    "package_name": _TEXT, "package_version": _TEXT, "supplier": _TEXT,
+    "targets": _array(_IMPORT_PACKAGE, nullable=True),
+    **{key: _TEXT for key in ("simplified_status", "status_notes", "justification", "impact_statement")},
+}, ("vulnerability_id", "status"))
+_SCAN_IMPORT_FIELDS = {
+    "scan_id": _UUID, "scan_type": _EXPORT_META["scan_type"], "timestamp": _IMPORT_NONEMPTY_STRING,
+    "project_name": _IMPORT_NONEMPTY_STRING, "variant_name": _IMPORT_NONEMPTY_STRING,
+    "scan_source": _TEXT, "packages": _array(_IMPORT_PACKAGE, nullable=True),
+    "findings": _array(_IMPORT_FINDING),
+    "assessments": _array(_IMPORT_ASSESSMENT, nullable=True),
+    "newly_detected_assessments": _array(_IMPORT_ASSESSMENT, nullable=True),
+}
+_SCAN_IMPORT_REQUIRED = ("scan_id", "scan_type", "timestamp", "project_name", "variant_name", "findings")
+_SCAN_IMPORT_TYPES = [
+    _object({
+        "scan_type": {"type": "string", "enum": ["import_sbom"]}, "packages": _array(_IMPORT_PACKAGE),
+    }, ("packages",)),
+    _object({"scan_type": {"type": "string", "enum": ["vulnerability_scan"]}}),
+]
+SCHEMAS["ScanImportItem"] = _object({
+    **_SCAN_IMPORT_FIELDS,
+    "export_version": _EXPORT_META["export_version"],
+    "export_format": {"type": "string", "enum": ["scan-diff", "full-result"]},
+}, (*_SCAN_IMPORT_REQUIRED, "export_version", "export_format"), oneOf=_SCAN_IMPORT_TYPES,
+    description="Versioned scan import; packages are required only for import_sbom scans.")
+SCHEMAS["LegacyScanExport"] = _object(
+    _SCAN_IMPORT_FIELDS, (*_SCAN_IMPORT_REQUIRED, "packages"), oneOf=_SCAN_IMPORT_TYPES,
+    **{"not": {"anyOf": [{"required": ["export_version"]}, {"required": ["export_format"]}]}},
+    description="Legacy full-result import with neither export_version nor export_format markers.",
+)
+_SCAN_IMPORT_ITEM = {"oneOf": [_ref("ScanImportItem"), _ref("LegacyScanExport")]}
 SCHEMAS["ScanImport"] = {
-    "anyOf": [_SCAN_IMPORT_ITEM, _array(_SCAN_IMPORT_ITEM)],
+    "anyOf": [_SCAN_IMPORT_ITEM, _array(_SCAN_IMPORT_ITEM, minItems=1, maxItems=200)],
     "description": "One scan export or a list; legacy unversioned full-result exports are also accepted.",
 }
 
@@ -868,5 +899,8 @@ SCHEMAS.update({
     "NvdRefreshRequest": _object({
         "mode": {"type": "string", "enum": ["local", "api"], "default": "local"},
     }),
+    "VulnerabilityRefreshResponse": _object({
+        "vulnerabilities": _array(_ref("Vulnerability")),
+    }, ("vulnerabilities",)),
     "ScanImportResult": SCHEMAS["ImportSummary"]["anyOf"][2],
 })

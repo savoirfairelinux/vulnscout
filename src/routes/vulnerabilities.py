@@ -1385,7 +1385,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         body NvdRefreshRequest optional Request body containing mode: local or api.
-        response 200 Vulnerability Refreshed vulnerability payload.
+        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection.
         response 404 Error CVE not found.
         response 401 Error NVD API key rejected.
         response 403 Error NVD API credentials forbidden.
@@ -1501,7 +1501,7 @@ def init_app(app: Flask) -> None:
         """Refresh EPSS data for a single CVE.
 
         OpenAPI:
-        response 200 Vulnerability Refreshed vulnerability payload.
+        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection.
         response 404 Error CVE not found.
         response 503 Error EPSS data source unavailable.
         """
@@ -1543,7 +1543,7 @@ def init_app(app: Flask) -> None:
         """Refresh GitHub advisory metadata for a single GHSA identifier.
 
         OpenAPI:
-        response 200 Vulnerability Refreshed vulnerability payload.
+        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection.
         response 400 Error Invalid GHSA identifier.
         response 404 Error GHSA advisory not found.
         response 502 Error Upstream GitHub advisory error.
