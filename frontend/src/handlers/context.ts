@@ -105,7 +105,7 @@ type VariantEntry = {
     editor_mode?: EditorMode;
     codebase_source?: CodebaseSource;
     system?: SystemFields;
-    stride?: StrideModel;
+    stride_model?: StrideModel;
 };
 
 /** One project with its variants nested underneath. */
@@ -186,6 +186,24 @@ export function joinCodebasePaths(paths: string[]): string | null {
     return blankToNull(paths.map(p => p.trim()).filter(p => p !== '').join(CODEBASE_PATH_SEPARATOR));
 }
 
+type ErrorReply = { error?: string; fields?: Record<string, string> };
+
+/** The JSON body of a failed reply; empty when it is not JSON (e.g. a proxy's HTML error page). */
+async function errorReply(res: Response): Promise<ErrorReply> {
+    try {
+        const data = await res.json();
+        return data && typeof data === 'object' ? data : {};
+    } catch {
+        return {};
+    }
+}
+
+/** The JSON body of a successful reply; otherwise throws the server's error or `<failure> (<status>)`. */
+async function jsonOrThrow<T>(res: Response, failure: string): Promise<T> {
+    if (!res.ok) throw new Error((await errorReply(res)).error || `${failure} (${res.status})`);
+    return await res.json() as T;
+}
+
 class Context {
     static async uploadFile(variantId: string, file: File, description: string): Promise<ContextFile> {
         const body = new FormData();
@@ -200,9 +218,7 @@ class Context {
                 "Upload rejected as too large (HTTP 413). A server or proxy request-size limit may apply."
             );
         }
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to upload reference (${res.status})`);
-        return data as ContextFile;
+        return jsonOrThrow<ContextFile>(res, 'Failed to upload reference');
     }
 
     static async deleteFile(variantId: string, fileId: string): Promise<void> {
@@ -210,18 +226,13 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files/${encodeURIComponent(fileId)}`,
             { mode: 'cors', method: 'DELETE' }
         );
-        if (!res.ok) {
-            const data = await res.json();
-            throw new Error(data.error || `Failed to delete reference (${res.status})`);
-        }
+        if (!res.ok) throw new Error((await errorReply(res)).error || `Failed to delete reference (${res.status})`);
     }
 
     static async get(projectId: string, variantId: string): Promise<MergedContext> {
         const url = `${import.meta.env.VITE_API_URL}/api/context?project_id=${encodeURIComponent(projectId)}&variant_id=${encodeURIComponent(variantId)}`;
         const res = await fetch(url, { mode: 'cors' });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to load context (${res.status})`);
-        return data as MergedContext;
+        return jsonOrThrow<MergedContext>(res, 'Failed to load context');
     }
 
     static async getProject(projectId: string): Promise<ProjectContext> {
@@ -229,9 +240,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context`,
             { mode: 'cors' }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to load project context (${res.status})`);
-        return data as ProjectContext;
+        return jsonOrThrow<ProjectContext>(res, 'Failed to load project context');
     }
 
     static async saveProject(projectId: string, description: string | null): Promise<ProjectContext> {
@@ -244,24 +253,7 @@ class Context {
                 body: JSON.stringify({ description }),
             }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to save project context (${res.status})`);
-        return data as ProjectContext;
-    }
-
-    static async saveVariant(variantId: string, fields: VariantContextData): Promise<VariantContext> {
-        const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context`,
-            {
-                mode: 'cors',
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(fields),
-            }
-        );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to save variant context (${res.status})`);
-        return data as VariantContext;
+        return jsonOrThrow<ProjectContext>(res, 'Failed to save project context');
     }
 
     static async saveVariantEditor(variantId: string, draft: VariantDraft): Promise<VariantContext> {
@@ -293,15 +285,15 @@ class Context {
                 body: JSON.stringify(payload),
             }
         );
-        const data = await res.json();
         if (!res.ok) {
+            const data = await errorReply(res);
             throw new ContextSaveError(
                 data.error || `Failed to save variant context (${res.status})`,
                 res.status,
                 data.fields ?? {},
             );
         }
-        return data as VariantContext;
+        return await res.json() as VariantContext;
     }
 
     static async exportAll(): Promise<ContextExport> {
@@ -309,9 +301,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/context/export`,
             { mode: 'cors' }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextExport;
+        return jsonOrThrow<ContextExport>(res, 'Failed to export context');
     }
 
     static async exportSelected(variantIds: string[]): Promise<ContextExport> {
@@ -320,9 +310,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/context/export?variant_ids=${query}`,
             { mode: 'cors' }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextExport;
+        return jsonOrThrow<ContextExport>(res, 'Failed to export context');
     }
 
     static async importContext(entries: unknown): Promise<ImportResult> {
@@ -335,9 +323,7 @@ class Context {
                 body: JSON.stringify(entries),
             }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to import context (${res.status})`);
-        return data as ImportResult;
+        return jsonOrThrow<ImportResult>(res, 'Failed to import context');
     }
 }
 
