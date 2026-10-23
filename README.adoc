@@ -278,7 +278,7 @@ To scan newly added files, run `add` and then `scan` with the same scope:
 `scan` accepts `grype`, `nvd` (CPE-based), `osv` (PURL-based), and `sbom-cve-check` (local advisory databases). Select several with commas (`scan nvd,osv`) or spaces (`scan nvd osv`). With no type, or with `all`, every available scanner runs. Scans always run in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh is a separate command (`refresh`).
 
 Local NVD and `sbom-cve-check` CLI scans commit results in chunks, releasing SQLite's write transaction between packages so other requests can write while the scan continues.
-If a scan fails or is interrupted, its new assessments and unshared findings are removed along with the failed scan step; pre-existing findings and assessments and findings adopted by another scan are retained.
+If a scan fails or is interrupted, its new assessments and unshared findings are removed along with the failed scan step; pre-existing findings and assessments, findings adopted by another scan, and new pending assessments that are the only assessment for a finding another scan of the same variant observed are retained.
 
 `scan grype` can consume significant RAM when the SBOM contains many packages.
 By default VulnScout caps Grype's memory at ~80 % of the container/cgroup limit.

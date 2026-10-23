@@ -27,6 +27,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import orm as sa_orm
 from flask.cli import with_appcontext
 
 
@@ -655,11 +656,40 @@ class _SccBulkWriter:
 
     def cleanup(self) -> None:
         """Remove only this writer's new rows, in bounded transactions."""
+        # Another scan of the same variant may have observed a new target and
+        # reused its pending assessment instead of creating its own.
+        other_target = sa_orm.aliased(AssessmentTarget)
+        observed_elsewhere = (
+            _db.select(Observation.id)
+            .join(ScanModel, ScanModel.id == Observation.scan_id)
+            .where(
+                Observation.finding_id == AssessmentTarget.finding_id,
+                ScanModel.variant_id == AssessmentTarget.variant_id,
+                Observation.scan_id != self._scan_id,
+            )
+            .exists()
+        )
+        assessed_elsewhere = (
+            _db.select(other_target.assessment_id)
+            .where(
+                other_target.finding_id == AssessmentTarget.finding_id,
+                other_target.variant_id == AssessmentTarget.variant_id,
+                other_target.assessment_id != AssessmentTarget.assessment_id,
+            )
+            .exists()
+        )
         for i in range(0, len(self._created_assessment_ids), self._SELECT_CHUNK):
             chunk = self._created_assessment_ids[i:i + self._SELECT_CHUNK]
             with _write_lock():
+                still_needed = _db.select(AssessmentTarget.assessment_id).where(
+                    AssessmentTarget.assessment_id.in_(chunk),
+                    observed_elsewhere,
+                    ~assessed_elsewhere,
+                )
                 for assessment in _db.session.scalars(
-                    _db.select(Assessment).where(Assessment.id.in_(chunk))
+                    _db.select(Assessment).where(
+                        Assessment.id.in_(chunk), Assessment.id.not_in(still_needed),
+                    )
                 ).all():
                     _db.session.delete(assessment)
                 _db.session.commit()
