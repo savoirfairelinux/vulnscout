@@ -23,9 +23,12 @@ from ..helpers.scan_runs import tool_scan
 from ..controllers.operation_registry import new_queue_id
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
+import os
+import tempfile
 import uuid
+import weakref
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Iterable, Iterator
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import orm as sa_orm
 from flask.cli import with_appcontext
@@ -372,6 +375,32 @@ def _scc_cvss_version(metric) -> str:
     return f"{major}.{minor}"
 
 
+class _IdSpool:
+    """Append-only file of UUIDs, keeping cleanup ownership out of memory."""
+
+    def __init__(self) -> None:
+        self._file = tempfile.TemporaryFile()
+        self._close = weakref.finalize(self, self._file.close)
+
+    def extend(self, ids: Iterable[uuid.UUID]) -> None:
+        self._file.seek(0, os.SEEK_END)
+        self._file.write(b"".join(id_.bytes for id_ in ids))
+
+    def chunks(self, size: int) -> Iterator[list[uuid.UUID]]:
+        self._file.flush()
+        offset = 0
+        while True:
+            self._file.seek(offset)
+            data = self._file.read(16 * size)
+            if not data:
+                return
+            offset += len(data)
+            yield [uuid.UUID(bytes=data[i:i + 16]) for i in range(0, len(data), 16)]
+
+    def close(self) -> None:
+        self._close()
+
+
 class _SccBulkWriter:
     """Buffered bulk persister for sbom-cve-check-scan findings.
 
@@ -412,10 +441,12 @@ class _SccBulkWriter:
     def __init__(self, scan_id, variant_uuid, packages, *, failure_cleanups=None):
         self._scan_id = scan_id
         self._variant_uuid = variant_uuid
-        self._created_finding_ids: list[uuid.UUID] = []
-        self._created_assessment_ids: list[uuid.UUID] = []
-        self._track_created = failure_cleanups is not None
+        # Kept on disk: the kernel-module case can create millions of rows.
+        self._created_finding_ids: _IdSpool | None = None
+        self._created_assessment_ids: _IdSpool | None = None
         if failure_cleanups is not None:
+            self._created_finding_ids = _IdSpool()
+            self._created_assessment_ids = _IdSpool()
             failure_cleanups.append(self.cleanup)
         self.cves_found: set[str] = set()
 
@@ -641,7 +672,7 @@ class _SccBulkWriter:
                 _db.session.bulk_insert_mappings(sa_inspect(AssessmentTarget), self._assess_target_rows)
             # Record ownership before committing, including when a caller is
             # interrupted immediately after the commit returns.
-            if self._track_created:
+            if self._created_finding_ids is not None and self._created_assessment_ids is not None:
                 self._created_finding_ids.extend(row["id"] for row in self._finding_rows)
                 self._created_assessment_ids.extend(row["id"] for row in self._assess_rows)
             _db.session.commit()
@@ -656,6 +687,8 @@ class _SccBulkWriter:
 
     def cleanup(self) -> None:
         """Remove only this writer's new rows, in bounded transactions."""
+        if self._created_finding_ids is None or self._created_assessment_ids is None:
+            return
         # Another scan of the same variant may have observed a new target and
         # reused its pending assessment instead of creating its own.
         other_target = sa_orm.aliased(AssessmentTarget)
@@ -678,8 +711,7 @@ class _SccBulkWriter:
             )
             .exists()
         )
-        for i in range(0, len(self._created_assessment_ids), self._SELECT_CHUNK):
-            chunk = self._created_assessment_ids[i:i + self._SELECT_CHUNK]
+        for chunk in self._created_assessment_ids.chunks(self._SELECT_CHUNK):
             with _write_lock():
                 still_needed = _db.select(AssessmentTarget.assessment_id).where(
                     AssessmentTarget.assessment_id.in_(chunk),
@@ -694,8 +726,7 @@ class _SccBulkWriter:
                     _db.session.delete(assessment)
                 _db.session.commit()
 
-        for i in range(0, len(self._created_finding_ids), self._SELECT_CHUNK):
-            chunk = self._created_finding_ids[i:i + self._SELECT_CHUNK]
+        for chunk in self._created_finding_ids.chunks(self._SELECT_CHUNK):
             with _write_lock():
                 _db.session.execute(
                     _db.delete(Observation).where(
@@ -716,6 +747,9 @@ class _SccBulkWriter:
                 for finding in findings:
                     _db.session.delete(finding)
                 _db.session.commit()
+
+        self._created_finding_ids.close()
+        self._created_assessment_ids.close()
 
     def _existing_vuln_ids(self, ids: list[str]) -> set[str]:
         found: set[str] = set()
