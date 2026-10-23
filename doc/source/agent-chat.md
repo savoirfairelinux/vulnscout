@@ -31,7 +31,8 @@ and restored on restart. After restarting a non-GitHub provider that has no save
 model, the toolbar requires an explicit selection rather than sending Copilot's
 `auto` model ID to that provider.
 
-From the demo worktree, with Python 3.11+ and Node.js installed:
+From the repository root, with Python 3.11+ and Node.js 22 installed, create a
+separate local database for development:
 
 ```sh
 python3 -m venv .venv
@@ -44,9 +45,11 @@ printf '__END_OF_SCAN_SCRIPT__\n' > "$FLASK_SCAN_FILE"
 .venv/bin/flask --app src.bin.webapp:create_app run --host 127.0.0.1 --port 7275
 ```
 
-The ignored `instance/vulnscout.db` in this worktree is an independent SQLite snapshot of the populated database under the original checkout's `.vulnscout/cache/`. It has been migrated to this branch's schema; running `db upgrade` above affects only the demo copy. Do not point the demo at the original checkout's database. In another terminal:
-
-If an older database is already stamped at revision `z2c3d4e5f6a7` but lacks `assessments.created_at`, run `db upgrade` after updating: the follow-up migration repairs the missing assessment and context timestamp columns.
+This creates or upgrades `instance/vulnscout.db`; no populated snapshot is
+shipped with the repository. Use a fresh path if that file already contains
+data you want to preserve. Back up an existing database before upgrading it.
+Import your own SBOM through **Settings → project → variant → Import SBOM** to
+populate the local instance. In another terminal, start the frontend:
 
 ```sh
 cd frontend
@@ -92,7 +95,7 @@ The panel detects an existing Copilot CLI or GitHub CLI sign-in on the backend h
 Device sign-in defaults to the public GitHub Copilot (VS Code) OAuth client ID, following the Virtual Engineer Copilot connector. This is a GitHub-owned application, not a VulnScout-owned registration; its availability and policies are outside VulnScout's control. GitHub's approval screen identifies that application. An operator can override the client ID using an OAuth App with device flow enabled (in `config.env` for the container):
 
 ```sh
-VULNSCOUT_AGENT_GITHUB_CLIENT_ID=<OAuth App client ID>
+VULNSCOUT_AGENT_GITHUB_CLIENT_ID='your-oauth-app-client-id'
 ```
 
 The client ID is public; no client secret is needed. The app requests only the `read:user` scope. The backend exchanges the device code, so the resulting token does not reach the browser. A GitHub account with Copilot access (including the free tier) is required for GitHub sign-in. Choose from the models available to that account in the toolbar selector; switching models keeps the current conversation. **Sign out** clears stored agent credentials and deletes that agent session. The **+** button starts a **New conversation** after confirmation: it deletes the SDK session and resets messages, draft, and usage while retaining the connection and selected model. **Never ask again** remembers the confirmation preference in this browser. Earlier sessions created before starting a new conversation may still exist in the local Copilot directory.

@@ -176,7 +176,7 @@ pytest --cov=src tests/
 pytest --cov-report html --cov=src tests/
 
 # Type checking
-mypy --config-file tests/tox.ini
+mypy --config-file tox.ini
 ```
 
 The PostgreSQL migration test starts a temporary server as the current
@@ -222,13 +222,8 @@ The version is then available at runtime:
 ### Testing the Docker Image
 
 You can test the Docker image using the provided `tests` Makefile.
-To build and test the Docker image, run:
-
-```bash
-make -C tests docker_build docker_test docker_clean
-```
-
-Optionally set a custom tag:
+`BUILD_TAG` is required by all three image targets. From the repository root,
+choose a local tag, then build, test, and remove the test image:
 
 ```bash
 export BUILD_TAG="my-local-test"
@@ -266,11 +261,16 @@ make -C tests docker_build docker_test docker_clean
 | Linter | `shellcheck vulnscout src/entrypoint.sh` |
 
 
-> **Note:** Running `make -C tests test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit. With CQFD, use `cqfd -b test` to run the full suite.
+> **Note:** Run `cqfd -b test` for the combined backend, frontend, and shell/CI
+> targets; schema and container tests have separate CQFD flavors or Make targets.
+> The underlying command is `make -C tests test` in the CQFD environment.
+> Installed pre-commit hooks run their configured checks on matching staged files.
 
 ### Pre-commit Hook
 
-We use `pre-commit` to automatically run `flake8` before every commit.
+The repository's `pre-commit` configuration includes YAML checks, backend
+`flake8` and `mypy`, frontend ESLint, and ShellCheck, scoped to their matching
+files. Installing the hook enables these checks on commits.
 
 To enable it:
 
@@ -292,7 +292,7 @@ Full documentation is available in the `doc/` directory as a Sphinx project.
 Install the required Python packages:
 
 ```bash
-pip install sphinx myst-parser sphinx-rtd-theme
+pip install -r doc/requirements.txt
 ```
 
 Then build the HTML documentation:
@@ -302,6 +302,8 @@ make -C doc html
 ```
 
 The generated pages are in `doc/build/html/`. Open `doc/build/html/index.html` in your browser.
+To catch unresolved references and formatting warnings before submitting a
+documentation change, use `make -C doc html SPHINXOPTS="-n -W --keep-going"`.
 
 ### Building with CQFD
 
@@ -317,14 +319,27 @@ The generated documentation will be available in `doc/build/html/` on the host.
 
 ## Release Process
 
-VulnScout follows a semantic versioning strategy with development versions between releases.
+Release versions use a `v` prefix, with an optional `-dev` suffix for development.
+Use the version in the current repository and the intended next release rather
+than treating any example below as the latest published version.
 
 ### Version Numbering Strategy
 
-The versioning workflow follows these steps:
+Keep `Dockerfile`'s `VULNSCOUT_VERSION`, `frontend/package.json`, the README
+version, and `doc/source/conf.py`'s `release` synchronized.
 
-1. **Current stable version**: `v0.9.1` (example - keep for now)
-2. **Before creating a release tag**: Bump version to `v0.10`
-3. **First PR after release**: Bump version to `v0.10-dev`
-4. **Feature PRs**: Continue development with `-dev` suffix
-5. Repeat the cycle
+For example, to prepare a `v0.24` release, a maintainer can run:
+
+```bash
+./ci/release_tag.sh v0.24
+```
+
+This script updates those version references, prompts to commit or amend the
+changes, creates an annotated tag, and pushes the tag to the configured
+repository. Run it only when ready to publish, not merely to test a local
+version change. Tag pushes trigger the release-image pipeline.
+For local image builds, use the build argument described above instead.
+
+On resuming development, update the same references to the chosen next
+development version (for example, `v0.25-dev`); keep them aligned until the next
+release.

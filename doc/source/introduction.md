@@ -12,18 +12,21 @@
 
 VulnScout is designed to analyse and identify vulnerabilities in software components and dependencies using an **SBOM (Software Bill Of Materials)**.
 
-It pulls known vulnerabilities from public sources like the **NVD**, **EPSS**, and **Grype** to figure out which parts of a codebase might be affected by security issues (CVE).
+It discovers vulnerabilities using **NVD**, **OSV**, **Grype**, and local
+**sbom-cve-check** advisory databases. Separate refreshers enrich existing
+vulnerabilities with NVD, **EPSS**, **GHSA**, and **ENISA EUVD** metadata; EPSS
+provides exploitation probabilities, not new vulnerability findings.
 
 VulnScout also provides a **web interface** for visualisation, triage and assessment, and a **command-line interface** to generate enriched output files.
 
 ### VulnScout Features
 
 - Analyse SBOMs (SPDX 2/3, CycloneDX, Yocto CVE check, OpenVEX, Grype)
-- Detect and enrich vulnerabilities from NVD, EPSS, and Grype
+- Discover vulnerabilities with NVD, OSV, Grype, and sbom-cve-check; enrich them with NVD, EPSS, GHSA, and EUVD
 - Manage **projects and variants** for multi-target builds
 - Web interface for visualisation, triage, and assessment
 - **Vulnerability review** — assess, justify, and track the status of each vulnerability
-- **Scan and enrichment** — scan imported data with Grype and refresh EPSS and other vulnerability metadata on demand
+- **Scan and enrichment** — run selected scanners and refresh vulnerability metadata on demand through a shared operation queue
 - Non-interactive / CI mode with configurable **match conditions**
 - Generate customisable reports (AsciiDoc, HTML, PDF, CSV)
 - Export enriched SBOMs (SPDX 2.3, SPDX 3.0, CycloneDX 1.4–1.6, OpenVEX)
@@ -39,11 +42,16 @@ VulnScout also provides a **web interface** for visualisation, triage and assess
 
 ### Supported Input Files
 
-- **SPDX 2.3** (Packages) — JSON and tag-value formats
+- **SPDX 2.2 / 2.3** (Packages) — JSON; tag-value input is not supported
 - **SPDX 3.0** (Packages + vulnerabilities)
 - **CycloneDX 1.4, 1.5, 1.6** (Packages + vulnerabilities)
 - **Grype native JSON format** (Packages + vulnerabilities)
 - **Yocto JSON output** of the `cve-check` module (Packages + vulnerabilities)
+- **Yocto VEX** and **OpenVEX** JSON (vulnerabilities + assessments)
+
+For launcher imports, SPDX files must end in `.spdx.json` or `.jsonld`, and
+OpenVEX filenames must contain `openvex` and end in `.json`. See
+[Input Sources](vulnscout-script.md#input-sources) for staging and archive support.
 
 ### Supported Output Files
 
@@ -71,8 +79,11 @@ Other outputs:
 VulnScout pulls vulnerability and risk data from multiple trusted sources:
 
 - **NVD (National Vulnerability Database)**
+- **OSV (Open Source Vulnerabilities)**
 - All data sources supported by **Grype**
+- Local **NVD-FKIE** and **CVEList** databases used by sbom-cve-check and local NVD scans
 - **EPSS (Exploit Prediction Scoring System)**
+- **GitHub Security Advisories (GHSA)** and **ENISA EUVD** enrichment
 - Information embedded in input files
 
 ---
