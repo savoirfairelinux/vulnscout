@@ -164,18 +164,50 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, environment, threat model, risks, other info) |
 | `list_codebase_files` / `read_codebase_file` / `search_codebase` | Browse, read and search uploaded codebase references for a variant, including inside the container |
 | `get_project_context` / `update_project_context` | Read / replace a project's description |
-| `update_variant_context`   | Replace a variant's context fields (description, environment, threat model, risks, other info) — full replacement, not a partial update |
+| `update_variant_context`   | Replace a variant's context fields (description, environment, threat model, risks, other info) — full replacement, not a partial update; rejected (409) for STRIDE-mode variants when threat model or risks is set to a value that differs from the current one; passing back the unchanged values from `get_merged_context` is accepted, and other fields still update when those two are omitted |
 | `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |
 | `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
 | `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
 
-## Codebase references in the AI tab
+## AI Context page
 
-Select a project and variant in **AI**, then drag source files or archives onto
-**Codebase References**, or use the file picker. Multiple uploads are supported.
+The **AI Context** page uses a settings-style layout. The sidebar lists
+**Project description** and the variants of the selected project. Variants that
+are not ticked in the top-bar selector stay listed but locked. Selecting an item
+opens its page; there is one **Save changes** button per page and no auto-save.
+Leaving a page with unsaved changes asks to Save, Discard or Cancel.
+
+A variant page has four tabs, **Context**, **System**, **Threat model** and
+**Risks**. Edits are kept when you switch tabs. **Copy from...** replaces the
+whole draft with another variant's context (any project); nothing is saved until
+you save. Uploaded references are never copied.
+
+**Context** holds the variant description, the **Codebase source** (uploaded
+references, the default, or paths; only the selected one is shown, the other is
+kept), environment, **Editor mode** and other information.
+
+- **STRIDE** mode edits structured data: system text fields, Components and
+  Interactions tables (System), a Threats table with notes (Threat model) and
+  a likelihood/impact/mitigation row per threat (Risks).
+- **Free** mode edits plain text for the threat model and risks.
+
+Both modes keep their data when you switch. Agents receive plain text in both
+cases: `threat_model` and `risks` are the stored text in Free mode and a text
+rendering of the tables in STRIDE mode. `codebase_path` is only sent when the
+source is paths, and uploaded references are only listed when the source is
+references. Writes from the MCP `update_variant_context` tool cannot change a
+STRIDE variant's threat model or risks; edit them in the page.
+
+## Codebase references on the AI Context page
+
+Open the **AI Context** page (top nav **AI**), select a variant in the sidebar and,
+in its **Context** tab, keep **Codebase source** on **Codebase references** (the
+default for a new variant). Then
+drag source files or archives onto **Codebase References**, or use the file
+picker. Multiple uploads are supported.
 An optional description can identify the component/version and whether the
 upload is a complete source tree or only selected files. References are saved
-**immediately**, independently of **Save context**; unsaved text fields are kept.
+**immediately**, independently of **Save changes**; unsaved fields are kept.
 Uploads and deletion mark older pending AI assessments for that variant outdated.
 The UI asks before uploading when pending assessments exist and always confirms deletion.
 
@@ -188,8 +220,9 @@ may be stored/listed but cannot provide text evidence. Other archive formats
 are not unpacked.
 
 **Codebase Path** remains available for an external Copilot/MCP client running
-on the machine that owns the source. Separate multiple local paths with a
-semicolon. A path entered here does **not** mount a directory into the container,
+on the machine that owns the source. Add one row per local path with **Add path**
+and remove rows with **Remove**; they are sent to agents joined by a semicolon.
+A path entered here does **not** mount a directory into the container,
 and the embedded Agent has no shell or arbitrary filesystem access.
 Both embedded and external agents can inspect uploaded references through
 `get_merged_context` (which supplies reference IDs), then `list_codebase_files`,

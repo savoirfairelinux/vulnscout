@@ -126,7 +126,7 @@ python vulnscout_mcp/server.py
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
 | `get_project_context`          | Get context fields for a project by UUID                             |
 | `update_project_context`       | Update the description of a project                                  |
-| `update_variant_context`       | Replace all context fields for a variant by UUID (full replacement; omitted fields are cleared) |
+| `update_variant_context`       | Replace all context fields for a variant by UUID (full replacement; omitted fields are cleared). Rejected (409) for STRIDE-mode variants when `threat_model` or `risks` is set to a value that differs from the current one; passing back the unchanged values from `get_merged_context` is accepted, and other fields still update when those two are omitted |
 | `get_custom_assessment`        | Fetch a single user/custom assessment, with any existing per-target AI reviews |
 | `list_custom_assessments`      | List user/custom assessments, optionally scoped to a project variant |
 | `write_assessment_review`      | Save an AI review of one (variant, package) target of a user/custom assessment |
@@ -177,7 +177,9 @@ uploaded references, or use the external skill with a web-capable client for liv
 research. Do not interpret an embedded-agent response as a completed lifecycle
 audit without that evidence.
 
-Upload references in the **AI** tab's **Codebase References** drop zone. Fetch
+Upload references on the **AI Context** page (top nav **AI**): open a variant and, in its
+**Context** tab, set **Codebase source** to **Codebase references** to show the
+**Codebase References** drop zone. Fetch
 `get_merged_context` and use each `files` entry's `id` as `file_id` together with
 that entry's variant UUID for the source tools. Source paths are archive-relative,
 not paths on the MCP host. The same tools work for external clients and the
