@@ -60,6 +60,14 @@ const EMPTY_VARIANT_DRAFT = emptyDraft();
 const NO_FILES: ContextFile[] = [];
 const sameText = (a: string, b: string) => a === b;
 
+/** The variant tab that owns a server field path (e.g. "components[0].name", "system.actors"). */
+function tabForField(path: string): VariantTab {
+    if (/^(system\.|components|interactions)/.test(path)) return 'system';
+    if (/^(threats|notes)/.test(path)) return 'threat_model';
+    if (/^(risks|risk_notes)/.test(path)) return 'risks';
+    return 'context';
+}
+
 async function hasPendingAi(target: SaveTarget): Promise<boolean> {
     try {
         // A project-description change outdates every variant in the project.
@@ -165,6 +173,12 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const openKey = projectKey ?? variantKey;
     const openKeyRef = useRef(openKey);
     openKeyRef.current = openKey;
+    // Field errors and the active tab belong to the open item, however it changed.
+    useEffect(() => {
+        setFieldError('');
+        setFieldErrors({});
+        setVariantTab('context');
+    }, [openKey, projectDraft.epoch, variantDraft.epoch]);
     // Errors about the item or project just left no longer apply. Opening the
     // first item keeps them: they may explain why the variant list is empty.
     const lastOpenRef = useRef({ projectId, openKey });
@@ -241,7 +255,11 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             if (!unmountedRef.current) setAnnouncement("Saved.");
             return true;
         } catch (e: any) {
-            if (e instanceof ContextSaveError && !unmountedRef.current && openKeyRef.current === key) setFieldErrors(e.fields);
+            if (e instanceof ContextSaveError && !unmountedRef.current && openKeyRef.current === key) {
+                setFieldErrors(e.fields);
+                const first = Object.keys(e.fields)[0];
+                if (first !== undefined) setVariantTab(tabForField(first));
+            }
             showBanner(e?.message || "Failed to save context.", "error");
             return false;
         } finally {
@@ -300,9 +318,6 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const handleSelect = async (next: SidebarSelection) => {
         const same = next.kind === selected?.kind && (next.kind === 'project' || (selected?.kind === 'variant' && next.id === selected.id));
         if (!projectId || same || !(await confirmLeave())) return;
-        setFieldError('');
-        setFieldErrors({});
-        setVariantTab('context');
         setSelection({ projectId, item: next });
     };
 
@@ -412,6 +427,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                                         dirty={variantDraft.dirty}
                                         fieldErrors={fieldErrors}
                                         notify={showBanner}
+                                        draftGeneration={variantDraft.generation}
                                         tab={variantTab}
                                         onTabChange={setVariantTab}
                                     />

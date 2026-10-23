@@ -1,7 +1,9 @@
 import type { ContextFile, VariantDraft } from "../../handlers/context";
 import { switchEditorMode } from "../../helpers/strideModel";
 import CodebaseReferences from "../CodebaseReferences";
-import { ERROR, HELP, LABEL, TEXTAREA } from "./styles";
+import FieldErrorText from "./FieldErrorText";
+import { describeField } from "./fieldErrors";
+import { HELP, LABEL, TEXTAREA } from "./styles";
 
 type Props = {
     draft: VariantDraft;
@@ -27,18 +29,6 @@ const MODES: Choice<VariantDraft['editor_mode']>[] = [
 
 const fieldId = (key: string) => `ai-variant-${key.replace(/_/g, '-')}`;
 
-/** aria-invalid plus an aria-describedby list joining the field's error and help ids. */
-function describe(key: string, errors: Record<string, string>, helpId?: string) {
-    const error = errors[key];
-    const ids = [error ? `${fieldId(key)}-error` : '', helpId ?? ''].filter(Boolean).join(' ');
-    return { 'aria-invalid': error ? true : undefined, 'aria-describedby': ids || undefined };
-}
-
-function FieldError({ name, errors }: Readonly<{ name: string; errors: Record<string, string> }>) {
-    const error = errors[name];
-    return error ? <p id={`${fieldId(name)}-error`} className={`${ERROR} mt-1`}>{error}</p> : null;
-}
-
 function RadioGroup<T extends string>({ name, label, options, value, onChange, errors }: Readonly<{
     name: string;
     label: string;
@@ -51,7 +41,7 @@ function RadioGroup<T extends string>({ name, label, options, value, onChange, e
     return (
         <div>
             <span id={labelId} className={LABEL}>{label}</span>
-            <div role="radiogroup" aria-labelledby={labelId} {...describe(name, errors)} className="flex flex-wrap gap-4">
+            <div role="radiogroup" aria-labelledby={labelId} {...describeField(name, errors)} className="flex flex-wrap gap-4">
                 {options.map(option => (
                     <label key={option.value} className="flex items-center gap-1.5 text-sm text-zinc-200">
                         <input
@@ -66,7 +56,7 @@ function RadioGroup<T extends string>({ name, label, options, value, onChange, e
                     </label>
                 ))}
             </div>
-            <FieldError name={name} errors={errors} />
+            <FieldErrorText path={name} errors={errors} />
         </div>
     );
 }
@@ -81,9 +71,9 @@ function ContextTab({ draft, onDraftChange, variantId, files, notify, fieldError
                 className={TEXTAREA}
                 value={draft[key]}
                 onChange={e => setText(key, e.target.value)}
-                {...describe(key, fieldErrors, helpId)}
+                {...describeField(key, fieldErrors, helpId)}
             />
-            <FieldError name={key} errors={fieldErrors} />
+            <FieldErrorText path={key} errors={fieldErrors} />
         </>
     );
     const pathsHelpId = `${fieldId('codebase_path')}-help`;

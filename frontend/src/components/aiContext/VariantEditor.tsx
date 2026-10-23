@@ -4,6 +4,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons";
 import type { ContextFile, VariantDraft } from "../../handlers/context";
 import ContextTab from "./ContextTab";
+import SystemTab from "./SystemTab";
 import { BADGE_VARIANT, BUTTON_PRIMARY, BUTTON_SECONDARY, PANEL } from "./styles";
 
 export type VariantTab = 'context' | 'system' | 'threat_model' | 'risks';
@@ -21,6 +22,8 @@ type Props = {
     onCopyFrom?: () => void;
     fieldErrors: Record<string, string>;
     notify: (message: string, type: 'success' | 'error') => void;
+    /** Changes whenever the draft is loaded, reset or saved; per-draft UI state starts over. */
+    draftGeneration: number;
     tab: VariantTab;
     onTabChange: (tab: VariantTab) => void;
 };
@@ -48,7 +51,7 @@ function keyTarget(key: string, index: number): number | null {
 
 function VariantEditor({
     variantId, variantName, draft, onDraftChange, files, onSave, saving, dirty,
-    onCopyFrom, fieldErrors, notify, tab, onTabChange,
+    onCopyFrom, fieldErrors, notify, draftGeneration, tab, onTabChange,
 }: Readonly<Props>) {
     const tabRefs = useRef<Partial<Record<VariantTab, HTMLButtonElement | null>>>({});
 
@@ -106,6 +109,15 @@ function VariantEditor({
                             variantId={variantId}
                             files={files}
                             notify={notify}
+                            fieldErrors={fieldErrors}
+                            disabled={saving}
+                        />
+                    )}
+                    {key === 'system' && (
+                        <SystemTab
+                            key={`${variantId}:${draftGeneration}`}
+                            draft={draft}
+                            onDraftChange={onDraftChange}
                             fieldErrors={fieldErrors}
                             disabled={saving}
                         />

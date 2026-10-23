@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type DraftState<T> = { draft: T; baseline: T | null; loading: boolean };
+type DraftState<T> = { draft: T; baseline: T | null; loading: boolean; epoch: number; commits: number };
 
 export type LoadedDraft<T> = DraftState<T> & {
     /** True once loaded and the draft differs from the last loaded or saved value. */
     dirty: boolean;
+    /** Bumps whenever the draft is loaded, reloaded or reset (not on edits or saves). */
+    epoch: number;
+    /** `epoch` plus every save: bumps whenever the draft is replaced by a known value. */
+    generation: number;
     setDraft: (draft: T) => void;
     /**
      * Adopt a saved value as the baseline, and as the draft unless the draft
@@ -29,7 +33,7 @@ export function useLoadedDraft<T>(
     equal: (a: T, b: T) => boolean,
     onError: (message: string) => void,
 ): LoadedDraft<T> {
-    const [state, setState] = useState<DraftState<T>>({ draft: empty, baseline: null, loading: false });
+    const [state, setState] = useState<DraftState<T>>({ draft: empty, baseline: null, loading: false, epoch: 0, commits: 0 });
     const loadRef = useRef(load);
     const emptyRef = useRef(empty);
     const onErrorRef = useRef(onError);
@@ -47,18 +51,20 @@ export function useLoadedDraft<T>(
         const keyChanged = keyRef.current !== key;
         keyRef.current = key;
         if (key === null) {
-            setState({ draft: emptyRef.current, baseline: null, loading: false });
+            setState(prev => ({ ...prev, draft: emptyRef.current, baseline: null, loading: false, epoch: prev.epoch + 1 }));
             return;
         }
         // A reload of the same item keeps showing it; a new item starts blank.
         setState(prev => keyChanged
-            ? { draft: emptyRef.current, baseline: null, loading: true }
+            ? { ...prev, draft: emptyRef.current, baseline: null, loading: true, epoch: prev.epoch + 1 }
             : { ...prev, loading: true });
         loadRef.current().then(value => {
-            if (loadId === loadIdRef.current) setState({ draft: value, baseline: value, loading: false });
+            if (loadId === loadIdRef.current) {
+                setState(prev => ({ ...prev, draft: value, baseline: value, loading: false, epoch: prev.epoch + 1 }));
+            }
         }).catch((e: unknown) => {
             if (loadId !== loadIdRef.current) return;
-            setState({ draft: emptyRef.current, baseline: null, loading: false });
+            setState(prev => ({ ...prev, draft: emptyRef.current, baseline: null, loading: false, epoch: prev.epoch + 1 }));
             onErrorRef.current(e instanceof Error && e.message ? e.message : "Failed to load context.");
         });
     }, [key]);
@@ -73,12 +79,12 @@ export function useLoadedDraft<T>(
     const commit = useCallback((saved: T, sent: T) => setState(prev => (
         !equalRef.current(prev.draft, sent)
             ? { ...prev, baseline: saved }
-            : { ...prev, draft: saved, baseline: saved }
+            : { ...prev, draft: saved, baseline: saved, commits: prev.commits + 1 }
     )), []);
     const reset = useCallback(() => setState(prev => (
-        prev.baseline === null ? prev : { ...prev, draft: prev.baseline }
+        prev.baseline === null ? prev : { ...prev, draft: prev.baseline, epoch: prev.epoch + 1 }
     )), []);
 
     const dirty = state.baseline !== null && !equal(state.draft, state.baseline);
-    return { ...state, dirty, setDraft, commit, reset, reload };
+    return { ...state, generation: state.epoch + state.commits, dirty, setDraft, commit, reset, reload };
 }

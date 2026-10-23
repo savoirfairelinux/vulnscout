@@ -31,6 +31,7 @@ type FileRow = { id: string; original_name: string; description: string | null }
 type Backend = {
     description: string; threat: string; aiRows: unknown[]; requests: Request[]; files: FileRow[];
     variantPutError?: { error: string; fields: Record<string, string> };
+    echoPut?: boolean;
 };
 
 function variantContext(variantId: string, threat: string, files: FileRow[] = []) {
@@ -67,7 +68,11 @@ function respond(backend: Backend, url: string, method: string, body: string | n
         return reference;
     }
     const variantPut = /^\/api\/variants\/([^/]+)\/context$/.exec(path);
-    if (variantPut) return variantContext(variantPut[1], backend.threat, backend.files);
+    if (variantPut) {
+        const ctx = variantContext(variantPut[1], backend.threat, backend.files);
+        // Echo the saved editor shape back, as the real server does.
+        return backend.echoPut ? { ...ctx, editor: { ...ctx.editor, ...JSON.parse(body ?? '{}') } } : ctx;
+    }
     return {};
 }
 
@@ -557,6 +562,202 @@ describe('AIContext page', () => {
             await waitFor(() => expect(screen.getByLabelText('Variant description')).toHaveValue(''));
             fireEvent.click(screen.getByRole('radio', { name: 'Codebase references' }));
             expect(await screen.findByRole('button', { name: 'Delete reference source.zip' })).toBeInTheDocument();
+        });
+    });
+
+    describe('system tab', () => {
+        async function openSystemTab(backend?: Partial<Backend>) {
+            const mocked = mockBackend(backend);
+            const utils = renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.click(screen.getByRole('radio', { name: 'STRIDE' }));
+            fireEvent.click(variantTab('System'));
+            return { backend: mocked, ...utils };
+        }
+        const addComponent = (name: string) => {
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            const inputs = screen.getAllByLabelText(/^Component C\d+ name$/);
+            fireEvent.change(inputs[inputs.length - 1], { target: { value: name } });
+        };
+
+        test('free mode shows only the note', async () => {
+            mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.click(variantTab('System'));
+
+            expect(screen.getByText('In Free mode, describe the system and its interactions in Threat model.')).toBeInTheDocument();
+            expect(screen.queryByLabelText('System scope and assets')).not.toBeInTheDocument();
+            expect(screen.queryByRole('table', { name: 'Components' })).not.toBeInTheDocument();
+        });
+
+        test('STRIDE mode shows the four system fields and both tables with column headers', async () => {
+            await openSystemTab();
+
+            ['System scope and assets', 'Actors and access', 'Entry points and data flows', 'Trust boundaries']
+                .forEach(label => expect(screen.getByLabelText(label)).toBeInTheDocument());
+            const components = screen.getByRole('table', { name: 'Components' });
+            expect(within(components).getAllByRole('columnheader').map(h => h.textContent))
+                .toEqual(['ID', 'Name', 'Description / role', 'Trust zone', 'Remove']);
+            const interactions = screen.getByRole('table', { name: 'Interactions' });
+            expect(within(interactions).getAllByRole('columnheader').map(h => h.textContent)).toEqual([
+                'ID', 'Name', 'Source', 'Destination', 'Interface / protocol', 'Data / commands', 'Trust boundary', 'Remove',
+            ]);
+        });
+
+        test('adds and removes a component and saves the rows', async () => {
+            const { backend } = await openSystemTab();
+            fireEvent.change(screen.getByLabelText('System scope and assets'), { target: { value: 'Gateway' } });
+            addComponent('Broker');
+            fireEvent.change(screen.getByLabelText('Component C1 trust zone'), { target: { value: 'DMZ' } });
+            addComponent('Temp');
+            expect(screen.getByLabelText('Component C2 name')).toHaveValue('Temp');
+
+            fireEvent.click(screen.getByRole('button', { name: 'Remove component C2' }));
+            expect(screen.queryByLabelText('Component C2 name')).not.toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+            const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+            expect(body.system.scope).toBe('Gateway');
+            expect(body.stride.components).toEqual([{ id: 'C1', name: 'Broker', description: '', trust_zone: 'DMZ' }]);
+        });
+
+        test('removed ids are not reused by the next add', async () => {
+            await openSystemTab();
+            addComponent('A');
+            addComponent('B');
+            fireEvent.click(screen.getByRole('button', { name: 'Remove component C2' }));
+
+            addComponent('C');
+
+            expect(screen.getByLabelText('Component C3 name')).toHaveValue('C');
+            expect(screen.queryByLabelText('Component C2 name')).not.toBeInTheDocument();
+        });
+
+        test('a referenced component cannot be removed and says why', async () => {
+            await openSystemTab();
+            addComponent('A');
+            addComponent('B');
+            fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+            fireEvent.change(screen.getByLabelText('Interaction I1 source'), { target: { value: 'C1' } });
+            fireEvent.change(screen.getByLabelText('Interaction I1 destination'), { target: { value: 'C2' } });
+
+            const remove = screen.getByRole('button', { name: 'Remove component C1' });
+            expect(remove).toBeDisabled();
+            expect(remove).toHaveAccessibleDescription('Remove its interactions, threat targets and risks first.');
+            expect(screen.getByRole('button', { name: 'Remove interaction I1' })).toBeEnabled();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Remove interaction I1' }));
+            expect(screen.getByRole('button', { name: 'Remove component C1' })).toBeEnabled();
+        });
+
+        test('endpoint selects list named components and disable unnamed ones', async () => {
+            await openSystemTab();
+            addComponent('Broker');
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+
+            const source = screen.getByLabelText('Interaction I1 source');
+            const options = within(source).getAllByRole('option');
+            expect(options.map(o => o.textContent)).toEqual(['Select a component', 'C1: Broker', 'C2: ']);
+            expect(options[1]).toBeEnabled();
+            expect(options[2]).toBeDisabled();
+        });
+
+        test('save 400 maps server paths to cells and opens the System tab', async () => {
+            const { backend } = await openSystemTab({
+                variantPutError: {
+                    error: 'Invalid variant context',
+                    fields: { 'components[0].name': 'name is required', 'system.actors': 'must be text' },
+                },
+            });
+            addComponent('Broker');
+            fireEvent.click(variantTab('Context'));
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('Invalid variant context')).toBeInTheDocument();
+            expect(variantTab('System')).toHaveAttribute('aria-selected', 'true');
+            const cell = screen.getByLabelText('Component C1 name');
+            expect(cell).toHaveAttribute('aria-invalid', 'true');
+            expect(cell).toHaveAccessibleDescription('name is required');
+            expect(screen.getByLabelText('Actors and access')).toHaveAccessibleDescription('must be text');
+            expect(screen.getByLabelText('Component C1 trust zone')).not.toHaveAttribute('aria-invalid');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1);
+        });
+
+        async function failSave() {
+            const utils = await openSystemTab({
+                variantPutError: { error: 'Invalid variant context', fields: { 'system.actors': 'must be text' } },
+            });
+            fireEvent.change(screen.getByLabelText('Actors and access'), { target: { value: 'x' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            expect(await screen.findByText('must be text')).toBeInTheDocument();
+            expect(variantTab('System')).toHaveAttribute('aria-selected', 'true');
+            return utils;
+        }
+
+        test('discarding with a same-scope revision clears errors and returns to the Context tab', async () => {
+            const { setScope } = await failSave();
+
+            setScope({ projectId: 'p1', revision: 1 });
+
+            await waitFor(() => expect(screen.queryByText('must be text')).not.toBeInTheDocument());
+            expect(variantTab('Context')).toHaveAttribute('aria-selected', 'true');
+        });
+
+        test('importing over the open item clears errors and returns to the Context tab', async () => {
+            const createObjectURL = jest.fn(() => 'blob:mock');
+            (global.URL as any).createObjectURL = createObjectURL;
+            await failSave();
+            fetchMock.mockResponseOnce(JSON.stringify({ imported: [], ignored: [], failed: [] }));
+            const text = JSON.stringify({ version: '1.0', exported_at: 'x', projects: [] });
+            const file = new File([text], 'ctx.json', { type: 'application/json' });
+            (file as any).text = () => Promise.resolve(text);
+
+            const pick = jest.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+            fireEvent.click(screen.getByRole('button', { name: 'Import context' }));
+            fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+            await waitFor(() => expect(pick).toHaveBeenCalledTimes(1));
+            pick.mockRestore();
+            await act(async () => {
+                fireEvent.change(screen.getByLabelText('Import context file'), { target: { files: [file] } });
+            });
+
+            await waitFor(() => expect(screen.queryByText('must be text')).not.toBeInTheDocument());
+            expect(variantTab('Context')).toHaveAttribute('aria-selected', 'true');
+        });
+
+        test('removed ids are reserved until the draft is saved', async () => {
+            await openSystemTab({ echoPut: true });
+            addComponent('A');
+            addComponent('B');
+            fireEvent.click(screen.getByRole('button', { name: 'Remove component C2' }));
+            addComponent('C');
+            expect(screen.getByLabelText('Component C3 name')).toHaveValue('C');
+            fireEvent.click(screen.getByRole('button', { name: 'Remove component C3' }));
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(screen.getByText('Saved.')).toBeInTheDocument());
+            addComponent('D');
+
+            expect(screen.getByLabelText('Component C2 name')).toHaveValue('D');
+        });
+
+        test('a scope-driven selection change clears field errors and returns to the Context tab', async () => {
+            const { setScope } = await openSystemTab({
+                variantPutError: { error: 'Invalid variant context', fields: { 'system.actors': 'must be text' } },
+            });
+            fireEvent.change(screen.getByLabelText('Actors and access'), { target: { value: 'x' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            expect(await screen.findByText('must be text')).toBeInTheDocument();
+
+            setScope({ projectId: 'p1', variantIds: ['v2'] });
+
+            await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
+            expect(await screen.findByRole('tab', { name: 'Context' })).toHaveAttribute('aria-selected', 'true');
+            expect(screen.queryByText('must be text')).not.toBeInTheDocument();
         });
     });
 
