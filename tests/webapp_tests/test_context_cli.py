@@ -82,7 +82,7 @@ class TestExportContextCLI:
         assert result.exit_code == 0, result.output
         assert out.exists()
         doc = json.loads(out.read_text())
-        assert doc["version"] == "1.0"
+        assert doc["version"] == "2.0"
         assert isinstance(doc["exported_at"], str) and doc["exported_at"]
         keys = {(e["project_name"], e["variant_name"]) for e in self._flat(doc)}
         assert keys == {
