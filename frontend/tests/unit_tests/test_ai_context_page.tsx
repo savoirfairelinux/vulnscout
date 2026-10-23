@@ -27,17 +27,21 @@ const DIRTY_VARIANT_TEXT = "The agent updated the variant context. Your unsaved 
 const DIRTY_PROJECT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
 
 type Request = { url: string; method: string; body: string | null };
-type Backend = { description: string; threat: string; aiRows: unknown[]; requests: Request[] };
+type FileRow = { id: string; original_name: string; description: string | null };
+type Backend = {
+    description: string; threat: string; aiRows: unknown[]; requests: Request[]; files: FileRow[];
+    variantPutError?: { error: string; fields: Record<string, string> };
+};
 
-function variantContext(variantId: string, threat: string) {
+function variantContext(variantId: string, threat: string, files: FileRow[] = []) {
     return {
         project_id: 'p1', description: 'ignored', variant_id: variantId, variant_description: null,
-        codebase_path: null, environment: null, threat_model: threat, risks: null, other_info: null, files: [],
+        codebase_path: null, environment: null, threat_model: threat, risks: null, other_info: null, files,
         editor: {
             editor_mode: 'free', codebase_source: 'paths', codebase_path: null,
             free: { threat_model: threat, risks: null },
             system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
-            stride: emptyStrideModel(), files: [], updated_at: null,
+            stride: emptyStrideModel(), files, updated_at: null,
         },
     };
 }
@@ -55,18 +59,26 @@ function respond(backend: Backend, url: string, method: string, body: string | n
     }
     if (path === '/api/context') {
         const variantId = new URL(url).searchParams.get('variant_id') ?? '';
-        return variantContext(variantId, backend.threat);
+        return variantContext(variantId, backend.threat, backend.files);
+    }
+    if (/^\/api\/variants\/[^/]+\/context\/files$/.test(path)) {
+        const reference = { id: `f${backend.files.length + 1}`, original_name: 'source.zip', description: null };
+        backend.files = [...backend.files, reference];
+        return reference;
     }
     const variantPut = /^\/api\/variants\/([^/]+)\/context$/.exec(path);
-    if (variantPut) return variantContext(variantPut[1], backend.threat);
+    if (variantPut) return variantContext(variantPut[1], backend.threat, backend.files);
     return {};
 }
 
 function mockBackend(overrides: Partial<Backend> = {}): Backend {
-    const backend: Backend = { description: 'Desc', threat: 'TM', aiRows: [], requests: [], ...overrides };
+    const backend: Backend = { description: 'Desc', threat: 'TM', aiRows: [], requests: [], files: [], ...overrides };
     fetchMock.mockResponse(async request => {
         const body = request.method === 'GET' ? null : await request.text();
         backend.requests.push({ url: request.url, method: request.method, body });
+        if (backend.variantPutError && request.method === 'PUT' && request.url.includes('/api/variants/')) {
+            return { status: 400, body: JSON.stringify(backend.variantPutError) };
+        }
         return JSON.stringify(respond(backend, request.url, request.method, body));
     });
     return backend;
@@ -91,6 +103,12 @@ async function openProjectDescription() {
     fireEvent.click(await screen.findByRole('button', { name: 'Project description' }));
     await waitFor(() => expect(screen.getByLabelText('Project description')).toHaveValue('Desc'));
 }
+
+async function openVariant1() {
+    await waitFor(() => expect(screen.getByLabelText('Variant description')).toBeInTheDocument());
+}
+
+const variantTab = (name: string) => screen.getByRole('tab', { name });
 
 const agentWrite = (tool: string) => act(() => {
     window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool } }));
@@ -136,7 +154,7 @@ describe('AIContext page', () => {
         const { setScope } = renderPage({ projectId: 'p1', variantIds: ['v2'] });
 
         await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
-        expect(screen.getByRole('region', { name: 'Variant editor' })).toBeInTheDocument();
+        expect(await screen.findByRole('region', { name: 'Variant 2' })).toBeInTheDocument();
         await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
         expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(0);
 
@@ -328,6 +346,218 @@ describe('AIContext page', () => {
         fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
         await waitFor(() => expect(pick).toHaveBeenCalledTimes(1));
         pick.mockRestore();
+    });
+
+    describe('variant editor', () => {
+        test('title row shows the variant name, badge and actions', async () => {
+            mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+
+            expect(screen.getByRole('heading', { level: 2, name: 'Variant 1' })).toBeInTheDocument();
+            expect(screen.getByText('Variant')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Copy from…' })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+            const fields = ['Variant description', 'Codebase paths', 'Environment', 'Other information']
+                .map(name => screen.getByRole('textbox', { name }));
+            fields.slice(1).forEach((field, index) => {
+                expect(fields[index].compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            });
+            expect(screen.getByText('Separate several paths with ";".')).toBeInTheDocument();
+        });
+
+        test('tabs follow the WAI-ARIA keyboard pattern', async () => {
+            mockBackend();
+            const user = userEvent.setup();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+
+            const tablist = screen.getByRole('tablist', { name: 'Variant context sections' });
+            const names = within(tablist).getAllByRole('tab').map(tab => tab.textContent);
+            expect(names).toEqual(['Context', 'System', 'Threat model', 'Risks']);
+            expect(variantTab('Context')).toHaveAttribute('aria-selected', 'true');
+            expect(variantTab('Context')).toHaveAttribute('tabindex', '0');
+            expect(variantTab('System')).toHaveAttribute('tabindex', '-1');
+            const panels = screen.getAllByRole('tabpanel', { hidden: true });
+            expect(panels).toHaveLength(4);
+            expect(screen.getByRole('tabpanel', { name: 'Context' })).toBeVisible();
+            expect(panels.filter(panel => panel.hidden)).toHaveLength(3);
+
+            variantTab('Context').focus();
+            await user.keyboard('{ArrowLeft}');
+            expect(variantTab('Risks')).toHaveFocus();
+            expect(variantTab('Risks')).toHaveAttribute('aria-selected', 'true');
+            expect(screen.getByRole('tabpanel', { name: 'Risks' })).toBeVisible();
+            await user.keyboard('{ArrowRight}');
+            expect(variantTab('Context')).toHaveFocus();
+            await user.keyboard('{ArrowRight}');
+            expect(variantTab('System')).toHaveFocus();
+            expect(variantTab('System')).toHaveAttribute('tabindex', '0');
+            expect(variantTab('Context')).toHaveAttribute('tabindex', '-1');
+            await user.keyboard('{End}');
+            expect(variantTab('Risks')).toHaveFocus();
+            await user.keyboard('{Home}');
+            expect(variantTab('Context')).toHaveFocus();
+            expect(screen.getByLabelText('Variant description')).toBeVisible();
+        });
+
+        test('edits survive switching tabs', async () => {
+            mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Factory floor' } });
+
+            fireEvent.click(variantTab('Threat model'));
+            expect(screen.getByLabelText('Environment')).not.toBeVisible();
+            fireEvent.click(variantTab('Context'));
+
+            expect(screen.getByLabelText('Environment')).toHaveValue('Factory floor');
+            expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
+        });
+
+        test('codebase radio shows only the selected source and keeps the hidden value', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            const source = screen.getByRole('radiogroup', { name: 'Codebase source' });
+            expect(within(source).getByRole('radio', { name: 'Codebase paths' })).toBeChecked();
+            expect(screen.queryByRole('region', { name: 'Codebase references' })).not.toBeInTheDocument();
+            fireEvent.change(screen.getByRole('textbox', { name: 'Codebase paths' }), { target: { value: '/src/a;/src/b' } });
+
+            fireEvent.click(within(source).getByRole('radio', { name: 'Codebase references' }));
+            expect(screen.getByRole('region', { name: 'Codebase references' })).toBeVisible();
+            expect(screen.getByRole('textbox', { name: 'Codebase paths', hidden: true })).not.toBeVisible();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+            const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+            expect(body.codebase_source).toBe('references');
+            expect(body.codebase_path).toBe('/src/a;/src/b');
+        });
+
+        test('switching editor mode Free to STRIDE pre-fills notes', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            const mode = screen.getByRole('radiogroup', { name: 'Editor mode' });
+            expect(within(mode).getByRole('radio', { name: 'Free' })).toBeChecked();
+
+            fireEvent.click(within(mode).getByRole('radio', { name: 'STRIDE' }));
+            expect(within(mode).getByRole('radio', { name: 'STRIDE' })).toBeChecked();
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+            const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+            expect(body.editor_mode).toBe('stride');
+            expect(body.stride.notes).toBe('TM');
+            expect(body.free.threat_model).toBe('TM');
+        });
+
+        test('Save changes disabled until the draft differs from saved', async () => {
+            mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            const save = screen.getByRole('button', { name: 'Save changes' });
+            expect(save).toBeDisabled();
+
+            fireEvent.change(screen.getByLabelText('Other information'), { target: { value: 'x' } });
+            expect(save).toBeEnabled();
+            fireEvent.change(screen.getByLabelText('Other information'), { target: { value: '' } });
+            expect(save).toBeDisabled();
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+        });
+
+        test('variant save sends the editor shape through saveVariantEditor', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Gateway' } });
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Lab' } });
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            await waitFor(() => expect(screen.getByText('Saved.')).toBeInTheDocument());
+            const puts = requestsTo(backend, '/api/variants/v1/context', 'PUT');
+            expect(puts).toHaveLength(1);
+            expect(JSON.parse(puts[0].body ?? '{}')).toEqual({
+                variant_description: 'Gateway', environment: 'Lab', other_info: null,
+                editor_mode: 'free', codebase_source: 'paths', codebase_path: null,
+                free: { threat_model: 'TM', risks: null },
+                system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
+                stride: emptyStrideModel(),
+            });
+        });
+
+        test('a missing threat model blocks the save and opens the Threat model tab', async () => {
+            const backend = mockBackend({ threat: '' });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Lab' } });
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('A threat model is required.')).toBeInTheDocument();
+            expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+        });
+
+        test('save 400 marks the offending field and shows the error banner', async () => {
+            mockBackend({ variantPutError: { error: 'Invalid variant context', fields: { environment: 'must be text' } } });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Lab' } });
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('Invalid variant context')).toBeInTheDocument();
+            const environment = screen.getByLabelText('Environment');
+            expect(environment).toHaveAttribute('aria-invalid', 'true');
+            expect(environment).toHaveAccessibleDescription('must be text');
+            expect(screen.getByLabelText('Other information')).not.toHaveAttribute('aria-invalid');
+            expect(environment).toHaveValue('Lab');
+        });
+
+        test('agent write on a dirty variant keeps the edits and shows the banner', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Mine' } });
+            const loads = requestsTo(backend, 'variant_id=v1').length;
+
+            agentWrite('update_variant_context');
+
+            expect(await screen.findByText(DIRTY_VARIANT_TEXT)).toBeInTheDocument();
+            expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(loads);
+            expect(screen.getByLabelText('Variant description')).toHaveValue('Mine');
+            expect(screen.queryByText(DIRTY_PROJECT_TEXT)).not.toBeInTheDocument();
+        });
+
+        test('uploading references keeps unsaved fields', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Unsaved desc' } });
+            fireEvent.click(screen.getByRole('radio', { name: 'Codebase references' }));
+
+            fireEvent.drop(screen.getByRole('region', { name: 'Drop codebase files' }), {
+                dataTransfer: { files: [new File(['source'], 'source.zip')] },
+            });
+
+            await screen.findByRole('button', { name: 'Delete reference source.zip' });
+            expect(screen.getByLabelText('Variant description')).toHaveValue('Unsaved desc');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+            expect(requestsTo(backend, '/api/variants/v1/context/files', 'POST')).toHaveLength(1);
+
+            // Reopening the variant shows the stored reference from the server.
+            fireEvent.click(sidebarItem('Variant 2'));
+            fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+            await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
+            fireEvent.click(sidebarItem('Variant 1'));
+            await screen.findByRole('region', { name: 'Variant 1' });
+            await waitFor(() => expect(screen.getByLabelText('Variant description')).toHaveValue(''));
+            fireEvent.click(screen.getByRole('radio', { name: 'Codebase references' }));
+            expect(await screen.findByRole('button', { name: 'Delete reference source.zip' })).toBeInTheDocument();
+        });
     });
 
     describe('import / export', () => {
