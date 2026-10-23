@@ -26,6 +26,7 @@ from src.models.assessment import Assessment
 from src.models.assessment_target import AssessmentTarget
 from src.models.vulnerability import Vulnerability
 from src.models.metrics import Metrics
+from src.helpers.scan_runs import tool_scan
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,50 @@ def _assessments_for(finding_id, variant_id):
 # ---------------------------------------------------------------------------
 
 class TestSccBulkWriter:
+
+    def test_failure_cleanup_preserves_new_finding_adopted_by_another_scan(self, app):
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+            failure_cleanups = []
+
+            with pytest.raises(KeyboardInterrupt):
+                with tool_scan(variant_id, "scc", failure_cleanups=failure_cleanups) as scan:
+                    writer = _SccBulkWriter(
+                        scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                    )
+                    _scan_pkg(writer, pkg, [
+                        (_Computed("CVE-2023-0001"), "affected"),
+                        (_Computed("CVE-2023-0002"), "affected"),
+                    ])
+                    writer.flush()
+
+                    # A separate session adopts one of the newly committed
+                    # findings before the original producer is interrupted.
+                    with app.app_context():
+                        adopted = _db.session.scalar(_db.select(Finding).where(
+                            Finding.package_id == package_id,
+                            Finding.vulnerability_id == "CVE-2023-0001",
+                        ))
+                        adopted_id = adopted.id
+                        other_scan = Scan.create("completed", variant_id, scan_type="tool")
+                        other_scan_id = other_scan.id
+                        Observation.create(finding_id=adopted_id, scan_id=other_scan_id)
+                        custom = Assessment.create(
+                            status="not_affected", origin="custom",
+                            targets=[(variant_id, adopted_id)],
+                        )
+                        custom_id = custom.id
+                    raise KeyboardInterrupt
+
+            assert list(_db.session.scalars(_db.select(Finding.id))) == [adopted_id]
+            assert list(_db.session.scalars(_db.select(Scan.id))) == [other_scan_id]
+            assert list(_db.session.scalars(_db.select(Assessment.id))) == [custom_id]
+            assert _db.session.query(AssessmentTarget).count() == 1
+            observation = _db.session.query(Observation).one()
+            assert (observation.finding_id, observation.scan_id) == (adopted_id, other_scan_id)
 
     def test_kernel_explosion_persists_once_per_package_cve(self, app):
         """Many sibling packages sharing the same CVE set each get their own

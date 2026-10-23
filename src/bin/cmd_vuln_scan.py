@@ -25,6 +25,7 @@ from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
 import uuid
 from datetime import datetime, timezone
+from typing import Callable
 from sqlalchemy import inspect as sa_inspect
 from flask.cli import with_appcontext
 
@@ -124,11 +125,14 @@ def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str |
         click.echo("Loading local NVD advisory database…")
         engine = get_engine(progress=click.echo)
 
-    with tool_scan(variant_uuid, "nvd", run_id or new_queue_id()) as scan:
+    failure_cleanups: list[Callable[[], None]] = []
+    with tool_scan(
+        variant_uuid, "nvd", run_id or new_queue_id(), failure_cleanups=failure_cleanups,
+    ) as scan:
         if mode == "api":
             _nvd_scan_api(variant_uuid, packages, scan)
         else:
-            _nvd_scan_local(variant_uuid, packages, scan, engine)
+            _nvd_scan_local(variant_uuid, packages, scan, engine, failure_cleanups)
 
 
 def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
@@ -196,10 +200,10 @@ def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
     )
 
 
-def _nvd_scan_local(variant_uuid, packages, scan: ScanModel, engine) -> None:
+def _nvd_scan_local(variant_uuid, packages, scan: ScanModel, engine, failure_cleanups=None) -> None:
     """NVD scan using the local NVD-FKIE advisory database."""
     total = len(packages)
-    writer = _SccBulkWriter(scan.id, variant_uuid, packages, commit_chunks=False)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages, failure_cleanups=failure_cleanups)
     seen_keys: set = set()
 
     for idx, pkg in enumerate(packages, 1):
@@ -380,9 +384,9 @@ class _SccBulkWriter:
 
     This writer instead accumulates plain row dictionaries and flushes them with
     ``bulk_insert_mappings`` in foreign-key order (vulnerabilities → metrics →
-    findings → observations → assessments), committing once per chunk by default.
-    CLI scans use ``commit_chunks=False`` to stage all chunks in one transaction:
-    failure can then roll back findings and assessments as well as observations.
+    findings → observations → assessments), committing once per chunk so SQLite
+    writers are never held up by engine processing between packages. CLI scans
+    register failure cleanup for exclusively new findings and assessments.
     Duplicate work is avoided in memory:
 
     * ``(package_id, cve)`` pairs that already have a finding (from a prior
@@ -404,10 +408,14 @@ class _SccBulkWriter:
     FLUSH_THRESHOLD = 5000
     _SELECT_CHUNK = 500
 
-    def __init__(self, scan_id, variant_uuid, packages, *, commit_chunks=True):
+    def __init__(self, scan_id, variant_uuid, packages, *, failure_cleanups=None):
         self._scan_id = scan_id
         self._variant_uuid = variant_uuid
-        self._commit_chunks = commit_chunks
+        self._created_finding_ids: list[uuid.UUID] = []
+        self._created_assessment_ids: list[uuid.UUID] = []
+        self._track_created = failure_cleanups is not None
+        if failure_cleanups is not None:
+            failure_cleanups.append(self.cleanup)
         self.cves_found: set[str] = set()
 
         # Confirmed-present (existing or already-inserted) vulnerability ids.
@@ -630,10 +638,12 @@ class _SccBulkWriter:
                 _db.session.bulk_insert_mappings(sa_inspect(Assessment), self._assess_rows)
             if self._assess_target_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(AssessmentTarget), self._assess_target_rows)
-            if self._commit_chunks:
-                _db.session.commit()
-            else:
-                _db.session.flush()
+            # Record ownership before committing, including when a caller is
+            # interrupted immediately after the commit returns.
+            if self._track_created:
+                self._created_finding_ids.extend(row["id"] for row in self._finding_rows)
+                self._created_assessment_ids.extend(row["id"] for row in self._assess_rows)
+            _db.session.commit()
 
         self._vuln_rows.clear()
         self._metric_rows.clear()
@@ -642,6 +652,40 @@ class _SccBulkWriter:
         self._assess_rows.clear()
         self._assess_target_rows.clear()
         self._buffered_findings = 0
+
+    def cleanup(self) -> None:
+        """Remove only this writer's new rows, in bounded transactions."""
+        for i in range(0, len(self._created_assessment_ids), self._SELECT_CHUNK):
+            chunk = self._created_assessment_ids[i:i + self._SELECT_CHUNK]
+            with _write_lock():
+                for assessment in _db.session.scalars(
+                    _db.select(Assessment).where(Assessment.id.in_(chunk))
+                ).all():
+                    _db.session.delete(assessment)
+                _db.session.commit()
+
+        for i in range(0, len(self._created_finding_ids), self._SELECT_CHUNK):
+            chunk = self._created_finding_ids[i:i + self._SELECT_CHUNK]
+            with _write_lock():
+                _db.session.execute(
+                    _db.delete(Observation).where(
+                        Observation.scan_id == self._scan_id,
+                        Observation.finding_id.in_(chunk),
+                    )
+                )
+                # Another scan or a user may have adopted a newly committed
+                # finding while the engine was processing the next package.
+                findings = _db.session.scalars(
+                    _db.select(FindingModel).where(
+                        FindingModel.id.in_(chunk),
+                        ~FindingModel.observations.any(),
+                        ~FindingModel.assessment_targets.any(),
+                        ~FindingModel.time_estimates.any(),
+                    )
+                ).all()
+                for finding in findings:
+                    _db.session.delete(finding)
+                _db.session.commit()
 
     def _existing_vuln_ids(self, ids: list[str]) -> set[str]:
         found: set[str] = set()
@@ -686,13 +730,16 @@ def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str |
     engine = get_engine(progress=click.echo)
     click.echo("Index ready — scanning packages")
 
-    with tool_scan(variant_uuid, "scc", run_id or new_queue_id()) as scan:
-        _sbom_cve_check_scan(variant_uuid, packages, engine, scan)
+    failure_cleanups: list[Callable[[], None]] = []
+    with tool_scan(
+        variant_uuid, "scc", run_id or new_queue_id(), failure_cleanups=failure_cleanups,
+    ) as scan:
+        _sbom_cve_check_scan(variant_uuid, packages, engine, scan, failure_cleanups)
 
 
-def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel) -> None:
+def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel, failure_cleanups=None) -> None:
     total_pkgs = len(packages)
-    writer = _SccBulkWriter(scan.id, variant_uuid, packages, commit_chunks=False)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages, failure_cleanups=failure_cleanups)
 
     for idx, pkg in enumerate(packages, 1):
         pkg_label = f"{pkg.name}@{pkg.version}" if pkg.name else str(pkg.id)
@@ -712,7 +759,7 @@ def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel) -> Non
 
         _echo_query_results(idx, total_pkgs, pkg_label, persisted_ids,
                             "vuln(s)", "no vulnerabilities")
-        # Bound buffer memory while keeping all chunks in one transaction.
+        # Bound both buffer memory and SQLite write-transaction duration.
         writer.maybe_flush()
 
     writer.flush()
