@@ -6,6 +6,8 @@
 import json
 import re
 from io import BytesIO
+from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 from jsonschema.exceptions import ValidationError
@@ -546,3 +548,125 @@ def test_runtime_agent_replies_match_documented_media_types(client, monkeypatch,
             )
     finally:
         response.close()
+
+
+def _minimal_scan_import():
+    return {
+        "export_version": 1, "export_format": "full-result", "scan_id": str(uuid4()),
+        "scan_type": "import_sbom", "timestamp": "2026-01-01T00:00:00Z",
+        "project_name": "Swagger contract", "variant_name": "default", "packages": [], "findings": [],
+    }
+
+
+def _scan_import_schema(spec):
+    return spec["paths"]["/api/scans/import"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+
+
+@pytest.mark.parametrize("export_format", ["full-result", "scan-diff", None])
+@pytest.mark.parametrize("scan_type", ["import_sbom", "vulnerability_scan"])
+def test_minimal_scan_import_contract_matches_handler(client, contract_data, export_format, scan_type):
+    spec = client.get("/api/openapi").get_json()
+    payload = _minimal_scan_import()
+    payload["scan_type"] = scan_type
+    if export_format is None:
+        payload.pop("export_version")
+        payload.pop("export_format")
+    else:
+        payload["export_format"] = export_format
+        if scan_type == "vulnerability_scan":
+            payload.pop("packages")
+    _assert_payload_matches(spec, _scan_import_schema(spec), payload)
+    response = client.post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.get_json()
+
+
+@pytest.mark.parametrize("markers", [
+    {"export_version": 99, "export_format": "full-result"},
+    {"export_version": 1, "export_format": "unsupported"},
+    {"export_version": 1},
+    {"export_format": "full-result"},
+    {"export_version": None, "export_format": None},
+])
+@pytest.mark.parametrize("batch", [False, True])
+def test_marked_scan_import_cannot_fall_back_to_legacy(client, contract_data, markers, batch):
+    spec = client.get("/api/openapi").get_json()
+    payload = _minimal_scan_import()
+    payload.pop("export_version")
+    payload.pop("export_format")
+    payload.update(markers)
+    body = [payload] if batch else payload
+    with pytest.raises(ValidationError):
+        _assert_payload_matches(spec, _scan_import_schema(spec), body)
+    response = client.post("/api/scans/import", json=body)
+    assert response.status_code == 400, response.get_json()
+
+
+def test_versioned_scan_import_does_not_validate_as_legacy(client):
+    spec = client.get("/api/openapi").get_json()
+    with pytest.raises(ValidationError):
+        _assert_payload_matches(
+            spec, {"$ref": "#/components/schemas/LegacyScanExport"}, _minimal_scan_import(),
+        )
+
+
+@pytest.mark.parametrize("missing", [
+    "scan_id", "scan_type", "timestamp", "project_name", "variant_name", "findings", "packages",
+])
+def test_scan_import_requires_handler_fields(client, contract_data, missing):
+    spec = client.get("/api/openapi").get_json()
+    payload = _minimal_scan_import()
+    payload.pop(missing)
+    with pytest.raises(ValidationError):
+        _assert_payload_matches(spec, _scan_import_schema(spec), payload)
+    assert client.post("/api/scans/import", json=payload).status_code == 400
+
+
+@pytest.mark.parametrize("count", [0, 201])
+def test_scan_import_batch_limits_match_handler(client, contract_data, count):
+    spec = client.get("/api/openapi").get_json()
+    payload = [_minimal_scan_import() for _ in range(count)]
+    with pytest.raises(ValidationError):
+        _assert_payload_matches(spec, _scan_import_schema(spec), payload)
+    assert client.post("/api/scans/import", json=payload).status_code == 400
+
+
+def test_scan_import_allows_packages_without_export_only_fields(client, contract_data):
+    spec = client.get("/api/openapi").get_json()
+    payload = _minimal_scan_import()
+    payload["packages"] = [{"package_name": "imported-package"}]
+    payload["findings"] = [{"package_name": "imported-package", "vulnerability_id": "CVE-2024-1234"}]
+    _assert_payload_matches(spec, _scan_import_schema(spec), payload)
+    response = client.post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.get_json()
+
+
+@pytest.mark.parametrize("source", ["nvd", "epss", "ghsa"])
+def test_vulnerability_refresh_response_envelope_matches_runtime(client, app, contract_data, monkeypatch, source):
+    from src.models.vulnerability import Vulnerability
+    from src.routes import vulnerabilities
+
+    vuln_id = "CVE-2024-1234"
+    if source == "nvd":
+        monkeypatch.setattr(vulnerabilities, "get_cve_json", lambda cve_id: {"id": cve_id})
+        monkeypatch.setattr(vulnerabilities, "extract_cve_details", lambda cve: {"description": "Refreshed NVD data"})
+    elif source == "epss":
+        epss = Mock()
+        epss.api_get_epss.return_value = {"score": 0.25, "percentile": 0.8}
+        monkeypatch.setattr(vulnerabilities, "EPSS_DB", lambda: epss)
+    else:
+        vuln_id = "GHSA-ABCD-EFGH-1234"
+        with app.app_context():
+            Vulnerability.create_record(id=vuln_id, description="Advisory", status="high")
+            db.session.commit()
+        monkeypatch.setattr(
+            vulnerabilities.VulnerabilitiesController, "_fetch_ghsa_published",
+            lambda ghsa_id: "2026-01-01T00:00:00Z",
+        )
+    spec = client.get("/api/openapi").get_json()
+    response = client.post(f"/api/vulnerabilities/{vuln_id}/{source}-refresh")
+    assert response.status_code == 200, response.get_json()
+    identifier = "ghsa_id" if source == "ghsa" else "cve_id"
+    operation = spec["paths"][f"/api/vulnerabilities/{{{identifier}}}/{source}-refresh"]["post"]
+    schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    _assert_payload_matches(spec, schema, response.get_json())
+    assert response.get_json()["vulnerabilities"][0]["id"] == vuln_id
