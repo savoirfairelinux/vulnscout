@@ -119,11 +119,16 @@ def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str |
 
     packages = _resolve_active_packages(variant_uuid)
 
+    engine = None
+    if mode == "local":
+        click.echo("Loading local NVD advisory database…")
+        engine = get_engine(progress=click.echo)
+
     with tool_scan(variant_uuid, "nvd", run_id or new_queue_id()) as scan:
         if mode == "api":
             _nvd_scan_api(variant_uuid, packages, scan)
         else:
-            _nvd_scan_local(variant_uuid, packages, scan)
+            _nvd_scan_local(variant_uuid, packages, scan, engine)
 
 
 def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
@@ -191,13 +196,10 @@ def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
     )
 
 
-def _nvd_scan_local(variant_uuid, packages, scan: ScanModel) -> None:
+def _nvd_scan_local(variant_uuid, packages, scan: ScanModel, engine) -> None:
     """NVD scan using the local NVD-FKIE advisory database."""
-    click.echo("Loading local NVD advisory database…")
-    engine = get_engine(progress=click.echo)
-
     total = len(packages)
-    writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages, commit_chunks=False)
     seen_keys: set = set()
 
     for idx, pkg in enumerate(packages, 1):
@@ -378,8 +380,10 @@ class _SccBulkWriter:
 
     This writer instead accumulates plain row dictionaries and flushes them with
     ``bulk_insert_mappings`` in foreign-key order (vulnerabilities → metrics →
-    findings → observations → assessments), committing once per chunk.  Duplicate
-    work is avoided in memory:
+    findings → observations → assessments), committing once per chunk by default.
+    CLI scans use ``commit_chunks=False`` to stage all chunks in one transaction:
+    failure can then roll back findings and assessments as well as observations.
+    Duplicate work is avoided in memory:
 
     * ``(package_id, cve)`` pairs that already have a finding (from a prior
       nvd/osv scan) are pre-loaded so existing findings are reused, never
@@ -400,9 +404,10 @@ class _SccBulkWriter:
     FLUSH_THRESHOLD = 5000
     _SELECT_CHUNK = 500
 
-    def __init__(self, scan_id, variant_uuid, packages):
+    def __init__(self, scan_id, variant_uuid, packages, *, commit_chunks=True):
         self._scan_id = scan_id
         self._variant_uuid = variant_uuid
+        self._commit_chunks = commit_chunks
         self.cves_found: set[str] = set()
 
         # Confirmed-present (existing or already-inserted) vulnerability ids.
@@ -625,7 +630,10 @@ class _SccBulkWriter:
                 _db.session.bulk_insert_mappings(sa_inspect(Assessment), self._assess_rows)
             if self._assess_target_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(AssessmentTarget), self._assess_target_rows)
-            _db.session.commit()
+            if self._commit_chunks:
+                _db.session.commit()
+            else:
+                _db.session.flush()
 
         self._vuln_rows.clear()
         self._metric_rows.clear()
@@ -684,7 +692,7 @@ def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str |
 
 def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel) -> None:
     total_pkgs = len(packages)
-    writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages, commit_chunks=False)
 
     for idx, pkg in enumerate(packages, 1):
         pkg_label = f"{pkg.name}@{pkg.version}" if pkg.name else str(pkg.id)
@@ -704,7 +712,7 @@ def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel) -> Non
 
         _echo_query_results(idx, total_pkgs, pkg_label, persisted_ids,
                             "vuln(s)", "no vulnerabilities")
-        # Flush in large bulk-inserted chunks to bound memory/transaction size.
+        # Bound buffer memory while keeping all chunks in one transaction.
         writer.maybe_flush()
 
     writer.flush()

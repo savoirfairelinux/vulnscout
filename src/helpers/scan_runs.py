@@ -15,8 +15,9 @@ from ..models.scan import Scan
 def tool_scan(variant_id: uuid.UUID, source: str, run_id: str | None = None) -> Iterator[Scan]:
     """Persist a scan step, removing it if its producer fails or is interrupted.
 
-    Producers can commit findings in chunks. Removing a failed step also removes
-    its observations, without deleting shared findings or assessments.
+    CLI producers stage new findings and assessments until they succeed.
+    On failure, rollback removes staged data and deleting the scan removes its
+    observations. Already-committed shared findings and assessments are retained.
     """
     scan = Scan.create(
         description="empty description",
@@ -28,6 +29,7 @@ def tool_scan(variant_id: uuid.UUID, source: str, run_id: str | None = None) -> 
     scan_id = scan.id
     try:
         yield scan
+        db.session.commit()
     except BaseException:
         db.session.rollback()
         persisted_scan = db.session.get(Scan, scan_id)

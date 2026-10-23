@@ -203,6 +203,103 @@ def test_failed_cli_step_is_removed_without_removing_completed_steps(app, ids, c
         assert [scan.id for scan in scans] == [completed_id]
 
 
+@pytest.mark.parametrize("command", ["nvd-scan", "sbom-cve-check-scan"])
+@pytest.mark.parametrize("error", [RuntimeError("after chunk"), KeyboardInterrupt()])
+@pytest.mark.parametrize("failure_point", ["chunk", "completion"])
+def test_failed_local_scan_rolls_back_flushed_assessments(app, ids, command, error, failure_point):
+    import click
+    from src.bin.cmd_vuln_scan import _SccBulkWriter
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+    from src.models.finding import Finding
+    from tests.webapp_tests.test_scc_bulk_writer import _Computed
+
+    with app.app_context():
+        existing = Finding.get_by_vulnerability("CVE-EXISTING-1")[0]
+        Assessment.create(
+            status="not_affected", origin="custom",
+            targets=[(uuid.UUID(ids["variant_id"]), existing.id)],
+        )
+        original_findings = set(_db.session.scalars(_db.select(Finding.id)))
+        original_assessments = set(_db.session.scalars(_db.select(Assessment.id)))
+        original_targets = _db.session.execute(_db.select(
+            AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+        )).all()
+    endpoint = "/api/vulnerabilities/CVE-BARE-001/assessments"
+    before = app.test_client().get(endpoint)
+    assert before.status_code == 200
+    engine = MagicMock()
+    engine.applicable_vulns.return_value = [
+        (_Computed(cve), "affected")
+        for cve in ("CVE-EXISTING-1", "CVE-BARE-001", "CVE-2026-1234")
+    ]
+    real_flush = _SccBulkWriter.flush
+    real_echo = click.echo
+
+    def fail_after_chunk(writer):
+        real_flush(writer)
+        if failure_point == "chunk":
+            raise error
+
+    def echo(message=None, *args, **kwargs):
+        if failure_point == "completion" and str(message).startswith("✓ Scan complete"):
+            raise error
+        return real_echo(message, *args, **kwargs)
+
+    with patch("src.bin.cmd_vuln_scan.get_engine", return_value=engine), \
+            patch("src.controllers.scc_engine.get_engine", return_value=engine), \
+            patch.object(_SccBulkWriter, "FLUSH_THRESHOLD", 1), \
+            patch.object(_SccBulkWriter, "flush", fail_after_chunk), \
+            patch("src.bin.cmd_vuln_scan.click.echo", side_effect=echo):
+        result = app.test_cli_runner().invoke(args=[command, *_scan_args(ids)])
+    assert result.exit_code != 0
+    with app.app_context():
+        assert set(_db.session.scalars(_db.select(Finding.id))) == original_findings
+        assert set(_db.session.scalars(_db.select(Assessment.id))) == original_assessments
+        assert _db.session.execute(_db.select(
+            AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+        )).all() == original_targets
+        assert all(scan.scan_type == "sbom" for scan in Scan.get_all())
+    assert app.test_client().get(endpoint).json == before.json
+
+
+@pytest.mark.parametrize("command", ["nvd-scan", "sbom-cve-check-scan"])
+def test_local_engine_load_precedes_scan_creation(app, ids, command):
+    def load_engine(**kwargs):
+        assert not _db.session.scalars(_db.select(Scan).where(Scan.scan_type == "tool")).all()
+        engine = MagicMock()
+        engine.applicable_vulns.return_value = []
+        return engine
+
+    with patch("src.bin.cmd_vuln_scan.get_engine", side_effect=load_engine), \
+            patch("src.controllers.scc_engine.get_engine", side_effect=load_engine):
+        result = app.test_cli_runner().invoke(args=[command, *_scan_args(ids)])
+    assert result.exit_code == 0, result.output
+
+
+def test_history_cache_notices_observations_committed_by_another_process(app, ids):
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.routes._scan_diff import serialize_list_with_diff_cached
+
+    invalidate_scan_list_cache()
+    try:
+        with app.app_context():
+            scan = Scan.create("in progress", uuid.UUID(ids["variant_id"]),
+                               scan_type="tool", scan_source="scc")
+            scans = Scan.get_all()
+            before = serialize_list_with_diff_cached("cli-progress", scans)
+            assert next(item for item in before if item["id"] == str(scan.id))["finding_count"] == 0
+            finding = Finding.get_by_vulnerability("CVE-EXISTING-1")[0]
+            # A direct commit bypasses this process's cache invalidation hooks,
+            # just like a separate CLI process writing to the shared database.
+            Observation.create(finding_id=finding.id, scan_id=scan.id)
+            after = serialize_list_with_diff_cached("cli-progress", scans)
+            assert next(item for item in after if item["id"] == str(scan.id))["finding_count"] == 1
+    finally:
+        invalidate_scan_list_cache()
+
+
 def test_vulnerability_refresh_does_not_create_scan_steps(app, ids):
     with patch("src.bin.cmd_process._refresh_source", return_value=True):
         result = app.test_cli_runner().invoke(args=[
