@@ -212,7 +212,7 @@ class TestSccBulkWriter:
 
     @pytest.mark.parametrize("first_source", ["nvd", "scc"])
     @pytest.mark.parametrize("second_source", ["nvd", "scc"])
-    @pytest.mark.parametrize("failure_order", [(0, 1), (1, 0)])
+    @pytest.mark.parametrize("failure_order", [(0, 1), (1, 0), (0, 1, 2), (0, 2, 1), (2, 1, 0)])
     def test_overlapping_failed_scans_remove_their_shared_pending_assessment(
         self, app, monkeypatch, first_source, second_source, failure_order,
     ):
@@ -224,7 +224,7 @@ class TestSccBulkWriter:
             variant_id, package_id = variant.id, pkg.id
 
         steps = []
-        for source in (first_source, second_source):
+        for source in (first_source, second_source, first_source)[:len(failure_order)]:
             with app.app_context():
                 failure_cleanups = []
                 step = tool_scan(variant_id, source, failure_cleanups=failure_cleanups)
@@ -239,12 +239,12 @@ class TestSccBulkWriter:
                 steps.append(step)
 
         with app.app_context():
-            assert _db.session.query(Scan).count() == 2
-            assert _db.session.query(Observation).count() == 6
+            assert _db.session.query(Scan).count() == len(steps)
+            assert _db.session.query(Observation).count() == 3 * len(steps)
             pending_ids = set(_db.session.scalars(_db.select(Assessment.id)))
             assert len(pending_ids) == 3
 
-        for remaining, index in zip((1, 0), failure_order):
+        for remaining, index in zip(reversed(range(len(steps))), failure_order):
             with app.app_context():
                 error = KeyboardInterrupt()
                 assert steps[index].__exit__(type(error), error, None) is False
@@ -252,9 +252,58 @@ class TestSccBulkWriter:
                 assert _db.session.query(Observation).count() == 3 * remaining
                 if remaining:
                     assert set(_db.session.scalars(_db.select(Assessment.id))) == pending_ids
+                    surviving_ids = set(_db.session.scalars(_db.select(Scan.id)))
+                    assert set(_db.session.scalars(_db.select(Assessment.provisional_scan_id))) <= surviving_ids
                 else:
                     assert _db.session.query(Assessment).count() == 0
                     assert _db.session.query(AssessmentTarget).count() == 0
+
+    @pytest.mark.parametrize("completion", ["before_overlap", "after_overlap", "adopter"])
+    def test_failed_scan_preserves_assessment_after_completed_scan_is_deleted(self, app, tmp_path, completion):
+        status_file = tmp_path / "status.txt"
+        status_file.write_text("__END_OF_SCAN_SCRIPT__")
+        app.config["SCAN_FILE"] = str(status_file)
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+            pkg = _make_packages([("openssl", "1.1.1")])[0]
+            variant_id, package_id = variant.id, pkg.id
+
+        steps, scan_ids = [], []
+        for index, source in enumerate(("nvd", "scc")):
+            with app.app_context():
+                failure_cleanups = []
+                step = tool_scan(variant_id, source, failure_cleanups=failure_cleanups)
+                scan = step.__enter__()
+                scan_ids.append(scan.id)
+                pkg = _db.session.get(Package, package_id)
+                writer = _SccBulkWriter(
+                    scan.id, variant_id, [pkg], failure_cleanups=failure_cleanups,
+                )
+                _scan_pkg(writer, pkg, [(_Computed("CVE-2023-0001"), "affected")])
+                writer.flush()
+                steps.append(step)
+                if index == 0 and completion == "before_overlap":
+                    step.__exit__(None, None, None)
+
+        completed = int(completion == "adopter")
+        with app.app_context():
+            if completion != "before_overlap":
+                steps[completed].__exit__(None, None, None)
+            pending_id = _db.session.query(Assessment).one().id
+
+        response = app.test_client().delete(f"/api/scans/{scan_ids[completed]}")
+        assert response.status_code == 200
+        assert response.json["orphaned_findings_removed"] == 0
+
+        with app.app_context():
+            assert _db.session.query(Assessment).one().id == pending_id
+            error = KeyboardInterrupt()
+            assert steps[1 - completed].__exit__(type(error), error, None) is False
+            assert _db.session.query(Scan).count() == 0
+            assert _db.session.query(Observation).count() == 0
+            assert _db.session.query(Assessment).one().id == pending_id
+            assert _db.session.query(AssessmentTarget).count() == 1
 
     @pytest.mark.parametrize("origin", ["scc", "custom"])
     @pytest.mark.parametrize("observed", [False, True])
@@ -340,6 +389,7 @@ class TestSccBulkWriter:
 
             retained = _db.session.query(Assessment).one()
             assert (retained.id, retained.origin, retained.status) == (pending_id, origin, status)
+            assert retained.provisional_scan_id is None
             assert _db.session.query(AssessmentTarget).count() == 1
             assert _db.session.query(Observation).count() == 0
             assert _db.session.query(Scan).count() == 0

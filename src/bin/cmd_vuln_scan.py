@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Callable, Iterable, Iterator
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import orm as sa_orm
+from sqlalchemy import case as sa_case
 from sqlalchemy.sql.selectable import Exists
 from flask.cli import with_appcontext
 
@@ -622,6 +623,7 @@ class _SccBulkWriter:
                 "finding_id": finding_id,
                 "variant_id": self._variant_uuid,
                 "origin": "scc",
+                "provisional_scan_id": self._scan_id if self._created_assessment_ids is not None else None,
                 "status_notes": None,
                 "timestamp": assessment_timestamp,
                 "created_at": assessment_timestamp,
@@ -717,12 +719,20 @@ class _SccBulkWriter:
                     AssessmentTarget.variant_id == self._variant_uuid,
                     Assessment.origin == "scc",
                     Assessment.status == "under_investigation",
+                    self._is_provisional(),
                     self._observed_elsewhere(),
                 )
                 .distinct()
             )
             for chunk in ids.partitions(self._SELECT_CHUNK):
                 self._adopted_assessment_ids.extend(chunk)
+
+    @staticmethod
+    def _is_provisional() -> Exists:
+        return _db.select(ScanModel.id).where(
+            ScanModel.id == Assessment.provisional_scan_id,
+            ScanModel.in_progress.is_(True),
+        ).exists()
 
     def cleanup(self) -> None:
         """Reconcile owned and adopted rows in bounded write transactions."""
@@ -765,14 +775,43 @@ class _SccBulkWriter:
                         still_needed = still_needed.where(~assessed_elsewhere)
                     assessments = _db.select(Assessment).where(
                         Assessment.id.in_(chunk), Assessment.id.not_in(still_needed),
+                        self._is_provisional(),
+                        Assessment.origin == "scc",
+                        Assessment.status == "under_investigation",
                     )
-                    if not created:
-                        assessments = assessments.where(
-                            Assessment.origin == "scc",
-                            Assessment.status == "under_investigation",
-                        )
                     for assessment in _db.session.scalars(assessments).all():
                         _db.session.delete(assessment)
+                    _db.session.flush()
+                    # A completed observer establishes the assessment. Otherwise
+                    # hand cleanup ownership to a surviving in-progress observer.
+                    next_owner = (
+                        _db.select(sa_case(
+                            (ScanModel.in_progress.is_(True), ScanModel.id), else_=None,
+                        ))
+                        .select_from(AssessmentTarget)
+                        .join(Observation, Observation.finding_id == AssessmentTarget.finding_id)
+                        .join(ScanModel, ScanModel.id == Observation.scan_id)
+                        .where(
+                            AssessmentTarget.assessment_id == Assessment.id,
+                            ScanModel.variant_id == AssessmentTarget.variant_id,
+                            Observation.scan_id != self._scan_id,
+                        )
+                        .order_by(ScanModel.in_progress, ScanModel.id)
+                        .limit(1)
+                        .scalar_subquery()
+                    )
+                    _db.session.execute(
+                        _db.update(Assessment).where(
+                            Assessment.id.in_(chunk),
+                            self._is_provisional(),
+                        ).values(provisional_scan_id=sa_case(
+                            (
+                                (Assessment.origin == "scc") & (Assessment.status == "under_investigation"),
+                                next_owner,
+                            ),
+                            else_=None,
+                        )).execution_options(synchronize_session=False)
+                    )
                     _db.session.commit()
 
         for chunk in self._created_finding_ids.chunks(self._SELECT_CHUNK):

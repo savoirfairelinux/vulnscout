@@ -233,7 +233,9 @@ def test_tool_scan_records_its_run_id(app, ids):
     with app.app_context():
         with _tool_scan(uuid.UUID(ids["variant_a"]), "osv", "q-42") as scan:
             scan_id = scan.id
+            assert scan.in_progress is True
         assert _db.session.get(Scan, scan_id).run_id == "q-42"
+        assert _db.session.get(Scan, scan_id).in_progress is False
 
         with _tool_scan(uuid.UUID(ids["variant_a"]), "osv") as scan:
             scan_id = scan.id
