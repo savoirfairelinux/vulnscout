@@ -469,9 +469,13 @@ targets outside the current project or variant view, without changing the
 assessment. Scan-imported assessments and pending AI suggestions are not eligible.
 Selection is preserved; already queued or running assessments are not queued
 again. Use **AI review chat** to hide or reopen the conversation without stopping
-it, or remove pending requests from its queue. Connection setup, errors and retry
-are handled in the chat. Leaving the Review page or changing project/variant
-discards this conversation and its remaining queue; reviews already saved remain.
+it. The **AI queue** button in any chat shows the same running, waiting and failed
+requests from global, bulk assessment, review and vulnerability chats. Remove
+waiting requests there, or retry a failed request to resume the shared queue.
+Connection setup is available through the plug button; model selection is at the
+bottom of the message box. Leaving the Review page or changing project/variant
+does not cancel queued reviews. Closed conversations are released after their
+requests finish or are removed; reviews already saved remain.
 
 ### Import and Export
 

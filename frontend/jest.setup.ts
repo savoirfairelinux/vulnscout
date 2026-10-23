@@ -7,7 +7,9 @@
 // references them at import time.
 import { TextEncoder, TextDecoder } from 'node:util';
 import { randomUUID } from 'node:crypto';
+import { deserialize, serialize } from 'node:v8';
 Object.assign(global, { TextEncoder, TextDecoder });
+Object.assign(global, { structuredClone: <T,>(value: T): T => deserialize(serialize(value)) });
 Object.defineProperty(globalThis.crypto, 'randomUUID', { configurable: true, value: randomUUID });
 
 // Mock the global fetch function

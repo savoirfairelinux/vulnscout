@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleNotch, faWandMagicSparkles } from '@fortawesome/free-solid-svg-icons';
-import AgentChat, { type QueuedAgentMessage } from './AgentChat';
+import AgentChat from './AgentChat';
 import type { Vulnerability } from '../handlers/vulnerabilities';
-import type { AgentContext } from '../types/agent';
+import type { AgentContext, QueuedAgentMessage } from '../types/agent';
 import { buildAiAssessmentMessages, loadAiAssessmentTargets } from '../helpers/aiAssessment';
+import { enqueueAgentMessages } from '../handlers/agentQueue';
+import useAgentQueue from '../hooks/useAgentQueue';
 
-type BulkMessage = QueuedAgentMessage & { vulnerabilityId: string };
 type Props = {
     vulnerabilities: Vulnerability[];
     selectedVulns: string[];
@@ -19,31 +20,22 @@ type Props = {
 /** The owning bar keys this component by scope; selections do not discard a conversation. */
 export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, context, disabled, onError, onPrepare }: Readonly<Props>) {
     const [threadId] = useState(() => crypto.randomUUID());
-    const threadStarted = useRef(false);
     const preparation = useRef<AbortController | null>(null);
     const [preparing, setPreparing] = useState(false);
     const [mounted, setMounted] = useState(false);
     const [open, setOpen] = useState(false);
-    const [queue, setQueue] = useState<BulkMessage[]>([]);
-    const [running, setRunning] = useState<BulkMessage | null>(null);
+    const queue = useAgentQueue(threadId);
+    const running = queue.find(item => item.status === 'running');
     const selectionKey = JSON.stringify([...selectedVulns].sort());
-    const activeIds = new Set([...queue.map(item => item.vulnerabilityId), ...(running ? [running.vulnerabilityId] : [])]);
+    const activeIds = new Set(queue.flatMap(item => item.context.view?.selectedVulnerabilityIds ?? []));
     const selectionActive = selectedVulns.length > 0 && selectedVulns.every(id => activeIds.has(id));
-    const selectionRunning = selectionActive && running && selectedVulns.includes(running.vulnerabilityId);
+    const selectionRunning = selectionActive && running?.context.view?.selectedVulnerabilityIds?.some(id => selectedVulns.includes(id));
 
     useEffect(() => {
         preparation.current?.abort();
         setPreparing(false);
         return () => preparation.current?.abort();
     }, [selectionKey]);
-
-    useEffect(() => () => {
-        if (threadStarted.current) {
-            void fetch('/api/agent/conversation', {
-                method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
-            }).catch(() => {});
-        }
-    }, [threadId]);
 
     const assess = async () => {
         if (preparation.current && !preparation.current.signal.aborted) return;
@@ -57,7 +49,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                 if (!vulnerability) throw new Error(`Selected vulnerability ${id} is no longer available. Refresh the table and try again.`);
                 return vulnerability;
             });
-            const messages: BulkMessage[][] = [];
+            const messages: QueuedAgentMessage[][] = [];
             // Bound compatibility lookups instead of issuing one concurrent request per selected row.
             let next = 0;
             await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
@@ -73,14 +65,13 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                     }
                     messages[index] = actions.map(message => ({
                         ...message, id: crypto.randomUUID(), key: `assess:${vulnerability.id}`,
-                        vulnerabilityId: vulnerability.id,
                         title: `${vulnerability.id} · ${message.title}`,
+                        context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [vulnerability.id], selectionCount: 1 } },
                     }));
                 }
             }));
             if (controller.signal.aborted) return;
-            setQueue(current => [...current, ...messages.flat()]);
-            threadStarted.current = true;
+            enqueueAgentMessages(messages.flat(), context, threadId, 'Bulk assessment chat');
             setMounted(true);
             setOpen(true);
         } catch (error) {
@@ -113,17 +104,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
             className="fixed inset-y-0 right-0 z-50 w-full border-l border-neutral-700 bg-white shadow-2xl sm:w-[min(480px,100%)]">
             <AgentChat threadId={threadId} active={open}
                 context={{ ...context, view: { selectedVulnerabilityIds: [...activeIds], selectionCount: activeIds.size } }}
-                onClose={() => setOpen(false)} queue={queue}
-                onQueuedMessageSent={id => {
-                    const sent = queue.find(item => item.id === id);
-                    if (sent) setRunning(sent);
-                }}
-                onQueuedMessageDone={(id, success) => {
-                    setRunning(current => current?.id === id ? null : current);
-                    if (success) setQueue(current => current.filter(item => item.id !== id));
-                }}
-                onQueueRemove={id => setQueue(current => current.filter(item => item.id !== id))}
-                onQueueClear={() => setQueue(current => current.filter(item => item.id === running?.id))}
+                onClose={() => setOpen(false)}
             />
         </aside>}
     </>;

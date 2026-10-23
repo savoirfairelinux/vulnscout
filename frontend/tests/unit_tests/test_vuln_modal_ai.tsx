@@ -9,31 +9,41 @@ import React from 'react';
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import type { AssessmentTargetPair } from "../../src/handlers/assessments";
 import VulnModal from '../../src/components/VulnModal';
+import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 type QueueItem = { id: string; text: string; key: string; kind: string; title: string; detail?: string };
 type ChatProps = {
-    threadId?: string; active?: boolean; queue?: QueueItem[];
-    onQueuedMessageSent?: (id: string) => void; onQueuedMessageDone?: (id: string, success: boolean) => void;
-    onQueueRemove?: (id: string) => void; onQueueClear?: () => void;
+    threadId?: string; active?: boolean;
 };
 const chatProps: ChatProps[] = [];
 let chatMounts = 0;
 let lastSentId: string | undefined;
-const lastQueue = () => chatProps[chatProps.length - 1].queue ?? [];
+const lastQueue = () => getAgentQueue().filter(item => item.threadId === chatProps[chatProps.length - 1].threadId);
 
 jest.mock('../../src/components/AgentChat', () => ({
     __esModule: true,
     default: function MockAgentChat(props: ChatProps & { onClose: () => void }) {
         const ReactLib = jest.requireActual('react');
+        const store = jest.requireActual('../../src/handlers/agentQueue');
+        const useQueue = jest.requireActual('../../src/hooks/useAgentQueue').default;
+        const queue = useQueue(props.threadId);
+        const mark = (status: 'running' | 'failed') => {
+            const item = queue[0];
+            if (item) {
+                lastSentId = item.id;
+                item.status = status;
+                store.enqueueAgentMessages([], { page: 'vulnerabilities' });
+            }
+        };
         ReactLib.useEffect(() => { chatMounts += 1; }, []);
         chatProps.push(props);
         return <div data-testid="agent-chat">
-            <span data-testid="queued-message">{props.queue?.[0]?.text ?? ''}</span>
+            <span data-testid="queued-message">{queue[0]?.text ?? ''}</span>
             <button type="button" onClick={props.onClose}>Close chat</button>
-            <button type="button" onClick={() => { const head = props.queue?.[0]; if (head) { lastSentId = head.id; props.onQueuedMessageSent?.(head.id); } }}>Accept queued</button>
-            <button type="button" onClick={() => lastSentId && props.onQueuedMessageDone?.(lastSentId, true)}>Finish running</button>
-            <button type="button" onClick={() => lastSentId && props.onQueuedMessageDone?.(lastSentId, false)}>Fail running</button>
-            <button type="button" onClick={() => props.onQueueClear?.()}>Clear queue</button>
+            <button type="button" onClick={() => mark('running')}>Accept queued</button>
+            <button type="button" onClick={() => { const item = queue.find((task: QueueItem) => task.id === lastSentId); if (item) item.status = 'queued'; if (lastSentId) store.removeAgentTask(lastSentId); }}>Finish running</button>
+            <button type="button" onClick={() => mark('failed')}>Fail running</button>
+            <button type="button" onClick={store.clearAgentQueue}>Clear queue</button>
         </div>;
     },
 }));
@@ -98,6 +108,7 @@ function renderModal(props: Partial<React.ComponentProps<typeof VulnModal>> = {}
 
 describe('VulnModal AI actions', () => {
     beforeEach(() => {
+        resetAgentQueue();
         chatProps.length = 0;
         chatMounts = 0;
         lastSentId = undefined;
@@ -302,7 +313,7 @@ describe('VulnModal AI actions', () => {
         expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('navigating to another CVE discards the session', async () => {
+    test('navigating to another CVE isolates the new chat without deleting the old session', async () => {
         const user = userEvent.setup();
         const { rerender } = renderModal();
         await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
@@ -312,14 +323,13 @@ describe('VulnModal AI actions', () => {
         rerender(<VulnModal vuln={other} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
-        expect(deleteCalls()).toHaveLength(1);
-        expect((deleteCalls()[0][1]?.headers as Record<string, string>)['X-Agent-Thread']).toBe(threadId);
+        expect(deleteCalls()).toHaveLength(0);
 
         await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${other.id}` }));
         expect(chatProps[chatProps.length - 1].threadId).not.toBe(threadId);
     });
 
-    test('closing the modal discards the session', async () => {
+    test('closing the modal does not delete a session needed by the shared queue', async () => {
         const user = userEvent.setup();
         const { unmount } = renderModal();
         await user.click(screen.getByRole('button', { name: `Toggle AI chat for ${vulnerability.id}` }));
@@ -327,7 +337,7 @@ describe('VulnModal AI actions', () => {
         expect(deleteCalls()).toHaveLength(0);
 
         unmount();
-        expect(deleteCalls()).toHaveLength(1);
+        expect(deleteCalls()).toHaveLength(0);
     });
 
     test('read-only modal hides all AI actions', () => {

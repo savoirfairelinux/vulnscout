@@ -5,6 +5,7 @@ import type React from 'react';
 import MultiEditBar from '../../src/components/MultiEditBar';
 import type AgentChat from '../../src/components/AgentChat';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
+import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 fetchMock.enableMocks();
 type ChatProps = React.ComponentProps<typeof AgentChat>;
@@ -16,20 +17,35 @@ jest.mock('../../src/components/AgentChat', () => ({
     __esModule: true,
     default: (props: ChatProps) => {
         const ReactLib = jest.requireActual('react');
+        const store = jest.requireActual('../../src/handlers/agentQueue');
+        const useQueue = jest.requireActual('../../src/hooks/useAgentQueue').default;
+        const queue: ReturnType<typeof getAgentQueue> = useQueue(props.threadId);
         ReactLib.useEffect(() => { chatMounts++; }, []);
         chatProps = props;
         return <div data-testid="agent-chat">
             <button onClick={props.onClose}>Close chat</button>
             <button onClick={() => {
-                runningId = props.queue?.[0]?.id;
-                if (runningId) props.onQueuedMessageSent?.(runningId);
+                const item = queue[0];
+                if (item) {
+                    runningId = item.id;
+                    item.status = 'running';
+                    store.enqueueAgentMessages([], { page: 'vulnerabilities' });
+                }
             }}>Start queued</button>
-            <button onClick={() => runningId && props.onQueuedMessageDone?.(runningId, true)}>Finish running</button>
-            <button onClick={() => runningId && props.onQueuedMessageDone?.(runningId, false)}>Fail running</button>
-            <button onClick={() => props.onQueueClear?.()}>Clear queue</button>
             <button onClick={() => {
-                const id = props.queue?.[0]?.id;
-                if (id) props.onQueueRemove?.(id);
+                const item = queue.find(task => task.id === runningId);
+                if (item) item.status = 'queued';
+                if (runningId) store.removeAgentTask(runningId);
+            }}>Finish running</button>
+            <button onClick={() => {
+                const item = queue.find(task => task.id === runningId);
+                if (item) item.status = 'failed';
+                store.enqueueAgentMessages([], { page: 'vulnerabilities' });
+            }}>Fail running</button>
+            <button onClick={store.clearAgentQueue}>Clear queue</button>
+            <button onClick={() => {
+                const id = queue[0]?.id;
+                if (id) store.removeAgentTask(id);
             }}>Remove queued</button>
         </div>;
     },
@@ -48,9 +64,10 @@ const baseProps = {
 type Props = React.ComponentProps<typeof MultiEditBar>;
 const bar = (props: Partial<Props> = {}) => <MultiEditBar {...baseProps} {...props} />;
 const assessButton = () => screen.getByRole('button', { name: /^Assess with AI/ });
-const queue = () => chatProps?.queue ?? [];
+const queue = () => getAgentQueue().filter(item => item.threadId === chatProps?.threadId);
 
 beforeEach(() => {
+    resetAgentQueue();
     chatProps = undefined;
     chatMounts = 0;
     runningId = undefined;
@@ -233,14 +250,14 @@ test('limits concurrent target resolution and keeps selection order', async () =
     expect(queue().map(item => item.title.split(' · ')[0])).toEqual(selected.map(vuln => vuln.id));
 });
 
-test('discards the old thread and queue when scope changes and deletes the active thread on unmount', async () => {
+test('isolates new scopes while preserving queued work and its sessions after unmount', async () => {
     const { rerender, unmount } = render(bar({ selectedVulns: ['CVE-1'] }));
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(1));
     const threadId = chatProps?.threadId;
     rerender(bar({ selectedVulns: ['CVE-1'], variantId: 'other-variant' }));
     expect(screen.queryByTestId('agent-chat')).not.toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('/api/agent/conversation', {
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/agent/conversation', {
         method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': threadId },
     });
     rerender(bar({ selectedVulns: ['CVE-1'] }));
@@ -249,7 +266,8 @@ test('discards the old thread and queue when scope changes and deletes the activ
     expect(chatProps?.threadId).not.toBe(threadId);
     const secondThreadId = chatProps?.threadId;
     unmount();
-    expect(fetchMock).toHaveBeenCalledWith('/api/agent/conversation', {
+    expect(getAgentQueue().map(item => item.threadId)).toEqual([threadId, secondThreadId]);
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/agent/conversation', {
         method: 'DELETE', credentials: 'same-origin', headers: { 'X-Agent-Thread': secondThreadId },
     });
 });
