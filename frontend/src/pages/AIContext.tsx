@@ -18,6 +18,7 @@ import type { SidebarSelection } from "../components/aiContext/ContextSidebar";
 import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionPanel";
 import ContextTransferControls, { ImportDetails } from "../components/aiContext/ContextTransferControls";
 import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
+import CopyFromDialog, { type CopySourceProject } from "../components/aiContext/CopyFromDialog";
 import { ERROR } from "../components/aiContext/styles";
 import { AGENT_WRITE_EVENT, type AgentViewContext } from "../types/agent";
 
@@ -43,6 +44,16 @@ async function fetchVariantList(projectId: string): Promise<Variant[]> {
     ) as Variant[];
 }
 
+/** Every project with its variants; projects whose variants fail to load are left out. */
+async function fetchCopySources(): Promise<CopySourceProject[]> {
+    const projects = await fetchProjectList();
+    const lists = await Promise.all(projects.map(p => fetchVariantList(p.id).catch(() => null)));
+    return projects.flatMap((p, i) => {
+        const list = lists[i];
+        return list ? [{ id: p.id, name: p.name, variants: list.map(v => ({ id: v.id, name: v.name })) }] : [];
+    });
+}
+
 /**
  * Top-bar scope; `variantIds` undefined means the whole project. `revision`
  * changes on every applied scope, even an identical one, so the page drops
@@ -59,6 +70,7 @@ const DIRTY_VARIANT_AGENT_TEXT = "The agent updated the variant context. Your un
 const EMPTY_VARIANT_DRAFT = emptyDraft();
 const NO_FILES: ContextFile[] = [];
 const sameText = (a: string, b: string) => a === b;
+type BannerType = 'success' | 'error' | 'info';
 
 /** The variant tab that owns a server field path (e.g. "components[0].name", "system.actors"). */
 function tabForField(path: string): VariantTab {
@@ -114,10 +126,12 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const [confirmOutdate, setConfirmOutdate] = useState(false);
     // The save a pending confirmation belongs to, and who waits for its outcome.
     const pendingSaveRef = useRef<{ target: SaveTarget; resolve: (saved: boolean) => void } | null>(null);
-    const [banner, setBanner] = useState<{ msg: ReactNode; type: 'success' | 'error' } | null>(null);
+    const [banner, setBanner] = useState<{ msg: ReactNode; type: BannerType } | null>(null);
     const [importDetails, setImportDetails] = useState<ImportResult | null>(null);
+    // Copy dialog sources; null while the dialog is closed.
+    const [copySources, setCopySources] = useState<CopySourceProject[] | null>(null);
 
-    const showBanner = useCallback((msg: ReactNode, type: 'success' | 'error') => {
+    const showBanner = useCallback((msg: ReactNode, type: BannerType) => {
         if (unmountedRef.current) return;
         setBanner({ msg, type });
     }, []);
@@ -179,6 +193,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         setFieldErrors({});
         setVariantTab('context');
     }, [openKey, projectDraft.epoch, variantDraft.epoch]);
+    useEffect(() => { setCopySources(null); }, [openKey]);
     // Errors about the item or project just left no longer apply. Opening the
     // first item keeps them: they may explain why the variant list is empty.
     const lastOpenRef = useRef({ projectId, openKey });
@@ -339,6 +354,30 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         return true;
     };
 
+    const openCopyFrom = () => {
+        const key = openKeyRef.current;
+        fetchCopySources().then(sources => {
+            if (!unmountedRef.current && openKeyRef.current === key) setCopySources(sources);
+        }).catch((e: any) => showBanner(e?.message || "Failed to load projects.", "error"));
+    };
+
+    // Copy replaces only the draft: the baseline stays, so the variant turns dirty.
+    const handleCopy = async (sourceProjectId: string, sourceVariantId: string) => {
+        const key = openKeyRef.current;
+        const project = copySources?.find(p => p.id === sourceProjectId);
+        const variant = project?.variants.find(v => v.id === sourceVariantId);
+        try {
+            const source = await Context.get(sourceProjectId, sourceVariantId);
+            if (unmountedRef.current || openKeyRef.current !== key) return;
+            variantDraft.setDraft(draftFromContext(source));
+            setFieldError('');
+            setFieldErrors({});
+            showBanner(`Copied the context of ${project?.name ?? ''} / ${variant?.name ?? ''}. Review it, then Save changes.`, "info");
+        } catch (e: any) {
+            showBanner(e?.message || "Failed to load context.", "error");
+        }
+    };
+
     const handleImported = (result: ImportResult) => {
         setImportDetails(result);
         reloadProject();
@@ -425,6 +464,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                                         onSave={() => { void requestSave(); }}
                                         saving={busy}
                                         dirty={variantDraft.dirty}
+                                        onCopyFrom={openCopyFrom}
                                         fieldErrors={fieldErrors}
                                         notify={showBanner}
                                         draftGeneration={variantDraft.generation}
@@ -438,6 +478,15 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 </div>
             )}
 
+            {selected?.kind === 'variant' && (
+                <CopyFromDialog
+                    isOpen={copySources !== null}
+                    currentVariantId={selected.id}
+                    projects={copySources ?? []}
+                    onCopy={handleCopy}
+                    onClose={() => setCopySources(null)}
+                />
+            )}
             <ConfirmationModal
                 isOpen={confirmOutdate}
                 title="Mark AI assessments as outdated?"
