@@ -19,8 +19,9 @@ def tool_scan(
     """Persist a scan step, removing it if its producer fails or is interrupted.
 
     On failure, rollback removes staged data, producer callbacks clean up their
-    exclusively new committed records, and deleting the scan removes its
-    observations. Pre-existing/shared findings and assessments are retained.
+    new committed records and orphaned pending assessments adopted from another
+    failed producer. Deleting the scan removes any remaining observations.
+    Pre-existing findings and assessments still needed by other scans are retained.
     """
     scan = Scan.create(
         description="empty description",

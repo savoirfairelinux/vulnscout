@@ -350,6 +350,9 @@ stay separate from tool runs even when `merge` is given `--run-id`.
 An unhandled scan error or interruption removes that failed NVD, OSV, or
 sbom-cve-check step from history; other completed steps remain. Existing
 per-package error handling and command exit codes are unchanged.
+Overlapping local NVD and sbom-cve-check scans retain shared pending assessments
+while another scan still observes their targets. If all overlapping steps fail,
+their shared pending assessments are removed rather than left in assessment views.
 
 `refresh` (and `flask refresh-vulnerability-data` or
 `process --refresh-vulnerability-data`) enriches existing vulnerability records;
