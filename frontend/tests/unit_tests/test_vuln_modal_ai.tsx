@@ -13,9 +13,7 @@ import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 type QueueItem = { id: string; text: string; key: string; kind: string; title: string; detail?: string };
 type ChatProps = {
-    threadId?: string; active?: boolean; queue?: QueueItem[];
-    onQueuedMessageSent?: (id: string) => void; onQueuedMessageDone?: (id: string, success: boolean) => void;
-    onQueueRemove?: (id: string) => void; onQueueClear?: () => void;
+    threadId?: string; active?: boolean;
 };
 const chatProps: ChatProps[] = [];
 let chatMounts = 0;

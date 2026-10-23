@@ -1,12 +1,13 @@
 import { useSyncExternalStore } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleNotch, faXmark } from '@fortawesome/free-solid-svg-icons';
-import { clearAgentQueue, getAgentQueue, removeAgentTask, retryAgentTask, subscribeAgentQueue } from '../handlers/agentQueue';
+import { clearAgentQueue, getAgentQueue, getAgentQueueError, removeAgentTask, retryAgentTask, subscribeAgentQueue } from '../handlers/agentQueue';
 
 const labels = { assess: 'Assess', review: 'Review', message: 'Message' };
 
 export default function AgentQueue({ id }: Readonly<{ id: string }>) {
     const queue = useSyncExternalStore(subscribeAgentQueue, getAgentQueue);
+    const cleanupError = useSyncExternalStore(subscribeAgentQueue, getAgentQueueError);
     const failed = queue.some(item => item.status === 'failed');
     return <section id={id} aria-label="Queued AI actions" className="mx-4 mb-3 shrink-0 overflow-hidden rounded-lg border border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900">
         <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
@@ -14,6 +15,7 @@ export default function AgentQueue({ id }: Readonly<{ id: string }>) {
             <button type="button" disabled={!queue.some(item => item.status !== 'running')} onClick={clearAgentQueue} className="text-cyan-700 disabled:opacity-40 dark:text-cyan-400">Clear all</button>
         </div>
         {failed && <p role="status" className="px-3 py-2 text-sm">Queue paused. Retry or remove the failed action to continue.</p>}
+        {cleanupError && <p role="alert" className="px-3 py-2 text-sm text-red-700 dark:text-red-300">{cleanupError}</p>}
         {!queue.length && <p className="px-3 py-3 text-sm text-neutral-500">No AI requests queued.</p>}
         <ol className="scrollbar-minimal max-h-60 overflow-y-auto">
             {queue.map((item, index) => <li key={item.id} className="flex items-start gap-3 border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">

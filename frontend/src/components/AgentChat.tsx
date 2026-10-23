@@ -3,16 +3,16 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowDown, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faClock, faCopy, faLocationDot, faPlug, faPlus, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext, type Activity, type AgentMessage as Message, type AgentUsage as Usage, type AgentStreamEvent as StreamEvent, type QueuedAgentMessage } from '../types/agent';
+import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext, type Activity, type AgentMessage as Message, type AgentUsage as Usage, type AgentStreamEvent as StreamEvent } from '../types/agent';
 import { providerIcons } from '../assets/providers';
 import { agentRequest, agentErrorMessage as errorMessage } from '../handlers/agent';
-import { configureAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentQueue, initializeAgentConversation, resetAgentConversation, resetAgentQueue, subscribeAgentQueue } from '../handlers/agentQueue';
+import { configureAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentQueue, initializeAgentConversation, resetAgentConversation, resetAgentQueue, retainAgentThread, subscribeAgentQueue } from '../handlers/agentQueue';
 import AgentQueue from './AgentQueue';
-type AgentState = { authenticated: boolean; login: string | null; configured: boolean; device_login: boolean; token_connected: boolean; provider: string | null; messages: Message[]; model: string; usage: Usage };
+type ConnectionState = { authenticated: boolean; login: string | null; configured: boolean; token_connected: boolean; provider: string | null };
+type AgentState = ConnectionState & { messages: Message[]; model: string; usage: Usage };
 type DeviceCode = { user_code: string; verification_uri: string; interval: number };
 type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; login?: string | null };
 type ModelChoice = { id: string; name: string };
-const emptyUsage: Usage = { cost: null, input_tokens: null, output_tokens: null };
 const pageLabels: Record<string, string> = { metrics: 'Overview', packages: 'SBOM', vulnerabilities: 'Vulnerabilities', scans: 'Scans', review: 'Review', exports: 'Export', settings: 'Settings', ai: 'AI context', unknown: 'Page not found' };
 const iconButton = 'flex h-9 w-9 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white';
 const skipDiscardKey = 'vulnscout.agent.skipDiscardConfirmation';
@@ -37,23 +37,12 @@ function ActivityLog({ items, pending = false }: Readonly<{ items: Activity[]; p
     </details>;
 }
 
-export type { QueuedAgentMessage } from '../types/agent';
-
-type QueueProps = {
-    /** Pending AI actions, oldest first; the head is sent once the chat is idle. */
-    queue?: QueuedAgentMessage[];
-    onQueuedMessageSent?: (id: string) => void;
-    onQueuedMessageDone?: (id: string, success: boolean) => void;
-    onQueueRemove?: (id: string) => void;
-    onQueueClear?: () => void;
-};
-
-function AgentChat({ onClose, context, active = true, threadId, queue = [], onQueuedMessageSent, onQueuedMessageDone }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string } & QueueProps>) {
+function AgentChat({ onClose, context, active = true, threadId }: Readonly<{ onClose: () => void; context: AgentContext; active?: boolean; threadId?: string }>) {
     const request = useCallback(<T,>(path: string, options?: RequestInit, onEvent?: (event: StreamEvent) => void) => agentRequest<T>(path, {
         ...options,
         headers: { ...options?.headers, ...(threadId ? { 'X-Agent-Thread': threadId } : {}) },
     }, onEvent), [threadId]);
-    const [state, setState] = useState<AgentState | null>(null);
+    const [state, setState] = useState<ConnectionState | null>(null);
     const [error, setError] = useState('');
     const [draft, setDraft] = useState('');
     const [device, setDevice] = useState<DeviceCode | null>(null);
@@ -73,7 +62,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
     const conversation = useSyncExternalStore(subscribeAgentQueue, () => getAgentConversation(threadId));
     const sharedQueue = useSyncExternalStore(subscribeAgentQueue, getAgentQueue);
     const { pendingMessage, liveReply, activity, progress } = conversation;
-    const [queueOpen, setQueueOpen] = useState(queue.length > 0);
+    const [queueOpen, setQueueOpen] = useState(false);
     const composerId = useId();
     const queueId = useId();
     const providerFormId = useId();
@@ -102,6 +91,8 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         ? [{ label: 'Assess this vulnerability', message: `Assess ${context.view.openVulnerabilityId} in the current scope. Retrieve its details with VulnScout MCP first.` }, { label: 'Review existing assessments', message: 'Review the existing assessments for the open vulnerability in the current scope.' }]
         : [{ label: `Summarize ${pageLabel.toLowerCase()}`, message: `Summarize the current ${pageLabel.toLowerCase()} view and its project scope using VulnScout MCP.` }, { label: 'Prioritize next steps', message: 'Review the current scope and recommend the most important next steps. Do not make changes.' }];
 
+    useEffect(() => threadId ? retainAgentThread(threadId) : undefined, [threadId]);
+
     useEffect(() => {
         const reload = (event: Event) => {
             if ((event as CustomEvent).detail !== connectionSource.current) setRefresh(value => value + 1);
@@ -119,9 +110,10 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         let active = true;
         request<AgentState>('').then(result => {
             if (active) {
-                setState(result);
-                setSelectedModel(result.model);
-                initializeAgentConversation(threadId, result.messages, result.usage);
+                const { messages, usage, model, ...connection } = result;
+                setState(connection);
+                setSelectedModel(model);
+                initializeAgentConversation(threadId, messages, usage);
             }
         }).catch(reason => {
             if (active) setError(errorMessage(reason));
@@ -135,17 +127,6 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             model: selectedModel,
         });
     }, [threadId, state?.authenticated, state?.configured, models.length, modelBusy, busy, selectedModel]);
-
-    useEffect(() => {
-        if (!queue.length) return;
-        try {
-            enqueueAgentMessages(queue, context, threadId, source, {
-                onSent: onQueuedMessageSent, onDone: onQueuedMessageDone,
-            });
-        } catch (reason) {
-            setError(errorMessage(reason));
-        }
-    }, [queue, context, threadId, source, onQueuedMessageSent, onQueuedMessageDone]);
 
     useEffect(() => {
         if (!state?.authenticated) return;
@@ -199,7 +180,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
                     timer = window.setTimeout(() => void poll(), interval * 1000);
                     return;
                 }
-                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, provider: null, messages: [], model: 'auto', usage: emptyUsage });
+                setState(previous => previous && { ...previous, authenticated: true, login: result.login ?? null, token_connected: true, provider: null });
                 setSelectedModel('auto');
                 setDevice(null);
                 setCheckState('success');
@@ -265,7 +246,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             setShowConnections(true);
             setModels([]);
             setSelectedModel(result.model);
-            setState(previous => previous && { ...previous, provider: result.provider, authenticated: true, login: null, model: result.model, messages: [], usage: emptyUsage });
+            setState(previous => previous && { ...previous, provider: result.provider, authenticated: true, login: null });
             setRefresh(value => value + 1);
             setCheckState('success');
             notifyConnectionChange();
@@ -288,7 +269,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             setSetupStep(1);
             setProviderChoice('github');
             setShowEndpoint(false);
-            setState(previous => previous && { ...previous, provider: null, authenticated: false, login: null, model: 'auto', messages: [], usage: emptyUsage });
+            setState(previous => previous && { ...previous, provider: null, authenticated: false, login: null });
             setSelectedModel('auto');
             setRefresh(value => value + 1);
             notifyConnectionChange();
@@ -308,7 +289,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
             setDraft('');
             setShowConnections(false);
             setSetupStep(1);
-            setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false, messages: [], model: 'auto', usage: emptyUsage });
+            setState(previous => previous && { ...previous, authenticated: false, login: null, token_connected: false });
             setSelectedModel('auto');
             notifyConnectionChange();
             if (result.cleanup_error) setError(result.cleanup_error);
@@ -324,8 +305,7 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         setBusy(true);
         setError('');
         try {
-            const result = await request<{ usage: Usage }>('/conversation', { method: 'DELETE' });
-            setState(previous => previous && { ...previous, messages: [], usage: result.usage });
+            await request('/conversation', { method: 'DELETE' });
             resetAgentConversation(threadId);
             setDraft('');
             followMessages.current = true;
@@ -345,7 +325,6 @@ function AgentChat({ onClose, context, active = true, threadId, queue = [], onQu
         setError('');
         try {
             await request('/model', { method: 'POST', body: JSON.stringify({ model }) });
-            setState(current => current && { ...current, model });
         } catch (reason) {
             setSelectedModel(previous);
             setError(errorMessage(reason));

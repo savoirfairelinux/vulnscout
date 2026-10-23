@@ -940,11 +940,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 : selectedCustomCvss;
     const selectedRowCount = Object.keys(selectedRows).length;
     const selectedReviewRows = assessments.filter(row => selectedAssessments[row.id] && row.origin === 'custom');
-    const pendingReviewKeys = new Set([
-        ...reviewActions.queue.map(action => action.key),
-        ...(reviewActions.running ? [reviewActions.running.key] : []),
-        ...(reviewActions.failed ? [reviewActions.failed.key] : []),
-    ]);
+    const pendingReviewKeys = new Set(reviewActions.queue.map(action => action.key));
     const reviewableRows = selectedReviewRows.filter(row => !pendingReviewKeys.has(assessmentReviewKey(row.id)));
     const selectedReviewRunning = selectedReviewRows.some(row => reviewActions.running?.key === assessmentReviewKey(row.id));
 

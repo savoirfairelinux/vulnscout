@@ -13,6 +13,10 @@ Failures pause the queue until you retry or remove the failed request. **Clear
 all** removes waiting and failed requests, never the running request.
 Connection changes require an empty queue. The AI queue is separate from the
 navigation bar's scan/upload/export operation queue.
+Once a scoped chat is unmounted, its SDK conversation is released only after
+its queued work completes or is removed. Failed requests keep their session
+available for retry. Cleanup errors appear in the AI queue; closing a chat
+never silently abandons pending work.
 
 This proof of concept is **localhost-only** (including local host-to-container forwarding through the gateway or rootless Podman pasta). It is intended for one developer running the backend and frontend on the same machine, not a shared or remotely accessible VulnScout deployment. Do not forward the agent port to other users: the server can access the local user's Copilot identity and configured provider keys, and the agent can change assessments. Access tokens and API keys stay on the backend and are never sent back to the browser; browser storage is not used. Agent credentials are kept in memory and are also persisted in `config.env` (`AI_PROVIDER`, `AI_AUTH_CREDENTIALS`, optional `AI_MODEL` and `AI_BASE_URL`) when connector flows succeed, so they survive restarts and can later support CI-style AI execution. Copilot may keep session state in its own local directory.
 

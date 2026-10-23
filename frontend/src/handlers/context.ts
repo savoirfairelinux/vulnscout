@@ -63,13 +63,7 @@ type ContextExport = {
 };
 
 export type {
-    ProjectContext,
-    VariantContext,
     VariantContextData,
-    MergedContext,
-    VariantEntry,
-    ProjectEntry,
-    ImportResultItem,
     ImportResult,
     ContextExport,
     ContextFile,
@@ -151,16 +145,6 @@ class Context {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Failed to save variant context (${res.status})`);
         return data as VariantContext;
-    }
-
-    static async exportAll(): Promise<ContextExport> {
-        const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/context/export`,
-            { mode: 'cors' }
-        );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextExport;
     }
 
     static async exportSelected(variantIds: string[]): Promise<ContextExport> {

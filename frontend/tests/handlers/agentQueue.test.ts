@@ -1,5 +1,5 @@
 import { configureAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentQueue,
-    clearAgentQueue, removeAgentTask, resetAgentQueue, retryAgentTask } from '../../src/handlers/agentQueue';
+    clearAgentQueue, getAgentQueueError, removeAgentTask, resetAgentQueue, retainAgentThread, retryAgentTask } from '../../src/handlers/agentQueue';
 import type { AgentContext, QueuedAgentMessage } from '../../src/types/agent';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
@@ -89,4 +89,68 @@ test('deduplicates active batches without dropping sibling requests and rejects 
     expect(getAgentQueue().map(item => item.id)).toEqual(['batch-1', 'batch-2']);
     expect(() => enqueueAgentMessages([{ ...action('oversized'), text: 'a'.repeat(8001) }], context)).toThrow(/8000/);
     expect(() => enqueueAgentMessages([{ ...action('empty'), text: ' ' }], context)).toThrow(/8000/);
+});
+
+test('releases an unmounted chat only after its last queued request, without exceeding backend thread capacity', async () => {
+    const requests: Array<{ path: string; method?: string }> = [];
+    let finish: (response: Response) => void = () => {};
+    global.fetch = jest.fn(async (input, options) => {
+        requests.push({ path: String(input), method: options?.method });
+        if (String(input).endsWith('/messages')) return new Promise<Response>(resolve => { finish = resolve; });
+        return json({ messages: [], usage });
+    });
+    const release = retainAgentThread('closed');
+    configureAgentQueue('closed', { ready: true, model: 'auto' });
+    enqueueAgentMessages([action('work')], context, 'closed');
+    await settle();
+    release();
+    await settle();
+    expect(requests.some(request => request.method === 'DELETE')).toBe(false);
+    finish(finished('Completed before cleanup'));
+    await settle();
+    expect(getAgentQueue()).toEqual([]);
+    expect(requests.filter(request => request.method === 'DELETE')).toEqual([{ path: '/api/agent/conversation', method: 'DELETE' }]);
+    expect(getAgentConversation('closed').messages).toEqual([]);
+    expect(getAgentQueueError()).toBe('');
+});
+
+test('keeps closed failed threads available for retry and reports cleanup errors explicitly', async () => {
+    let failCleanup = true;
+    global.fetch = jest.fn(async (input, options) => {
+        if (options?.method === 'DELETE' && failCleanup) throw new TypeError('offline');
+        if (String(input).endsWith('/messages')) throw new TypeError('offline');
+        return json({ messages: [], usage });
+    });
+    const release = retainAgentThread('failed');
+    configureAgentQueue('failed', { ready: true, model: 'auto' });
+    enqueueAgentMessages([action('work')], context, 'failed');
+    await settle();
+    release();
+    await settle();
+    expect(getAgentQueue()[0].status).toBe('failed');
+    expect(global.fetch).not.toHaveBeenCalledWith('/api/agent/conversation', expect.objectContaining({ method: 'DELETE' }));
+    removeAgentTask('work');
+    await settle();
+    expect(getAgentQueueError()).toContain('Could not release a closed agent conversation');
+    failCleanup = false;
+    clearAgentQueue();
+    await settle();
+    expect(getAgentQueueError()).toBe('');
+});
+
+test('balances multiple owners and ignores StrictMode-style release and reattach', async () => {
+    global.fetch = jest.fn(async () => json({ messages: [], usage }));
+    const first = retainAgentThread('shared');
+    const second = retainAgentThread('shared');
+    configureAgentQueue('shared', { ready: true, model: 'auto' });
+    first();
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    second();
+    const reattached = retainAgentThread('shared');
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    reattached();
+    await settle();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
 });

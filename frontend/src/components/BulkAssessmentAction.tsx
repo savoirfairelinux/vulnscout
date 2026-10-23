@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleNotch, faWandMagicSparkles } from '@fortawesome/free-solid-svg-icons';
-import AgentChat, { type QueuedAgentMessage } from './AgentChat';
+import AgentChat from './AgentChat';
 import type { Vulnerability } from '../handlers/vulnerabilities';
-import type { AgentContext } from '../types/agent';
+import type { AgentContext, QueuedAgentMessage } from '../types/agent';
 import { buildAiAssessmentMessages, loadAiAssessmentTargets } from '../helpers/aiAssessment';
 import { enqueueAgentMessages } from '../handlers/agentQueue';
 import useAgentQueue from '../hooks/useAgentQueue';
 
-type BulkMessage = QueuedAgentMessage & { vulnerabilityId: string };
 type Props = {
     vulnerabilities: Vulnerability[];
     selectedVulns: string[];
@@ -50,7 +49,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                 if (!vulnerability) throw new Error(`Selected vulnerability ${id} is no longer available. Refresh the table and try again.`);
                 return vulnerability;
             });
-            const messages: BulkMessage[][] = [];
+            const messages: QueuedAgentMessage[][] = [];
             // Bound compatibility lookups instead of issuing one concurrent request per selected row.
             let next = 0;
             await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
@@ -66,7 +65,6 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                     }
                     messages[index] = actions.map(message => ({
                         ...message, id: crypto.randomUUID(), key: `assess:${vulnerability.id}`,
-                        vulnerabilityId: vulnerability.id,
                         title: `${vulnerability.id} · ${message.title}`,
                         context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [vulnerability.id], selectionCount: 1 } },
                     }));

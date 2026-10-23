@@ -2,15 +2,14 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import '@testing-library/jest-dom';
 import { ReadableStream, TextDecoderStream } from 'node:stream/web';
 import { TextEncoder } from 'node:util';
-import { useState } from 'react';
 // @ts-expect-error TS6133
 import React from 'react';
 
-import AgentChat, { type QueuedAgentMessage } from '../../src/components/AgentChat';
+import AgentChat from '../../src/components/AgentChat';
 import { buildAssessmentReviewAction } from '../../src/helpers/aiAssessmentReview';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type { AgentContext } from '../../src/types/agent';
-import { getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
+import { enqueueAgentMessages, getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
 const signedIn = { authenticated: true, login: 'tester', configured: true, device_login: true,
@@ -452,7 +451,7 @@ test('scrolling away from the latest message exposes a return control', async ()
     fireEvent.click(screen.getByRole('button', { name: 'Jump to latest message' }));
     expect(log.scrollTop).toBe(300);
 });
-test('sends a queued message once when ready and again only for a new queued id', async () => {
+test('sends queued actions when connected and accepts subsequent actions through the shared store', async () => {
     const sent: string[] = [];
     global.fetch = async (input, options) => {
         const path = String(input);
@@ -466,22 +465,16 @@ test('sends a queued message once when ready and again only for a new queued id'
     };
 
     const first = { id: 'q1', text: 'Assess the selected targets', key: 'assess:a', kind: 'assess' as const, title: '1 target' };
-    const accepted: string[] = [];
-    const done: string[] = [];
-    const onQueuedMessageSent = (id: string) => { accepted.push(id); };
-    const onQueuedMessageDone = (id: string) => { done.push(id); };
-    const { rerender } = render(<AgentChat onClose={() => undefined} context={context} queue={[first]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
+    enqueueAgentMessages([first], context);
+    enqueueAgentMessages([{ ...first }], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByText('Reply 1');
-    expect(accepted).toEqual(['q1']);
-    await waitFor(() => expect(done).toEqual(['q1']));
-    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ ...first }]} />);
-    await act(async () => { await Promise.resolve(); });
+    await waitFor(() => expect(getAgentQueue()).toEqual([]));
     expect(sent).toEqual(['Assess the selected targets']);
 
-    rerender(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q2', text: 'Review assessment', key: 'assess:x', kind: 'assess', title: 'assessment x' }]} onQueuedMessageSent={onQueuedMessageSent} onQueuedMessageDone={onQueuedMessageDone} />);
+    act(() => enqueueAgentMessages([{ id: 'q2', text: 'Review assessment', key: 'assess:x', kind: 'assess', title: 'assessment x' }], context));
     await screen.findByText('Reply 2');
     expect(sent).toEqual(['Assess the selected targets', 'Review assessment']);
-    expect(accepted).toEqual(['q1', 'q2']);
 });
 
 test('all chat windows see the same queue and work continues after the originating window unmounts', async () => {
@@ -557,27 +550,19 @@ test.each(['missing', 'partial', 'unchanged', 'stale', 'read failure', 'changed 
             });
             return jsonResponse(signedIn);
         };
-        const done = jest.fn<void, [string, boolean]>(() => { finishedTurn = false; });
         const first = { ...buildAssessmentReviewAction(assessment), id: 'first' };
-        function QueueHarness() {
-            const [queue, setQueue] = useState<QueuedAgentMessage[]>([first, {
-                id: 'second', key: 'assess:next', kind: 'assess', text: 'Next assessment', title: 'next',
-            }]);
-            return <AgentChat context={context} onClose={() => undefined} queue={queue}
-                onQueuedMessageDone={(id, success) => {
-                    done(id, success);
-                    if (success) setQueue(items => items.filter(item => item.id !== id));
-                }} />;
-        }
-        render(<QueueHarness />);
-        await waitFor(() => expect(done).toHaveBeenCalledWith('first', false));
+        enqueueAgentMessages([first, {
+            id: 'second', key: 'assess:next', kind: 'assess', text: 'Next assessment', title: 'next',
+        }], context);
+        render(<AgentChat context={context} onClose={() => undefined} />);
+        await waitFor(() => expect(getAgentQueue()[0].status).toBe('failed'));
         expect(attempts).toBe(1);
         expect(screen.getByText(/Queue paused/)).toBeInTheDocument();
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue(first.text);
         expect(screen.getByRole('alert')).toBeInTheDocument();
+        finishedTurn = false;
         fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
-        await waitFor(() => expect(done).toHaveBeenCalledWith('first', true));
-        await waitFor(() => expect(done).toHaveBeenCalledWith('second', true));
+        await waitFor(() => expect(getAgentQueue()).toEqual([]));
         expect(attempts).toBe(3);
         expect(screen.queryByText(/Queue paused/)).not.toBeInTheDocument();
     },
@@ -591,16 +576,15 @@ test('does not send a queued message while signed out', async () => {
         return jsonResponse(signedOut);
     };
 
-    const onQueuedMessageSent = jest.fn();
-    render(<AgentChat onClose={() => undefined} context={context} queue={[{ id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '1 target' }]} onQueuedMessageSent={onQueuedMessageSent} />);
+    enqueueAgentMessages([{ id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '1 target' }], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByText('Step 1 of 3');
     expect(sent).toEqual([]);
-    expect(onQueuedMessageSent).not.toHaveBeenCalled();
+    expect(getAgentQueue()[0].status).toBe('queued');
 });
 
 test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action queue on %s failure and retries the same item', async failure => {
     const sent: string[] = [];
-    const done = jest.fn();
     global.fetch = async (input, options) => {
         const path = String(input);
         if (path.endsWith('/models')) return jsonResponse(models);
@@ -616,21 +600,13 @@ test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action q
         }
         return jsonResponse(signedIn);
     };
-    function QueueChat() {
-        const [queue, setQueue] = useState([
-            { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess' as const, title: 'CVE-1' },
-            { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess' as const, title: 'CVE-2' },
-        ]);
-        return <AgentChat onClose={() => undefined} context={context} queue={queue}
-            onQueuedMessageDone={(id, success) => {
-                done(id, success);
-                if (success) setQueue(current => current.filter(item => item.id !== id));
-            }} />;
-    }
-
-    render(<QueueChat />);
+    enqueueAgentMessages([
+        { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess', title: 'CVE-1' },
+        { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess', title: 'CVE-2' },
+    ], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByText('Queue paused. Retry or remove the failed action to continue.');
-    expect(done).toHaveBeenLastCalledWith('q1', false);
+    expect(getAgentQueue()[0].status).toBe('failed');
     expect(sent).toEqual(['Assess CVE-1']);
     expect(screen.getByLabelText('Message the agent')).toHaveValue('Assess CVE-1');
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
@@ -641,13 +617,14 @@ test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action q
     expect(sent).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
-    await waitFor(() => expect(done).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    await waitFor(() => expect(getAgentQueue()[0].status).toBe('failed'));
     expect(sent).toEqual(['Assess CVE-1', 'Assess CVE-1']);
     expect(screen.getByLabelText('Message the agent')).toHaveValue('Assess CVE-1');
     fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
     await screen.findByText('Reply 4');
     expect(sent).toEqual(['Assess CVE-1', 'Assess CVE-1', 'Assess CVE-1', 'Assess CVE-2']);
-    expect(done.mock.calls).toEqual([['q1', false], ['q1', false], ['q1', true], ['q2', true]]);
+    expect(getAgentQueue()).toEqual([]);
     expect(screen.getByText('No AI requests queued.')).toBeInTheDocument();
 });
 
@@ -663,19 +640,11 @@ test.each(['remove', 'clear'])('%s releases a failed action without retrying it'
         }
         return jsonResponse(signedIn);
     };
-    function QueueChat() {
-        const [queue, setQueue] = useState([
-            { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess' as const, title: 'CVE-1' },
-            { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess' as const, title: 'CVE-2' },
-        ]);
-        return <AgentChat onClose={() => undefined} context={context} queue={queue}
-            onQueuedMessageDone={(id, success) => {
-                if (success) setQueue(current => current.filter(item => item.id !== id));
-            }}
-            onQueueRemove={id => setQueue(current => current.filter(item => item.id !== id))}
-            onQueueClear={() => setQueue([])} />;
-    }
-    render(<QueueChat />);
+    enqueueAgentMessages([
+        { id: 'q1', text: 'Assess CVE-1', key: 'assess:1', kind: 'assess', title: 'CVE-1' },
+        { id: 'q2', text: 'Assess CVE-2', key: 'assess:2', kind: 'assess', title: 'CVE-2' },
+    ], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByText('Queue paused. Retry or remove the failed action to continue.');
     expect(sent).toEqual(['Assess CVE-1']);
     fireEvent.click(screen.getByRole('button', { name: action === 'remove' ? 'Remove assess CVE-1 from queue' : 'Clear all' }));
@@ -688,12 +657,12 @@ test.each(['remove', 'clear'])('%s releases a failed action without retrying it'
 
 test('lists queued actions with remove and clear controls', async () => {
     global.fetch = async input => String(input).endsWith('/models') ? jsonResponse(models) : jsonResponse(signedOut);
-    const onQueueRemove = jest.fn();
-    const onQueueClear = jest.fn();
-    render(<AgentChat onClose={() => undefined} context={context} onQueueRemove={onQueueRemove} onQueueClear={onQueueClear} queue={[
+    enqueueAgentMessages([
         { id: 'q1', text: 'Assess', key: 'assess:a', kind: 'assess', title: '2 targets', detail: 'default · pkg@1.0.0' },
         { id: 'q2', text: 'Review', key: 'review:x', kind: 'review', title: 'assessment 1a2b3c4d' },
-    ]} />);
+    ], context);
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    fireEvent.click(screen.getByRole('button', { name: 'AI queue (2)' }));
 
     const queue = await screen.findByRole('region', { name: 'Queued AI actions' });
     expect(queue).toHaveTextContent('AI queue · 2 queued');

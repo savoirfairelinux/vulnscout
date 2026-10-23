@@ -19,14 +19,16 @@ type Conversation = {
     error: string;
 };
 type Connection = { ready: boolean; model: string };
-type Callbacks = { onSent?: (id: string) => void; onDone?: (id: string, success: boolean) => void };
 const listeners = new Set<() => void>();
 let tasks: AgentTask[] = [];
 let running = false;
+let cleaning = false;
+let generation = 0;
+let cleanupError = '';
 const connections = new Map<string, Connection>();
-const callbacks = new Map<string, Callbacks>();
 const conversations = new Map<string, Conversation>();
-const acceptedIds = new Set<string>();
+const owners = new Map<string, number>();
+const releasedThreads = new Set<string>();
 let lastConnection: Connection | undefined;
 const emptyConversation: Conversation = {
     messages: [], usage: { cost: null, input_tokens: null, output_tokens: null },
@@ -39,6 +41,7 @@ export const subscribeAgentQueue = (listener: () => void) => {
     return () => { listeners.delete(listener); };
 };
 export const getAgentQueue = () => tasks;
+export const getAgentQueueError = () => cleanupError;
 export const getAgentConversation = (threadId?: string) => conversations.get(threadKey(threadId)) ?? emptyConversation;
 
 function updateConversation(threadId: string | undefined, update: Partial<Conversation>) {
@@ -58,12 +61,61 @@ export function resetAgentConversation(threadId?: string) {
 export function resetAgentQueue() {
     if (running) throw new Error('Wait for the running AI request to finish before changing the connection.');
     tasks = [];
+    generation++;
+    cleaning = false;
+    cleanupError = '';
+    releasedThreads.clear();
     connections.clear();
-    callbacks.clear();
     conversations.clear();
-    acceptedIds.clear();
     lastConnection = undefined;
     emit();
+}
+
+/** Keep closed chats only until their queued work no longer needs the SDK session. */
+export function retainAgentThread(threadId: string) {
+    owners.set(threadId, (owners.get(threadId) ?? 0) + 1);
+    releasedThreads.delete(threadId);
+    return () => {
+        const remaining = (owners.get(threadId) ?? 1) - 1;
+        if (remaining) owners.set(threadId, remaining);
+        else {
+            owners.delete(threadId);
+            releasedThreads.add(threadId);
+            const version = generation;
+            queueMicrotask(() => { if (generation === version) void cleanReleasedThreads(); });
+        }
+    };
+}
+
+async function cleanReleasedThreads() {
+    if (running || cleaning) return;
+    cleaning = true;
+    const version = generation;
+    try {
+        for (const threadId of releasedThreads) {
+            if (owners.has(threadId) || tasks.some(task => task.threadId === threadId)) continue;
+            try {
+                if (conversations.has(threadId) || connections.has(threadId)) {
+                    await agentRequest('/conversation', { method: 'DELETE', headers: { 'X-Agent-Thread': threadId } });
+                }
+                if (generation !== version) return;
+                releasedThreads.delete(threadId);
+                connections.delete(threadId);
+                conversations.delete(threadId);
+            } catch (reason) {
+                if (generation !== version) return;
+                cleanupError = `Could not release a closed agent conversation: ${agentErrorMessage(reason)}`;
+                emit();
+            }
+        }
+    } finally {
+        if (generation === version) {
+            if (!releasedThreads.size) cleanupError = '';
+            cleaning = false;
+            emit();
+            void drain();
+        }
+    }
 }
 
 export function configureAgentQueue(threadId: string | undefined, connection: Connection) {
@@ -74,42 +126,38 @@ export function configureAgentQueue(threadId: string | undefined, connection: Co
 }
 
 export function enqueueAgentMessages(
-    messages: QueuedAgentMessage[], context: AgentContext, threadId?: string, source = 'Global chat', handlers: Callbacks = {},
+    messages: QueuedAgentMessage[], context: AgentContext, threadId?: string, source = 'Global chat',
 ) {
+    const ids = new Set(tasks.map(task => task.id));
     const keys = new Set(tasks.filter(task => task.threadId === threadId).map(task => task.key));
     // Batches may deliberately share a key; deduplicate against existing work, not siblings.
-    const added = messages.filter(message => !acceptedIds.has(message.id) && !keys.has(message.key));
+    const added = messages.filter(message => !ids.has(message.id) && !keys.has(message.key));
     if (added.some(message => !message.text.trim() || message.text.length > AGENT_MESSAGE_MAX_LENGTH)) {
         throw new Error(`AI messages must contain between 1 and ${AGENT_MESSAGE_MAX_LENGTH} characters.`);
     }
     tasks = [...tasks, ...added.map(message => ({
         ...message, context: structuredClone(message.context ?? context), threadId, source, status: 'queued' as const,
     }))];
-    added.forEach(message => {
-        acceptedIds.add(message.id);
-        callbacks.set(message.id, handlers);
-    });
     emit();
-    void drain();
+    void cleanReleasedThreads();
 }
 
 export function removeAgentTask(id: string) {
     const task = tasks.find(item => item.id === id);
     if (!task || task.status === 'running') return;
     tasks = tasks.filter(item => item.id !== id);
-    callbacks.delete(id);
     if (task.status === 'failed') updateConversation(task.threadId, { error: '' });
     emit();
-    void drain();
+    void cleanReleasedThreads();
 }
 
 export function clearAgentQueue() {
     tasks.filter(task => task.status !== 'running').forEach(task => {
-        callbacks.delete(task.id);
         if (task.status === 'failed') updateConversation(task.threadId, { error: '' });
     });
     tasks = tasks.filter(task => task.status === 'running');
     emit();
+    void cleanReleasedThreads();
 }
 
 export function retryAgentTask(id: string) {
@@ -141,14 +189,12 @@ function contextForTurn(context: AgentContext): AgentContext {
 
 async function drain() {
     const task = tasks[0];
-    if (running || !task || task.status === 'failed') return;
+    if (running || cleaning || !task || task.status === 'failed') return;
     const connection = connections.get(threadKey(task.threadId)) ?? lastConnection;
     if (!connection?.ready) return;
     running = true;
     tasks = tasks.map(item => item.id === task.id ? { ...item, status: 'running' } : item);
     emit();
-    callbacks.get(task.id)?.onSent?.(task.id);
-    let success = false;
     let currentMessageId = '';
     let activity: Activity[] = [];
     try {
@@ -193,7 +239,6 @@ async function drain() {
             usage: result.usage,
         });
         await verify?.();
-        success = true;
         tasks = tasks.filter(item => item.id !== task.id);
     } catch (reason) {
         const error = agentErrorMessage(reason);
@@ -202,9 +247,7 @@ async function drain() {
     } finally {
         running = false;
         updateConversation(task.threadId, { pendingMessage: '' });
-        callbacks.get(task.id)?.onDone?.(task.id, success);
-        if (success) callbacks.delete(task.id);
         emit();
-        void drain();
+        void cleanReleasedThreads();
     }
 }
