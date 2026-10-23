@@ -588,7 +588,7 @@ def _global_result_full(
                 if doc.format else doc.source_name
             )
             sbom_doc_names.append(label)
-    sbom_source_label = ", ".join(sbom_doc_names) if sbom_doc_names else "SBOM Scan"
+    sbom_source_label = ", ".join(dict.fromkeys(sbom_doc_names)) if sbom_doc_names else "SBOM Scan"
 
     scan_source_labels: dict = {sbom_scan.id: sbom_source_label}
     for tool_scan in latest_tool.values():

@@ -4,7 +4,7 @@
 """A scan archive must preserve scoped scanner inputs, not just display names."""
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 import uuid
@@ -340,3 +340,107 @@ def test_many_evidence_records_use_batched_flushes_and_hash_deduplication(app):
     assert {tuple(entry["purl"]) for entry in restored["packages"][0]["sbom_evidence"]} == {
         (f"pkg:generic/foo@{index}",) for index in range(100)
     }
+
+
+@pytest.mark.parametrize("export_type", ["diff", "total"])
+def test_bulk_export_over_evidence_budget_does_not_download_unimportable_archive(app, export_type):
+    variant = _variant("bulk-source", "original")
+    packages = [Package(name=f"package-{index}", version="1", supplier="") for index in range(96)]
+    db.session.add_all(packages)
+    db.session.flush()
+    scans = []
+    for index in range(105):
+        scan = Scan(
+            id=uuid.uuid4(), description="Historical SBOM", variant_id=variant.id, scan_type="sbom",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=index),
+        )
+        document = SBOMDocument(
+            id=uuid.uuid4(), scan_id=scan.id, path=f"history-{index}.json", source_name="history.json",
+        )
+        db.session.add_all([scan, document])
+        db.session.add_all([
+            SBOMPackage(
+                sbom_document_id=document.id, package_id=package.id, cpe=[],
+                purl=[f"pkg:generic/{package.name}@1"], source_urls=[], source_revisions=[],
+            )
+            for package in packages
+        ])
+        scans.append(scan)
+    db.session.commit()
+    assert db.session.query(SBOMPackage).count() == 10080
+    client = app.test_client()
+    response = client.get(f"/api/scans/export?type={export_type}")
+    assert response.status_code == 400, response.json
+    assert "10000 records per request" in response.json["error"]
+    assert "individual scans" in response.json["error"]
+    assert "Content-Disposition" not in response.headers
+
+    endpoint = "export-diff" if export_type == "diff" else "export-result"
+    response = client.get(f"/api/scans/{scans[-1].id}/{endpoint}")
+    assert response.status_code == 200, response.json
+    payload = response.json
+    _variant("bulk-destination", "restored")
+    payload.update(project_name="bulk-destination", variant_name="restored")
+    response = client.post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.json
+    assert len(_snapshots(uuid.UUID(response.json["scan_id"]))) == 96
+
+
+@pytest.mark.parametrize("endpoint", ["export-diff", "export-result", "bulk-diff", "bulk-total"])
+@pytest.mark.parametrize("limit_name", ["_MAX_IMPORT_EVIDENCE_PER_PACKAGE", "_MAX_IMPORT_EVIDENCE"])
+def test_exports_enforce_the_same_evidence_limits_as_imports(app, monkeypatch, endpoint, limit_name):
+    _variant("evidence-destination", "restored")
+    payload = _evidence_archive()
+    evidence = payload["packages"][0]["sbom_evidence"][0]
+    payload["packages"][0]["sbom_evidence"] = [
+        {**evidence, "purl": [f"pkg:generic/foo@{index}"]} for index in range(4)
+    ]
+    client = app.test_client()
+    response = client.post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.json
+    scan_id = response.json["scan_id"]
+    url = (
+        f"/api/scans/export?type={endpoint.removeprefix('bulk-')}"
+        if endpoint.startswith("bulk-") else f"/api/scans/{scan_id}/{endpoint}"
+    )
+    monkeypatch.setattr(scan_routes, limit_name, 3)
+    response = client.get(url)
+    assert response.status_code == 400, response.json
+    assert "sbom_evidence" in response.json["error"]
+    monkeypatch.setattr(scan_routes, limit_name, 4)
+    response = client.get(url)
+    assert response.status_code == 200, response.json
+
+
+def test_multiple_imported_associations_are_one_document_source_in_responses(app):
+    variant = _variant("evidence-destination", "restored")
+    payload = _evidence_archive()
+    package = payload["packages"][0]
+    evidence = package["sbom_evidence"][0]
+    package["sbom_evidence"] = [
+        {**evidence, "purl": [f"pkg:generic/foo@{index}"]} for index in (1, 2)
+    ]
+    payload["findings"] = [{
+        "package_name": "foo", "package_version": "1", "vulnerability_id": "CVE-2099-12345",
+    }]
+    client = app.test_client()
+    response = client.post("/api/scans/import", json=payload)
+    assert response.status_code == 201, response.json
+    scan_id = response.json["scan_id"]
+    response = client.get(f"/api/package-dependencies?variant_id={variant.id}")
+    assert response.status_code == 200, response.json
+    documents = response.json["documents"]
+    assert len(documents) == 1
+    assert documents[0]["source_name"] == "Imported VulnScout scan"
+    assert documents[0]["dependencies_recorded"] is False
+    assert len(documents[0]["packages"]) == 1
+    assert documents[0]["edges"] == []
+    assert {
+        item["identifier"] for item in documents[0]["packages"][0]["version_evidence"] if item["source"] == "purl"
+    } == {"pkg:generic/foo@1", "pkg:generic/foo@2"}
+    result = client.get(f"/api/scans/{scan_id}/global-result").json
+    label = "Imported VulnScout scan (vulnscout_json)"
+    assert result["findings"][0]["sources"] == [label]
+    assert result["packages"][0]["sources"] == [label]
+    restored = client.get(f"/api/scans/{scan_id}/export-result").json
+    assert len(restored["packages"][0]["sbom_evidence"]) == 2
