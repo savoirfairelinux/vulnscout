@@ -4,12 +4,13 @@
 """Exercise the consolidated evidence migration through real Alembic upgrades."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from alembic.script import ScriptDirectory
 import pytest
-from sqlalchemy import JSON, String, Uuid, column, inspect, table, text
+from sqlalchemy import JSON, DateTime, String, Uuid, column, inspect, table, text
 
 from src.bin.webapp import create_app
 from src.controllers.packages import PackagesController
@@ -77,12 +78,15 @@ def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(
     _upgrade(app, "cc5359c88dd2")
     project = Project.create("old-schema")
     variant = Variant.create("default", project.id)
-    scan = Scan.create("SBOM", variant.id)
-    scan_id, variant_id = scan.id, variant.id
+    scan_id, variant_id = uuid4(), variant.id
     document_id, package_id = uuid4(), uuid4()
     cpe = "cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*"
     purl = "pkg:generic/lib@1.0"
     db.session.remove()
+    scans = table(
+        "scans", column("id", Uuid), column("description", String), column("scan_type", String),
+        column("timestamp", DateTime(timezone=True)), column("variant_id", Uuid),
+    )
     documents = table(
         "sbom_documents", column("id", Uuid), column("path", String),
         column("source_name", String), column("scan_id", Uuid), column("format", String),
@@ -96,6 +100,10 @@ def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(
     )
     original = tmp_path / "lib.cdx.json"
     with db.engine.begin() as connection:
+        connection.execute(scans.insert().values(
+            id=scan_id, description="SBOM", scan_type="sbom",
+            timestamp=datetime.now(timezone.utc), variant_id=variant_id,
+        ))
         connection.execute(documents.insert().values(
             id=document_id, path=str(original), source_name="lib", scan_id=scan_id, format="cdx",
         ))
@@ -107,6 +115,7 @@ def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(
         ))
 
     _upgrade(app)
+    assert db.session.get(Scan, scan_id).in_progress is False
     package = db.session.get(Package, package_id)
     assert (package.name, package.version, package.cpe, package.purl) == ("lib", "1.0", [cpe], [purl])
     assert package._legacy_source_urls is None
