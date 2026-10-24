@@ -249,7 +249,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                     cdx.merge_components_into_controller()
                     pkgCtrl.add_dependencies(cdx._document_refs, cdx._dependency_edges)
                     if (getattr(cdx, "sbom", None) is not None
-                            and any(affect.ref.startswith("urn:cdx:") and affect.ref not in cdx.ref_dict
+                            and any(affect.ref.startswith("urn:cdx:") and affect.ref not in cdx.bom_link_refs
                                     for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects)):
                         detached_cdx_documents.append(doc)
                         # Only used local refs retain their original path-position mapping.
@@ -260,11 +260,11 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                         }
                         continue
                 elif getattr(document_cdx, "sbom", None) is not None:
-                    document_cdx.ref_dict.update({
-                        affect.ref: cdx.ref_dict[affect.ref]
+                    document_cdx.bom_link_refs = {
+                        affect.ref: cdx.bom_link_refs[affect.ref]
                         for vulnerability in document_cdx.sbom.vulnerabilities for affect in vulnerability.affects
-                        if affect.ref.startswith("urn:cdx:") and affect.ref in cdx.ref_dict
-                    })
+                        if affect.ref.startswith("urn:cdx:") and affect.ref in cdx.bom_link_refs
+                    }
                 document_cdx.merge_vulnerabilities_into_controller()
             elif fmt == "openvex" or (fmt is None and "statements" in data):
                 openvex.load_from_dict(data)

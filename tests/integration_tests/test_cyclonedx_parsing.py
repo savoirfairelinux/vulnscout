@@ -49,7 +49,8 @@ def test_parse_yocto_bom_and_vex_examples(cdx_parser):
                    for assessment in cdx_parser.assessmentsCtrl.gets_by_vuln(vulnerability["id"]))
 
 
-def test_bom_links_are_scoped_to_document_and_version(cdx_parser):
+@pytest.mark.parametrize("collision_kind", ["component", "vulnerability"])
+def test_bom_links_are_scoped_to_document_and_version(cdx_parser, collision_kind):
     serials = ["87b5cc5a-ee50-449f-bcdf-cabea628c2a2", "082c4a99-77b3-4edd-83d8-066e303ce202"]
     for serial, version, name in [(serials[0], 1, "first"), (serials[0], 2, "second"),
                                   (serials[1], 1, "other")]:
@@ -62,6 +63,19 @@ def test_bom_links_are_scoped_to_document_and_version(cdx_parser):
 
     refs = [f"urn:cdx:{serials[0]}/1#shared", f"urn:cdx:{serials[0]}/2#shared",
             f"urn:cdx:{serials[1]}/1#shared", f"urn:cdx:{serials[1]}/2#shared", "shared"]
+    collisions = [refs[0], refs[1], refs[3]]
+    cdx_parser.load_from_dict({
+        "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+        "components": [
+            {"type": "library", "name": f"collision-{index}", "version": "1", "bom-ref": ref}
+            for index, ref in enumerate(collisions)
+        ] if collision_kind == "component" else [],
+        "vulnerabilities": [
+            {"id": f"CVE-2026-999{index}", "bom-ref": ref}
+            for index, ref in enumerate(collisions)
+        ] if collision_kind == "vulnerability" else [],
+    })
+    cdx_parser.parse_and_merge()
     cdx_parser.load_from_dict({
         "bomFormat": "CycloneDX", "specVersion": "1.4", "version": 1,
         "vulnerabilities": [{"id": f"CVE-2026-{index}", "affects": [{"ref": ref}]}
@@ -180,6 +194,70 @@ def test_cli_detached_vex_is_independent_of_input_order(
     assert set(assessments[0].targets) == {(variant.id, findings[0].id)}
 
 
+@pytest.mark.parametrize(
+    "vex_name,target_name,collision_name",
+    [
+        ("c-vex.json", "a-target.json", "b-collision.json"),
+        ("a-vex.json", "b-target.json", "c-collision.json"),
+        ("b-vex.json", "c-target.json", "a-collision.json"),
+    ],
+)
+def test_cli_bom_links_ignore_colliding_local_refs(monkeypatch, tmp_path, vex_name, target_name, collision_name):
+    from flask import current_app
+    from src.extensions import db
+    from src.models import Assessment as StoredAssessment
+    from src.models import Finding, Observation, Project, Scan, Variant
+
+    monkeypatch.setenv("MATCH_CONDITION", "")
+    status = tmp_path / "scan-status"
+    status.write_text("__END_OF_SCAN_SCRIPT__\n")
+    monkeypatch.setitem(current_app.config, "SCAN_FILE", str(status))
+    serial = "87b5cc5a-ee50-449f-bcdf-cabea628c2a2"
+    link = f"urn:cdx:{serial}/1#shared"
+    documents = {
+        target_name: {
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "serialNumber": f"urn:uuid:{serial}",
+            "components": [{"type": "library", "name": "target", "version": "1", "bom-ref": "shared"}],
+        },
+        collision_name: {
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "components": [{"type": "library", "name": "collision", "version": "1", "bom-ref": link}],
+        },
+        vex_name: {
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "vulnerabilities": [{
+                "id": "CVE-2026-0001", "affects": [{"ref": link}],
+                "analysis": {"state": "not_affected", "justification": "code_not_reachable"},
+            }],
+        },
+    }
+    args = ["merge", "--project", "reference-collision"]
+    for filename, document in sorted(documents.items()):
+        path = tmp_path / filename
+        path.write_text(json.dumps(document))
+        args.extend(["--cdx", str(path)])
+    runner = current_app.test_cli_runner()
+    result = runner.invoke(args=args)
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(args=["process"])
+    assert result.exit_code == 0, result.output
+    assert "Error" not in result.output
+    assert "dropped" not in result.output
+
+    variant = Variant.get_by_name_and_project("default", Project.get_by_name("reference-collision").id)
+    scan = Scan.get_by_variant_id(variant.id)[0]
+    findings = db.session.execute(db.select(Finding)).scalars().all()
+    assert [(finding.vulnerability_id, finding.package.string_id) for finding in findings] == [
+        ("CVE-2026-0001", "target@1"),
+    ]
+    assert {observation.finding_id for observation in Observation.get_by_scan(scan.id)} == {findings[0].id}
+    assessments = db.session.execute(db.select(StoredAssessment)).scalars().all()
+    assert len(assessments) == 1
+    assert assessments[0].is_compatible_status("not_affected")
+    assert set(assessments[0].targets) == {(variant.id, findings[0].id)}
+
+
 @pytest.mark.parametrize("include_bom_links", [False, True])
 @pytest.mark.parametrize("include_inventory", [False, True])
 def test_cli_detached_vex_preserves_local_reference_order(
@@ -286,10 +364,11 @@ def test_cli_detached_vex_only_snapshots_referenced_local_refs(monkeypatch, tmp_
     def indexed_init(parser, controllers):
         original_init(parser, controllers)
         parser.ref_dict = IndexedRefs()
+        parser.bom_link_refs = IndexedRefs()
 
     def record_refs(parser):
         if parser.packagesCtrl.current_sbom_document.path.endswith("-vex.json"):
-            replayed_refs.append(dict(parser.ref_dict))
+            replayed_refs.append((dict(parser.ref_dict), dict(parser.bom_link_refs)))
         original_merge(parser)
 
     monkeypatch.setattr(CycloneDx, "__init__", indexed_init)
@@ -335,7 +414,7 @@ def test_cli_detached_vex_only_snapshots_referenced_local_refs(monkeypatch, tmp_
     assert result.exit_code == 0, result.output
     result = runner.invoke(args=["process"])
     assert result.exit_code == 0, result.output
-    assert replayed_refs == [{"shared": "first@1", link: "last@1"}] * 4
+    assert replayed_refs == [({"shared": "first@1"}, {link: "last@1"})] * 4
 
 
 def test_parse_empty_json(cdx_parser):
