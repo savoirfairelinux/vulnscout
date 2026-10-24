@@ -243,20 +243,29 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 document_cdx = cdx
                 if doc in detached_cdx_refs:
                     document_cdx = CycloneDx(controllers)
-                    # Only BOM-Links may see later inventories; local refs keep
-                    # the mapping from this document's original path position.
-                    document_cdx.ref_dict = detached_cdx_refs[doc] | {
-                        ref: package for ref, package in cdx.ref_dict.items() if ref.startswith("urn:cdx:")
-                    }
+                    document_cdx.ref_dict = detached_cdx_refs.pop(doc)
                 document_cdx.load_from_dict(data)
-                if (document_cdx is cdx and getattr(cdx, "sbom", None) is not None
-                        and not any(cdx._inventory_components())
-                        and any(affect.ref.startswith("urn:cdx:")
-                                for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects)):
-                    detached_cdx_documents.append(doc)
-                    detached_cdx_refs[doc] = dict(cdx.ref_dict)
-                    continue
-                document_cdx.parse_and_merge()
+                if document_cdx is cdx:
+                    cdx.merge_components_into_controller()
+                    pkgCtrl.add_dependencies(cdx._document_refs, cdx._dependency_edges)
+                    if (getattr(cdx, "sbom", None) is not None
+                            and any(affect.ref.startswith("urn:cdx:") and affect.ref not in cdx.ref_dict
+                                    for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects)):
+                        detached_cdx_documents.append(doc)
+                        # Only used local refs retain their original path-position mapping.
+                        detached_cdx_refs[doc] = {
+                            affect.ref: cdx.ref_dict[affect.ref]
+                            for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects
+                            if not affect.ref.startswith("urn:cdx:") and affect.ref in cdx.ref_dict
+                        }
+                        continue
+                elif getattr(document_cdx, "sbom", None) is not None:
+                    document_cdx.ref_dict.update({
+                        affect.ref: cdx.ref_dict[affect.ref]
+                        for vulnerability in document_cdx.sbom.vulnerabilities for affect in vulnerability.affects
+                        if affect.ref.startswith("urn:cdx:") and affect.ref in cdx.ref_dict
+                    })
+                document_cdx.merge_vulnerabilities_into_controller()
             elif fmt == "openvex" or (fmt is None and "statements" in data):
                 openvex.load_from_dict(data)
             elif fmt == "yocto_vex" or (

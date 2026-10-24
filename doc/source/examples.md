@@ -98,6 +98,8 @@ components.
 Local `bom-ref` affects retain path-order resolution when multiple BOMs reuse a
 reference. Only BOM-Link references can resolve against a later inventory;
 detached VEX documents mixing both forms preserve their original local mapping.
+If a VEX also contains components, its inventory is imported at its original
+path position before unresolved external affects are replayed.
 
 The bundled files contain 97 components (93 distinct name/version packages) and
 3,133 distinct CVE IDs, forming 7,063 distinct package/CVE findings. These findings
