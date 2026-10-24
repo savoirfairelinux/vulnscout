@@ -37,7 +37,8 @@ class CycloneDx:
         self.packagesCtrl: PackagesController = controllers.packages
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
-        self.ref_dict: dict = {}  # TODO exact type
+        self.ref_dict: dict[str, str] = {}
+        self.bom_link_refs: dict[str, str] = {}
         self._document_refs: dict[str, str] = {}
         self._dependency_edges: set[tuple[str, str]] = set()
         self._component_refs: dict[str, BomRef] = {}
@@ -184,7 +185,7 @@ class CycloneDx:
                 self.ref_dict[component.bom_ref.value] = package.string_id
                 # Detached VEX documents identify components by BOM-Link, not just the local bom-ref.
                 bom_link = f"urn:cdx:{self.sbom.serial_number}/{self.sbom.version}#{component.bom_ref.value}"
-                self.ref_dict[bom_link] = package.string_id
+                self.bom_link_refs[bom_link] = package.string_id
                 self._document_refs[component.bom_ref.value] = package.string_id
 
             self.packagesCtrl.add(package)
@@ -256,9 +257,9 @@ class CycloneDx:
 
             for affect in vulnerability.affects:
                 ref = affect.ref
-                # Check is the ref in file exist in the dictionnary, if not skip it
-                if ref in self.ref_dict:
-                    vuln.add_package(self.ref_dict[ref])
+                references = self.bom_link_refs if ref.startswith("urn:cdx:") else self.ref_dict
+                if ref in references:
+                    vuln.add_package(references[ref])
 
             if vulnerability.bom_ref.value:
                 self.ref_dict[vulnerability.bom_ref.value] = vuln.id
