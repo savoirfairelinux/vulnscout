@@ -100,8 +100,10 @@ reference. Only BOM-Link references can resolve against a later inventory;
 detached VEX documents mixing both forms preserve their original local mapping.
 If a VEX also contains components, its inventory is imported at its original
 path position before unresolved external affects are replayed.
-BOM-Links resolve only through a separate UUID/version-qualified inventory index,
-so a local reference resembling a BOM-Link cannot redirect an external target.
+BOM-Links use a separate UUID/version-qualified inventory index, so unrelated
+local references cannot redirect a qualified target. If no qualified target
+exists, an exact component `bom-ref` in the current document is retained as a
+local fallback, including during deferred replay.
 
 The bundled files contain 97 components (93 distinct name/version packages) and
 3,133 distinct CVE IDs, forming 7,063 distinct package/CVE findings. These findings

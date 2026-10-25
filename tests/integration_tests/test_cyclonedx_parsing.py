@@ -86,6 +86,34 @@ def test_bom_links_are_scoped_to_document_and_version(cdx_parser, collision_kind
         assert cdx_parser.vulnerabilitiesCtrl.get(f"CVE-2026-{index}").packages == expected
 
 
+@pytest.mark.parametrize("qualified_target", [False, True])
+def test_urn_shaped_local_refs_preserve_qualified_precedence(cdx_parser, qualified_target):
+    serial = "87b5cc5a-ee50-449f-bcdf-cabea628c2a2"
+    ref = f"urn:cdx:{serial}/1#local"
+    if qualified_target:
+        cdx_parser.load_from_dict({
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "serialNumber": f"urn:uuid:{serial}",
+            "components": [{"type": "library", "name": "external", "version": "1", "bom-ref": "local"}],
+        })
+        cdx_parser.parse_and_merge()
+    cdx_parser.load_from_dict({
+        "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+        "components": [{"type": "library", "name": "local", "version": "1", "bom-ref": ref}],
+        "vulnerabilities": [{
+            "id": "CVE-2026-0001", "affects": [{"ref": ref}],
+            "analysis": {"state": "not_affected", "justification": "code_not_reachable"},
+        }],
+    })
+    cdx_parser.parse_and_merge()
+    expected = ["external@1"] if qualified_target else ["local@1"]
+    assert cdx_parser.vulnerabilitiesCtrl.get("CVE-2026-0001").packages == expected
+    assessments = cdx_parser.assessmentsCtrl.gets_by_vuln("CVE-2026-0001")
+    assert len(assessments) == 1
+    assert assessments[0].packages == expected
+    assert assessments[0].is_compatible_status("not_affected")
+
+
 def test_process_yocto_bom_and_vex_examples(monkeypatch, tmp_path):
     """The normal process command must persist findings visible in the selected variant."""
     from flask import current_app
@@ -258,6 +286,62 @@ def test_cli_bom_links_ignore_colliding_local_refs(monkeypatch, tmp_path, vex_na
     assert set(assessments[0].targets) == {(variant.id, findings[0].id)}
 
 
+@pytest.mark.parametrize("external_target_name", [None, "b-target.json", "y-target.json"])
+def test_cli_urn_shaped_refs_fall_back_only_to_current_document(monkeypatch, tmp_path, external_target_name):
+    from flask import current_app
+    from src.extensions import db
+    from src.models import Assessment as StoredAssessment
+    from src.models import Finding, Observation, Project, Scan, Variant
+
+    monkeypatch.setenv("MATCH_CONDITION", "")
+    status = tmp_path / "scan-status"
+    status.write_text("__END_OF_SCAN_SCRIPT__\n")
+    monkeypatch.setitem(current_app.config, "SCAN_FILE", str(status))
+    serial = "87b5cc5a-ee50-449f-bcdf-cabea628c2a2"
+    ref = f"urn:cdx:{serial}/1#local"
+    documents = {}
+    for filename, name in [("a-prior.json", "prior"), ("m-local.json", "local"), ("z-later.json", "later")]:
+        documents[filename] = {
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "components": [{"type": "library", "name": name, "version": "1", "bom-ref": ref}],
+        }
+    documents["m-local.json"]["vulnerabilities"] = [{
+        "id": "CVE-2026-0001", "affects": [{"ref": ref}],
+        "analysis": {"state": "not_affected", "justification": "code_not_reachable"},
+    }]
+    if external_target_name is not None:
+        documents[external_target_name] = {
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "serialNumber": f"urn:uuid:{serial}",
+            "components": [{"type": "library", "name": "external", "version": "1", "bom-ref": "local"}],
+        }
+    args = ["merge", "--project", "local-urn"]
+    for filename, document in sorted(documents.items()):
+        path = tmp_path / filename
+        path.write_text(json.dumps(document))
+        args.extend(["--cdx", str(path)])
+    runner = current_app.test_cli_runner()
+    result = runner.invoke(args=args)
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(args=["process"])
+    assert result.exit_code == 0, result.output
+    assert "Error" not in result.output
+    assert "dropped" not in result.output
+
+    variant = Variant.get_by_name_and_project("default", Project.get_by_name("local-urn").id)
+    scan = Scan.get_by_variant_id(variant.id)[0]
+    findings = db.session.execute(db.select(Finding)).scalars().all()
+    expected = "external@1" if external_target_name is not None else "local@1"
+    assert [(finding.vulnerability_id, finding.package.string_id) for finding in findings] == [
+        ("CVE-2026-0001", expected),
+    ]
+    assert {observation.finding_id for observation in Observation.get_by_scan(scan.id)} == {findings[0].id}
+    assessments = db.session.execute(db.select(StoredAssessment)).scalars().all()
+    assert len(assessments) == 1
+    assert assessments[0].is_compatible_status("not_affected")
+    assert set(assessments[0].targets) == {(variant.id, findings[0].id)}
+
+
 @pytest.mark.parametrize("include_bom_links", [False, True])
 @pytest.mark.parametrize("include_inventory", [False, True])
 def test_cli_detached_vex_preserves_local_reference_order(
@@ -368,7 +452,7 @@ def test_cli_detached_vex_only_snapshots_referenced_local_refs(monkeypatch, tmp_
 
     def record_refs(parser):
         if parser.packagesCtrl.current_sbom_document.path.endswith("-vex.json"):
-            replayed_refs.append((dict(parser.ref_dict), dict(parser.bom_link_refs)))
+            replayed_refs.append((dict(parser.ref_dict), dict(parser.bom_link_refs), dict(parser._document_refs)))
         original_merge(parser)
 
     monkeypatch.setattr(CycloneDx, "__init__", indexed_init)
@@ -379,6 +463,7 @@ def test_cli_detached_vex_only_snapshots_referenced_local_refs(monkeypatch, tmp_
     monkeypatch.setitem(current_app.config, "SCAN_FILE", str(status))
     serial = "87b5cc5a-ee50-449f-bcdf-cabea628c2a2"
     link = f"urn:cdx:{serial}/1#shared"
+    local_ref = f"urn:cdx:{serial}/2#local"
     documents = {
         "a-bom.json": {
             "bomFormat": "CycloneDX", "specVersion": "1.4", "version": 1,
@@ -399,9 +484,10 @@ def test_cli_detached_vex_only_snapshots_referenced_local_refs(monkeypatch, tmp_
     for index in range(4):
         documents[f"b{index}-vex.json"] = {
             "bomFormat": "CycloneDX", "specVersion": "1.4", "version": 1,
+            "components": [{"type": "library", "name": f"embedded-{index}", "version": "1", "bom-ref": local_ref}],
             "vulnerabilities": [{
                 "id": f"CVE-2026-{index:04d}",
-                "affects": [{"ref": ref} for ref in ("shared", link, "missing-local")],
+                "affects": [{"ref": ref} for ref in ("shared", link, "missing-local", local_ref)],
             }],
         }
     args = ["merge", "--project", "bounded-refs"]
@@ -414,7 +500,10 @@ def test_cli_detached_vex_only_snapshots_referenced_local_refs(monkeypatch, tmp_
     assert result.exit_code == 0, result.output
     result = runner.invoke(args=["process"])
     assert result.exit_code == 0, result.output
-    assert replayed_refs == [({"shared": "first@1"}, {link: "last@1"})] * 4
+    assert replayed_refs == [
+        ({"shared": "first@1", local_ref: f"embedded-{index}@1"}, {link: "last@1"}, {local_ref: f"embedded-{index}@1"})
+        for index in range(4)
+    ]
 
 
 def test_parse_empty_json(cdx_parser):

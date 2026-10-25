@@ -244,6 +244,9 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 if doc in detached_cdx_refs:
                     document_cdx = CycloneDx(controllers)
                     document_cdx.ref_dict = detached_cdx_refs.pop(doc)
+                    document_cdx._document_refs = {
+                        ref: package for ref, package in document_cdx.ref_dict.items() if ref.startswith("urn:cdx:")
+                    }
                 document_cdx.load_from_dict(data)
                 if document_cdx is cdx:
                     cdx.merge_components_into_controller()
@@ -252,11 +255,13 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                             and any(affect.ref.startswith("urn:cdx:") and affect.ref not in cdx.bom_link_refs
                                     for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects)):
                         detached_cdx_documents.append(doc)
-                        # Only used local refs retain their original path-position mapping.
+                        # URN-shaped local fallbacks must belong to this document,
+                        # not another inventory in the accumulated local index.
                         detached_cdx_refs[doc] = {
                             affect.ref: cdx.ref_dict[affect.ref]
                             for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects
-                            if not affect.ref.startswith("urn:cdx:") and affect.ref in cdx.ref_dict
+                            if affect.ref in cdx.ref_dict
+                            and (not affect.ref.startswith("urn:cdx:") or affect.ref in cdx._document_refs)
                         }
                         continue
                 elif getattr(document_cdx, "sbom", None) is not None:
