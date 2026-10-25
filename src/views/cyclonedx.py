@@ -257,7 +257,9 @@ class CycloneDx:
 
             for affect in vulnerability.affects:
                 ref = affect.ref
-                references = self.bom_link_refs if ref.startswith("urn:cdx:") else self.ref_dict
+                references = self.ref_dict
+                if ref.startswith("urn:cdx:"):
+                    references = self.bom_link_refs if ref in self.bom_link_refs else self._document_refs
                 if ref in references:
                     vuln.add_package(references[ref])
 
