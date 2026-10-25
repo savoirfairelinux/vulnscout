@@ -23,7 +23,11 @@ Four pieces work together:
   variant-context APIs as tools an AI agent can call.
 - **cve-assessment skill** — an agent skill (shipped in this repository under
   `.github/skills/cve-assessment/`) that guides the agent through researching a
-  CVE and submitting the result via the MCP tools.
+  CVE and submitting the result via the MCP tools. Phase 2 uses the scoped SBOM
+  dependency tools to discover exact packages, preserve per-source version
+  evidence and trace dependency/reverse-impact paths, then corroborates them
+  with source/build/deployment evidence. Graph reachability alone does not
+  establish runtime exploitability or a VEX verdict.
 - **assessment-review skill** — an agent skill under
   `.github/skills/assessment-review/` that independently reviews existing
   user-authored assessments, without changing them.

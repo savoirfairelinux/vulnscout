@@ -266,3 +266,21 @@ def test_skill_is_discoverable_and_requires_evidence():
         "backport", "authoritative", "unknown", "runtime", "YYYY-MM-DD",
     ))
     assert "sbom-dependencies/SKILL.md" in (root / ".github/skills/README.md").read_text()
+
+
+def test_cve_assessment_integrates_dependency_evidence(tools):
+    root = Path(__file__).resolve().parents[2]
+    skill = (root / ".github/skills/cve-assessment/SKILL.md").read_text()
+    phase_two = skill.split("## Phase 2:", 1)[1].split("## Phase 3:", 1)[0]
+    tool_guide = skill.split("## Tool Usage Guide", 1)[1].split("## Decision Tree", 1)[0]
+    checklist = skill.split("## Quality Checklist", 1)[1]
+    for name in tools:
+        for section in (phase_two, tool_guide, checklist):
+            assert f"vulnscout-{name}" in section
+    assert all(term in phase_two for term in (
+        'direction="dependents"', 'direction="dependencies"', "max_depth=0",
+        "next_offset", "path_document_ids", "version_conflict", "revision_conflict",
+        "source_revision", "depth_limited", "dependencies_recorded=false",
+        "SBOM declarations do not prove runtime usage", "under_investigation",
+        "backports", "Phase 5",
+    ))
