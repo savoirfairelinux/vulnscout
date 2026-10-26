@@ -230,6 +230,7 @@ describe('AIContext page', () => {
         fireEvent.click(sidebarItem('Variant 2'));
         fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save' }));
         expect(await screen.findByText('Mark AI assessments as outdated?')).toBeInTheDocument();
+        expect(screen.getByText(/Saving the description of project Project A marks all pending AI assessments of every variant in this project as outdated/)).toBeInTheDocument();
         expect(requestsTo(backend, 'project_id=p1').some(r => r.url.includes('/api/reviews/assessments'))).toBe(true);
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(screen.queryByText('Mark AI assessments as outdated?')).not.toBeInTheDocument());
@@ -247,15 +248,23 @@ describe('AIContext page', () => {
         expect(JSON.parse(puts[0].body ?? '{}')).toEqual({ description: 'New desc' });
     });
 
+    test('variant save confirmation names the variant scope', async () => {
+        mockBackend({ aiRows: [AI_ROW] });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(await screen.findByLabelText('Environment'), { target: { value: 'Lab' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+        expect(await screen.findByText(/Saving the context of variant Variant 1 marks all pending AI assessments for this variant as outdated/)).toBeInTheDocument();
+    });
+
     test('project description Save disabled until changed and requires text', async () => {
         const backend = mockBackend();
         renderPage({ projectId: 'p1', variantIds: [] });
         await waitFor(() => expect(screen.getByLabelText('Project description')).toHaveValue('Desc'));
         const save = screen.getByRole('button', { name: 'Save changes' });
         expect(save).toBeDisabled();
-        expect(screen.getByText(
-            'Changing the project description marks AI assessments of every variant in this project as outdated.'
-        )).toBeInTheDocument();
+        expect(screen.queryByText(/marks AI assessments of every variant/)).not.toBeInTheDocument();
         expect(screen.getByText('Project')).toBeInTheDocument();
 
         fireEvent.change(screen.getByLabelText('Project description'), { target: { value: 'Desc!' } });
