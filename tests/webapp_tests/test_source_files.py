@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import json
+import io
+import subprocess
+import tarfile
 from pathlib import Path
 import pytest
 
@@ -313,6 +316,12 @@ def test_upstream_engine_uses_proven_sources_without_suppressing_matching_files(
     assert vex_assessment_from_compiled_sources(build, (entry,), now) is None
     package._compiled_sources_complete = False
     assert vex_assessment_from_compiled_sources(build_comp_build(package), (entry,), now) is None
+    # Older stored recipe inputs may lack the explicit compilation flag.
+    package._compiled_sources_complete = True
+    package.source_files[0]["builds"] = [{"build_type": "http://openembedded.org/bitbake/do_create_spdx/recipe"}]
+    entry.affected_sources = {"src/disabled.c"}
+    assert package.to_dict()["compiled_source_file_count"] == 0
+    assert vex_assessment_from_compiled_sources(build_comp_build(package), (entry,), now) is None
 
 
 def test_source_migration_roundtrip_is_idempotent_and_keeps_existing_packages(app, tmp_path):
@@ -333,3 +342,104 @@ def test_source_migration_roundtrip_is_idempotent_and_keeps_existing_packages(ap
     db.session.expire_all()
     assert db.session.query(Package).count() == package_count
     assert _package(app, variant)["source_file_count"] is None
+
+
+def _spdx2_documents():
+    def document(namespace, packages, files, relationships):
+        return {
+            "spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT",
+            "name": namespace, "documentNamespace": "https://example.org/" + namespace,
+            "creationInfo": {"creators": ["Tool: source-tests"], "created": "2026-01-01T00:00:00Z"},
+            "packages": packages, "files": files, "relationships": relationships,
+        }
+
+    source = {"SPDXID": "SPDXRef-source", "fileName": "src/enabled.c", "fileTypes": ["SOURCE"],
+              "checksums": [{"algorithm": "SHA256", "checksumValue": "a" * 64}],
+              "licenseConcluded": "MIT", "licenseInfoInFiles": ["MIT"], "copyrightText": "NOASSERTION"}
+    package = {"SPDXID": "SPDXRef-package", "name": "lib", "versionInfo": "1.0",
+               "downloadLocation": "NOASSERTION", "filesAnalyzed": False, "licenseDeclared": "MIT"}
+    built = document("built", [package], [], [])
+    built["externalDocumentRefs"] = [{
+        "externalDocumentId": "DocumentRef-sources", "spdxDocument": "https://example.org/sources",
+        "checksum": {"algorithm": "SHA1", "checksumValue": "b" * 40},
+    }]
+    built["relationships"] = [{
+        "spdxElementId": "SPDXRef-package", "relationshipType": "CONTAINS",
+        "relatedSpdxElement": "DocumentRef-sources:SPDXRef-source",
+    }]
+    sources = document("sources", [], [source], [])
+    return {"a-built.spdx.json": built, "z-source.spdx.json": sources}
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize("containment", ["CONTAINS", "CONTAINED_BY", "hasFiles"])
+def test_spdx2_companion_source_files_preserve_properties_without_claiming_compilation(
+    app, tmp_path, monkeypatch, fast, containment,
+):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _spdx2_documents()
+    built = documents["a-built.spdx.json"]
+    if containment == "hasFiles":
+        built["packages"][0]["hasFiles"] = ["DocumentRef-sources:SPDXRef-source"]
+        built["relationships"] = []
+    elif containment == "CONTAINED_BY":
+        built["relationships"] = [{
+            "spdxElementId": "DocumentRef-sources:SPDXRef-source", "relationshipType": containment,
+            "relatedSpdxElement": "SPDXRef-package",
+        }]
+    variant, scan = _import(tmp_path, documents)
+    row = _package(app, variant)
+    assert row["source_file_count"] == 1
+    assert row["compiled_source_file_count"] == 0
+    assert not row["compiled_sources_complete"]
+    file = row["source_files"][0]
+    assert file["path"] == "src/enabled.c"
+    assert file["spdx_id"] == "https://example.org/sources#SPDXRef-source"
+    assert file["properties"] == documents["z-source.spdx.json"]["files"][0]
+    assert not file["builds"]
+    assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+    read_inputs(ControllersCache(), scan.id)
+    assert db.session.query(SBOMFile).count() == 1
+
+
+def test_spdx2_external_file_references_never_use_a_different_scan(app, tmp_path):
+    documents = _spdx2_documents()
+    variant, _ = _import(tmp_path, documents)
+    other = Variant.create("missing-source-companion", variant.project_id)
+    _, scan = _import(tmp_path, {"a-built.spdx.json": documents["a-built.spdx.json"]}, other)
+    assert _package(app, other)["source_file_count"] is None
+    assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+
+
+@pytest.mark.parametrize("fast", [False, True])
+def test_checked_in_yocto_spdx2_retains_binary_inventory_without_compiled_sources(app, tmp_path, monkeypatch, fast):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    path = (Path(__file__).resolve().parents[2] / "example" / "yocto-scarthgap-spdx2"
+            / "core-image-minimal-stm32mp25-eval.spdx.tar.zst")
+    uncompressed = subprocess.run(["unzstd", "-c", str(path)], check=True, capture_output=True)
+    with tarfile.open(fileobj=io.BytesIO(uncompressed.stdout)) as archive:
+        documents = {
+            member.name: json.load(archive.extractfile(member))
+            for member in archive if member.isfile() and member.name.endswith(".spdx.json")
+        }
+    variant, scan = _import(tmp_path, documents)
+    assert len(documents) == 203
+    assert db.session.query(SBOMFile).count() == 162
+    binary = db.session.scalars(db.select(SBOMFile).where(SBOMFile.path == "bin/busybox.suid")).one()
+    assert binary.properties["fileTypes"] == ["BINARY"]
+    assert _package(app, variant, "busybox")["source_file_count"] == 0
+    assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+
+
+def test_checked_in_yocto_spdx3_recipe_inputs_do_not_exclude_cves(app, tmp_path):
+    path = (Path(__file__).resolve().parents[2] / "example" / "yocto-wrynose-spdx3"
+            / "core-image-minimal-qemux86-64.rootfs.spdx.json")
+    variant, scan = _import(tmp_path, {path.name: json.loads(path.read_text())})
+    assert db.session.query(SBOMFile).count() == 859
+    row = _package(app, variant, "libacl1")
+    assert row["source_file_count"] == 3
+    assert not row["compiled_sources_complete"]
+    assert row["compiled_source_file_count"] == 0
+    assert all(file["builds"] and not file["builds"][0]["compiled"] for file in row["source_files"])
+    assert not any(file["path"].startswith("usr/lib/") for file in row["source_files"])
+    assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
