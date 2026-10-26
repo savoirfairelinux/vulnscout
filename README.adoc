@@ -45,6 +45,20 @@ cd vulnscout
 
 ==  :penguin: Using VulnScout
 
+=== CLI colors
+
+Human-readable CLI output uses cyan for headings and information, green for
+success, yellow for warnings, and red for errors, with bold labels.
+Colors are enabled automatically for terminals; stdout and stderr are detected
+separately, so redirected output stays plain. Set a non-empty `NO_COLOR`
+(for example, `NO_COLOR=1 ./vulnscout --help`) to disable colors.
+`TERM=dumb` also disables colors.
+
+This applies to the host launcher, container entrypoint, and custom Flask
+commands. The launcher forwards terminal eligibility to each container command
+without allocating a TTY. JSON, shell completion, configuration values, and
+generated files remain plain regardless of terminal settings.
+
 ===  Run VulnScout in interactive mode
 
 This project contains default examples of VulnScout.

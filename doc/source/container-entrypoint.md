@@ -15,6 +15,25 @@ podman exec <container> /scan/src/entrypoint.sh [OPTIONS]
 
 ---
 
+## Output colors
+
+First-party help and human-readable messages use cyan for headings/information,
+green for success, yellow for warnings, and red for errors, with bold labels.
+Colors are automatic and stdout/stderr are detected separately. Pipes and
+redirected files stay plain; non-empty `NO_COLOR` or `TERM=dumb` disables colors.
+For example, run `NO_COLOR=1 ./vulnscout scan nvd` for plain output.
+
+The host wrapper forwards its stream eligibility on each container exec, without
+allocating a TTY or changing the container's persistent configuration. Direct
+entrypoint or Flask invocations detect their own terminals. Plain `docker exec`
+without a TTY therefore produces plain output. To disable colors inside a
+direct container invocation, pass `--env NO_COLOR=1` to `docker exec` or
+`podman exec`.
+
+JSON listings, generated completion scripts, captured run IDs, configuration
+values, status files, and exported SBOMs/reports are never colorized. Third-party
+tools retain their own output behavior.
+
 ## Container Lifecycle
 
 When the container starts with no arguments, it enters **daemon mode** — it stays alive and waits for commands sent via `docker exec` (or `podman exec`). This is the mode used by the `./vulnscout` host wrapper.
