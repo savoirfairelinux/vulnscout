@@ -23,6 +23,7 @@ from ..helpers.scan_runs import tool_scan
 from ..controllers.operation_registry import new_queue_id
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
+from ._console import Command, echo
 import os
 import tempfile
 import uuid
@@ -42,7 +43,7 @@ from flask.cli import with_appcontext
 
 def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
     """Resolve active SBOM-scoped package snapshots for a variant, raising on failure."""
-    click.echo("Resolving active packages…")
+    echo("Resolving active packages…", role="info")
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
     if not latest_ids:
         raise click.ClickException("No scans found for variant")
@@ -55,7 +56,7 @@ def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
     return filter_scannable_packages(packages)
 
 
-@click.command("new-scan-run-id")
+@click.command("new-scan-run-id", cls=Command)
 def new_scan_run_id_command() -> None:
     """Print a fresh run ID for grouping synchronous tool scan steps."""
     click.echo(new_queue_id())
@@ -67,12 +68,12 @@ def _echo_query_results(idx: int, total: int, label: str, vuln_ids: list[str],
     if vuln_ids:
         ids_str = ', '.join(vuln_ids[:10])
         ellip = '…' if len(vuln_ids) > 10 else ''
-        click.echo(
+        echo(
             f"[{idx}/{total}] {label} → "
-            f"{len(vuln_ids)} {noun}: {ids_str}{ellip}"
+            f"{len(vuln_ids)} {noun}: {ids_str}{ellip}", role="info"
         )
     else:
-        click.echo(f"[{idx}/{total}] {label} → {no_results}")
+        echo(f"[{idx}/{total}] {label} → {no_results}", role="info")
 
 
 def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
@@ -104,7 +105,7 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
             )
 
 
-@click.command("nvd-scan")
+@click.command("nvd-scan", cls=Command)
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
@@ -128,8 +129,8 @@ def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str |
 
     engine = None
     if mode == "local":
-        click.echo("Loading local NVD advisory database…")
-        engine = get_engine(progress=click.echo)
+        echo("Loading local NVD advisory database…", role="info")
+        engine = get_engine(progress=echo)
 
     failure_cleanups: list[Callable[[], None]] = []
     with tool_scan(
@@ -157,8 +158,8 @@ def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
         raise click.ClickException("No packages with valid CPE identifiers")
 
     total_cpes = len(cpe_to_pkgs)
-    click.echo(
-        f"Found {len(packages)} packages with {total_cpes} unique CPEs to query"
+    echo(
+        f"Found {len(packages)} packages with {total_cpes} unique CPEs to query", role="info"
     )
 
     cves_found: set[str] = set()
@@ -166,7 +167,7 @@ def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
     assessed_findings: set = set()
 
     for idx, (cpe_name, pkgs) in enumerate(cpe_to_pkgs.items(), 1):
-        click.echo(f"[{idx}/{total_cpes}] Querying {cpe_name}…")
+        echo(f"[{idx}/{total_cpes}] Querying {cpe_name}…", role="info")
         try:
             cpe_parts = cpe_name.split(":")
             has_wildcards = (
@@ -177,7 +178,7 @@ def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
                 cpe_name, results_per_page=100, use_virtual_match=has_wildcards,
             )
         except Exception as exc:
-            click.echo(f"[{idx}/{total_cpes}] ERROR {cpe_name}: {str(exc)[:200]}", err=True)
+            echo(f"[{idx}/{total_cpes}] ERROR {cpe_name}: {str(exc)[:200]}", err=True, role="error")
             continue
 
         cpe_cves = [
@@ -201,8 +202,8 @@ def _nvd_scan_api(variant_uuid, packages, scan: ScanModel) -> None:
 
     _db.session.commit()
     cve_count = len(cves_found)
-    click.echo(
-        f"✓ Scan complete — found {cve_count} unique CVEs across {total_cpes} CPEs"
+    echo(
+        f"✓ Scan complete — found {cve_count} unique CVEs across {total_cpes} CPEs", role="success"
     )
 
 
@@ -213,25 +214,25 @@ def _nvd_scan_local(variant_uuid, packages, scan: ScanModel, engine, failure_cle
     seen_keys: set = set()
 
     for idx, pkg in enumerate(packages, 1):
-        click.echo(f"[{idx}/{total}] Scanning {pkg.name} {pkg.version}…")
+        echo(f"[{idx}/{total}] Scanning {pkg.name} {pkg.version}…", role="info")
         try:
             for computed, status in engine.applicable_vulns(pkg):
                 writer.add(pkg, computed, status, seen_keys)
         except Exception as exc:
-            click.echo(
+            echo(
                 f"[{idx}/{total}] ERROR {pkg.name}: {str(exc)[:200]}",
-                err=True,
+                err=True, role="error",
             )
         writer.maybe_flush()
 
     writer.flush()
-    click.echo(
+    echo(
         f"✓ Scan complete — found {len(seen_keys)} unique CVEs "
-        f"across {total} packages"
+        f"across {total} packages", role="success"
     )
 
 
-@click.command("osv-scan")
+@click.command("osv-scan", cls=Command)
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
@@ -264,9 +265,9 @@ def osv_scan_command(project: str, variant: str | None, run_id: str | None = Non
         )
 
     total_pkgs = len(purl_to_packages)
-    click.echo(
+    echo(
         f"Found {len(packages)} packages, "
-        f"{total_pkgs} unique PURL identifiers to query"
+        f"{total_pkgs} unique PURL identifiers to query", role="info"
     )
 
     with tool_scan(variant_uuid, "osv", run_id or new_queue_id()) as scan:
@@ -281,13 +282,13 @@ def _osv_scan(variant_uuid, packages, purl_to_packages, osv, scan: ScanModel) ->
 
     for idx, (purl_str, matched_packages) in enumerate(purl_to_packages.items(), 1):
         pkg_label = purl_str
-        click.echo(f"[{idx}/{total_pkgs}] Querying {pkg_label}…")
+        echo(f"[{idx}/{total_pkgs}] Querying {pkg_label}…", role="info")
         try:
             osv_vulns = osv.query_by_purl(purl_str)
         except Exception as e:
-            click.echo(
+            echo(
                 f"[{idx}/{total_pkgs}] ERROR {pkg_label}: {str(e)[:200]}",
-                err=True,
+                err=True, role="error",
             )
             continue
 
@@ -331,9 +332,9 @@ def _osv_scan(variant_uuid, packages, purl_to_packages, osv, scan: ScanModel) ->
                                      observation_pairs, assessed_findings)
 
     _db.session.commit()
-    click.echo(
+    echo(
         f"✓ Scan complete — found {len(vulns_found)} unique vulnerabilities "
-        f"across {len(packages)} packages"
+        f"across {len(packages)} packages", role="success"
     )
 
 
@@ -851,7 +852,7 @@ class _SccBulkWriter:
         return found
 
 
-@click.command("sbom-cve-check-scan")
+@click.command("sbom-cve-check-scan", cls=Command)
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
@@ -877,11 +878,11 @@ def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str |
     variant_uuid = variant_obj.id
 
     packages = _resolve_active_packages(variant_uuid)
-    click.echo(f"Resolved {len(packages)} active packages")
+    echo(f"Resolved {len(packages)} active packages", role="info")
 
-    click.echo("Loading local CVE databases (NVD-FKIE + CVEList) and building index…")
-    engine = get_engine(progress=click.echo)
-    click.echo("Index ready — scanning packages")
+    echo("Loading local CVE databases (NVD-FKIE + CVEList) and building index…", role="info")
+    engine = get_engine(progress=echo)
+    echo("Index ready — scanning packages", role="info")
 
     failure_cleanups: list[Callable[[], None]] = []
     with tool_scan(
@@ -904,9 +905,9 @@ def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel, failur
                 if cve_id is not None:
                     persisted_ids.append(cve_id)
         except Exception as e:
-            click.echo(
+            echo(
                 f"[{idx}/{total_pkgs}] ERROR {pkg_label}: {str(e)[:200]}",
-                err=True,
+                err=True, role="error",
             )
             continue
 
@@ -916,7 +917,7 @@ def _sbom_cve_check_scan(variant_uuid, packages, engine, scan: ScanModel, failur
         writer.maybe_flush()
 
     writer.flush()
-    click.echo(
+    echo(
         f"✓ Scan complete — found {len(writer.cves_found)} unique vulnerabilities "
-        f"across {total_pkgs} packages"
+        f"across {total_pkgs} packages", role="success"
     )
