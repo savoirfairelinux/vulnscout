@@ -132,12 +132,24 @@ SPDX 3 `software_File`, `contains`, and Build-profile `hasInput`/`hasOutput`
 relationships are resolved across companion documents of the **same import
 scan**, including West's `app.jsonld`, `zephyr.jsonld`, and `build.jsonld`.
 Source/build package consolidation preserves those associations.
-**Build input** means explicit build evidence exists; **Listed only** does not
+SPDX 2.2/2.3 `files`, package `hasFiles`, `CONTAINS`, and `CONTAINED_BY`
+relationships also populate the inventory, including namespaced
+`DocumentRef-*` references between companion documents.
+Original SPDX 2 checksums, licenses, and file types remain visible in the details.
+Explicit binary file types and installed package outputs are not source files.
+
+**Build input** means compilation evidence exists; **Listed only** does not
 prove compilation, and neither proves inclusion in the final firmware.
+Yocto SPDX 3 lifecycle-scoped build relationships are supported, but BitBake
+recipe inputs are shown as **Recipe input (not compilation)**: patches,
+licenses, configuration files, and source archives are not a list of compiled
+translation units. SPDX 2 package provenance likewise does not prove compilation.
 
 **Not recorded** means file evidence is unavailable, not that there are zero
 source files. Reimport the original companion SBOMs together to populate older
-imports. Other SBOM formats currently do not populate this inventory.
+imports. Non-SPDX SBOM formats currently do not populate this inventory.
+SPDX 2 packages with `filesAnalyzed: false` and no associated file records also
+remain **Not recorded**, including package-only VulnScout exports.
 Outdated packages show **Not in active scan**.
 
 The local advisory engine uses resolved compiled-source paths for CVE refinement
