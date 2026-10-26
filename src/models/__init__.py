@@ -8,6 +8,7 @@ from .scan import Scan
 from .sbom_document import SBOMDocument
 from .package import Package
 from .sbom_package import SBOMPackage
+from .sbom_file import SBOMFile, PackageSourceFile
 from .package_dependency import PackageDependency
 from .vulnerability import Vulnerability
 from .finding import Finding
