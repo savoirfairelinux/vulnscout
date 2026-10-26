@@ -19,6 +19,7 @@ from ..helpers.package_versions import PackageVersionInfo, git_revision_from_url
 if typing.TYPE_CHECKING:
     from ..models import SBOMObservation, SBOMPackage, Finding
     from .sbom_package import PackageType
+    from .sbom_file import SourceFileEvidence
 
 
 def _normalize_supplier(value: str | None) -> str:
@@ -112,6 +113,8 @@ class Package(Base):
         source_urls: Optional[list[str]] = None,
         source_revisions: Optional[list[str]] = None,
         component_types: Optional[list["PackageType"]] = None,
+        source_files: Optional[list["SourceFileEvidence"]] = None,
+        compiled_sources_complete: bool = False,
         **kwargs: Any,
     ):
         version = str(version).strip().split("+git")[0]
@@ -135,6 +138,8 @@ class Package(Base):
         self.source_urls = []
         self.source_revisions = list(source_revisions or [])
         self._component_types = list(component_types or ["normal"])
+        self._source_files = source_files
+        self._compiled_sources_complete = compiled_sources_complete
         for url in source_urls or []:
             self.add_source_url(url)
         for c in cpes:
@@ -194,10 +199,22 @@ class Package(Base):
         """Classifications from selected SBOM associations, never a global package attribute."""
         return getattr(self, "_component_types", ["normal"])
 
+    @property
+    def source_files(self) -> list["SourceFileEvidence"] | None:
+        return getattr(self, "_source_files", None)
+
+    @property
+    def compiled_sources(self) -> set[str]:
+        if not getattr(self, "_compiled_sources_complete", False):
+            return set()
+        return {file["path"] for file in self.source_files or [] if file["builds"]}
+
     def with_sbom_evidence(self, cpe: list[str] | None = None, purl: list[str] | None = None,
                            source_urls: list[str] | None = None,
                            source_revisions: list[str] | None = None,
-                           component_types: list["PackageType"] | None = None) -> "Package":
+                           component_types: list["PackageType"] | None = None,
+                           source_files: list["SourceFileEvidence"] | None = None,
+                           compiled_sources_complete: bool = False) -> "Package":
         """Build a detached display/scan/export snapshot without mutating the shared DB row."""
         selected_purls = list(dict.fromkeys(
             [value for value in self.purl or [] if value in (purl or [])] + list(purl or []),
@@ -209,6 +226,7 @@ class Package(Base):
             self.name or "", self.version or "", selected_cpes, selected_purls,
             self.licences or "", self.supplier, source_urls=source_urls,
             source_revisions=source_revisions, component_types=component_types, id=self.id,
+            source_files=source_files, compiled_sources_complete=compiled_sources_complete,
         )
 
     def generate_generic_cpe(self) -> str:
@@ -338,6 +356,9 @@ class Package(Base):
             "source_urls": list(self.source_urls or []),
             "source_revisions": list(self.source_revisions or []),
             "component_types": list(self.component_types),
+            "source_file_count": len(self.source_files) if self.source_files is not None else None,
+            "compiled_source_file_count": len({file["path"] for file in self.source_files or [] if file["builds"]}),
+            "compiled_sources_complete": getattr(self, "_compiled_sources_complete", False),
             **self.version_info,
         }
 

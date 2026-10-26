@@ -103,19 +103,20 @@ class VsCompBuild(CompBuild):
     """Wrap a single VulnScout :class:`Package` as an engine ``CompBuild``.
 
     A package maps to exactly one build holding one component, sharing the same
-    version and identifiers (the invariant the engine expects).  Compiled-source
-    refinement (kernel per-file trimming) is intentionally disabled: VulnScout's
-    portable SBOM does not carry recipe source-file lists, so an empty set is
-    returned, which makes the engine fall back to pure version-range evaluation.
+    version and identifiers (the invariant the engine expects). Source paths
+    come only from the selected SBOM's resolved build evidence; unknown or
+    incomplete inventories retain version-range evaluation.
     """
 
     def __init__(self, name: str, version: str, identifiers: set[CompId],
-                 cpes: tuple[str, ...], purls: tuple[str, ...]) -> None:
+                 cpes: tuple[str, ...], purls: tuple[str, ...],
+                 compiled_sources: frozenset[str] = frozenset()) -> None:
         super().__init__()
         self._build_name = name
         self._version = version
         self._identifiers = tuple(sorted(identifiers))
         self._component = VsComponent(name, version, identifiers, cpes, purls)
+        self._compiled_sources = compiled_sources
 
     @property
     def version(self) -> str:
@@ -134,7 +135,7 @@ class VsCompBuild(CompBuild):
         return self._build_name
 
     def _get_compiled_sources(self) -> set[str]:
-        return set()
+        return set(self._compiled_sources)
 
 
 def build_comp_build(pkg) -> VsCompBuild | None:
@@ -152,4 +153,4 @@ def build_comp_build(pkg) -> VsCompBuild | None:
     if not identifiers or not version:
         return None
 
-    return VsCompBuild(name, version, identifiers, cpes, purls)
+    return VsCompBuild(name, version, identifiers, cpes, purls, frozenset(pkg.compiled_sources))
