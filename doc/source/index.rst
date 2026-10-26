@@ -17,7 +17,6 @@ VulnScout Documentation
    api
    dev_guide
    container-entrypoint
-   agent-chat
    yocto-integration
    zephyr-integration
    license

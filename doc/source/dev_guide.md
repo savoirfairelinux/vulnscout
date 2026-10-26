@@ -1,5 +1,13 @@
 # Developer's Guide
 
+For embedded AI architecture and development setup, see:
+
+```{toctree}
+:maxdepth: 1
+
+agent-chat
+```
+
 ## Developing VulnScout
 
 ### Requirements
