@@ -756,6 +756,23 @@ describe('AIContext page', () => {
             expect(options[2]).toBeDisabled();
         });
 
+        test('endpoint selects disable the component chosen for the other endpoint', async () => {
+            await openSystemTab();
+            addComponent('A');
+            addComponent('B');
+            fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+            const source = screen.getByLabelText('Interaction I1 source');
+            const destination = screen.getByLabelText('Interaction I1 destination');
+
+            fireEvent.change(source, { target: { value: 'C1' } });
+            expect(within(destination).getByRole('option', { name: 'C1: A' })).toBeDisabled();
+            expect(within(destination).getByRole('option', { name: 'C2: B' })).toBeEnabled();
+
+            fireEvent.change(destination, { target: { value: 'C2' } });
+            expect(within(source).getByRole('option', { name: 'C2: B' })).toBeDisabled();
+            expect(within(source).getByRole('option', { name: 'C1: A' })).toBeEnabled();
+        });
+
         test('save 400 maps server paths to cells and opens the System tab', async () => {
             const { backend } = await openSystemTab({
                 variantPutError: {

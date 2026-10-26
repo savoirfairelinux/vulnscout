@@ -57,9 +57,10 @@ type EntityProps<T> = Pick<TableProps<T & { id: string }>, 'noun' | 'prefix' | '
     onEdit: (index: number, key: string, value: string) => void;
 };
 
-function EndpointSelect({ components, value, label, disabled, onChange, aria }: Readonly<{
+function EndpointSelect({ components, value, exclude, label, disabled, onChange, aria }: Readonly<{
     components: StrideComponent[];
     value: string;
+    exclude: string;
     label: string;
     disabled: boolean;
     onChange: (value: string) => void;
@@ -70,7 +71,9 @@ function EndpointSelect({ components, value, label, disabled, onChange, aria }: 
             onChange={e => onChange(e.target.value)} {...aria}>
             <option value="">Select a component</option>
             {components.map(c => (
-                <option key={c.id} value={c.id} disabled={c.name.trim() === ''}>{`${c.id}: ${c.name}`}</option>
+                <option key={c.id} value={c.id} disabled={c.name.trim() === '' || (c.id === exclude && c.id !== value)}>
+                    {`${c.id}: ${c.name}`}
+                </option>
             ))}
         </select>
     );
@@ -86,7 +89,9 @@ function Cell<T extends { id: string }>({ row, index, col, noun, prefix, compone
     const onChange = (v: string) => onEdit(index, col.key, v);
     let control: ReactNode;
     if (col.kind === 'source' || col.kind === 'destination') {
-        control = <EndpointSelect components={components} value={value} label={label}
+        const other = col.kind === 'source' ? 'destination_id' : 'source_id';
+        const exclude = String((row as Record<string, unknown>)[other] ?? '');
+        control = <EndpointSelect components={components} value={value} exclude={exclude} label={label}
             disabled={disabled} onChange={onChange} aria={aria} />;
     } else if (col.kind === 'text') {
         control = <textarea rows={2} className={CELL_FIELD} aria-label={label} value={value}
