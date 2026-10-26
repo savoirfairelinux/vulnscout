@@ -1,6 +1,6 @@
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons";
-import { BADGE_PROJECT, BUTTON_PRIMARY, ERROR, LABEL, PANEL, TEXTAREA, WARNING } from "./styles";
+import { BADGE_PROJECT, BUTTON_PRIMARY, ERROR, LABEL, PANEL, TEXTAREA } from "./styles";
 
 type Props = {
     projectName: string;
@@ -36,13 +36,10 @@ function ProjectDescriptionPanel({ projectName, value, onChange, onSave, saving,
                     value={value}
                     onChange={e => onChange(e.target.value)}
                     aria-invalid={error ? true : undefined}
-                    aria-describedby={error ? "ai-project-description-error ai-project-description-note" : "ai-project-description-note"}
+                    aria-describedby={error ? "ai-project-description-error" : undefined}
                     placeholder="Describe your project..."
                 />
                 {error && <p id="ai-project-description-error" className={`${ERROR} mt-1`}>{error}</p>}
-                <p id="ai-project-description-note" className={`${WARNING} mt-1`}>
-                    Changing the project description marks AI assessments of every variant in this project as outdated.
-                </p>
             </div>
         </section>
     );

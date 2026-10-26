@@ -124,7 +124,8 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     // Uploaded references are saved on their own, outside the draft; tagged with the draft key they belong to.
     const [variantFiles, setVariantFiles] = useState<{ key: string | null; files: ContextFile[] }>({ key: null, files: [] });
     const [announcement, setAnnouncement] = useState('');
-    const [confirmOutdate, setConfirmOutdate] = useState(false);
+    // Which scope the pending save outdates; null when no confirmation is open.
+    const [confirmOutdate, setConfirmOutdate] = useState<SaveTarget['kind'] | null>(null);
     // The save a pending confirmation belongs to, and who waits for its outcome.
     const pendingSaveRef = useRef<{ target: SaveTarget; resolve: (saved: boolean) => void } | null>(null);
     const [banner, setBanner] = useState<{ msg: ReactNode; type: BannerType } | null>(null);
@@ -314,7 +315,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (!pending) return performSave(target, key);
         return new Promise<boolean>(resolve => {
             pendingSaveRef.current = { target, resolve };
-            setConfirmOutdate(true);
+            setConfirmOutdate(target.kind);
         });
     };
 
@@ -358,7 +359,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const resolvePendingSave = (confirmed: boolean) => {
         const pending = pendingSaveRef.current;
         pendingSaveRef.current = null;
-        setConfirmOutdate(false);
+        setConfirmOutdate(null);
         if (!pending) return;
         if (!confirmed) pending.resolve(false);
         else void performSave(pending.target, openKeyRef.current).then(pending.resolve);
@@ -512,9 +513,11 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 />
             )}
             <ConfirmationModal
-                isOpen={confirmOutdate}
+                isOpen={confirmOutdate !== null}
                 title="Mark AI assessments as outdated?"
-                message="Saving this context will mark all pending AI assessments as outdated, because they were generated before the context changed. They remain outdated until they are regenerated."
+                message={confirmOutdate === 'project'
+                    ? `Saving the description of ${projectName ? `project ${projectName}` : 'this project'} marks all pending AI assessments of every variant in this project as outdated. They remain outdated until they are regenerated.`
+                    : `Saving the context of ${openVariant ? `variant ${openVariant.name}` : 'this variant'} marks all pending AI assessments for this variant as outdated. They remain outdated until they are regenerated.`}
                 confirmText="Save and mark outdated"
                 cancelText="Cancel"
                 showTitleIcon={true}
