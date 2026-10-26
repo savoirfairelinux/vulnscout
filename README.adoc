@@ -3,635 +3,174 @@ Savoir-faire Linux
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
 
-image::./doc/source/_static/vulnscout_logo.jpeg[alt=vulnscout logo]
+image::doc/source/_static/vulnscout_logo.jpeg[VulnScout logo,width=220]
 
-image::https://img.shields.io/badge/License-GPL%203.0-green.svg[License, link=https://opensource.org/license/gpl-3-0]
+image::https://img.shields.io/badge/License-GPL--3.0--only-green.svg[GPL-3.0-only,link=LICENSE.GPL-3.0-only]
 
----
+VulnScout is an open-source, SBOM-first platform for identifying, assessing,
+and managing vulnerabilities in software components and dependencies.
+Import a *Software Bill of Materials (SBOM)*, investigate findings in the web
+interface, record product-specific assessments, and automate policy checks in CI.
 
-== :small_blue_diamond:  Introduction
+https://vulnscout.io/[Website] |
+https://vulnscout.readthedocs.io/[Documentation] |
+{url-repo}[Source code]
 
-VulnScout is designed to analyse and identify vulnerabilities in their software components and dependencies using an *SBOM* (Software Bill Of Materials).
+== Full Pipeline
 
-It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype to figure out which parts of a codebase might be affected by security issues (CVE).
+VulnScout starts after SBOM generation and supports a repeatable lifecycle:
+*Import -> Enrich -> Assess -> Enforce -> Share*.
 
-VulnScout also provides a web interface for visualisation and a command line to generate enriched output files.
+image::doc/source/_static/vulnscout-pipeline.svg[VulnScout full pipeline with optional AI assistance during assessment]
 
-=== VulnScout Features
+Scanning discovers additional findings; refreshing updates metadata for findings
+already recorded. Assessments connect those findings to product evidence.
+AI assistance is optional, and proposed AI assessments require human approval
+before becoming official.
 
-* Analyse SBOMs (SPDX 2/3, CycloneDX, Yocto CVE check, OpenVEX, Grype)
-* Detect and enrich vulnerabilities from NVD, EPSS, and Grype
-* Manage projects and variants for multi-target builds
-* Web interface for visualisation, triage, and assessment
-* Non-interactive / CI mode with configurable match conditions
-* Generate customisable reports (AsciiDoc, HTML, PDF, CSV)
-* Export enriched SBOMs (SPDX 3.0, CycloneDX 1.6, OpenVEX)
-* Custom CVSS scoring per vulnerability
-* Time estimation tracking for remediation effort
+The stages describe a logical lifecycle, not a mandatory shell sequence.
+In CI, generate required reports and exports *before the final
+`match-condition`*, so a policy failure does not prevent artifact creation.
+See link:doc/source/vulnscout-workflow.md[VulnScout Workflow] for each stage
+and its detailed task guides.
 
-==  :wrench: Setting up VulnScout
+== Features
 
-=== Requirements & Installation
+* Import SPDX 2/3 JSON, SPDX 3 JSON-LD, and CycloneDX JSON, along with Yocto
+  CVE-check/VEX, OpenVEX, and Grype JSON findings.
+* Discover vulnerability candidates with *Grype, NVD, OSV, and sbom-cve-check*.
+* Enrich existing vulnerabilities with *NVD, EPSS, ENISA EUVD, and GitHub
+  Advisory* metadata.
+* Manage projects and variants, inspect package dependencies, and compare
+  scan history without mixing build-specific evidence.
+* Triage findings in the web interface, record VEX assessments, customize CVSS
+  scores, and estimate remediation effort.
+* Use the built-in *SDK-backed Agent* for AI-assisted assessments and independent
+  reviews of custom assessments.
+* Enforce executable vulnerability policies in CI using match conditions.
+* Generate customizable reports and export enriched SPDX, CycloneDX, OpenVEX,
+  or VulnScout assessment-exchange data.
 
-VulnScout is designed to run locally in a Docker container.
-It only requires `docker` to be installed and running on your host.
+SPDX tag-value input is not supported by the current import pipeline.
+See link:doc/source/cli-inputs.md[Input Sources] and
+link:doc/source/exports.md[Exporting SBOM Files] for format details.
 
-To install VulnScout, you only need to clone the repository:
+== Quick Start
+
+On the host, install *Git*, *Bash*, and a working *Docker or Podman* setup
+that your user can run. VulnScout runs inside the container; normal use does
+not require a host Python or Node.js installation.
+
+Clone the repository, import the bundled Yocto example, then start the interface:
+
 [source,bash]
 ----
 git clone https://github.com/savoirfairelinux/vulnscout.git
 cd vulnscout
-----
-
-==  :penguin: Using VulnScout
-
-=== CLI colors
-
-Human-readable CLI output uses cyan for headings and information, green for
-success, yellow for warnings, and red for errors, with bold labels.
-Colors are enabled automatically for terminals; stdout and stderr are detected
-separately, so redirected output stays plain. Set a non-empty `NO_COLOR`
-(for example, `NO_COLOR=1 ./vulnscout --help`) to disable colors.
-`TERM=dumb` also disables colors.
-
-This applies to the host launcher, container entrypoint, and custom Flask
-commands. The launcher forwards terminal eligibility to each container command
-without allocating a TTY. JSON, shell completion, configuration values, and
-generated files remain plain regardless of terminal settings.
-
-===  Run VulnScout in interactive mode
-
-This project contains default examples of VulnScout.
-
-To run VulnScout demo in interactive mode, you can simply run the command:
-[source,shell]
-----
-./vulnscout add --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout add \
+  --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
+  --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ./vulnscout serve
 ----
 
-Then open your browser to view the results:
+The launcher pulls the image if needed, starts the container, and imports the
+supplied packages and findings. *API keys are not required to view this example.*
+Import alone does not request additional scans or a complete metadata refresh.
 
-[source,plaintext]
-----
-http://localhost:7275
-----
+Open http://localhost:7275/ and select project *default* and variant *default*
+in the navigation bar, then open *Vulnerabilities*.
+A *project* groups a software product's data; a *variant* represents a build,
+target, or deployment within it.
 
-If you don't need additional source files, start the web UI alone:
+On subsequent runs, use `./vulnscout serve` without reimporting the same data.
+Press `Ctrl+C` to stop the web server; the container remains running.
+To stop and remove the container:
 
-[source,shell]
+[source,bash]
 ----
-./vulnscout serve
-----
-
-It is also possible to add sources files on a specific project and variant with `-p`/`--project` and `-v`/`--variant`:
-[source,shell]
-----
-./vulnscout -p demo -v x86 add --spdx $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---cve-check $(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout stop
 ----
 
-=== Bundled example data
+By default, the database and configuration remain in `.vulnscout/cache/`, and
+exports remain in `.vulnscout/outputs/` beside the launcher. Stopping the
+container does not reset them.
 
-The `example/` directory contains separate datasets for Yocto and Zephyr:
+For proxies, API keys, or custom runtime settings, follow
+link:doc/source/cli-configuration.md[Container Lifecycle and Configuration].
+The example import initializes defaults; if configuring before the first import,
+run `./vulnscout start` before `config set`. Restart after changing web-service
+settings. Arbitrary exported host variables are not automatically forwarded.
+
+See link:doc/source/getting-started.md[Getting Started] for the full first-run
+guide and link:doc/source/examples.md[Bundled Examples] for alternative Yocto
+and Zephyr datasets with their project/variant-scoped commands.
+
+=== CLI Colors
+
+Human-readable output is colored automatically on terminals; stdout and stderr
+are detected separately, so redirected output stays plain. A non-empty
+`NO_COLOR` (for example, `NO_COLOR=1 ./vulnscout --help`) or `TERM=dumb` disables
+colors. JSON, shell completion, configuration values, and generated files remain
+plain. This applies to the host launcher, container entrypoint, and custom Flask
+commands; see link:doc/source/container-entrypoint.md#output-colors[Output colors]
+for the palette and container forwarding behavior.
+
+== Architecture
+
+image::doc/source/_static/vulnscout-architecture.svg[VulnScout architecture showing CLI and web access, core services, scanners, storage, and the Copilot SDK and MCP tool loop]
+
+The host launcher manages Docker/Podman and invokes the container entrypoint.
+The React interface communicates with the Flask REST API. Both paths use the
+same core services and persisted project/variant data.
+
+The embedded Agent uses the *GitHub Copilot SDK* and its agent runtime to
+communicate with the selected AI provider and invoke the bundled MCP server
+over stdio. MCP tools call VulnScout's REST API rather than accessing the
+database directly. The embedded Agent has no shell, arbitrary filesystem,
+or web research tools; source evidence is provided through uploaded references.
+
+The embedded Agent is *localhost-only and single-user*. Provider credentials
+stay on the backend, but assessment context and source evidence may be sent
+to the selected AI provider; only share data you are authorized to disclose.
+See link:doc/source/ai-assessments.md[AI Assessments] for provider setup and
+human approval, or link:doc/source/agent-chat.md[AI Agent Development] for
+configuration and implementation details.
+
+External MCP clients remain an optional alternative using the server bundled
+in this repository; no separate MCP repository is required. See
+link:doc/source/ai-external-clients.md[External AI Clients].
+
+== Documentation and Integrations
+
+Full rendered documentation is available at https://vulnscout.readthedocs.io/.
+The links below also provide the documentation sources for this checkout.
 
 [cols="1,2",options="header"]
 |===
-|Directory |Contents
-|`example/yocto-wrynose-spdx3/` |Yocto Wrynose SPDX 3 JSON-LD and CVE-check JSON
-|`example/yocto-scarthgap-spdx2/` |Yocto Scarthgap SPDX 2 archive and CVE-check JSON
-|`example/yocto-scarthgap-cdx/` |Yocto CycloneDX SBOM/VEX
-|`example/zephyr/` |Zephyr West-generated SPDX 3 JSON-LD companion documents
+|Guide |Purpose
+|link:doc/source/getting-started.md[Getting Started] |Requirements, first import, and web startup
+|link:doc/source/vulnscout-workflow.md[VulnScout Workflow] |Import, enrich, assess, enforce, and share
+|link:doc/source/vulnscout-script.md[VulnScout CLI] |Command syntax and project/variant scope
+|link:doc/source/interactive-mode.md[Interactive Mode] |Web-interface tasks and assessment guidance
+|link:doc/source/ai-assessments.md[AI Assessments] |Embedded Agent, source evidence, and human review
+|link:doc/source/api.md[REST API] |HTTP operations and interactive OpenAPI documentation
+|link:doc/source/templates.md[Writing Report Templates] |Custom reports and assets
+|link:doc/source/dev_guide.md[Developer's Guide] |Development, tests, and documentation builds
 |===
 
-To import the Zephyr example, pass all four companion documents in the same
-command so their cross-document references can be resolved:
+Integrate generated build outputs through
+link:doc/source/yocto-integration.md[Yocto Integration] or
+link:doc/source/zephyr-integration.md[Zephyr Integration].
+For advanced container-managed and CI setups, see
+link:doc/source/container-entrypoint.md[Using Container Entrypoint].
 
-[source,shell]
-----
-./vulnscout -p zephyr_demo -v mbedtls_native_sim add \
-  --spdx "$(pwd)/example/zephyr/app.jsonld" \
-  --spdx "$(pwd)/example/zephyr/build.jsonld" \
-  --spdx "$(pwd)/example/zephyr/modules-deps.jsonld" \
-  --spdx "$(pwd)/example/zephyr/zephyr.jsonld"
-./vulnscout serve
-----
+Migrating older automation? See
+link:doc/source/cli-migration.md[Migrating from Legacy CLI Flags].
 
-The Zephyr SBOMs describe the component inventory. Run `vulnscout scan all`
-to request vulnerability discovery; scanners may require network access and credentials.
-See link:doc/source/examples.md[Bundled Examples] for commands for every dataset,
-including the SPDX 2 archives and CycloneDX exports.
+== Licence
 
-== :book: Documentation
+Copyright (C) 2017-2026 Savoir-faire Linux, Inc.
 
-Full documentation is available at https://vulnscout.readthedocs.io/
+VulnScout is licensed under link:LICENSE.GPL-3.0-only[GPL-3.0-only].
 
-===  MCP Server Source
-
-The VulnScout MCP server source is now vendored in this repository under
-`vulnscout_mcp/`.
-
-It is launched as a stdio process by MCP clients (for example VS Code /
-Copilot) via `vulnscout_mcp/run_server.py`.
-
-===  Container Lifecycle
-
-The `vulnscout` script manages the container lifecycle. The container runs in the background and accepts commands via `docker exec`.
-
-[source,shell]
-----
-# Start the container (done automatically by most commands)
-./vulnscout start
-
-# Stop and remove the container
-./vulnscout stop
-
-# Restart the container (useful after changing config)
-./vulnscout restart
-----
-
-NOTE: Releases before v0.24 used flags instead of commands. They still work until v0.25 and print a deprecation warning. See link:doc/source/vulnscout-script.md#migrating-from-the-flag-syntax[Migrating from the flag syntax].
-
-===  Projects and Variants
-
-VulnScout organises data into *projects* and *variants*. A project typically maps to a product, and variants represent different builds or architectures (e.g. `x86_64`, `aarch64`).
-
-Select them with `-p, --project` and `-v, --variant`. Each command documents how it uses them (see link:doc/source/vulnscout-script.md#commands[commands reference]); commands that do not use a scope reject these options.
-
-[source,shell]
-----
-./vulnscout -p <name> -v <name> <command>
-----
-
-===  Adding Input Files to the Database
-
-VulnScout accepts multiple input file types through `add`. Repeat an option or mix types in one call; the inputs are processed together.
-
-[source,shell]
-----
-# SPDX 2/3 SBOM (JSON, tag-value, or .tar/.tar.gz/.tar.zst archive)
-./vulnscout add --spdx <path>
-
-# Yocto CVE check JSON output
-./vulnscout add --cve-check <path>
-
-# Yocto VEX JSON output (from vex.bbclass)
-./vulnscout add --yocto-vex <path>
-
-# CycloneDX file
-./vulnscout add --cdx <path>
-
-# OpenVEX file
-./vulnscout add --openvex <path>
-
-# Grype file
-./vulnscout add --grype <path>
-----
-
-Repeat or mix input options in one `add` call:
-
-[source,shell]
-----
-./vulnscout -p demo -v x86 add \
-  --spdx /path/to/sbom.spdx.json \
-  --cve-check /path/to/cve-check.json \
-  --openvex /path/to/assessments.openvex.json
-----
-
-[TIP]
-====
-- `.tar`, `.tar.gz`, `.tar.zst` archives are supported as SPDX 2 input.
-- `.spdx` files (tag-value format) are supported as SPDX 2 input.
-- `.spdx.json` is supported as SPDX 3 input.
-- Grype scan files should end with `.grype.json`.
-- To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
-====
-
-===  Run VulnScout with Yocto
-
-We have a dedicated layer for VulnScout integration in Yocto.
-
-You can find the layer here: https://github.com/savoirfairelinux/meta-vulnscout
-
-To be short, a simple `inherit vulnscout` in your image recipe will be enough to configure vulnscout for your project.
-
-The vulnscout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
-
-=== Web Interface Settings
-
-The web interface includes a *Settings* tab that provides:
-
-* *Rename Project* — Select a project and give it a new name (must be unique across all projects).
-* *Rename Variant* — Select a variant within a project and rename it (must be unique within the project).
-* *Import SBOM* — Upload an SBOM file directly from the browser instead of `vulnscout add`.
-  When importing, you must select (or create) the target project and variant.
-  Supported formats are auto-detected or can be specified explicitly: SPDX (2/3), CycloneDX, OpenVEX, Yocto CVE check, and Grype.
-
-=== Run VulnScout in non-interactive mode
-
-If you want to use the non-interactive mode, without the web interface, you can use `match-condition`:
-
-[source,shell]
-----
-./vulnscout -p demo match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
-----
-
-The command exits with code `2` if any vulnerability matches the condition, enabling use in CI pipelines.
-
-Match conditions evaluate vulnerability data already stored by VulnScout. They do not automatically refresh EPSS or other provider data. Run `vulnscout refresh` before `match-condition` when the condition must use current enrichment data.
-
-See the link:doc/source/ci_conditions.md[match conditions documentation] for the full condition syntax and token reference.
-
-In CI, import the inputs and then run `match-condition` last:
-
-[source,shell]
-----
-./vulnscout -p demo add --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
-./vulnscout -p demo match-condition "((cvss >= 9.0) and (pending or affected))"
-----
-
-===  Refreshing Vulnerability Data
-
-Use `refresh` to enrich vulnerabilities with current EPSS, NVD, ENISA EUVD, and GitHub Advisory data. After importing new inputs, refresh the same project:
-
-[source,shell]
-----
-./vulnscout -p demo add --spdx /path/to/sbom.spdx.json
-./vulnscout -p demo refresh
-----
-
-`refresh` also works on its own. Without a project it refreshes all vulnerabilities; project and variant options restrict the scope:
-
-[source,shell]
-----
-./vulnscout refresh
-./vulnscout -p demo refresh
-./vulnscout -p demo -v x86 refresh
-----
-
-The refresh enriches existing CVE and GHSA records; it does not discover new findings. A variant requires its project because variant names are project-local.
-
-===  Performing a Grype Scan
-
-VulnScout can run Grype on the current database contents. This exports the current state as a CycloneDX SBOM, runs Grype against it, and merges the results back:
-
-[source,shell]
-----
-./vulnscout -p demo -v x86 scan grype
-----
-
-To scan newly added files, run `add` and then `scan` with the same scope:
-
-[source,shell]
-----
-./vulnscout -p demo add --spdx example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json
-./vulnscout -p demo scan grype
-----
-
-`scan` accepts `grype`, `nvd` (CPE-based), `osv` (PURL-based), and `sbom-cve-check` (local advisory databases). Select several with repeatable scanner flags (`scan --grype --osv --sbom-cve-check`), commas (`scan nvd,osv`), or spaces (`scan nvd osv`); the forms can be mixed and duplicates are ignored. With no selection, or with `all`/`--all`, every available scanner runs. All selected scanners run in one invocation, always in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh is a separate command (`refresh`).
-
-Local NVD and `sbom-cve-check` CLI scans commit results in chunks, releasing SQLite's write transaction between packages so other requests can write while the scan continues.
-If a scan fails or is interrupted, its new assessments and unshared findings are removed along with the failed scan step; pre-existing findings and assessments, findings adopted by another scan, and new pending assessments that are the only assessment for a finding another scan of the same variant observed are retained.
-
-`scan grype` can consume significant RAM when the SBOM contains many packages.
-By default VulnScout caps Grype's memory at ~80 % of the container/cgroup limit.
-Override with the `GRYPE_MEMLIMIT` environment variable (see the Environment Variables table above).
-
-[source,shell]
-----
-# Persistent: keep Grype below 6 GiB across all future scans in this container
-./vulnscout config set GRYPE_MEMLIMIT 6GiB
-
-# One-off: override via the host environment before starting the container
-export GRYPE_MEMLIMIT=24GiB
-./vulnscout -p demo -v x86 scan grype
-----
-
-===  Generating Reports
-
-Reports are generated from AsciiDoc templates. VulnScout ships with built-in templates and also supports custom ones.
-Use `-p` to select the report scope; when omitted, the `default` project is used. A project report includes all its variants. Add `-v` to restrict the report to one variant in that project. Unknown project or variant names fail instead of broadening the report scope.
-
-[source,shell]
-----
-# Generate a report from a built-in template
-./vulnscout -p demo report summary.adoc
-
-# Generate a report for one variant only
-./vulnscout -p demo -v x86 report summary.adoc
-
-# Generate a match-condition report (lists vulnerabilities that triggered the condition)
-./vulnscout -p demo report match_condition.adoc --condition "cvss >= 9.0"
-
-# Register a custom template permanently in the container and generate a report
-./vulnscout -p demo report /path/to/my-custom-report.adoc
-
-# Then generate a report from it by name
-./vulnscout -p demo report my-custom-report.adoc
-
-# Or pass the file path directly — registers and runs it in one step
-./vulnscout -p demo report /path/to/my-custom-report.adoc
-----
-
-`--condition` fills the report's list of matching vulnerabilities. A match does not fail `report`; use `match-condition` to fail a CI job. `--format pdf` or `--format html` overrides the format implied by the template extension.
-
-Multiple reports can be generated in one command:
-
-[source,shell]
-----
-./vulnscout -p demo report summary.adoc all_assessments.adoc
-----
-
-Reports are written to the outputs directory (default: `.vulnscout/outputs/`).
-
-See the link:doc/source/templates.md[report templates documentation] for documentation on writing custom report templates.
-
-===  Exporting SBOM Files
-
-VulnScout can export the enriched project data as standard SBOM formats. Exported files are written to the outputs directory (default: `.vulnscout/outputs/`).
-
-[source,shell]
-----
-# Export as SPDX 3.0 SBOM
-./vulnscout -p demo export spdx
-
-# Export as CycloneDX 1.6 SBOM
-./vulnscout -p demo export cdx
-
-# Export as OpenVEX document (vulnerabilities + assessments)
-./vulnscout -p demo export openvex
-----
-
-One `export` call can write several formats:
-
-[source,shell]
-----
-./vulnscout -p demo export spdx cdx openvex
-----
-
-===  Exporting and Importing Custom Assessments
-
-VulnScout lets you export and re-import the assessments you have manually created through the web interface (review / triage decisions). This is useful for:
-
-* Backing up your review work before re-importing SBOMs.
-* Sharing assessment decisions across different VulnScout instances.
-* Restoring triage state in CI pipelines after a database reset.
-
-==== VulnScout JSON
-
-`export custom-data` exports custom assessments, CVSS scores, and time estimates as one VulnScout JSON file. It includes every variant in the selected project unless `-v` is provided.
-
-[source,shell]
-----
-# Export all project variants
-./vulnscout -p demo export custom-data
-
-# Export one variant
-./vulnscout -p demo -v x86 export custom-data
-
-# Update the existing export with current review data
-./vulnscout -p demo export custom-data --amend
-----
-
-Add `--amend` to reconcile current review data with the existing file in the output directory. The file must already exist at the path produced by the same export scope. Existing records retain stable ordering and extension fields while updated and new records are incorporated.
-
-`import custom-data` restores entries according to the variant metadata stored in the file, so it rejects `-v`. Imported assessments use the current system time by default. Add `--timestamps original` to preserve assessment timestamps from the file; `--timestamps current` selects the default explicitly.
-
-Current version 2 exports identify assessment targets by variant name and package, without instance-local variant UUIDs, so they can be shared between VulnScout installations. Legacy version 1 files remain importable; unsupported future versions are rejected explicitly.
-
-[source,shell]
-----
-./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json
-
-./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json --timestamps original
-----
-
-==== OpenVEX
-
-OpenVEX custom-assessment transfers operate on one JSON document. With `-v`,
-`export custom-openvex` writes that variant; without it, it writes one document
-per variant that has custom assessments (`custom_openvex_<variant>.json`), and
-removes the file of a variant that no longer has any. `import
-custom-openvex` imports into `-v`, or into the project's only variant when `-v`
-is omitted. If the project has several variants, it exits with code 1 and lists
-them; import each per-variant file with its own `-v`.
-
-[source,shell]
-----
-# Export a variant
-./vulnscout -p demo -v x86 export custom-openvex
-
-# Update the existing OpenVEX export
-./vulnscout -p demo -v x86 export custom-openvex --amend
-
-# Import into a variant
-./vulnscout -p demo -v x86 import custom-openvex /path/to/custom_openvex_x86.json
-
-# Ignore OpenVEX statement timestamps and use the current system time
-./vulnscout -p demo -v x86 import custom-openvex /path/to/custom_openvex_x86.json --timestamps current
-----
-
-For OpenVEX exports, `--amend` preserves the document ID and statement ordering from the existing output file and increments its version.
-
-OpenVEX imports preserve statement timestamps by default. Add
-`--timestamps current` to use the current system time, or
-`--timestamps original` to select the default explicitly.
-
-A typical restore runs one command per step:
-
-[source,shell]
-----
-./vulnscout -p demo add --spdx /path/to/sbom.spdx.json
-./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json
-./vulnscout -p demo export spdx
-./vulnscout -p demo report summary.adoc
-----
-
-Exports and reports now run after the import. The legacy call ran them before it.
-
-=== Configuration
-
-==== Configuration Commands
-
-Persistent configuration is stored in `.vulnscout/cache/config.env` and is automatically loaded on each run.
-
-[source,shell]
-----
-# Set a config value
-./vulnscout config set <key> <value>
-
-# Print one value
-./vulnscout config get <key>
-
-# List current configuration (sensitive values masked)
-./vulnscout config list
-
-# Remove a config key
-./vulnscout config unset <key>
-----
-
-Example — set an NVD API key for higher rate limits:
-
-[source,shell]
-----
-./vulnscout config set NVD_API_KEY abc123
-----
-
-==== Environment Variables
-
-The following environment variables can be set via `vulnscout config` or exported before running:
-
-.Container & runtime
-[cols="1,2,1"]
-|===
-|Variable |Description |Default
-
-|`VULNSCOUT_CONTAINER`
-|Name of the Docker container
-|`vulnscout`
-
-|`VULNSCOUT_IMAGE`
-|Docker image to use
-|`docker.io/sflinux/vulnscout:v0.23`
-
-|`VULNSCOUT_BUILD_DIR`
-|Root build directory on the host (parent of `cache/` and `outputs/`)
-|`./.vulnscout`
-
-|`VULNSCOUT_OUTPUTS_DIR`
-|Directory for output files on the host
-|`$VULNSCOUT_BUILD_DIR/outputs`
-
-|`VULNSCOUT_CACHE_DIR`
-|Cache directory on the host (holds the SQLite database and config)
-|`$VULNSCOUT_BUILD_DIR/cache`
-
-|`FLASK_RUN_PORT`
-|Port the web UI listens on
-|`7275`
-
-|`FLASK_RUN_HOST`
-|Host address for the web UI
-|`0.0.0.0`
-
-|`VITE_API_URL`
-|Backend API URL used by the dev frontend
-|`http://localhost:7275`
-
-|`USER_UID`
-|UID used to write output files (avoids permission issues)
-|current user
-
-|`USER_GID`
-|GID used to write output files
-|current group
-|===
-
-.Scan & enrichment
-[cols="1,2,1"]
-|===
-|Variable |Description |Default
-
-|`NVD_API_KEY`
-|NVD API key for higher rate limits (https://nvd.nist.gov/developers/request-an-api-key)
-|_(none)_
-
-|`GRYPE_MEMLIMIT`
-|Cap the RAM used by the `grype` binary (Go soft memory limit, `GOMEMLIMIT`). Accepts the same unit strings as Go: `4GiB`, `8192MiB`, plain bytes. Set to `off` to disable. Default (unset): auto (~80 % of the container/cgroup memory limit, recommended for CI).
-|_(auto)_
-
-|`IGNORE_PARSING_ERRORS`
-|Continue scanning even if input files contain errors
-|`false`
-
-|`VERBOSE_MODE`
-|Enable verbose logging in the container
-|`false`
-|===
-
-.Report metadata
-[cols="1,2,1"]
-|===
-|Variable |Description |Default
-
-|`PRODUCT_NAME`
-|Product name embedded in generated reports and SBOMs
-|_(none)_
-
-|`PRODUCT_VERSION`
-|Product version embedded in generated reports
-|_(none)_
-
-|`AUTHOR_NAME`
-|Author/company name embedded in reports
-|_(none)_
-
-|`CLIENT_NAME`
-|Customer/client company name embedded in reports (optional, may be empty)
-|_(none)_
-
-|`CONTACT_EMAIL`
-|Contact email embedded in reports
-|_(none)_
-
-|`DOCUMENT_URL`
-|URL embedded in exported SBOM documents
-|_(none)_
-|===
-
-==== HTTP Proxy Configuration
-
-If you want to run VulnScout with an HTTP proxy, set variables in the config:
-
-[source,shell]
-----
-./vulnscout config set HTTP_PROXY http://proxy.example.com:8080
-./vulnscout config set HTTPS_PROXY http://proxy.example.com:8080
-./vulnscout config set NO_PROXY localhost,127.0.0.1
-----
-
-Or pass them directly as environment variables when calling `vulnscout`.
-
-== :mag_right: Architecture
-
-image::doc/source/_static/architecture_with_logo.png[An architecture diagram showing different components of the VulnScout app]
-
-=== :inbox_tray: Supported input files
-
-* SPDX 2.3 (Packages) - JSON and tag-value formats
-* SPDX 3.0 (Packages + vulnerabilities)
-* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
-* Grype native JSON format (Packages + vulnerabilities)
-* Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
-
-=== :outbox_tray: Supported output files
-
-* SPDX 2.3 (Packages)
-* SPDX 3.0 (Packages + vulnerabilities)
-* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
-* openVex (vulnerabilities + assessments)
-* All reports: Asciidoc, HTML, PDF
-* Summary: Asciidoc, HTML, PDF
-* Time estimates: csv
-* Vulnerabilities: csv, txt
-
-=== :bar_chart: Vulnerability Data Sources
-
-.The tool pulls vulnerability and risk data from multiple trusted sources:
-
-* NVD (National Vulnerability Database)
-* All data sources supported by Grype
-* EPSS (Exploit Prediction Scoring System)
-* Information embedded in input files
-
-=== :pencil: Custom CVSS Scoring
-
-VulnScout allows you to add a custom CVSS vector string to a vulnerability, enabling organisation-specific vulnerability scoring.
-
-== :clipboard: Licence
-
-`Copyright (C) 2017-2026 Savoir-faire Linux, Inc.` +
-VulnScout is released under the GPL-3.0 license.
-
-image::./doc/source/_static/SFL.jpeg[fit]
+image::doc/source/_static/SFL.jpeg[Savoir-faire Linux,width=160]

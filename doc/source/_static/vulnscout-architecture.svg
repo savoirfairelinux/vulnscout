@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="980" viewBox="0 0 1440 980" role="img" aria-labelledby="architecture-title architecture-description">
+  <title id="architecture-title">VulnScout architecture</title>
+  <desc id="architecture-description">The host CLI invokes the container entrypoint, while the React browser interface calls the Flask API. Both use shared core services, scanning and enrichment, and host-backed storage. The embedded Agent uses the GitHub Copilot SDK and runtime, communicates with an AI provider, and invokes the bundled MCP server over stdio. MCP tools call the Flask REST API. Optional external MCP clients use a bundled launcher on their own host.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#536477"/>
+    </marker>
+    <marker id="tool-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#2a7d96"/>
+    </marker>
+  </defs>
+  <g font-family="Arial, sans-serif">
+    <text x="40" y="30" fill="#172d46" font-size="26" font-weight="700">VulnScout architecture</text>
+    <rect x="20" y="220" width="1100" height="580" rx="18" fill="#f4f8fb" stroke="#2f96b3" stroke-width="2"/>
+    <text x="1100" y="250" fill="#36475a" font-size="16" text-anchor="end">VulnScout container (Docker or Podman)</text>
+
+    <g fill="#ffffff" stroke="#c5ced8" stroke-width="1.5">
+      <rect x="40" y="54" width="260" height="100" rx="10"/>
+      <rect x="420" y="54" width="280" height="100" rx="10"/>
+      <rect x="800" y="54" width="280" height="100" rx="10" stroke-dasharray="6 4"/>
+      <rect x="40" y="280" width="260" height="110" rx="10"/>
+      <rect x="420" y="280" width="280" height="110" rx="10"/>
+      <rect x="420" y="480" width="280" height="110" rx="10"/>
+      <rect x="40" y="660" width="280" height="110" rx="10"/>
+      <rect x="420" y="660" width="280" height="110" rx="10"/>
+      <rect x="800" y="660" width="280" height="110" rx="10"/>
+      <rect x="1160" y="280" width="260" height="110" rx="10"/>
+      <rect x="40" y="850" width="280" height="100" rx="10"/>
+      <rect x="800" y="850" width="280" height="100" rx="10"/>
+    </g>
+    <g fill="#f2f9fb" stroke="#2a7d96" stroke-width="1.5">
+      <rect x="800" y="280" width="280" height="110" rx="10"/>
+      <rect x="800" y="480" width="280" height="110" rx="10"/>
+    </g>
+
+    <g fill="none" stroke="#536477" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M 170 158 V 276"/>
+      <path d="M 560 158 V 276" marker-start="url(#arrow)"/>
+      <path d="M 304 335 H 344 V 510 H 416"/>
+      <path d="M 560 394 V 476" marker-start="url(#arrow)"/>
+      <path d="M 704 335 H 796" marker-start="url(#arrow)"/>
+      <path d="M 1084 335 H 1156" marker-start="url(#arrow)"/>
+      <path d="M 416 560 H 180 V 656" marker-start="url(#arrow)"/>
+      <path d="M 560 594 V 656" marker-start="url(#arrow)"/>
+      <path d="M 660 594 V 620 H 760 V 715 H 796" marker-start="url(#arrow)"/>
+      <path d="M 180 774 V 846" marker-start="url(#arrow)"/>
+      <path d="M 940 774 V 846"/>
+      <path d="M 940 158 V 188 H 770 V 250 H 660 V 276" stroke-dasharray="6 4"/>
+    </g>
+    <g fill="none" stroke="#2a7d96" stroke-width="2" marker-end="url(#tool-arrow)">
+      <path d="M 940 394 V 476" marker-start="url(#tool-arrow)"/>
+      <path d="M 796 535 H 748 V 430 H 660 V 394" stroke-dasharray="6 4"/>
+    </g>
+
+    <g fill="#536477" font-size="16">
+      <text x="184" y="205">exec entrypoint</text>
+      <text x="574" y="205">REST API / chat streams</text>
+      <text x="850" y="180">HTTP via launcher</text>
+      <text x="350" y="447">Python commands</text>
+      <text x="708" y="325">sessions</text>
+      <text x="1091" y="325">AI API</text>
+      <text x="572" y="631">read / write</text>
+      <text x="770" y="650">persist</text>
+      <text x="192" y="827">APIs / repositories</text>
+      <text x="952" y="827">exports</text>
+    </g>
+    <g fill="#2a7d96" font-size="16">
+      <text x="952" y="447">stdio MCP</text>
+      <text x="754" y="422">HTTP tool calls</text>
+    </g>
+
+    <g text-anchor="middle">
+      <g fill="#172d46" font-size="22" font-weight="700">
+        <text x="170" y="86">Host CLI / CI</text>
+        <text x="560" y="86">Browser / React UI</text>
+        <text x="940" y="86">External MCP client</text>
+        <text x="170" y="313">Container entrypoint</text>
+        <text x="560" y="313">Flask REST API</text>
+        <text x="940" y="313">GitHub Copilot SDK</text>
+        <text x="1290" y="307">AI providers</text>
+        <text x="560" y="513">Core services</text>
+        <text x="940" y="513">Bundled MCP server</text>
+        <text x="180" y="692">Scanning / enrichment</text>
+        <text x="560" y="692">SQLite database</text>
+        <text x="940" y="692">Persisted files</text>
+        <text x="180" y="883">Advisory sources</text>
+        <text x="940" y="883">Output artifacts</text>
+      </g>
+      <g fill="#36475a" font-size="17">
+        <text x="170" y="115">./vulnscout</text>
+        <text x="170" y="139">Docker / Podman lifecycle</text>
+        <text x="560" y="115">Review, context, and Agent chat</text>
+        <text x="560" y="139">http://localhost:7275</text>
+        <text x="940" y="115">Optional client + stdio launcher</text>
+        <text x="940" y="139">Bundled code on the client host</text>
+        <text x="170" y="343">Import and command dispatch</text>
+        <text x="170" y="367">src/entrypoint.sh</text>
+        <text x="560" y="343">Web operations and Agent routes</text>
+        <text x="560" y="367">Validated project / variant scope</text>
+        <text x="940" y="343">Session + agent runtime</text>
+        <text x="940" y="367">Provider calls and MCP tools</text>
+        <text x="1290" y="332">GitHub Copilot</text>
+        <text x="1290" y="355">OpenAI / Foundry / Anthropic</text>
+        <text x="1290" y="378">Local compatible model</text>
+        <text x="560" y="543">Imports, findings, assessments</text>
+        <text x="560" y="567">Scans, policy, exports</text>
+        <text x="940" y="543">Scoped tools over stdio</text>
+        <text x="940" y="567">vulnscout_mcp/server.py</text>
+        <text x="180" y="719">Grype, NVD, OSV, sbom-cve-check</text>
+        <text x="180" y="745">NVD, EPSS, EUVD, GHSA refresh</text>
+        <text x="560" y="719">Inventory, findings, assessments</text>
+        <text x="560" y="745">History in host-backed cache</text>
+        <text x="940" y="719">Config, uploaded source, caches</text>
+        <text x="940" y="745">Host-backed cache and outputs</text>
+        <text x="180" y="911">Advisory APIs and database repos</text>
+        <text x="180" y="935">Scanner feeds and metadata</text>
+        <text x="940" y="911">Reports, enriched SBOMs, VEX</text>
+        <text x="940" y="935">Assessment-exchange data</text>
+      </g>
+    </g>
+  </g>
+</svg>
