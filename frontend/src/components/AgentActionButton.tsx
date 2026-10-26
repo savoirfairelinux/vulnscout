@@ -16,18 +16,19 @@ type Props = {
     icon?: IconDefinition;
     className?: string;
     iconClassName?: string;
+    openView?: 'chat' | 'conversations';
 };
 
 const stateText = (state: AgentActionState) => state.status === 'queued' ? `queued, position ${state.position}` : state.status;
 
 /** One look and behaviour for every AI action button: idle, preparing, queued, running or failed. */
 export default function AgentActionButton({
-    state, label, name = label, onRun, disabled = false, title, preparing, icon = faWandMagicSparkles, className = '', iconClassName = '',
+    state, label, name = label, onRun, disabled = false, title, preparing, icon = faWandMagicSparkles, className = '', iconClassName = '', openView = 'chat',
 }: Readonly<Props>) {
     const content = preparing ? <><FontAwesomeIcon icon={faCircleNotch} spin className={iconClassName} />{preparing}</>
-        : state?.status === 'running' ? <><FontAwesomeIcon icon={faCircleNotch} spin className={iconClassName} />Running…</>
-        : state?.status === 'failed' ? <><FontAwesomeIcon icon={faTriangleExclamation} className={iconClassName} />Failed · view</>
-        : state?.status === 'queued' ? <><FontAwesomeIcon icon={faHourglassHalf} className={iconClassName} />Queued · #{state.position}</>
+        : state?.status === 'running' ? <><FontAwesomeIcon icon={faCircleNotch} spin className={iconClassName} />{label}<span className="text-xs font-normal">Running…</span></>
+        : state?.status === 'failed' ? <><FontAwesomeIcon icon={faTriangleExclamation} className={iconClassName} />{label}<span className="text-xs font-normal">Failed · view</span></>
+        : state?.status === 'queued' ? <><FontAwesomeIcon icon={faHourglassHalf} className={iconClassName} />{label}<span className="text-xs font-normal">Queued · #{state.position}</span></>
         : <><FontAwesomeIcon icon={icon} className={iconClassName} />{label}</>;
     const hint = state?.status === 'running' ? 'Running in the agent chat. Click to follow the conversation.'
         : state?.status === 'failed' ? 'Failed. Click to retry or remove it in the agent chat.'
@@ -35,7 +36,7 @@ export default function AgentActionButton({
         : title;
     return <button
         type="button"
-        onClick={() => state ? openAgentChat(state.taskId) : onRun()}
+        onClick={() => state ? openAgentChat(openView === 'chat' ? state.taskId : undefined, openView) : onRun()}
         disabled={Boolean(preparing) || (!state && disabled)}
         aria-busy={Boolean(preparing) || state?.status === 'running'}
         aria-label={preparing ? `${name} (preparing)` : state ? `${name} (${stateText(state)})` : name}

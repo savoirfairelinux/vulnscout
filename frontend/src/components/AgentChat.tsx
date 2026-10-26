@@ -87,7 +87,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     const followMessages = useRef(true);
     const failedTask = sharedQueue.find(item => item.status === 'failed');
     const failedQueuedId = failedTask?.id;
-    const threadBusy = Boolean(pendingMessage);
+    const queueRunning = sharedQueue.some(item => item.status === 'running');
     const mainBusy = sharedQueue.some(item => item.conversationId === MAIN_CONVERSATION);
     const ready = Boolean(state?.authenticated && state.configured && models.length && selectedModel && !showConnections);
     const pageLabel = pageLabels[context.page] ?? context.page;
@@ -352,7 +352,8 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             }));
             enqueueAgentMessages(actions, context, ids.length > 1 ? 'Displayed vulnerabilities' : `Vulnerability ${ids[0]}`, 'per-action');
             setError('');
-            if (actions[0] && findAgentTask(actions[0].id)) openAgentChat(actions[0].id);
+            if (ids.length > 1) openAgentChat(undefined, 'conversations');
+            else if (actions[0] && findAgentTask(actions[0].id)) openAgentChat(actions[0].id);
         } catch (reason) {
             setError(errorMessage(reason));
         }
@@ -388,7 +389,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
 
     useEffect(() => {
         if (!chatRequest.nonce) return;
-        setView('chat');
+        setView(chatRequest.view ?? 'chat');
         if (!chatRequest.taskId) return;
         const task = findAgentTask(chatRequest.taskId);
         clearAgentChatFocus();
@@ -434,8 +435,23 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 {failedTask && <FontAwesomeIcon icon={faTriangleExclamation} className="absolute -right-0.5 top-0.5 h-2.5 w-2.5 text-amber-500" />}
                 {queueActive
                     ? <span className="agent-walker" data-testid="ai-queue-walking" aria-hidden="true">
-                        <FontAwesomeIcon icon={faPersonWalking} className="agent-walker-stride" />
-                        <FontAwesomeIcon icon={faPerson} className="agent-walker-step" />
+                        <svg className="agent-walker-motion" viewBox="0 0 24 34" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="4" r="2.5" fill="currentColor" stroke="none" />
+                            <path d="M12 10L12 19" strokeWidth="4" />
+                            <path d="M12 11L12 16L14 19" opacity="0.55">
+                                <animateTransform attributeName="transform" type="rotate" values="-22 12 11;22 12 11;-22 12 11" dur="1.6s" repeatCount="indefinite" />
+                            </path>
+                            <path d="M12 19L14 25L16 30" opacity="0.55" className="agent-walker-leg">
+                                <animate attributeName="d" values="M12 19L14 25L16 30;M12 19L15 23L12 28;M12 19L10 25L8 30;M12 19L12 25L12 30;M12 19L14 25L16 30" dur="1.6s" repeatCount="indefinite" />
+                            </path>
+                            <path d="M12 11L12 16L14 19">
+                                <animateTransform attributeName="transform" type="rotate" values="22 12 11;-22 12 11;22 12 11" dur="1.6s" repeatCount="indefinite" />
+                            </path>
+                            <path d="M12 19L10 25L8 30" className="agent-walker-leg">
+                                <animate attributeName="d" values="M12 19L10 25L8 30;M12 19L12 25L12 30;M12 19L14 25L16 30;M12 19L15 23L12 28;M12 19L10 25L8 30" dur="1.6s" repeatCount="indefinite" />
+                            </path>
+                        </svg>
+                        <FontAwesomeIcon icon={faPersonWalking} className="agent-walker-still" />
                     </span>
                     : <FontAwesomeIcon icon={faPerson} data-testid="ai-queue-idle" />}
                 <span className="ml-1 text-xs">{sharedQueue.length}</span>
@@ -461,6 +477,15 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             }} disabled={busy || modelBusy || mainBusy || !state || (inMain && !conversation.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
             <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>
         </header>
+        {state?.authenticated && state.configured && !showConnections && <div className="flex shrink-0 items-center gap-2 border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
+            <label htmlFor={`${composerId}-model`} className="text-xs text-neutral-500 dark:text-neutral-400">Model</label>
+            <select id={`${composerId}-model`} aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || queueRunning || !models.length} title={queueRunning ? 'Wait for the running request to finish before changing models' : 'Select the AI model'} className="min-w-0 flex-1 truncate rounded border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900">
+                {!selectedModel && <option value="">Select a model</option>}
+                {!models.length && selectedModel && <option value={selectedModel}>{error ? 'Models unavailable' : 'Loading models...'}</option>}
+                {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+            </select>
+            {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
+        </div>}
         <dialog ref={confirmation} aria-labelledby={discardTitleId} aria-describedby={discardDescriptionId} className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
             if (event.key === 'Escape') {
                 event.preventDefault();
@@ -630,7 +655,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                         : <button type="submit" form={providerFormId} disabled={busy} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">Verify connection</button>}
         </div>}
 
-        {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model in the message box to start chatting.</p>}
+        {state?.authenticated && state.provider && !selectedModel && !showConnections && models.length > 0 && <p role="status" className="px-4 py-2 text-xs text-neutral-500 dark:text-neutral-400">Choose a model above to start chatting.</p>}
 
         {failedTask && failedTask.conversationId !== conversation.id && <div role="status" className="mx-4 mb-3 flex items-center gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
             <FontAwesomeIcon icon={faTriangleExclamation} />
@@ -658,13 +683,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">
                 <textarea ref={composer} id={composerId} rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || Boolean(failedQueuedId) || conversation.archived} placeholder={failedQueuedId ? 'AI queue paused: retry or remove the failed action' : inMain ? 'Ask about this view...' : 'Follow up in this conversation...'} className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
                 <div className="mt-2 flex min-w-0 items-center gap-2">
-                    <select aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || threadBusy || !models.length} className="min-w-0 flex-1 truncate rounded border-0 bg-transparent py-2 pl-1 pr-6 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:bg-neutral-900">
-                        {!selectedModel && <option value="">Select a model</option>}
-                        {!models.length && selectedModel && <option value={selectedModel}>{error ? 'Models unavailable' : 'Loading models...'}</option>}
-                        {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-                    </select>
-                    {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
-                    <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || Boolean(failedQueuedId) || conversation.archived} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
+                    <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || Boolean(failedQueuedId) || conversation.archived} className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
                 </div>
             </div>
             {conversation.messages.length > 0 && <details className="text-xs text-neutral-500 dark:text-neutral-400"><summary className="w-fit cursor-pointer">Conversation usage</summary><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 tabular-nums"><span>{conversation.usage.cost == null ? 'Cost not reported' : `SDK cost ${conversation.usage.cost.toFixed(4)}`}</span><span>{conversation.usage.input_tokens?.toLocaleString() ?? '—'} input tokens</span><span>{conversation.usage.output_tokens?.toLocaleString() ?? '—'} output tokens</span></div></details>}

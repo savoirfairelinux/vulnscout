@@ -1123,18 +1123,21 @@ def _stream_reply(key, conversation, agent_prompt, user_message, path, model, sc
                                           {"role": "assistant", "content": reply}))
             conversation.model = model
             conversation.usage = usage
-            publish({"type": "done", "reply": reply, "model": model, "usage": usage})
+            terminal_event = {"type": "done", "reply": reply, "model": model, "usage": usage}
         except UnavailableModelError as exc:
-            publish({"type": "error", "error": str(exc)})
+            terminal_event = {"type": "error", "error": str(exc)}
         except Exception:
             logger.exception("Agent streaming request failed")
-            publish({"type": "error",
-                     "error": ("Agent request failed. Check the provider model, key, endpoint, and backend logs."
-                               if conversation.credentials.provider else
-                               "Agent request failed. Check Copilot sign-in, MCP server, and backend logs.")})
+            terminal_event = {
+                "type": "error",
+                "error": ("Agent request failed. Check the provider model, key, endpoint, and backend logs."
+                          if conversation.credentials.provider else
+                          "Agent request failed. Check Copilot sign-in, MCP server, and backend logs.")}
         finally:
             conversation.last_used = time.monotonic()
             conversation.lock.release()
+        # A terminal event lets the frontend immediately submit the next queued request.
+        publish(terminal_event)
 
     response = Response(_stream_events(events, disconnected), mimetype="application/x-ndjson",
                         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})

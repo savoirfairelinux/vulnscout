@@ -9,7 +9,7 @@ import AgentChat from '../../src/components/AgentChat';
 import { buildAssessmentReviewAction } from '../../src/helpers/aiAssessmentReview';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type { AgentContext } from '../../src/types/agent';
-import { clearAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentHistory, getAgentQueue, resetAgentQueue } from '../../src/handlers/agentQueue';
+import { clearAgentQueue, enqueueAgentMessages, getAgentConversation, getAgentHistory, getAgentQueue, openAgentChat, resetAgentQueue } from '../../src/handlers/agentQueue';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
 const signedIn = { authenticated: true, login: 'tester', configured: true, device_login: true,
@@ -151,11 +151,16 @@ test('connector wizard shows only the selected authentication fields', async () 
     expect(screen.getByRole('button', { name: /Use custom endpoint URL \(required\)/ })).toBeInTheDocument();
 });
 
-test('keeps model selection in the composer and exposes sign-out only through the plug', async () => {
+test('keeps model selection above both views and exposes sign-out only through the plug', async () => {
     const requests: string[] = [];
+    const modelRequests: unknown[] = [];
     global.fetch = async (input, options) => {
         const path = String(input);
-        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/models')) return jsonResponse({ models: [...models.models, { id: 'gpt-6-sol', name: 'GPT 6.0 Sol' }] });
+        if (path.endsWith('/model') && options?.method === 'POST') {
+            modelRequests.push(JSON.parse(String(options.body)));
+            return jsonResponse({ model: 'gpt-6-sol' });
+        }
         if (path.endsWith('/auth') && options?.method === 'DELETE') {
             requests.push(path);
             return jsonResponse({ cleanup_error: null });
@@ -165,7 +170,14 @@ test('keeps model selection in the composer and exposes sign-out only through th
     const { container } = render(<AgentChat context={context} onClose={() => undefined} />);
     const model = await screen.findByRole('combobox', { name: 'Agent model' });
     expect(container.querySelector('header')).not.toContainElement(model);
-    expect(screen.getByRole('textbox', { name: 'Message the agent' }).closest('form')).toContainElement(model);
+    expect(screen.getByRole('textbox', { name: 'Message the agent' }).closest('form')).not.toContainElement(model);
+    fireEvent.click(screen.getByRole('button', { name: 'AI queue (0)' }));
+    expect(screen.getByRole('combobox', { name: 'Agent model' })).toBe(model);
+    fireEvent.change(model, { target: { value: 'gpt-6-sol' } });
+    await waitFor(() => expect(model).toBeEnabled());
+    expect(model).toHaveValue('gpt-6-sol');
+    expect(modelRequests).toEqual([{ model: 'gpt-6-sol' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to conversation' }));
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
     expect(screen.queryByRole('combobox', { name: 'Agent model' })).not.toBeInTheDocument();
@@ -173,7 +185,7 @@ test('keeps model selection in the composer and exposes sign-out only through th
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     await screen.findByText('Select a connector');
     expect(requests).toEqual(['/api/agent/auth']);
-    expect(screen.queryByRole('button', { name: 'Configure model provider' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Configure model provider' })).not.toBeInTheDocument());
 });
 
 test('streams split NDJSON events without a write permission checkbox', async () => {
@@ -515,10 +527,19 @@ test('the conversations view lists every conversation and opens each one in the 
     ], context, 'Vulnerability selection', 'per-action'));
     await waitFor(() => expect(sent.map(item => item.message)).toEqual(['First request']));
     expect(screen.getByTestId('ai-queue-walking')).toBeInTheDocument();
+    const walker = screen.getByTestId('ai-queue-walking');
+    expect(walker).toHaveAttribute('aria-hidden', 'true');
+    expect(walker.querySelectorAll('animate, animateTransform')).toHaveLength(4);
+    for (const animation of walker.querySelectorAll('animate, animateTransform')) {
+        expect(animation).toHaveAttribute('dur', '1.6s');
+        expect(animation).toHaveAttribute('repeatCount', 'indefinite');
+    }
+    expect(walker.querySelector('.agent-walker-still')).toHaveAttribute('data-icon', 'person-walking');
+    expect(screen.getByRole('combobox', { name: 'Agent model' })).toBeDisabled();
 
-    // The walking person switches the panel to the conversation list, like a chat history.
+    // Bulk assessment requests open the list, not an arbitrary CVE conversation.
     const toggle = screen.getByRole('button', { name: 'AI queue (2)' });
-    fireEvent.click(toggle);
+    act(() => openAgentChat(undefined, 'conversations'));
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('heading', { name: 'Conversations' })).toBeInTheDocument();
     expect(screen.queryByRole('log', { name: 'Agent conversation' })).not.toBeInTheDocument();
@@ -534,6 +555,7 @@ test('the conversations view lists every conversation and opens each one in the 
     expect(log.getByText('Next request')).toBeInTheDocument();
     expect(log.getByRole('status')).toHaveTextContent('Waiting in the AI queue · #1');
     expect(log.getByText('Request details').closest('details')).toHaveTextContent('Targetsdefault · pkg@2');
+    expect(screen.getByRole('combobox', { name: 'Agent model' })).toBeDisabled();
 
     // The back arrow returns to the list; Escape returns to the conversation.
     fireEvent.click(screen.getByRole('button', { name: 'All conversations' }));
@@ -714,7 +736,7 @@ test('lists conversations by status with remove, clear and delete controls', asy
     ], context, 'Vulnerability CVE-1', 'per-action');
     render(<AgentChat onClose={() => undefined} context={context} />);
     await screen.findByText('Step 1 of 3');
-    expect(screen.getByTestId('ai-queue-walking')).toBeInTheDocument();
+    expect(screen.getByTestId('ai-queue-walking').querySelector('.agent-walker-motion')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'AI queue (2)' }));
 
     const list = within(screen.getByRole('navigation', { name: 'Conversations' }));
@@ -731,6 +753,7 @@ test('lists conversations by status with remove, clear and delete controls', asy
     expect(getAgentQueue()).toEqual([]);
     expect(list.getByText(/start their own conversations here/)).toBeInTheDocument();
     expect(screen.getByTestId('ai-queue-idle')).toBeInTheDocument();
+    expect(screen.getByTestId('ai-queue-idle')).toHaveAttribute('data-icon', 'person');
     expect(screen.queryByTestId('ai-queue-walking')).not.toBeInTheDocument();
     fireEvent.click(list.getByRole('button', { name: 'Open main conversation' }));
     expect(screen.getByRole('heading', { name: 'Agent chat' })).toBeInTheDocument();
@@ -784,10 +807,10 @@ test('Assess displayed and Assess vulnerability queue one conversation per vulne
     expect(first.context.view?.selectedVulnerabilityIds).toEqual(['CVE-1']);
     expect(first.conversationId).not.toBe(second.conversationId);
     expect(first.source).toBe('Displayed vulnerabilities');
-    // The chat follows the first request into its conversation.
-    expect(await screen.findByRole('heading', { name: 'Assess CVE-1' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Conversations' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open conversation Assess CVE-1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open conversation Assess CVE-2' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Assess displayed' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'All conversations' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open main conversation' }));
 
     rerender(<AgentChat context={{ ...context, view: { openVulnerabilityId: 'CVE-3' } }} onClose={() => undefined} />);

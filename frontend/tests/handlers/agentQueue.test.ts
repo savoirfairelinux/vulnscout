@@ -194,9 +194,9 @@ test('reports action positions and opens the chat on the conversation of a start
     openAgentChat('a');
     expect(getActiveConversationId()).toBe(queue[0].conversationId);
     clearAgentChatFocus();
-    expect(getAgentChatRequest()).toEqual({ nonce: 2 });
+    expect(getAgentChatRequest()).toEqual({ nonce: 2, taskId: undefined, view: 'chat' });
     openAgentChat();
-    expect(getAgentChatRequest()).toEqual({ nonce: 3, taskId: undefined });
+    expect(getAgentChatRequest()).toEqual({ nonce: 3, taskId: undefined, view: 'chat' });
     setActiveConversation('missing');
     expect(getActiveConversationId()).toBe(queue[0].conversationId);
     clearAgentQueue();

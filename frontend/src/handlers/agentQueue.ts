@@ -39,7 +39,7 @@ export type AgentConversation = {
 export type AgentConversationStatus = 'failed' | 'running' | 'queued' | 'idle';
 type Connection = { ready: boolean; model: string };
 /** A request to open the agent chat, optionally on one request of the AI queue. */
-export type AgentChatRequest = { nonce: number; taskId?: string };
+export type AgentChatRequest = { nonce: number; taskId?: string; view?: 'chat' | 'conversations' };
 
 const emptyUsage = (): AgentUsage => ({ cost: null, input_tokens: null, output_tokens: null });
 const newConversation = (id: string, title: string, extra: Partial<AgentConversation> = {}): AgentConversation => ({
@@ -85,16 +85,16 @@ export function conversationStatus(queue: AgentTask[], id: string): AgentConvers
 }
 
 /** Open the agent chat from anywhere in the app, optionally on one request and its conversation. */
-export function openAgentChat(taskId?: string) {
+export function openAgentChat(taskId?: string, view: 'chat' | 'conversations' = 'chat') {
     const task = taskId ? findAgentTask(taskId) : undefined;
     if (task && conversations[task.conversationId]) activeConversationId = task.conversationId;
-    chatRequest = { nonce: chatRequest.nonce + 1, taskId: task?.id };
+    chatRequest = { nonce: chatRequest.nonce + 1, taskId: task?.id, view };
     emit();
 }
 
 export function clearAgentChatFocus() {
     if (!chatRequest.taskId) return;
-    chatRequest = { nonce: chatRequest.nonce };
+    chatRequest = { ...chatRequest, taskId: undefined };
     emit();
 }
 
@@ -133,6 +133,7 @@ export function resetAgentQueue() {
     conversations = { [MAIN_CONVERSATION]: mainConversation() };
     activeConversationId = MAIN_CONVERSATION;
     connection = undefined;
+    chatRequest = { nonce: chatRequest.nonce };
     emit();
 }
 
