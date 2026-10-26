@@ -43,7 +43,7 @@ findings. Request vulnerability discovery after the import:
 Scanners may require network access and credentials. `all` includes NVD and
 sbom-cve-check local database setup: first use downloads the advisory databases,
 and updates run before each local scan by default. See
-[scanner setup and offline mode](vulnscout-script.md#performing-an-sbom-cve-check-scan).
+[scanner setup and offline mode](vulnerability-scanning.md#performing-an-sbom-cve-check-scan).
 Discovery does not automatically refresh all provider metadata; run
 `./vulnscout -p zephyr_demo -v mbedtls_native_sim refresh` when enrichment is needed.
 
@@ -113,5 +113,8 @@ or `not_affected`, so a view filtered to exploitable or unassessed vulnerabiliti
 can legitimately be empty. Clear status filters to inspect the imported findings
 and assessments. The BOM alone provides inventory, not vulnerability findings.
 
-See [VulnScout CLI](vulnscout-script.md) for input flags, scanner selection,
-metadata refresh, and container lifecycle commands.
+See [Input Sources](cli-inputs.md) for input flags,
+[Vulnerability Scanning](vulnerability-scanning.md) for scanner selection,
+[Refresh Vulnerability Data](vulnerability-data.md) for enrichment, and
+[Container Lifecycle and Configuration](cli-configuration.md) for container
+commands.
