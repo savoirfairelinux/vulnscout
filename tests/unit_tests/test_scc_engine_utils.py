@@ -534,7 +534,7 @@ class TestApplicableVulns:
 
         key = (frozenset({CompId(name="openssl")}), "1.1.1")
         engine._applicable_cache[key] = [("entry",)]
-        engine._verdict_cache[key] = {"CVE-2023-0001": "fixed"}
+        engine._verdict_cache[(*key, frozenset())] = {"CVE-2023-0001": "fixed"}
 
         with patch("src.controllers.scc_engine.build_comp_build", return_value=mock_build), \
              patch("src.controllers.scc_engine.ComputedVulnInfo") as MockCVI:
@@ -571,6 +571,27 @@ class TestApplicableVulns:
         # Both caches cleared then one new entry added.
         assert len(engine._applicable_cache) == 1
         assert len(engine._verdict_cache) <= 1
+
+    def test_different_compiled_sources_do_not_share_verdicts(self, tmp_path):
+        engine = self._make_bare_engine(tmp_path)
+        engine._manager._index_comp_vuln = {"lib": []}
+        key = (frozenset({CompId(name="lib")}), "1.0")
+        engine._applicable_cache[key] = [("entry",)]
+        build = MagicMock()
+        build.version = "1.0"
+        build.ids_for_matching.return_value = list(key[0])
+        computed = MagicMock()
+        computed.identifier = "CVE-2026-TEST"
+        with patch("src.controllers.scc_engine.build_comp_build", return_value=build), \
+                patch("src.controllers.scc_engine.ComputedVulnInfo", return_value=computed), \
+                patch.object(engine, "_vex_status_str", side_effect=["not_affected", "affected"]) as evaluate:
+            build.compiled_sources = {"safe.c"}
+            assert list(engine.applicable_vulns(MagicMock()))[0][1] == "not_affected"
+            build.compiled_sources = {"vulnerable.c"}
+            assert list(engine.applicable_vulns(MagicMock()))[0][1] == "affected"
+            build.compiled_sources = {"safe.c"}
+            assert list(engine.applicable_vulns(MagicMock()))[0][1] == "not_affected"
+            assert evaluate.call_count == 2
 
     def test_ids_not_in_index_excluded_from_key(self, tmp_path):
         """Identifiers whose name is absent from the index are excluded from the
