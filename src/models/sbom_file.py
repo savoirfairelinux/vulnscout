@@ -30,6 +30,16 @@ class SourceFileEvidence(TypedDict):
     builds: list[dict[str, Any]]
 
 
+def has_compilation_evidence(builds: list[dict[str, Any]]) -> bool:
+    """Recipe task inputs alone do not establish which source files were compiled."""
+    return any(
+        build.get("compiled", True) and not str(build.get("build_type", "")).startswith((
+            "http://openembedded.org/bitbake/", "https://openembedded.org/bitbake/",
+        ))
+        for build in builds
+    )
+
+
 class SBOMFile(Base):
     __tablename__ = "sbom_files"
 
