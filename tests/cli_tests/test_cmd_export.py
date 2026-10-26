@@ -47,6 +47,25 @@ def app(tmp_path, monkeypatch):
 class TestCmdExportCoverage:
     """flask export and flask report coverage."""
 
+    def test_export_colors_only_console_not_sbom(self, app, tmp_path, monkeypatch):
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("TERM", "xterm")
+        monkeypatch.setenv("_VULNSCOUT_COLOR_STDOUT", "1")
+        monkeypatch.setenv("_VULNSCOUT_COLOR_STDERR", "1")
+        with patch("src.bin.cmd_export.SPDX3") as spdx:
+            spdx.return_value.output_as_json.return_value = '{"sbom": true}'
+            result = app.test_cli_runner().invoke(args=[
+                "export", "--format", "spdx3", "--output-dir", str(tmp_path),
+                "--variant-id", "invalid",
+            ], color=True)
+
+        assert result.exit_code == 0, result.output
+        assert "\x1b[32mExport written:" in result.stdout
+        assert "\x1b[33mWarning: invalid variant id" in result.stderr
+        content = (tmp_path / "sbom_spdx_v3_0.spdx.json").read_text()
+        assert json.loads(content) == {"sbom": True}
+        assert "\x1b" not in content
+
     # ---- export_command ----
 
     def test_export_exception_handler(self, app, tmp_path):
@@ -63,20 +82,25 @@ class TestCmdExportCoverage:
 
     # ---- report_command ----
 
-    def test_report_adoc_written_as_plain_text(self, app, tmp_path):
+    @pytest.mark.parametrize("colored", [False, True])
+    def test_report_adoc_written_as_plain_text(self, app, tmp_path, monkeypatch, colored):
         """report_command auto-detects .adoc and writes plain text (line 157)."""
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("TERM", "xterm")
+        monkeypatch.setenv("_VULNSCOUT_COLOR_STDOUT", str(int(colored)))
         with patch("src.views.templates.Templates.render") as mock_render:
             mock_render.return_value = "= Title\nsome content"
             runner = app.test_cli_runner()
             result = runner.invoke(args=[
                 "report", "report.adoc", "--output-dir", str(tmp_path),
                 "--project", "default",
-            ])
+            ], color=True)
 
         out_file = tmp_path / "report.adoc"
         assert out_file.exists()
         assert out_file.read_text() == "= Title\nsome content"
         assert "Report written" in result.output
+        assert ("\x1b[32mReport written:" in result.stdout) == colored
 
     def test_report_pdf_output(self, app, tmp_path):
         """report_command writes PDF bytes when --format pdf is given (lines 160-163)."""
