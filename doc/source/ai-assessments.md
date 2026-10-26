@@ -189,7 +189,10 @@ references, the default, or paths; only the selected one is shown, the other is
 kept), environment and other information. The other tabs edit a STRIDE model:
 system text fields with Components and Interactions tables (System), a Threats
 table (Threat model) and a likelihood/impact/mitigation row per
-threat (Risks).
+threat (Risks). Required cells are marked with `*`: component name, interaction
+source and destination (two different components), threat STRIDE category and
+targets (at least one component or interaction), and risk threat. **Save changes** refuses to send a draft with a blank required
+cell; it opens the tab and explains each missing value next to its cell.
 
 Agents receive `threat_model` and `risks` as a plain-text rendering of these
 tables. `codebase_path` is only sent when the source is paths, and uploaded

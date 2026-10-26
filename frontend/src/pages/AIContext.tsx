@@ -12,7 +12,7 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 import { useLoadedDraft } from "../hooks/useLoadedDraft";
-import { draftFromContext, draftsEqual, emptyDraft, hasThreatModel } from "../helpers/strideModel";
+import { draftFromContext, draftsEqual, emptyDraft, hasThreatModel, requiredFieldErrors } from "../helpers/strideModel";
 import ContextSidebar from "../components/aiContext/ContextSidebar";
 import type { SidebarSelection } from "../components/aiContext/ContextSidebar";
 import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionPanel";
@@ -67,6 +67,7 @@ type SaveTarget =
 
 const DIRTY_PROJECT_AGENT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
 const DIRTY_VARIANT_AGENT_TEXT = "The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.";
+const FIX_FIELDS_TEXT = "Fix the highlighted fields before saving.";
 const EMPTY_VARIANT_DRAFT = emptyDraft();
 const NO_FILES: ContextFile[] = [];
 const sameText = (a: string, b: string) => a === b;
@@ -250,6 +251,14 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             setVariantTab('threat_model');
             return null;
         }
+        const missing = requiredFieldErrors(variantDraft.draft.stride);
+        const first = Object.keys(missing)[0];
+        if (first !== undefined) {
+            setFieldErrors(missing);
+            setVariantTab(tabForField(first));
+            showBanner(FIX_FIELDS_TEXT, "error");
+            return null;
+        }
         return { kind: 'variant', projectId, variantId: selected.id, draft: variantDraft.draft };
     };
 
@@ -270,12 +279,14 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             if (!unmountedRef.current) setAnnouncement("Saved.");
             return true;
         } catch (e: any) {
+            const fields = e instanceof ContextSaveError ? e.fields : {};
+            const first = Object.keys(fields)[0];
             if (e instanceof ContextSaveError && !unmountedRef.current && openKeyRef.current === key) {
-                setFieldErrors(e.fields);
-                const first = Object.keys(e.fields)[0];
+                setFieldErrors(fields);
                 if (first !== undefined) setVariantTab(tabForField(first));
             }
-            showBanner(e?.message || "Failed to save context.", "error");
+            // Field problems are shown inline; the raw server text joins their paths.
+            showBanner(first === undefined ? (e?.message || "Failed to save context.") : FIX_FIELDS_TEXT, "error");
             return false;
         } finally {
             if (!unmountedRef.current) setBusy(false);

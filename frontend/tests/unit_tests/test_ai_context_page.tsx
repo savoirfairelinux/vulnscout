@@ -547,7 +547,7 @@ describe('AIContext page', () => {
 
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
-            expect(await screen.findByText('Invalid variant context')).toBeInTheDocument();
+            expect(await screen.findByText('Fix the highlighted fields before saving.')).toBeInTheDocument();
             const environment = screen.getByLabelText('Environment');
             expect(environment).toHaveAttribute('aria-invalid', 'true');
             expect(environment).toHaveAccessibleDescription('must be text');
@@ -688,10 +688,10 @@ describe('AIContext page', () => {
                 .forEach(label => expect(screen.getByLabelText(label)).toBeInTheDocument());
             const components = screen.getByRole('table', { name: 'Components' });
             expect(within(components).getAllByRole('columnheader').map(h => h.textContent))
-                .toEqual(['ID', 'Name', 'Description / role', 'Trust zone', 'Remove']);
+                .toEqual(['ID', 'Name*', 'Description / role', 'Trust zone', 'Remove']);
             const interactions = screen.getByRole('table', { name: 'Interactions' });
             expect(within(interactions).getAllByRole('columnheader').map(h => h.textContent)).toEqual([
-                'ID', 'Name', 'Source', 'Destination', 'Interface / protocol', 'Data / commands', 'Trust boundary', 'Remove',
+                'ID', 'Name', 'Source*', 'Destination*', 'Interface / protocol', 'Data / commands', 'Trust boundary', 'Remove',
             ]);
         });
 
@@ -773,6 +773,38 @@ describe('AIContext page', () => {
             expect(within(source).getByRole('option', { name: 'C1: A' })).toBeEnabled();
         });
 
+        test('required cells are marked and optional ones are not', async () => {
+            await openSystemTab();
+            addComponent('A');
+            fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+
+            expect(screen.getByLabelText('Component C1 name')).toHaveAttribute('aria-required', 'true');
+            expect(screen.getByLabelText('Interaction I1 source')).toHaveAttribute('aria-required', 'true');
+            expect(screen.getByLabelText('Interaction I1 destination')).toHaveAttribute('aria-required', 'true');
+            expect(screen.getByLabelText('Interaction I1 name')).not.toHaveAttribute('aria-required');
+            expect(screen.getByLabelText('Component C1 trust zone')).not.toHaveAttribute('aria-required');
+        });
+
+        test('saving with blank required cells explains them inline without a request', async () => {
+            const { backend } = await openSystemTab();
+            addComponent('A');
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+            fireEvent.change(screen.getByLabelText('Interaction I1 source'), { target: { value: 'C1' } });
+            fireEvent.click(variantTab('Context'));
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('Fix the highlighted fields before saving.')).toBeInTheDocument();
+            expect(variantTab('System')).toHaveAttribute('aria-selected', 'true');
+            const destination = screen.getByLabelText('Interaction I1 destination');
+            expect(destination).toHaveAttribute('aria-invalid', 'true');
+            expect(destination).toHaveAccessibleDescription('Select a destination component.');
+            expect(screen.getByLabelText('Component C2 name')).toHaveAccessibleDescription('Enter a component name.');
+            expect(screen.getByLabelText('Interaction I1 source')).not.toHaveAttribute('aria-invalid');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+        });
+
         test('save 400 maps server paths to cells and opens the System tab', async () => {
             const { backend } = await openSystemTab({
                 variantPutError: {
@@ -785,7 +817,7 @@ describe('AIContext page', () => {
 
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
-            expect(await screen.findByText('Invalid variant context')).toBeInTheDocument();
+            expect(await screen.findByText('Fix the highlighted fields before saving.')).toBeInTheDocument();
             expect(variantTab('System')).toHaveAttribute('aria-selected', 'true');
             const cell = screen.getByLabelText('Component C1 name');
             expect(cell).toHaveAttribute('aria-invalid', 'true');
@@ -880,6 +912,15 @@ describe('AIContext page', () => {
         }
         const addThreat = () => fireEvent.click(screen.getByRole('button', { name: 'Add threat' }));
         const addRisk = () => fireEvent.click(screen.getByRole('button', { name: 'Add risk' }));
+        const addTargetedThreat = () => {
+            fireEvent.click(variantTab('System'));
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            fireEvent.change(screen.getByLabelText('Component C1 name'), { target: { value: 'Broker' } });
+            fireEvent.click(variantTab('Threat model'));
+            addThreat();
+            fireEvent.click(within(screen.getByRole('group', { name: 'Threat T1 targets' }))
+                .getByRole('checkbox', { name: 'C1 Broker' }));
+        };
         const saveBody = async (backend: Backend) => {
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
@@ -892,7 +933,7 @@ describe('AIContext page', () => {
 
             const table = screen.getByRole('table', { name: 'Threats' });
             expect(within(table).getAllByRole('columnheader').map(h => h.textContent))
-                .toEqual(['ID', 'STRIDE category', 'Description', 'Targets', 'Remove']);
+                .toEqual(['ID', 'STRIDE category*', 'Description', 'Targets*', 'Remove']);
             const category = screen.getByLabelText('Threat T1 STRIDE category');
             expect(within(category).getAllByRole('option').map(o => o.textContent)).toEqual([
                 'Spoofing', 'Tampering', 'Repudiation', 'Information disclosure', 'Denial of service',
@@ -901,17 +942,32 @@ describe('AIContext page', () => {
             expect(category).toHaveValue('spoofing');
         });
 
+        test('a threat without a target blocks the save and says so next to the cell', async () => {
+            const { backend } = await openStride();
+            addThreat();
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('Select at least one target.')).toBeInTheDocument();
+            expect(screen.getByRole('group', { name: 'Threat T1 targets' }))
+                .toHaveAccessibleDescription('Select at least one target.');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+        });
+
         test('selecting targets and category updates the saved threat', async () => {
             const { backend } = await openStride();
             fireEvent.click(variantTab('System'));
             fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
             fireEvent.change(screen.getByLabelText('Component C1 name'), { target: { value: 'Broker' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            fireEvent.change(screen.getByLabelText('Component C2 name'), { target: { value: 'Gateway' } });
             fireEvent.click(screen.getByRole('button', { name: 'Add interaction' }));
+            fireEvent.change(screen.getByLabelText('Interaction I1 source'), { target: { value: 'C1' } });
+            fireEvent.change(screen.getByLabelText('Interaction I1 destination'), { target: { value: 'C2' } });
             fireEvent.click(variantTab('Threat model'));
             addThreat();
 
             const targets = screen.getByRole('group', { name: 'Threat T1 targets' });
-            expect(within(targets).getAllByRole('checkbox')).toHaveLength(2);
+            expect(within(targets).getAllByRole('checkbox')).toHaveLength(3);
             fireEvent.click(within(targets).getByRole('checkbox', { name: 'C1 Broker' }));
             fireEvent.click(within(targets).getByRole('checkbox', { name: 'I1' }));
             fireEvent.click(within(targets).getByRole('checkbox', { name: 'I1' }));
@@ -968,14 +1024,14 @@ describe('AIContext page', () => {
 
         test('risk ratings show full text, store lowercase values and null for Not rated', async () => {
             const { backend } = await openStride();
-            addThreat();
+            addTargetedThreat();
             fireEvent.change(screen.getByLabelText('Threat T1 description'), { target: { value: 'x'.repeat(50) } });
             fireEvent.click(variantTab('Risks'));
             addRisk();
 
             const table = screen.getByRole('table', { name: 'Risks' });
             expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual([
-                'Threat', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision', 'Remove',
+                'Threat*', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision', 'Remove',
             ]);
             const likelihood = screen.getByLabelText('Risk 1 likelihood');
             expect(within(likelihood).getAllByRole('option').map(o => o.textContent))
@@ -1010,11 +1066,11 @@ describe('AIContext page', () => {
             prepare();
             fireEvent.click(variantTab('Context'));
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-            expect(await screen.findByText('Invalid variant context')).toBeInTheDocument();
+            expect(await screen.findByText('Fix the highlighted fields before saving.')).toBeInTheDocument();
         }
 
         test('threat 400 paths open the Threat model tab and mark the cells', async () => {
-            await failWith({ 'threats[0].target_ids': 'unknown target' }, addThreat);
+            await failWith({ 'threats[0].target_ids': 'unknown target' }, addTargetedThreat);
 
             expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
             expect(screen.getByRole('group', { name: 'Threat T1 targets' })).toHaveAccessibleDescription('unknown target');
@@ -1022,7 +1078,7 @@ describe('AIContext page', () => {
 
         test('risk 400 paths open the Risks tab and mark the cells', async () => {
             await failWith({ 'risks[0].likelihood': 'invalid rating' }, () => {
-                addThreat();
+                addTargetedThreat();
                 fireEvent.click(variantTab('Risks'));
                 addRisk();
             });
@@ -1034,14 +1090,14 @@ describe('AIContext page', () => {
         });
 
         test('a threat_model 400 error opens the Threat model tab and shows the message', async () => {
-            await failWith({ threat_model: 'A threat model is required.' }, addThreat);
+            await failWith({ threat_model: 'A threat model is required.' }, addTargetedThreat);
 
             expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
             expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('A threat model is required.')).toBeVisible();
         });
 
         test('an unrecognised or merely prefixed path falls back to the Context tab', async () => {
-            await failWith({ 'notesX': 'odd' }, addThreat);
+            await failWith({ 'notesX': 'odd' }, addTargetedThreat);
 
             expect(variantTab('Context')).toHaveAttribute('aria-selected', 'true');
         });

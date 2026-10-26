@@ -103,3 +103,23 @@ export function hasThreatModel(draft: VariantDraft): boolean {
         threats.length > 0
     );
 }
+
+/** Field path -> message for every blank required STRIDE field (paths match the server's). */
+export function requiredFieldErrors(model: StrideModel): Record<string, string> {
+    const errors: Record<string, string> = {};
+    model.components.forEach((c, i) => {
+        if (!hasText(c.name)) errors[`components[${i}].name`] = 'Enter a component name.';
+    });
+    model.interactions.forEach((row, i) => {
+        if (!hasText(row.source_id)) errors[`interactions[${i}].source_id`] = 'Select a source component.';
+        if (!hasText(row.destination_id)) errors[`interactions[${i}].destination_id`] = 'Select a destination component.';
+    });
+    model.threats.forEach((t, i) => {
+        if (!hasText(t.category)) errors[`threats[${i}].category`] = 'Select a STRIDE category.';
+        if (t.target_ids.length === 0) errors[`threats[${i}].target_ids`] = 'Select at least one target.';
+    });
+    model.risks.forEach((r, i) => {
+        if (!hasText(r.threat_id)) errors[`risks[${i}].threat_id`] = 'Select a threat.';
+    });
+    return errors;
+}
