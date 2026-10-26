@@ -658,7 +658,7 @@ describe('Packages Table', () => {
         render(<TablePackages preferenceScopeKey="dependency-default" packages={packages} />);
         const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
         expect(headers.slice(0, 6)).toEqual([
-            'Name', 'Release version', 'Source revision', 'Source Files', 'Dependency', 'Vulnerabilities',
+            'Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities',
         ]);
 
         await waitFor(() => expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length));
