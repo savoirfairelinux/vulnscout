@@ -131,6 +131,7 @@ async function openProjectDescription() {
 }
 
 async function openVariant1() {
+    fireEvent.click(await screen.findByRole('button', { name: 'Variant 1' }));
     await waitFor(() => expect(screen.getByLabelText('Variant description')).toBeInTheDocument());
 }
 
@@ -163,28 +164,29 @@ describe('AIContext page', () => {
         const user = userEvent.setup();
         renderPage({ projectId: 'p1', variantIds: ['v1'] });
         const locked = await screen.findByRole('button', { name: 'Variant 2' });
-        await waitFor(() => expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
 
         await user.click(locked);
         locked.focus();
         await user.keyboard('{Enter}');
         await user.keyboard(' ');
 
-        expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true');
+        expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true');
         expect(locked).not.toHaveAttribute('aria-current');
         expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
     });
 
-    test('initial selection is the first in-scope variant', async () => {
+    test('initial selection is the project description', async () => {
         const backend = mockBackend();
         const { setScope } = renderPage({ projectId: 'p1', variantIds: ['v2'] });
 
-        await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
-        expect(await screen.findByRole('region', { name: 'Variant 2' })).toBeInTheDocument();
-        await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
-        expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(0);
+        await waitFor(() => expect(screen.getByLabelText('Project description')).toHaveValue('Desc'));
+        expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true');
+        expect(requestsTo(backend, 'variant_id=')).toHaveLength(0);
 
-        // Whole-project scope: every variant is in scope, the first one opens.
+        // Widening the scope keeps the open item.
+        fireEvent.click(sidebarItem('Variant 2'));
+        await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
         setScope({ projectId: 'p1' });
         await waitFor(() => expect(screen.getByText('2 of 2 in scope')).toBeInTheDocument());
         expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true');
@@ -301,6 +303,7 @@ describe('AIContext page', () => {
         const backend = mockBackend();
         const onAgentContextChange = jest.fn();
         renderPage({ projectId: 'p1' }, onAgentContextChange);
+        await openVariant1();
         await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(1));
         await waitFor(() => expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
             selectedProjectId: 'p1', selectedProjectName: 'Project A',
@@ -320,15 +323,15 @@ describe('AIContext page', () => {
         expect(screen.queryByText(DIRTY_PROJECT_TEXT)).not.toBeInTheDocument();
     });
 
-    test('scope change removing the selected variant falls back to first in-scope', async () => {
+    test('scope change removing the selected variant falls back to the project description', async () => {
         mockBackend();
         const { setScope } = renderPage({ projectId: 'p1' });
-        await waitFor(() => expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
         fireEvent.click(sidebarItem('Variant 2'));
         await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
 
         setScope({ projectId: 'p1', variantIds: ['v1'] });
-        await waitFor(() => expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
         expect(sidebarItem('Variant 2')).toHaveAttribute('aria-disabled', 'true');
 
         // A scope applied after "Discard" drops the open item's edits.
@@ -357,9 +360,9 @@ describe('AIContext page', () => {
     });
 
     test.each([
-        ['a variant subset', ['v4'], 'Variant 4'],
-        ['the whole project', undefined, 'Variant 3'],
-    ])('a project switch scoped to %s opens its first in-scope variant once its list arrives', async (_label, variantIds, expected) => {
+        ['a variant subset', ['v4']],
+        ['the whole project', undefined],
+    ])('a project switch scoped to %s opens its project description once its list arrives', async (_label, variantIds) => {
         const p2List = deferred();
         const backend = mockBackend({
             projects: [...PROJECTS, { id: 'p2', name: 'Project B' }],
@@ -373,11 +376,9 @@ describe('AIContext page', () => {
         await waitFor(() => expect(requestsTo(backend, '/api/projects/p2/variants')).toHaveLength(1));
         await act(async () => { p2List.resolve(); });
 
-        await waitFor(() => expect(sidebarItem(expected)).toHaveAttribute('aria-current', 'true'));
-        expect(sidebarItem('Project description')).not.toHaveAttribute('aria-current');
-        await waitFor(() => expect(requestsTo(backend, `project_id=p2&variant_id=${expected === 'Variant 4' ? 'v4' : 'v3'}`)).toHaveLength(1));
-        expect(requestsTo(backend, 'project_id=p2&variant_id=v1')).toHaveLength(0);
-        expect(requestsTo(backend, '/api/projects/p2/context')).toHaveLength(0);
+        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(requestsTo(backend, '/api/projects/p2/context')).toHaveLength(1));
+        expect(requestsTo(backend, 'project_id=p2&variant_id=')).toHaveLength(0);
     });
 
     test('asks before importing while the open item has unsaved edits', async () => {
@@ -618,6 +619,7 @@ describe('AIContext page', () => {
                 holds: [{ fragment: '/api/projects/p2/variants', method: 'GET', until: p2List.promise }],
             });
             const { setScope } = renderPage({ projectId: 'p1' });
+            await openVariant1();
             const failSave = async () => {
                 await screen.findByRole('region', { name: 'Variant 1' });
                 fireEvent.change(await screen.findByLabelText('Environment'), { target: { value: 'Lab' } });
@@ -875,9 +877,10 @@ describe('AIContext page', () => {
 
             setScope({ projectId: 'p1', variantIds: ['v2'] });
 
-            await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
-            expect(await screen.findByRole('tab', { name: 'Context' })).toHaveAttribute('aria-selected', 'true');
+            await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
             expect(screen.queryByText('must be text')).not.toBeInTheDocument();
+            fireEvent.click(sidebarItem('Variant 2'));
+            expect(await screen.findByRole('tab', { name: 'Context' })).toHaveAttribute('aria-selected', 'true');
         });
     });
 
@@ -1288,6 +1291,7 @@ describe('AIContext page', () => {
         test('import shows summary banner and detail list, then reloads the open item', async () => {
             const backend = mockBackend();
             renderPage({ projectId: 'p1' });
+            await openVariant1();
             await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(1));
             fetchMock.mockResponseOnce(JSON.stringify({
                 imported: [{ project_name: 'Project A', variant_name: 'Variant 1' }],

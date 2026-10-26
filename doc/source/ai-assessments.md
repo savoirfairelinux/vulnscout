@@ -173,7 +173,9 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 
 The **AI Context** page uses a settings-style layout. The sidebar lists
 **Project description** and the variants of the selected project. Variants that
-are not ticked in the top-bar selector stay listed but locked. Selecting an item
+are not ticked in the top-bar selector stay listed but locked. The page opens on
+**Project description**, and returns to it when the open variant leaves the
+scope. Selecting an item
 opens its page; there is one **Save changes** button per page and no auto-save.
 Leaving a page with unsaved changes asks to Save, Discard or Cancel.
 

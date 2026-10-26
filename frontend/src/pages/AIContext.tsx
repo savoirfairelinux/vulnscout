@@ -205,16 +205,16 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const { reset: resetProject, reload: reloadProject } = projectDraft;
     const { reset: resetVariant, reload: reloadVariant } = variantDraft;
 
-    // Keep the selection inside the scope: the first in-scope variant, else the
-    // project description. A scope change only happens after the unsaved
-    // prompt was answered, so the open item's edits are dropped.
+    // Keep the selection inside the scope; otherwise open the project
+    // description. A scope change only happens after the unsaved prompt was
+    // answered, so the open item's edits are dropped.
     useEffect(() => {
         if (!projectId || variants === null) return;
         const ids = inScopeKey ? inScopeKey.split(',') : [];
         setSelection(prev => {
             const item = prev?.projectId === projectId ? prev.item : null;
             if (item?.kind === 'project' || (item?.kind === 'variant' && ids.includes(item.id))) return prev;
-            return { projectId, item: ids.length > 0 ? { kind: 'variant', id: ids[0] } : { kind: 'project' } };
+            return { projectId, item: { kind: 'project' } };
         });
         resetProject();
         resetVariant();
