@@ -1,16 +1,75 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Resolve SPDX 3 file/build evidence across companion documents of one scan."""
+"""Resolve SPDX file/build evidence across companion documents of one scan."""
 
 from collections import defaultdict
 import logging
+import re
 import uuid
 
 from ..extensions import db
 from ..models import Package, PackageSourceFile, SBOMDocument, SBOMFile, SBOMPackage
+from ..models.sbom_file import has_compilation_evidence
 
 logger = logging.getLogger(__name__)
+
+
+def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, str]) -> tuple[dict, dict[str, str]]:
+    """Adapt SPDX 2 containment without treating package provenance as compilation."""
+    from ..controllers.packages import _spdx_key
+
+    namespace = data.get('documentNamespace')
+    if not isinstance(namespace, str):
+        namespace = None
+    external_documents = {
+        ref['externalDocumentId']: ref['spdxDocument']
+        for ref in data.get('externalDocumentRefs') or []
+        if isinstance(ref, dict) and isinstance(ref.get('externalDocumentId'), str)
+        and isinstance(ref.get('spdxDocument'), str)
+    }
+
+    def key(ref: str) -> str:
+        qualified = _spdx_key(ref, namespace, external_documents)
+        return f'{qualified[0]}#{qualified[1]}' if qualified else f'{document.id}:{ref}'
+
+    graph: list[dict] = []
+    for package in data.get('packages') or []:
+        if not isinstance(package, dict) or not isinstance(package.get('SPDXID'), str):
+            continue
+        owner = key(package['SPDXID'])
+        graph.append({'type': 'software_Package', 'spdxId': owner})
+        graph.extend(
+            {'relationshipType': 'contains', 'from': owner, 'to': [key(ref)]}
+            for ref in package.get('hasFiles') or [] if isinstance(ref, str)
+        )
+    for file in data.get('files') or []:
+        if not isinstance(file, dict):
+            continue
+        ref = file.get('SPDXID')
+        graph.append({
+            'type': 'software_File', 'spdxId': key(ref) if isinstance(ref, str) else None,
+            'name': file.get('fileName'), '_file_properties': file,
+        })
+    for relation in data.get('relationships') or []:
+        if not isinstance(relation, dict):
+            continue
+        source, target = relation.get('spdxElementId'), relation.get('relatedSpdxElement')
+        if not isinstance(source, str) or not isinstance(target, str):
+            continue
+        kind = relation.get('relationshipType')
+        if kind == 'CONTAINED_BY':
+            source, target = target, source
+        if kind in {'CONTAINS', 'CONTAINED_BY'}:
+            graph.append({'relationshipType': 'contains', 'from': key(source), 'to': [key(target)]})
+    unknown_inventories = [
+        key(package['SPDXID']) for package in data.get('packages') or []
+        if isinstance(package, dict) and isinstance(package.get('SPDXID'), str)
+        and package.get('filesAnalyzed') is False
+    ]
+    return {'@graph': graph, '_compilation_complete': False, '_unknown_inventories': unknown_inventories}, {
+        key(ref): string_id for ref, string_id in references.items()
+    }
 
 
 def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str], dict[str, str]]]) -> None:
@@ -78,7 +137,8 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     for ref, (document, item) in nodes.items():
         if item.get('type') != 'software_File' or not isinstance(item.get('name'), str) or not item['name']:
             continue
-        file = SBOMFile(sbom_document_id=document.id, spdx_id=ref, path=item['name'], properties=item)
+        file = SBOMFile(sbom_document_id=document.id, spdx_id=ref, path=item['name'],
+                        properties=item.get('_file_properties', item))
         db.session.add(file)
         files[ref] = file
     contains: dict[str, set[str]] = defaultdict(set)
@@ -106,21 +166,31 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         inputs[build].add(source)
     output_files = {target for targets in outputs.values() for target in targets}
     input_files = {source for sources in inputs.values() for source in sources}
+    output_files.update(
+        ref for ref, file_owners in owners.items()
+        if any(nodes[owner][1].get('software_primaryPurpose') == 'install' for owner in file_owners)
+    )
     # West also lists intermediate objects as inputs without separate compiler
     # build nodes. They are retained as files, not evidence of compiled source.
     binaries = {
         ref for ref, file in files.items()
-        if file.path.lower().endswith(('.o', '.obj', '.a', '.so', '.dll', '.exe', '.elf', '.bin', '.hex', '.uf2'))
+        if file.path.lower().endswith((
+            '.o', '.obj', '.a', '.so', '.dylib', '.dll', '.exe', '.elf', '.bin', '.hex', '.uf2',
+        ))
+        or re.search(r'\.so(?:\.\d+)+$', file.path.lower())
+        or 'BINARY' in (file.properties.get('fileTypes') or [])
+        or file.properties.get('software_primaryPurpose') in {'executable', 'library', 'firmware', 'archive'}
     }
     artifacts = (output_files - input_files) | binaries
-    complete = not ambiguous and not malformed and all(
+    resolved = not ambiguous and not malformed and all(
         build in nodes and nodes[build][1].get('type') == 'build_Build' and target in nodes
         and (nodes[target][1].get('type') != 'software_File' or target in files)
         for build, target in edges['hasInput'] | edges['hasOutput']
     )
-    if not complete:
+    if not resolved:
         logger.warning("Incomplete SPDX build references in scan %s; compiled-source refinement disabled",
                        documents[0][0].scan_id)
+    complete = resolved and all(data.get('_compilation_complete', True) for _, data, *_ in documents)
     compiled: dict[str, list[dict]] = defaultdict(list)
     associations: dict[str, set[str]] = defaultdict(set)
     for ref in files:
@@ -135,18 +205,25 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         for source in sources:
             if source not in files or source in artifacts:
                 continue
-            compiled[source].append({
+            evidence = {
                 "spdx_id": build, "document_name": build_document.source_name,
                 "build_type": build_node.get('build_buildType'),
                 "parameters": build_node.get('build_parameter', []), "outputs": sorted(outputs[build]),
-            })
+            }
+            evidence["compiled"] = has_compilation_evidence([evidence])
+            compiled[source].append(evidence)
             associations[source].update(target_owners)
     db.session.flush()
     links = {(link.sbom_document_id, link.package_id): link for link in db.session.scalars(
         db.select(SBOMPackage).where(SBOMPackage.sbom_document_id.in_(document_ids))
     )}
-    for link in links.values():
-        link.compiled_sources_complete = complete
+    unknown = {
+        packages[ref] for _, data, *_ in documents for ref in data.get('_unknown_inventories', [])
+        if ref in packages
+    }
+    unknown -= {packages[owner] for file_owners in owners.values() for owner in file_owners}
+    for link_key, link in links.items():
+        link.compiled_sources_complete = None if link_key in unknown else complete
     rows: dict[tuple, PackageSourceFile] = {}
     for ref, package_refs in associations.items():
         file = files[ref]
@@ -154,7 +231,7 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
             document_id, package_id = packages[package_ref]
             if (document_id, package_id) not in links:
                 continue
-            if not compiled[ref]:
+            if not has_compilation_evidence(compiled[ref]):
                 links[document_id, package_id].compiled_sources_complete = False
             association_key = document_id, package_id, file.sbom_document_id, ref
             rows[association_key] = PackageSourceFile(

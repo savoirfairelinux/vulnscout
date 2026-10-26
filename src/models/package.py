@@ -14,6 +14,7 @@ from packageurl import PackageURL
 
 from ..extensions import db, Base
 from ..helpers.package_versions import PackageVersionInfo, git_revision_from_url, package_version_info
+from .sbom_file import has_compilation_evidence
 
 
 if typing.TYPE_CHECKING:
@@ -207,7 +208,7 @@ class Package(Base):
     def compiled_sources(self) -> set[str]:
         if not getattr(self, "_compiled_sources_complete", False):
             return set()
-        return {file["path"] for file in self.source_files or [] if file["builds"]}
+        return {file["path"] for file in self.source_files or [] if has_compilation_evidence(file["builds"])}
 
     def with_sbom_evidence(self, cpe: list[str] | None = None, purl: list[str] | None = None,
                            source_urls: list[str] | None = None,
@@ -357,7 +358,9 @@ class Package(Base):
             "source_revisions": list(self.source_revisions or []),
             "component_types": list(self.component_types),
             "source_file_count": len(self.source_files) if self.source_files is not None else None,
-            "compiled_source_file_count": len({file["path"] for file in self.source_files or [] if file["builds"]}),
+            "compiled_source_file_count": len({
+                file["path"] for file in self.source_files or [] if has_compilation_evidence(file["builds"])
+            }),
             "compiled_sources_complete": getattr(self, "_compiled_sources_complete", False),
             **self.version_info,
         }
