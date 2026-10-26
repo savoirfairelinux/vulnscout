@@ -9,13 +9,18 @@ with AI** (table selection, vulnerability modal, or the chat's **Assess
 vulnerability** and **Assess displayed**), and each assessment reviewed with
 **Review with AI** or **Review selected with AI**. Starting an action opens the
 chat on its conversation, where you can follow it and ask follow-up questions.
+Assessing multiple vulnerabilities opens **Conversations** instead, so you can
+see the whole queue and choose a conversation to follow.
 When a vulnerability modal is open, the chat docks on its right and the modal
 shrinks to stay visible beside it.
 
 All requests share one **AI queue** and run one at a time in submission order,
 each keeping the context captured when it was queued. The person button in the
-chat header stands still when the queue is empty or paused and walks while
-requests are being processed; a warning mark shows when the queue is paused.
+chat header shows a person walking in place when the queue has active work,
+with a slow, continuous walk cycle and no horizontal movement. At least one foot
+stays grounded throughout the cycle. Reduced-motion preferences replace the
+animation with a static walking-person icon. An empty or paused queue shows a
+standing-person icon; a warning mark shows when the queue is paused.
 Clicking it switches the panel to **Conversations**, a chat history like those of
 ChatGPT or Claude: the main conversation first, then every action conversation
 grouped into **Needs attention**, **Running**, **Waiting**, and **Finished**, with
@@ -32,9 +37,10 @@ Connection changes require an empty queue. The AI queue is separate from the
 navigation bar's scan/upload/export operation queue.
 
 Every AI action button in the app behaves the same way. Once its request is
-queued, the button shows **Queued · #N** (position in the AI queue), **Running…**,
-or **Failed · view**, and clicking it opens that request in the chat instead of
-queueing a duplicate. It returns to its normal label once the request finishes.
+queued, the button keeps its action label and adds **Queued · #N** (position in
+the AI queue), **Running…**, or **Failed · view**. Clicking it opens that request
+in the chat instead of queueing a duplicate; bulk assessments open the
+conversation list. The status disappears once the request finishes.
 A failed request appears in its conversation with its error, **Retry failed
 action**, and **Remove failed action**. The queue pauses until you retry or
 remove it, and other conversations show a banner linking to it.
@@ -70,8 +76,11 @@ use single quotes for literal dollar signs and backticks.
 Model selections made in the agent chatbox selector are also persisted as
 `AI_MODEL`, including GitHub Copilot (device sign-in or an existing CLI identity),
 and restored on restart. After restarting a non-GitHub provider that has no saved
-model, the composer requires an explicit selection rather than sending Copilot's
+model, the chat requires an explicit selection rather than sending Copilot's
 `auto` model ID to that provider.
+The **Model** selector above the chat stays visible in both the conversation and
+**Conversations** views. It lists the models available from the connected provider
+and is disabled while any request is running, including one in another conversation.
 
 From the repository root, with Python 3.11+ and Node.js 22 installed, create a
 separate local database for development:

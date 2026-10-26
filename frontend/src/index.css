@@ -6,35 +6,24 @@ html {
     font-size: 14px;
 }
 
-/* AI queue walker: alternate stride and upright poses with a small step bob and forward glide. */
 .agent-walker {
-    position: relative;
-    display: inline-block;
-    width: 1em;
-    height: 1em;
-    animation: agent-walk-glide 1s ease-in-out infinite;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5em;
+    height: 2.1em;
 }
-.agent-walker > svg {
-    position: absolute;
-    inset: 0;
-    margin: auto;
+.agent-walker-motion {
+    width: 100%;
+    height: 100%;
 }
-.agent-walker-stride { animation: agent-walk-stride 0.5s steps(1, end) infinite; }
-.agent-walker-step { opacity: 0; animation: agent-walk-step 0.5s steps(1, end) infinite; }
-@keyframes agent-walk-stride {
-    0% { opacity: 1; transform: translateY(0); }
-    50% { opacity: 0; }
-}
-@keyframes agent-walk-step {
-    0% { opacity: 0; }
-    50% { opacity: 1; transform: translateY(-0.08em); }
-}
-@keyframes agent-walk-glide {
-    0%, 100% { transform: translateX(-0.1em); }
-    50% { transform: translateX(0.1em); }
+.agent-walker .agent-walker-still {
+    display: none;
+    font-size: 1.5em;
 }
 @media (prefers-reduced-motion: reduce) {
-    .agent-walker, .agent-walker-stride, .agent-walker-step { animation: none; }
+    .agent-walker-motion { display: none; }
+    .agent-walker .agent-walker-still { display: inline-block; }
 }
 
 /* Keep modal overlays clear of the agent chat docked beside an open vulnerability (widths match #agent-panel). */

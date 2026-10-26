@@ -701,6 +701,44 @@ def test_streaming_validation_still_returns_json(client):
     assert response.is_json
 
 
+@pytest.mark.parametrize("outcome", ["done", "unavailable", "error"])
+def test_stream_releases_shared_lock_before_publishing_terminal_event(client, monkeypatch, tmp_path, outcome):
+    from src.routes import agent
+
+    server = tmp_path / "server.py"
+    server.touch()
+    monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", str(server))
+    client.get("/api/agent")
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    terminal_locks = []
+    original_queue = queue.Queue
+
+    class ObservedQueue(original_queue):
+        def put(self, event, *args, **kwargs):
+            if event["type"] in ("done", "error"):
+                terminal_locks.append(root.lock.locked())
+            return super().put(event, *args, **kwargs)
+
+    async def reply(*args):
+        if outcome == "unavailable":
+            raise agent.UnavailableModelError("Unavailable model")
+        if outcome == "error":
+            raise RuntimeError("Provider failed")
+        return "Assessed", {"cost": None, "input_tokens": None, "output_tokens": None}
+
+    monkeypatch.setattr(agent.queue, "Queue", ObservedQueue)
+    monkeypatch.setattr(agent, "_reply", reply)
+    # Action conversations and the main conversation share the same backend lock.
+    for thread_id in [str(uuid4()), str(uuid4())]:
+        response = client.post("/api/agent/messages", json={"message": "Assess this CVE"},
+                               headers={"Accept": "application/x-ndjson", "X-Agent-Thread": thread_id})
+        assert response.status_code == 200
+        events = [json.loads(chunk) for chunk in response.response]
+        assert events[-1]["type"] == ("done" if outcome == "done" else "error")
+        response.close()
+    assert terminal_locks == [False, False]
+
+
 def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
     if os.getenv("VULNSCOUT_TEST_MCP_SERVER_PATH"):
         monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", os.environ["VULNSCOUT_TEST_MCP_SERVER_PATH"])

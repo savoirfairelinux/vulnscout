@@ -97,15 +97,17 @@ test('queues exactly the selected vulnerabilities, their own packages, and the c
     expect([first.title, second.title]).toEqual(['Assess CVE-1 · 1 target', 'Assess CVE-2 · 1 target']);
     expect(first.threadId).not.toBe(second.threadId);
     expect(chatOpenings()).toBe(1);
-    expect(store.getAgentChatRequest().taskId).toBe(queue()[0].id);
+    expect(store.getAgentChatRequest()).toMatchObject({ view: 'conversations', taskId: undefined });
     expect(baseProps.resetVulns).not.toHaveBeenCalled();
     // Once queued, the button shows the queue position and opens the queued request instead of queueing it again.
     expect(assessButton()).toBeEnabled();
     expect(assessButton()).toHaveAccessibleName('Assess with AI (queued, position 1)');
     expect(assessButton()).toHaveTextContent('Queued · #1');
+    expect(assessButton()).toHaveTextContent('Assess with AI');
     fireEvent.click(assessButton());
     expect(queue()).toHaveLength(2);
     expect(chatOpenings()).toBe(2);
+    expect(store.getAgentChatRequest().view).toBe('conversations');
 });
 
 test('opens the main agent chat instead of rendering its own and skips overlapping actions when the selection changes', async () => {
@@ -132,6 +134,7 @@ test('tracks running actions, clearing pending items, and allows retry only afte
     await waitFor(() => expect(queue()).toHaveLength(1));
     startQueued();
     expect(assessButton()).toHaveTextContent('Running…');
+    expect(assessButton()).toHaveTextContent('Assess with AI');
     expect(assessButton()).toHaveAccessibleName('Assess with AI (running)');
     act(() => store.clearAgentQueue());
     expect(assessButton()).toHaveAccessibleName('Assess with AI (running)');
@@ -167,7 +170,7 @@ test('retains a failed assessment and later CVEs until it succeeds or is removed
     expect(queue()[0].id).toBe(firstId);
     expect(assessButton()).toHaveTextContent('Failed · view');
     fireEvent.click(assessButton());
-    expect(store.getAgentChatRequest().taskId).toBe(firstId);
+    expect(store.getAgentChatRequest().view).toBe('conversations');
     expect(queue()).toHaveLength(2);
     startQueued();
     finishRunning();

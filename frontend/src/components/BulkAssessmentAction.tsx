@@ -73,7 +73,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
             if (controller.signal.aborted) return;
             const queued = messages.flat();
             enqueueAgentMessages(queued, context, BULK_SOURCE, 'per-action');
-            openAgentChat(queued[0]?.id);
+            openAgentChat(selectedVulns.length > 1 ? undefined : queued[0]?.id, selectedVulns.length > 1 ? 'conversations' : 'chat');
         } catch (error) {
             if (!controller.signal.aborted) {
                 onError(error instanceof Error ? error.message : 'Unable to prepare AI assessments. Try again.');
@@ -89,6 +89,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
 
     return <AgentActionButton
         state={selectionState}
+        openView={selectedVulns.length > 1 ? 'conversations' : 'chat'}
         label="Assess with AI"
         onRun={() => void assess()}
         disabled={disabled || !selectedVulns.length}
