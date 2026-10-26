@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import importlib
+import json
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
@@ -230,3 +231,46 @@ def test_editor_fields_downgrade_drops_columns():
 
     assert not (EDITOR_COLUMNS & columns)
     assert {"threat_model", "risks"} <= columns
+
+
+def test_editor_fields_upgrade_outdates_only_contexts_that_lose_text():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        connection.exec_driver_sql("UPDATE variant_context SET threat_model = 'Old model' WHERE id = 'A'")
+        connection.exec_driver_sql("UPDATE variant_context SET risks = '  ' WHERE id = 'B'")
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+
+        editor_fields.upgrade()
+
+        stamps = dict(connection.exec_driver_sql("SELECT id, updated_at FROM variant_context").all())
+
+    assert stamps["A"] != "2026-01-01T00:00:00Z"
+    assert {stamps[k] for k in "BCD"} == {"2026-01-01T00:00:00Z"}
+
+
+def test_editor_fields_downgrade_restores_rendered_text():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+        editor_fields.upgrade()
+        model = {
+            "components": [{"id": "C1", "name": "API", "description": "", "trust_zone": ""}],
+            "interactions": [],
+            "threats": [{"id": "T1", "category": "spoofing", "description": "Fake caller", "target_ids": ["C1"]}],
+            "risks": [{"threat_id": "T1", "likelihood": "high", "impact": "low", "mitigation": "", "residual": ""}],
+        }
+        connection.execute(
+            sa.text("UPDATE variant_context SET system_scope = 'Scope text', stride_model = :m WHERE id = 'A'"),
+            {"m": json.dumps(model)},
+        )
+
+        editor_fields.downgrade()
+
+        rows = {r["id"]: r for r in connection.exec_driver_sql(
+            "SELECT id, threat_model, risks FROM variant_context").mappings().all()}
+
+    assert "Scope text" in rows["A"]["threat_model"] and "T1 [C1 API]: Fake caller" in rows["A"]["threat_model"]
+    assert "T1 Spoofing, Fake caller" in rows["A"]["risks"]
+    assert rows["B"]["threat_model"] is None and rows["B"]["risks"] is None
