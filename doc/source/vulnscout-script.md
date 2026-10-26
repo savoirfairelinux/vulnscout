@@ -3,6 +3,9 @@
 The `./vulnscout` script is the main host-side entry point for running VulnScout.
 It manages the container lifecycle (Docker or Podman) and forwards commands to the container's entrypoint.
 
+This page introduces command syntax, options, and project/variant selection.
+For task-specific instructions, see [VulnScout Workflow](vulnscout-workflow.md).
+
 ```
 ./vulnscout [global options] <command> [arguments] [options]
 ./vulnscout <command> --help
@@ -56,25 +59,6 @@ Example:
 ./vulnscout -p demo -v x86 add \
   --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
   --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
-```
-
-## Workflow Guides
-
-Choose a guide for the task you want to perform:
-
-```{toctree}
-:maxdepth: 2
-
-cli-inputs
-vulnerability-scanning
-monitor-vulnerabilities
-vulnerability-data
-cli-web-interface
-cli-data-maintenance
-reports
-exports
-cli-assessments
-cli-configuration
 ```
 
 ## Migrating from the flag syntax
