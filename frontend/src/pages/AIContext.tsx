@@ -180,7 +180,8 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const variantDraft = useLoadedDraft<VariantDraft>(
         variantKey,
         () => Context.get(projectId ?? '', selected?.kind === 'variant' ? selected.id : '').then(ctx => {
-            setVariantFiles({ key: variantKey, files: ctx.editor?.files ?? ctx.files ?? [] });
+            // A response for an item that is no longer open must not replace the open item's files.
+            if (openKeyRef.current === variantKey) setVariantFiles({ key: variantKey, files: ctx.editor?.files ?? ctx.files ?? [] });
             return draftFromContext(ctx);
         }),
         EMPTY_VARIANT_DRAFT, draftsEqual, showLoadError,
@@ -262,19 +263,22 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         return { kind: 'variant', projectId, variantId: selected.id, draft: variantDraft.draft };
     };
 
+    // False when edits made while a save was in flight are still unsaved.
+    const savedEverythingRef = useRef(true);
     const performSave = async (target: SaveTarget, key: string | null): Promise<boolean> => {
         setBusy(true);
         hideErrorBanner();
+        savedEverythingRef.current = true;
         try {
             if (target.kind === 'project') {
                 const saved = await Context.saveProject(target.projectId, target.description);
-                if (openKeyRef.current === key) projectDraft.commit(saved.description ?? target.description, target.sent);
+                if (openKeyRef.current === key) savedEverythingRef.current = projectDraft.commit(saved.description ?? target.description, target.sent);
             } else {
                 const saved = await Context.saveVariantEditor(target.variantId, target.draft);
                 const value = saved?.editor
                     ? draftFromContext({ ...saved, project_id: target.projectId, description: null })
                     : target.draft;
-                if (openKeyRef.current === key) variantDraft.commit(value, target.draft);
+                if (openKeyRef.current === key) savedEverythingRef.current = variantDraft.commit(value, target.draft);
             }
             if (!unmountedRef.current) setAnnouncement("Saved.");
             return true;
@@ -317,7 +321,11 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const saveRef = useRef(requestSave);
     useEffect(() => { saveRef.current = requestSave; });
     useEffect(() => {
-        registerGuard(dirty ? { label: openLabel, save: () => saveRef.current() } : null);
+        registerGuard(dirty ? {
+            label: openLabel,
+            // Leaving with newer edits still unsaved would discard them.
+            save: async () => (await saveRef.current()) && savedEverythingRef.current,
+        } : null);
     }, [dirty, openLabel, registerGuard]);
     useEffect(() => () => registerGuard(null), [registerGuard]);
 
@@ -380,7 +388,12 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         try {
             const source = await Context.get(sourceProjectId, sourceVariantId);
             if (unmountedRef.current || openKeyRef.current !== key) return;
-            variantDraft.setDraft(draftFromContext(source));
+            const copied = draftFromContext(source);
+            const own = variantDraft.draft;
+            // References are not copied, so the target keeps its own codebase source and paths.
+            variantDraft.setDraft(copied.codebase_source === 'references'
+                ? { ...copied, codebase_source: own.codebase_source, codebase_paths: own.codebase_paths }
+                : copied);
             setFieldError('');
             setFieldErrors({});
             showBanner(`Copied the context of ${project?.name ?? ''} / ${variant?.name ?? ''}. Review it, then Save changes.`, "info");

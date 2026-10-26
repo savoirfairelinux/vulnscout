@@ -686,6 +686,20 @@ describe('Explorer unsaved-changes guard', () => {
         await waitFor(() => expect(aiScope()).toEqual({ projectId: 'saved-project', variantIds, revision: 0 }));
     });
 
+    test('AI context scope covers every variant for a saved whole-project selection', async () => {
+        mockGetFrontendScope.mockReturnValue(savedScope('saved-project', []));
+        mockProjectsList.mockResolvedValue([{ id: 'saved-project', name: 'Saved Project' }]);
+        mockVariantsList.mockResolvedValue([
+            { id: 'v1', name: 'V1', project_id: 'saved-project' },
+            { id: 'v2', name: 'V2', project_id: 'saved-project' },
+        ]);
+        render(<Explorer />, { wrapper: ({ children }) => (
+            <MemoryRouter initialEntries={[ROUTES.ai]}><UnsavedGuardProvider>{children}</UnsavedGuardProvider></MemoryRouter>
+        ) });
+
+        await waitFor(() => expect(aiScope()).toEqual({ projectId: 'saved-project', revision: 0 }));
+    });
+
     test('nav link click with unsaved edits prompts before navigating', async () => {
         function Dirty() {
             const { registerGuard } = useUnsavedGuard();
