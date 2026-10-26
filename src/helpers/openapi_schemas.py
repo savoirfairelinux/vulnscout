@@ -97,6 +97,15 @@ _SCAN_PACKAGE_FIELDS = {
 
 
 SCHEMAS: dict[str, Any] = {
+    "SourceFile": _object({
+        "spdx_id": _STRING, "path": _STRING, "document_id": _UUID, "document_name": _STRING,
+        "scan_id": _UUID, "variant_id": _UUID, "variant_name": _STRING,
+        "properties": _object({}),
+        "builds": _array(_object({
+            "spdx_id": _STRING, "document_name": _STRING, "build_type": _TEXT,
+            "parameters": _array(_object({})), "outputs": _STRINGS,
+        })),
+    }, ("spdx_id", "path", "document_id", "document_name", "properties", "builds")),
     "Project": _object({
         "id": _UUID, "name": _STRING,
         "variants": _array(_object({"id": _UUID, "name": _STRING}, ("id", "name"))),
@@ -108,6 +117,9 @@ SCHEMAS: dict[str, Any] = {
         "id": _PACKAGE_ID, "package_id": _NULL_UUID, "name": _TEXT, "version": _TEXT,
         "cpe": _STRINGS, "purl": _STRINGS, "licences": _STRING, "supplier": _TEXT,
         "source_urls": _STRINGS, "source_revisions": _STRINGS, "component_types": _STRINGS,
+        "source_file_count": {**_COUNT, "nullable": True},
+        "compiled_source_file_count": _COUNT, "compiled_sources_complete": _BOOL,
+        "source_files": _array(_ref("SourceFile"), nullable=True),
         "release_version": _TEXT, "source_revision": _TEXT,
         "version_conflict": _BOOL, "revision_conflict": _BOOL,
         "version_evidence": _array(_object({

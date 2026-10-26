@@ -8,6 +8,7 @@ from sqlalchemy import CheckConstraint, ForeignKey, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db, Base
+from .sbom_file import SourceFileEvidence, PackageSourceFile
 
 if typing.TYPE_CHECKING:
     from ..models import SBOMDocument, Package
@@ -29,6 +30,8 @@ class PackageEvidence(typing.TypedDict):
     source_urls: list[str]
     source_revisions: typing.NotRequired[list[str]]
     component_types: typing.NotRequired[list[PackageType]]
+    source_files: typing.NotRequired[list[SourceFileEvidence]]
+    compiled_sources_complete: typing.NotRequired[bool]
 
 
 class SBOMPackage(Base):
@@ -46,6 +49,10 @@ class SBOMPackage(Base):
     purl: Mapped[list | None] = mapped_column(JSON)
     source_revisions: Mapped[list | None] = mapped_column(JSON)
     type: Mapped[PackageType] = mapped_column(String(9), default="normal", server_default="normal")
+    compiled_sources_complete: Mapped[bool | None]
+    source_files: Mapped[list["PackageSourceFile"]] = relationship(
+        back_populates="sbom_package", cascade="all, delete-orphan",
+    )
 
     sbom_document: Mapped["SBOMDocument"] = relationship(back_populates="sbom_packages")
     package: Mapped["Package"] = relationship(back_populates="sbom_packages")
@@ -117,9 +124,11 @@ class SBOMPackage(Base):
             return {}
         evidence_sets: dict[uuid.UUID, dict[str, set[str]]] = {}
         component_types: dict[uuid.UUID, set[PackageType]] = {}
-        for package_id, cpe, purl, source_urls, revisions, package_type in db.session.execute(
+        source_completeness: dict[uuid.UUID, list[bool | None]] = {}
+        for package_id, cpe, purl, source_urls, revisions, package_type, complete in db.session.execute(
             db.select(SBOMPackage.package_id, SBOMPackage.cpe, SBOMPackage.purl,
-                      SBOMPackage.source_urls, SBOMPackage.source_revisions, SBOMPackage.type)
+                      SBOMPackage.source_urls, SBOMPackage.source_revisions, SBOMPackage.type,
+                      SBOMPackage.compiled_sources_complete)
             .where(SBOMPackage.sbom_document_id.in_(document_ids))
         ):
             if require_recorded_identifiers and (cpe is None or purl is None):
@@ -132,6 +141,8 @@ class SBOMPackage(Base):
             item["source_urls"].update(source_urls or [])
             item["source_revisions"].update(revisions or [])
             component_types.setdefault(package_id, set()).add(package_type)
+            source_completeness.setdefault(package_id, []).append(complete)
+        source_files = PackageSourceFile.evidence_for_documents(document_ids)
         evidence: dict[uuid.UUID, PackageEvidence] = {}
         for package_id, values in evidence_sets.items():
             result = PackageEvidence(
@@ -142,6 +153,10 @@ class SBOMPackage(Base):
             types = component_types[package_id]
             if types != {"normal"}:
                 result["component_types"] = sorted(types)
+            completeness = source_completeness[package_id]
+            if any(value is not None for value in completeness):
+                result["source_files"] = source_files.get(package_id, [])
+                result["compiled_sources_complete"] = all(value is True for value in completeness)
             evidence[package_id] = result
         return evidence
 

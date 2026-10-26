@@ -38,6 +38,8 @@ def init_app(app: Flask) -> None:
         query variant_ids string optional Comma-separated list of variant IDs.
         query operation string optional Comparison mode such as difference, intersection, or union.
         query format string optional Response format such as list or dict.
+        query package_id string optional Filter by the package string ID.
+        query include_source_files boolean optional Include parsed source file and build details.
         query include_outdated boolean optional Include superseded package evidence within the selected scope.
         query outdated_only boolean optional Return only superseded package evidence.
         response 200 PackageCollection Filtered package collection; an array by default, or a map with format=dict.
@@ -215,10 +217,17 @@ def init_app(app: Flask) -> None:
         source_document_ids = set(db.session.execute(
             db.select(SBOMDocument.id).where(SBOMDocument.scan_id.in_(source_scan_ids)),
         ).scalars()) if source_scan_ids else set()
+        package_filter = request.args.get('package_id')
+        if package_filter is not None:
+            pkgs = [pkg for pkg in pkgs if pkg.string_id == package_filter]
         evidence = SBOMPackage.evidence_for_documents(source_document_ids)
-        result = [pkg.with_sbom_evidence(**evidence.get(
+        snapshots = [pkg.with_sbom_evidence(**evidence.get(
             pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
-        )).to_dict() for pkg in pkgs]
+        )) for pkg in pkgs]
+        result = [pkg.to_dict() for pkg in snapshots]
+        if request.args.get('include_source_files', '').lower() in ('1', 'true', 'yes'):
+            for item, pkg in zip(result, snapshots):
+                item["source_files"] = pkg.source_files
 
         for p in result:
             p.setdefault("variants", [])
