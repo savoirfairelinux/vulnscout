@@ -8,6 +8,7 @@ VulnScout Documentation
    getting-started
    examples
    vulnscout-script
+   vulnscout-workflow
    interactive-mode
    ai-assessments
    custom-data-format
