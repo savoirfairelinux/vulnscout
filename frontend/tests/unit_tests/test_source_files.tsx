@@ -94,6 +94,20 @@ test('empty inventory and retry remain distinguishable from failures', async () 
     expect(load).toHaveBeenCalledTimes(2);
 });
 
+test.each([true, false])('recipe inputs do not claim compilation (explicit flag: %s)', async explicit => {
+    const build = {
+        build_type: 'http://openembedded.org/bitbake/do_create_spdx/recipe',
+        ...(explicit ? { compiled: false } : {}),
+    };
+    jest.spyOn(Packages, 'sourceFiles').mockResolvedValue({
+        files: [{ ...file, path: 'fix.patch', builds: [build] }], complete: false,
+    });
+    render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
+    expect(await screen.findByText('fix.patch')).toBeTruthy();
+    expect(screen.getByText('Recipe input (not compilation)')).toBeTruthy();
+    expect(screen.getByText('1 source files; 0 with compilation evidence.')).toBeTruthy();
+});
+
 test('changing scope ignores a late response from the previous scope', async () => {
     let finish: (value: { files: SourceFile[]; complete: boolean }) => void = () => {};
     jest.spyOn(Packages, 'sourceFiles')

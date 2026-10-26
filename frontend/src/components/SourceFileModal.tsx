@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import Packages, { type SourceFile } from '../handlers/packages';
+import Packages, { hasCompilationEvidence, type SourceFile } from '../handlers/packages';
 import ModalShell, { ModalButton } from './ModalShell';
 
 type Props = {
@@ -53,7 +53,7 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
                 <ModalButton onClick={() => setRetry(value => value + 1)}>Retry</ModalButton>
             </div>}
             {!loading && !error && <>
-                <p>{files.length} source files; {files.filter(file => file.builds.length > 0).length} with build-input evidence.</p>
+                <p>{files.length} source files; {files.filter(hasCompilationEvidence).length} with compilation evidence.</p>
                 <p className="text-sm text-neutral-400">
                     Listed files alone do not prove compilation or inclusion in the final firmware.
                     {!complete && ' Evidence is incomplete or unproven; compiled-source CVE refinement is disabled.'}
@@ -68,7 +68,8 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
                         <summary className="cursor-pointer break-all">
                             <span className="font-mono">{file.path}</span>
                             <span className="ml-3 text-sm text-cyan-300">
-                                {file.builds.length > 0 ? 'Build input' : 'Listed only'}
+                                {hasCompilationEvidence(file) ? 'Build input'
+                                    : file.builds.length > 0 ? 'Recipe input (not compilation)' : 'Listed only'}
                             </span>
                         </summary>
                         <dl className="mt-3 space-y-1 break-all text-sm">
