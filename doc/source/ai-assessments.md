@@ -34,7 +34,7 @@ Do not forward it to other users.
 4. Follow the connector setup. GitHub Copilot uses GitHub sign-in; hosted
    providers require their credentials. A local OpenAI-compatible server needs
    an endpoint reachable from the VulnScout container.
-5. Complete the connection check and select a model in the chat toolbar.
+5. Complete the connection check and select a model above the chat.
 
 For GitHub Copilot, select **Sign in with GitHub**, open the displayed GitHub
 link, enter the short code, and approve access. A GitHub account with Copilot
@@ -56,10 +56,17 @@ refers to the container itself. Use a reachable container gateway or a configure
 `host.docker.internal` address for a server on the host.
 
 Use the plug button to reopen connector setup. The provider is shared across
-global and vulnerability chats, but their messages remain separate. Switching
-models preserves the current conversation. **Sign out** or **Disconnect
-provider** clears the stored credentials and the corresponding conversation
-state.
+the main and action conversations, but their messages remain separate.
+The **Model** selector stays visible in both conversation and **Conversations**
+views and is disabled while any request is running. Switching models preserves
+the current conversation. **Sign out** or **Disconnect provider** clears the
+stored credentials and conversation state.
+Actions queued before sign-in or the first connection wait until setup finishes.
+Replacing or disconnecting an existing connection requires an empty queue;
+finish or remove its requests first. Opening connection settings pauses waiting
+work until you return to the chat. New actions submitted during a connection
+change are retained. Follow-ups to a previous provider's conversation pause with
+an explanation and require an explicit retry to start a fresh conversation.
 
 Provider credentials are handled by the backend and persisted in the private
 configuration file so the connection can survive restarts. They are not returned
@@ -69,7 +76,7 @@ For configuration internals and development setup, see
 
 ### Prepare the Assessment Context
 
-In the **AI** tab, select the project and variant and provide relevant product,
+On the **AI Context** page, select the project and variant and provide relevant product,
 deployment, environment, and threat-model context. Save your context before
 requesting an assessment. Upload relevant source files using **Codebase
 References**, as described below.
@@ -80,22 +87,43 @@ different impacts on different variants.
 
 ### Chat Scope and Conversations
 
-The **Agent** button opens the global chat alongside the interface on desktop
-and full-screen on smaller displays. Each message includes the active page,
-project/variant selection, and relevant displayed or selected records.
-Unsaved form text and API keys are not sent automatically.
+The **Agent** button opens the only agent chat panel in VulnScout, alongside the
+interface on desktop and full-screen on smaller displays. Messages you type go
+to the **main conversation**. Every assessment or review action runs in its own
+conversation inside that same panel. Each request keeps the active page,
+project/variant scope, and relevant displayed or selected records captured when
+it was queued. Unsaved form text and API keys are not sent automatically.
 
-Closing the global panel preserves the draft and a response in progress until
-the page is reloaded. **+ → New conversation** deletes the current SDK session
-and resets its messages, draft, and usage while keeping the connection and
-selected model. **Never ask again** remembers the confirmation preference in
-this browser. Older SDK session files may remain in local storage on the backend.
+All requests share one **AI queue**, running one at a time in submission order.
+The person button in the header switches to **Conversations**: the main
+conversation first, then action conversations grouped into **Needs attention**,
+**Running**, **Waiting**, and **Finished**. Each shows its origin, queue position,
+and last activity. Selecting one opens its conversation; the back arrow returns
+to the list, and Escape or the back arrow in the list returns to the conversation.
 
-The **AI** button in a vulnerability modal opens its dedicated chat and enables
-Edit mode. Hiding that chat preserves its conversation and a response in
-progress; closing the modal or moving to another vulnerability discards it.
-Neither the global chat's history nor another vulnerability's chat is loaded
-into this conversation.
+The person icon walks in place while work is active, with no horizontal movement
+and at least one foot grounded. Reduced-motion preferences use a static walking
+icon. An empty or paused queue shows a standing person; a warning mark identifies
+a paused queue.
+
+A waiting conversation displays its pending request and **Remove from queue**.
+**Clear waiting** removes waiting and failed requests, never the running one.
+Finished conversations can be deleted individually or with **Delete all**.
+VulnScout keeps the 12 most recently used finished action conversations live;
+older conversations are archived with their transcripts but cannot accept
+follow-ups. This queue is separate from the navigation bar's scan/upload/export
+operation queue.
+
+Closing the panel, changing scope, or navigating away does not cancel queued or
+running work. Reloading the browser discards the in-memory queue and
+conversations. **+ → New conversation** deletes the main SDK session and resets
+its messages, draft, and usage while keeping the connection, selected model,
+and action conversations. **Never ask again** remembers the confirmation
+preference in this browser. Older SDK session files may remain on the backend.
+
+The **AI** button in a vulnerability modal opens this same panel beside the
+modal and enables Edit mode. Moving to another vulnerability does not cancel
+the previous one's queued work.
 
 Assessment and context write tools are available for explicit change requests,
 without a separate confirmation for each tool call. Check the target scope
@@ -106,23 +134,30 @@ human action.
 
 Open a vulnerability, enter **Edit** mode, select the target variants and
 packages, and click **Assess with AI** next to **Add assessment**. VulnScout opens
-the vulnerability's chat and requests an assessment of those exact targets.
+the agent panel on a new action conversation for those exact targets.
 
 For several vulnerabilities, select rows in **Vulnerabilities** and choose
-**Assess with AI** in the selection bar. Requests are queued; use **Up next** to
-inspect or remove queued actions. If an action fails, retry it or remove it
-before the queue continues. Narrow large selections when asked.
+**Assess with AI** in the selection bar. Each vulnerability gets its own
+conversation; bulk assessments open **Conversations** so you can follow the
+queue. If an action fails, retry it or remove it before the queue continues.
+Narrow large selections when asked.
 Historical/outdated packages and unselected vulnerabilities are excluded.
 If targets cannot be resolved, VulnScout reports an error instead of queuing a
 partial selection. Large requests are split within the message limit while
 keeping each variant's packages together.
 
-Closing the bulk chat or resetting the row selection preserves queued and
-running work. Additional selections queue only new vulnerabilities; a queued
-or running vulnerability cannot be queued twice. Remove items in **Up next**
-or use **Clear all** to discard pending actions.
-Changing the project/variant scope or leaving the Vulnerabilities tab discards
-the bulk conversation and its pending queue.
+Closing the panel or resetting the row selection preserves queued and running
+work. Additional selections queue only new vulnerabilities; a queued or running
+vulnerability cannot be queued twice. Remove requests in **Conversations** or
+use **Clear waiting** to discard waiting and failed actions.
+Changing scope or leaving the Vulnerabilities tab does not cancel queued work.
+
+Queued action buttons retain their labels and add **Queued · #N**, **Running...**,
+or **Failed · view**. Clicking them opens the existing request rather than
+queueing a duplicate. The status disappears when the request finishes.
+A failed request shows its error, **Retry failed action**, and **Remove failed
+action** in its conversation. The shared queue pauses until it is retried or
+removed; other conversations show a banner linking to it.
 
 Chat suggestions such as **Assess vulnerability** and **Assess displayed**
 send immediately. Large displayed lists may require narrowing the table; a
