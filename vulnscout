@@ -1,6 +1,64 @@
 #!/bin/bash
 set -euo pipefail
 
+# Keep stream decisions separate: container exec does not allocate a TTY.
+console_color_enabled() {
+    local stream="$1" hint=""
+    [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] || return 1
+    if [[ "$stream" == stderr ]]; then
+        hint="${_VULNSCOUT_COLOR_STDERR:-}"
+    else
+        hint="${_VULNSCOUT_COLOR_STDOUT:-}"
+    fi
+    case "$hint" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    if [[ "$stream" == stderr ]]; then [[ -t 2 ]]; else [[ -t 1 ]]; fi
+}
+
+console_message() {
+    local stream="$1" role="$2" code=36
+    shift 2
+    case "$role" in
+        success) code=32 ;;
+        warning) code=33 ;;
+        error) code=31 ;;
+        heading) code='1;36' ;;
+    esac
+    if console_color_enabled "$stream"; then
+        printf '\033[%sm%s\033[0m\n' "$code" "$*"
+    else
+        printf '%s\n' "$*"
+    fi
+}
+
+console_out() { console_message stdout "$@"; }
+console_err() { console_message stderr "$@" >&2; }
+
+console_help() {
+    local line prefix label rest
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if ! console_color_enabled stdout || [[ -z "$line" ]]; then
+            printf '%s\n' "$line"
+        elif [[ "$line" != " "* || "$line" == *: ]]; then
+            console_out heading "$line"
+        elif [[ "$line" =~ ^([[:space:]]+)([^[:space:]].*)$ ]]; then
+            prefix="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+            if [[ "$rest" == *"  "* ]]; then
+                label="${rest%%  *}"
+                printf '%s\033[1;36m%s\033[0m%s\n' "$prefix" "$label" "${rest#"$label"}"
+            else
+                printf '%s\n' "$line"
+            fi
+        else
+            printf '%s\n' "$line"
+        fi
+    done
+}
+
+
 print_completion() {
     cat <<'EOF'
 _vulnscout_files() {
@@ -124,7 +182,7 @@ EOF
 # Hidden verb: runs before config sourcing and container engine detection.
 if [ "${1:-}" = "completion" ]; then
     if [ "${2:-}" != "bash" ] || [ $# -gt 2 ]; then
-        echo "Error: unsupported shell. Usage: source <(vulnscout completion bash)" >&2
+        console_err error "Error: unsupported shell. Usage: source <(vulnscout completion bash)"
         exit 1
     fi
     print_completion
@@ -144,7 +202,7 @@ if command -v podman &> /dev/null; then
 elif command -v docker &> /dev/null; then
     CONTAINER_ENGINE="docker"
 else
-    echo "Error: \"podman\" or \"docker\" is not installed or not in PATH."
+    console_out error "Error: \"podman\" or \"docker\" is not installed or not in PATH."
     exit 1
 fi
 
@@ -152,11 +210,11 @@ fi
 if [[ -d "$VULNSCOUT_CACHE_DIR" && ! -x "$VULNSCOUT_CACHE_DIR" ]]; then
     if [[ "$CONTAINER_ENGINE" != "podman" ]] ||
         ! podman unshare chown 0:0 "$VULNSCOUT_CACHE_DIR"; then
-        echo "Error: cannot restore host ownership of $VULNSCOUT_CACHE_DIR." >&2
+        console_err error "Error: cannot restore host ownership of $VULNSCOUT_CACHE_DIR."
         exit 1
     fi
     if [[ ! -x "$VULNSCOUT_CACHE_DIR" ]]; then
-        echo "Error: $VULNSCOUT_CACHE_DIR is not accessible. Restore owner search permission before retrying." >&2
+        console_err error "Error: $VULNSCOUT_CACHE_DIR is not accessible. Restore owner search permission before retrying."
         exit 1
     fi
 fi
@@ -167,11 +225,11 @@ if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
     if [ ! -r "$VULNSCOUT_CONFIG_FILE" ]; then
         if [[ "$CONTAINER_ENGINE" != "podman" ]] ||
             ! podman unshare chown 0:0 "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_CONFIG_FILE"; then
-            echo "Error: cannot restore host ownership of $VULNSCOUT_CONFIG_FILE. Restore its ownership to $(id -u):$(id -g) before retrying." >&2
+            console_err error "Error: cannot restore host ownership of $VULNSCOUT_CONFIG_FILE. Restore its ownership to $(id -u):$(id -g) before retrying."
             exit 1
         fi
         if [ ! -r "$VULNSCOUT_CONFIG_FILE" ]; then
-            echo "Error: $VULNSCOUT_CONFIG_FILE is not readable. Restore owner read permission before retrying." >&2
+            console_err error "Error: $VULNSCOUT_CONFIG_FILE is not readable. Restore owner read permission before retrying."
             exit 1
         fi
     fi
@@ -199,7 +257,7 @@ VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.25"
 LEGACY_TOKENS=()
 SCOPE_ARGS=()
 
-show_help() {
+_show_help() {
     cat <<'EOF'
 VulnScout - Vulnerability Scanner
 Usage: vulnscout [global options] <command> [arguments] [options]
@@ -239,7 +297,7 @@ still works until v0.25 and prints a deprecation warning. See doc/source/vulnsco
 EOF
 }
 
-show_verb_help() {
+_show_verb_help() {
     case "$1" in
         add) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] add <input options>
@@ -462,14 +520,25 @@ Examples:
 EOF
             ;;
         *)
-            echo "Unknown command: $1" >&2
-            echo "Run 'vulnscout --help' for usage." >&2
+            console_err error "Unknown command: $1"
+            console_err info "Run 'vulnscout --help' for usage."
             return 1 ;;
     esac
 }
 
+show_help() { _show_help | console_help; }
+
+show_verb_help() { _show_verb_help "$@" | console_help; }
+
 exec_container() {
-    call_container_engine exec "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
+    local stdout=0 stderr=0
+    if console_color_enabled stdout; then stdout=1; fi
+    if console_color_enabled stderr; then stderr=1; fi
+    call_container_engine exec \
+        --env "_VULNSCOUT_COLOR_STDOUT=$stdout" \
+        --env "_VULNSCOUT_COLOR_STDERR=$stderr" \
+        --env "NO_COLOR=${NO_COLOR:-}" --env "TERM=${TERM:-}" \
+        "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
 }
 
 container_has_dev_mount() {
@@ -484,17 +553,17 @@ container_has_dev_mount() {
 
 ensure_running() {
     if ! call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo "Container not running, starting..."
+        console_out info "Container not running, starting..."
         do_start
     elif [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ] && ! container_has_dev_mount; then
         # Otherwise the container keeps serving the image's src/, ignoring local changes
-        echo "Container running without dev mode, restarting..."
+        console_out info "Container running without dev mode, restarting..."
         do_start
     fi
 }
 
 die() {
-    echo "Error: $*" >&2
+    console_err error "Error: $*"
     exit 1
 }
 
@@ -519,7 +588,7 @@ stage_report_template() {
     if [ -f "$tpl" ]; then
         stage_file "$tpl"
     elif [[ "$tpl" == */* ]]; then
-        echo "Error: template file not found: $tpl" >&2
+        console_err error "Error: template file not found: $tpl"
         return 1
     else
         echo "$tpl"
@@ -532,7 +601,7 @@ image_version() {
 }
 
 do_version() {
-    echo "VulnScout $(image_version "$DOCKER_IMAGE")"
+    console_out info "VulnScout $(image_version "$DOCKER_IMAGE")"
 }
 
 do_update() {
@@ -541,22 +610,22 @@ do_update() {
     if call_container_engine pull "$DOCKER_IMAGE" > /dev/null 2>&1; then
         new_ver="$(image_version "$DOCKER_IMAGE")"
         if [ "$cur_ver" != "$new_ver" ]; then
-            echo "Updated image: $cur_ver -> $new_ver"
+            console_out success "Updated image: $cur_ver -> $new_ver"
         else
-            echo "Image already up to date ($cur_ver)."
+            console_out info "Image already up to date ($cur_ver)."
         fi
     else
-        echo "Could not pull '$DOCKER_IMAGE' (local-only or registry not reachable)."
+        console_out warning "Could not pull '$DOCKER_IMAGE' (local-only or registry not reachable)."
     fi
     # Restart the container if it is running on a different image
     if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         running_id="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)"
         target_id="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
         if [ -n "$target_id" ] && [ "$running_id" != "$target_id" ]; then
-            echo "Restarting container on $DOCKER_IMAGE ($(image_version "$DOCKER_IMAGE"))..."
+            console_out info "Restarting container on $DOCKER_IMAGE ($(image_version "$DOCKER_IMAGE"))..."
             do_start
         else
-            echo "Container already running on the target image."
+            console_out info "Container already running on the target image."
         fi
     fi
 }
@@ -566,13 +635,13 @@ validate_scan_types() {
     local -a scan_types
     IFS=',' read -r -a scan_types <<< "$selection"
     if [[ -z "$selection" || "$selection" == ,* || "$selection" == *, || "$selection" == *,,* ]]; then
-        echo "Error: $label requires scan types: grype, nvd, osv, sbom-cve-check, or all." >&2
+        console_err error "Error: $label requires scan types: grype, nvd, osv, sbom-cve-check, or all."
         return 1
     fi
     for scan_type in "${scan_types[@]}"; do
         case "$scan_type" in
             grype|nvd|osv|sbom-cve-check|all) ;;
-            *) echo "Error: unknown scan type '$scan_type'. Expected grype, nvd, osv, sbom-cve-check, or all." >&2; return 1 ;;
+            *) console_err error "Error: unknown scan type '$scan_type'. Expected grype, nvd, osv, sbom-cve-check, or all."; return 1 ;;
         esac
     done
 }
@@ -695,7 +764,7 @@ warn_legacy_tokens() {
         elif ! replacement="$(legacy_replacement "$token")"; then
             replacement="$(legacy_modifier_replacement "$token")"
         fi
-        echo "deprecated: $token (removed in $VULNSCOUT_LEGACY_REMOVAL_VERSION); use 'vulnscout $replacement'" >&2
+        console_err warning "deprecated: $token (removed in $VULNSCOUT_LEGACY_REMOVAL_VERSION); use 'vulnscout $replacement'"
     done
 }
 
@@ -710,10 +779,10 @@ config_set() {
     echo "${key}=${value}" >> "$tmp"
     cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
     rm -f "$tmp"
-    echo "Config set: $key=$value"
+    console_out success "Config set: $key=$value"
     # Restart the container so volume mounts reflect the new cache dir
     if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo "Restarting container to apply new VULNSCOUT_CACHE_DIR..."
+        console_out info "Restarting container to apply new VULNSCOUT_CACHE_DIR..."
         VULNSCOUT_CACHE_DIR="$value"
         do_start
     fi
@@ -727,7 +796,7 @@ config_clear() {
     grep -v "^${key}=" "$VULNSCOUT_CONFIG_FILE" > "$tmp" || true
     cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
     rm -f "$tmp"
-    echo "Config cleared: $key"
+    console_out success "Config cleared: $key"
 }
 
 do_start() {
@@ -764,7 +833,7 @@ REFRESH_REMOTE_DELAY=2w
 # Set to "off" to disable the limit entirely.
 #GRYPE_MEMLIMIT=
 EOF
-        echo "Created default config at $VULNSCOUT_CONFIG_FILE"
+        console_out success "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
     chmod 600 "$VULNSCOUT_CONFIG_FILE"
     # The sbom-cve-check advisory databases (NVD-FKIE + CVEList) live inside the
@@ -806,7 +875,7 @@ EOF
             vol_args+=(-v "$SCRIPT_DIR/vulnscout_mcp":/scan/vulnscout_mcp:Z)
         fi
         env_args+=(-e DEV_MODE=true)
-        echo "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
+        console_out info "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
     fi
 
     local -a userns_args=()
@@ -831,7 +900,7 @@ EOF
     until call_container_engine exec "$CONTAINER_NAME" true 2>/dev/null; do
         retries=$((retries - 1))
         if [ "$retries" -le 0 ]; then
-            echo "Error: container failed to start. Check '$CONTAINER_ENGINE logs $CONTAINER_NAME'."
+            console_out error "Error: container failed to start. Check '$CONTAINER_ENGINE logs $CONTAINER_NAME'."
             exit 1
         fi
         sleep 1
@@ -840,13 +909,13 @@ EOF
 
 start_frontend_dev() {
     if ! command -v npm &>/dev/null; then
-        echo "Error: npm is not installed or not in PATH."
+        console_out error "Error: npm is not installed or not in PATH."
         exit 1
     fi
 
     local frontend_dir="$SCRIPT_DIR/frontend"
     if [ ! -d "$frontend_dir" ]; then
-        echo "Warning: frontend/ not found at $frontend_dir, skipping dev server."
+        console_out warning "Warning: frontend/ not found at $frontend_dir, skipping dev server."
         return
     fi
 
@@ -861,15 +930,15 @@ start_frontend_dev() {
     fi
 
     if [ ! -d "$frontend_dir/node_modules" ]; then
-        echo "node_modules not found. Running npm install..."
+        console_out info "node_modules not found. Running npm install..."
         (cd "$frontend_dir" && npm install)
     fi
 
-    echo "Starting frontend dev server..."
+    console_out info "Starting frontend dev server..."
     (cd "$frontend_dir" && npm run dev) &
     local npm_pid=$!
     echo "$npm_pid" > "$SCRIPT_DIR/.vulnscout-npm.pid"
-    echo "Frontend dev server started (PID $npm_pid)"
+    console_out success "Frontend dev server started (PID $npm_pid)"
 
     # shellcheck disable=SC2329
     # (does not handle function used in trap)
@@ -877,7 +946,7 @@ start_frontend_dev() {
         if [ -f "$SCRIPT_DIR/.vulnscout-npm.pid" ]; then
             local pid
             pid=$(cat "$SCRIPT_DIR/.vulnscout-npm.pid")
-            echo "Stopping frontend dev server (PID $pid)..."
+            console_out info "Stopping frontend dev server (PID $pid)..."
             kill -- "-$(ps -o pgid= "$pid" 2>/dev/null | tr -d ' ')" 2>/dev/null || kill "$pid" 2>/dev/null || true
             wait "$pid" 2>/dev/null || true
             rm -f "$SCRIPT_DIR/.vulnscout-npm.pid"
@@ -1330,7 +1399,7 @@ verb_delete() {
         case "$answer" in
             y|Y|yes|Yes) ;;
             *)
-                echo "Aborted." >&2
+                console_err warning "Aborted."
                 return 1 ;;
         esac
     fi
@@ -1399,7 +1468,7 @@ verb_config() {
             if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
                 sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
             else
-                echo "No config file found."
+                console_out info "No config file found."
             fi ;;
         "")
             die "'config' needs get, set, unset, or list." ;;
@@ -1462,8 +1531,8 @@ parse_new() {
         list) verb_list "${rest[@]}" ;;
         config) verb_config "${rest[@]}" ;;
         *)
-            echo "Unknown command: $verb" >&2
-            echo "Run 'vulnscout --help' for usage." >&2
+            console_err error "Unknown command: $verb"
+            console_err info "Run 'vulnscout --help' for usage."
             return 1 ;;
     esac
 }
@@ -1496,7 +1565,7 @@ parse_legacy() {
                 ensure_running; add_input add-asset "$2"; shift 2 ;;
             --perform-scans)
                 if [[ $# -lt 2 || "$2" == --* ]]; then
-                    echo "Error: --perform-scans requires a scan type." >&2; exit 1
+                    console_err error "Error: --perform-scans requires a scan type."; exit 1
                 fi
                 validate_scan_types "$2"
                 ensure_running
@@ -1574,7 +1643,7 @@ parse_legacy() {
                 command="${1#--}"
                 if [[ "$DATA_REQUESTED" != "" ]]; then
                     # Only 1 data request command is allowed at the same time
-                    echo "Cannot use $command and $DATA_REQUESTED together"
+                    console_out error "Cannot use $command and $DATA_REQUESTED together"
                     exit 1
                 fi
                 DATA_REQUESTED="$command"
@@ -1600,7 +1669,7 @@ parse_legacy() {
                 config_set "$2" "$3"; shift 3 ;;
             config-list|--config-list)
                 sed 's/\(API_KEY\|PASSWORD\|SECRET\|AI_AUTH_CREDENTIALS\)=.*/\1=****/' \
-                    "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || echo "No config file found."
+                    "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || console_out info "No config file found."
                 shift ;;
             config-clear|--config-clear)
                 config_clear "$2"; shift 2 ;;
@@ -1611,8 +1680,8 @@ parse_legacy() {
             update|--update)
                 do_update; shift ;;
             *)
-                echo "Unknown command: $1" >&2
-                echo "Run 'vulnscout --help' for usage." >&2
+                console_err error "Unknown command: $1"
+                console_err info "Run 'vulnscout --help' for usage."
                 exit 1 ;;
         esac
     done
