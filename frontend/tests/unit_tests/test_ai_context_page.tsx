@@ -54,8 +54,8 @@ function variantContext(variantId: string, threat: string, files: FileRow[] = []
         codebase_path: null, environment: null, threat_model: threat, risks: null, other_info: null, files,
         editor: {
             codebase_source: 'paths', codebase_path: null,
-            system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
-            stride: { ...emptyStrideModel(), notes: threat }, files, updated_at: null,
+            system: { scope: threat || null, actors: null, entry_points: null, trust_boundaries: null },
+            stride: emptyStrideModel(), files, updated_at: null,
         },
     };
 }
@@ -521,8 +521,8 @@ describe('AIContext page', () => {
             expect(JSON.parse(puts[0].body ?? '{}')).toEqual({
                 variant_description: 'Gateway', environment: 'Lab', other_info: null,
                 codebase_source: 'paths', codebase_path: null,
-                system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
-                stride: { ...emptyStrideModel(), notes: 'TM' },
+                system: { scope: 'TM', actors: null, entry_points: null, trust_boundaries: null },
+                stride: emptyStrideModel(),
             });
         });
 
@@ -917,14 +917,12 @@ describe('AIContext page', () => {
             fireEvent.click(within(targets).getByRole('checkbox', { name: 'I1' }));
             fireEvent.change(screen.getByLabelText('Threat T1 STRIDE category'), { target: { value: 'tampering' } });
             fireEvent.change(screen.getByLabelText('Threat T1 description'), { target: { value: 'Forged frames' } });
-            fireEvent.change(screen.getByLabelText('Additional notes'), { target: { value: 'N' } });
 
             const body = await saveBody(backend);
 
             expect(body.stride.threats).toEqual([
                 { id: 'T1', category: 'tampering', description: 'Forged frames', target_ids: ['C1'] },
             ]);
-            expect(body.stride.notes).toBe('N');
         });
 
         test('removed threat ids are not reused', async () => {
@@ -990,14 +988,12 @@ describe('AIContext page', () => {
             fireEvent.change(screen.getByLabelText('Risk 1 impact'), { target: { value: '' } });
             fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Patch' } });
             fireEvent.change(screen.getByLabelText('Risk 1 residual risk / decision'), { target: { value: 'Accept' } });
-            fireEvent.change(screen.getByLabelText('Additional risk notes'), { target: { value: 'RN' } });
 
             const body = await saveBody(backend);
 
             expect(body.stride.risks).toEqual([
                 { threat_id: 'T1', likelihood: 'high', impact: null, mitigation: 'Patch', residual: 'Accept' },
             ]);
-            expect(body.stride.risk_notes).toBe('RN');
         });
 
         test('threat option shows just the id when the description is empty', async () => {
@@ -1018,15 +1014,14 @@ describe('AIContext page', () => {
         }
 
         test('threat 400 paths open the Threat model tab and mark the cells', async () => {
-            await failWith({ 'threats[0].target_ids': 'unknown target', 'notes': 'too long' }, addThreat);
+            await failWith({ 'threats[0].target_ids': 'unknown target' }, addThreat);
 
             expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
             expect(screen.getByRole('group', { name: 'Threat T1 targets' })).toHaveAccessibleDescription('unknown target');
-            expect(screen.getByLabelText('Additional notes')).toHaveAccessibleDescription('too long');
         });
 
         test('risk 400 paths open the Risks tab and mark the cells', async () => {
-            await failWith({ 'risks[0].likelihood': 'invalid rating', 'risk_notes': 'bad' }, () => {
+            await failWith({ 'risks[0].likelihood': 'invalid rating' }, () => {
                 addThreat();
                 fireEvent.click(variantTab('Risks'));
                 addRisk();
@@ -1036,7 +1031,6 @@ describe('AIContext page', () => {
             const select = screen.getByLabelText('Risk 1 likelihood');
             expect(select).toHaveAttribute('aria-invalid', 'true');
             expect(select).toHaveAccessibleDescription('invalid rating');
-            expect(screen.getByLabelText('Additional risk notes')).toHaveAccessibleDescription('bad');
         });
 
         test('a threat_model 400 error opens the Threat model tab and shows the message', async () => {
@@ -1129,7 +1123,7 @@ describe('AIContext page', () => {
             await user.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
-            expect(body).toMatchObject({ other_info: 'Copied info', codebase_path: '/copied', stride: { notes: 'Source TM' } });
+            expect(body).toMatchObject({ other_info: 'Copied info', codebase_path: '/copied', system: { scope: 'Source TM' } });
         });
 
         test('copy clears the field errors of the replaced draft', async () => {
@@ -1157,7 +1151,7 @@ describe('AIContext page', () => {
 
             await copyFrom(user, 'Variant 2');
 
-            expect(screen.getByLabelText('Additional notes')).toHaveValue('');
+            expect(screen.getByLabelText('System scope and assets')).toHaveValue('');
             expect(within(screen.getByRole('radiogroup', { name: 'Codebase source' })).getByRole('radio', { name: 'Codebase references' })).toBeChecked();
             ['Variant description', 'Environment', 'Other information']
                 .forEach(name => expect(screen.getByRole('textbox', { name })).toHaveValue(''));

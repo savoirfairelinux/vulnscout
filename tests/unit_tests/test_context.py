@@ -736,6 +736,10 @@ class TestCodebaseSource:
 # Editor-shape saves, legacy writes on STRIDE variants, agent view
 # ---------------------------------------------------------------------------
 
+def _risk(mitigation):
+    return [{"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": mitigation, "residual": ""}]
+
+
 def _stride_model(**overrides):
     model = {
         "components": [
@@ -749,11 +753,9 @@ def _stride_model(**overrides):
         "threats": [
             {"id": "T1", "category": "tampering", "description": "Image swapped", "target_ids": ["C1", "I1"]},
         ],
-        "notes": "",
         "risks": [
             {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
         ],
-        "risk_notes": "",
     }
     model.update(overrides)
     return model
@@ -831,11 +833,11 @@ class TestVariantEditorSave:
 
     def test_editor_save_bumps_on_model_change(self, app, variant):
         from src.models.variant_context import VariantContext
-        vc = VariantContext.save_editor(variant.id, _editor_payload(stride=_stride_model(risk_notes="a")))
+        vc = VariantContext.save_editor(variant.id, _editor_payload(stride=_stride_model(risks=_risk("a"))))
         first = vc.updated_at
-        vc = VariantContext.save_editor(variant.id, _editor_payload(stride=_stride_model(risk_notes="b")))
+        vc = VariantContext.save_editor(variant.id, _editor_payload(stride=_stride_model(risks=_risk("b"))))
         assert vc.updated_at > first
-        assert vc.stride_model["risk_notes"] == "b"
+        assert vc.stride_model["risks"][0]["mitigation"] == "b"
 
     def test_controller_save_editor_missing_variant(self, app):
         from src.controllers.context import VariantContextController

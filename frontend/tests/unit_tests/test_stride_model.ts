@@ -27,9 +27,7 @@ const populated: StrideModel = {
     components: [{ id: 'C1', name: 'API', description: '', trust_zone: '' }],
     interactions: [{ id: 'I1', name: 'call', source_id: 'C1', destination_id: 'C2', interface: '', data: '', trust_boundary: '' }],
     threats: [{ id: 'T1', category: 'spoofing', description: 'x', target_ids: ['I1'] }],
-    notes: '',
     risks: [{ threat_id: 'T1', likelihood: 'low', impact: null, mitigation: '', residual: '' }],
-    risk_notes: '',
 };
 
 describe('constants', () => {
@@ -111,16 +109,15 @@ describe('ids and references', () => {
 });
 
 describe('hasThreatModel', () => {
-    test('counts system fields, rows and notes but not risks', () => {
+    test('counts system fields and rows but not risks', () => {
         const base = emptyDraft();
         expect(hasThreatModel(base)).toBe(false);
         expect(hasThreatModel({ ...base, system: { ...base.system, scope: 'x' } })).toBe(true);
         expect(hasThreatModel({ ...base, system: { ...base.system, scope: '  ' } })).toBe(false);
-        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), notes: ' n ' } })).toBe(true);
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), components: populated.components } })).toBe(true);
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), interactions: populated.interactions } })).toBe(true);
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), threats: populated.threats } })).toBe(true);
-        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), risks: populated.risks, risk_notes: 'rn' } })).toBe(false);
+        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), risks: populated.risks } })).toBe(false);
     });
 });
 

@@ -47,9 +47,7 @@ type StrideModel = {
     components: StrideComponent[];
     interactions: StrideInteraction[];
     threats: StrideThreat[];
-    notes: string;
     risks: StrideRisk[];
-    risk_notes: string;
 };
 
 type SystemFields = {

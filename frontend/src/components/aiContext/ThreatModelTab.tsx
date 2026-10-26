@@ -4,7 +4,7 @@ import { STRIDE_CATEGORIES, nextId } from "../../helpers/strideModel";
 import FieldErrorText from "./FieldErrorText";
 import { describeField } from "./fieldErrors";
 import { CELL, CELL_FIELD, RemoveButton, TH } from "./SystemTables";
-import { BUTTON_SECONDARY, FIELD, HELP, LABEL, TEXTAREA } from "./styles";
+import { BUTTON_SECONDARY, FIELD, HELP } from "./styles";
 
 type Props = {
     draft: VariantDraft;
@@ -114,12 +114,6 @@ function ThreatModelTab({ draft, onDraftChange, fieldErrors, disabled = false }:
                 </div>
                 {stride.threats.length === 0 && <p className={HELP}>No threats yet.</p>}
                 <button type="button" className={BUTTON_SECONDARY} disabled={disabled} onClick={add}>Add threat</button>
-            </div>
-            <div>
-                <label className={LABEL} htmlFor="ai-variant-notes">Additional notes</label>
-                <textarea id="ai-variant-notes" className={TEXTAREA} value={stride.notes} disabled={disabled}
-                    onChange={e => update({ notes: e.target.value })} {...describeField('notes', fieldErrors)} />
-                <FieldErrorText path="notes" errors={fieldErrors} />
             </div>
         </div>
     );
