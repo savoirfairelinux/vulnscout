@@ -364,7 +364,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     const pkg = info.row.original;
                     if (pkg.outdated) return <span className="text-neutral-400">Not in active scan</span>;
                     if (pkg.source_file_count == null) return <span className="text-neutral-400"
-                        title="Reimport the original SPDX 3 SBOMs to record source files">Not recorded</span>;
+                        title="Reimport the original SPDX SBOMs to record source files">Not recorded</span>;
                     return <button type="button" onClick={() => setSelectedSourcePackage(pkg.id)}
                         aria-label={`View source files for ${pkg.name}`}
                         className="h-full w-full p-4 text-cyan-300 hover:bg-slate-700 hover:underline">

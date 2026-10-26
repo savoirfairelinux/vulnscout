@@ -15,6 +15,10 @@ export type SourceFile = {
     properties: Record<string, unknown>;
     builds: Record<string, unknown>[];
 };
+
+export const hasCompilationEvidence = (file: SourceFile): boolean => file.builds.some(build =>
+    build.compiled !== false && !/^https?:\/\/openembedded\.org\/bitbake\//.test(String(build.build_type ?? '')));
+
 type Package = PackageVersionMetadata & {
     id: string;
     name: string;
