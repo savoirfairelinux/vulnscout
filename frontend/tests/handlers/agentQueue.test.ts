@@ -173,6 +173,44 @@ test('waits for a ready connection and loads the main conversation before its fi
     expect(getAgentConversation().messages.map(message => message.content)).toEqual(['second', 'Done']);
 });
 
+test('stops draining when a configured connection becomes unavailable', async () => {
+    global.fetch = jest.fn(async input => String(input).endsWith('/messages') ? finished('Done') : json({ messages: [], usage }));
+    configureAgentQueue({ ready: true, model: 'auto' });
+    configureAgentQueue({ ready: false, model: 'auto' });
+    enqueueAgentMessages([action('waiting')], context);
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(getAgentQueue()[0].status).toBe('queued');
+    configureAgentQueue({ ready: true, model: 'auto' });
+    await settle();
+    expect(getAgentHistory().map(task => task.id)).toEqual(['waiting']);
+});
+
+test('retains work arriving during a provider change but requires explicit retry for incompatible follow-ups', async () => {
+    global.fetch = jest.fn(async input => String(input).endsWith('/messages') ? finished('Done') : json({ messages: [], usage }));
+    configureAgentQueue({ ready: true, model: 'auto' });
+    enqueueAgentMessages([action('old')], context, 'Selection', 'per-action');
+    await settle();
+    const oldId = getAgentHistory()[0].conversationId;
+    configureAgentQueue({ ready: false, model: 'auto' });
+    enqueueAgentMessages([action('follow-up')], context, 'Selection', oldId);
+    enqueueAgentMessages([action('waiting')], context, 'Selection', 'per-action');
+    const waitingId = getAgentQueue()[1].conversationId;
+    resetAgentQueue(true);
+    expect(getAgentQueue()).toEqual([
+        expect.objectContaining({ id: 'follow-up', status: 'failed', error: expect.stringContaining('previous provider history') }),
+        expect.objectContaining({ id: 'waiting', status: 'queued', conversationId: waitingId }),
+    ]);
+    expect(getAgentConversation(oldId).messages).toEqual([]);
+    configureAgentQueue({ ready: true, model: 'new-model' });
+    await settle();
+    expect(getAgentHistory()).toEqual([]);
+    retryAgentTask('follow-up');
+    await settle();
+    expect(getAgentHistory().map(task => task.id)).toEqual(['follow-up', 'waiting']);
+    expect(getAgentConversation(oldId).messages.map(message => message.content)).toEqual(['follow-up', 'Done']);
+});
+
 test('reports action positions and opens the chat on the conversation of a started request', async () => {
     let finish: (response: Response) => void = () => {};
     global.fetch = jest.fn(async input => !String(input).endsWith('/messages') ? json({ messages: [], usage })

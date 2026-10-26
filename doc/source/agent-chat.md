@@ -33,7 +33,14 @@ conversation. **Clear waiting** removes waiting and failed requests, never the
 running one. Finished conversations can be deleted one by one or with **Delete
 all**. Closing the chat, changing scope, or navigating away does not cancel queued
 work; reloading the browser discards the in-memory queue and conversations.
-Connection changes require an empty queue. The AI queue is separate from the
+Actions queued before sign-in or the first provider connection stay waiting
+until setup is complete. Replacing or disconnecting an existing connection
+requires an empty queue; finish or remove its requests first. Opening connection
+settings pauses waiting work until you return to the chat.
+New actions submitted while a connection change is already in progress are
+retained. Follow-ups to a previous provider's conversation pause with an
+explanation and require an explicit retry to start a fresh conversation.
+The AI queue is separate from the
 navigation bar's scan/upload/export operation queue.
 
 Every AI action button in the app behaves the same way. Once its request is
@@ -44,6 +51,9 @@ conversation list. The status disappears once the request finishes.
 A failed request appears in its conversation with its error, **Retry failed
 action**, and **Remove failed action**. The queue pauses until you retry or
 remove it, and other conversations show a banner linking to it.
+Review responses become completed conversation turns only after every target's
+freshly saved review has been verified. A failed verification leaves the request
+paused without adding a successful answer to the transcript.
 
 To stay within the backend's limit of active agent conversations, VulnScout
 keeps the 12 most recently used finished action conversations live and archives

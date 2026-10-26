@@ -126,11 +126,23 @@ export function resetAgentConversation() {
     emit();
 }
 
-export function resetAgentQueue() {
+export function resetAgentQueue(preserveWaiting = false) {
     if (running) throw new Error('Wait for the running AI request to finish before changing the connection.');
-    tasks = [];
+    const previous = conversations;
+    tasks = preserveWaiting ? tasks.map(task => previous[task.conversationId]?.messages.length ? {
+        ...task, status: 'failed' as const,
+        error: 'The agent connection changed. Retry to start a fresh conversation without the previous provider history.',
+    } : task) : [];
     history = [];
     conversations = { [MAIN_CONVERSATION]: mainConversation() };
+    for (const task of tasks) {
+        const old = previous[task.conversationId];
+        if (task.conversationId !== MAIN_CONVERSATION && old) {
+            conversations[old.id] = newConversation(old.id, old.title, {
+                threadId: old.threadId, context: old.context, initialized: true,
+            });
+        }
+    }
     activeConversationId = MAIN_CONVERSATION;
     connection = undefined;
     chatRequest = { nonce: chatRequest.nonce };
@@ -138,7 +150,6 @@ export function resetAgentQueue() {
 }
 
 export function configureAgentQueue(next: Connection) {
-    if (!next.ready) return;
     connection = next;
     void drain();
 }
@@ -320,12 +331,12 @@ async function drain() {
                 if (event.success && event.write) window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool } }));
             }
         });
+        await verify?.();
         updateConversation(id, {
             messages: [...conversations[id].messages,
                 { role: 'user', content: task.text, taskId: task.id }, { role: 'assistant', content: result.reply, activity, taskId: task.id }],
             usage: result.usage, lastUsed: Date.now(),
         });
-        await verify?.();
         tasks = tasks.filter(item => item.id !== task.id);
         history = [...history, { ...task, status: 'done' as const }].slice(-HISTORY_LIMIT);
         succeeded = true;

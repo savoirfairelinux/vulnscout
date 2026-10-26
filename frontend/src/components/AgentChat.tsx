@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowDown, faArrowLeft, faArrowRight, faArrowRotateRight, faArrowUp, faArrowUpRightFromSquare, faCheck, faChevronDown, faCircleCheck, faCircleNotch, faCopy, faLocationDot, faPerson, faPersonWalking, faHourglassHalf, faPlug, faPlus, faTriangleExclamation, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
@@ -108,9 +108,15 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         return () => window.removeEventListener(connectionChangedEvent, reload);
     }, []);
 
-    const notifyConnectionChange = () => {
-        resetAgentQueue();
+    const notifyConnectionChange = useCallback(() => {
+        if (state?.authenticated) resetAgentQueue(true);
         window.dispatchEvent(new CustomEvent(connectionChangedEvent, { detail: connectionSource.current }));
+    }, [state?.authenticated]);
+
+    const connectionChangeBlocked = () => {
+        if (!state?.authenticated || !getAgentQueue().length) return false;
+        setError('Finish or remove queued AI requests before changing the connection.');
+        return true;
     };
 
     useEffect(() => {
@@ -130,10 +136,10 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
 
     useEffect(() => {
         configureAgentQueue({
-            ready: Boolean(state?.authenticated && state.configured && models.length && selectedModel) && !modelBusy && !busy,
+            ready: Boolean(state?.authenticated && state.configured && models.length && selectedModel) && !modelBusy && !busy && !showConnections,
             model: selectedModel,
         });
-    }, [state?.authenticated, state?.configured, models.length, modelBusy, busy, selectedModel]);
+    }, [state?.authenticated, state?.configured, models.length, modelBusy, busy, selectedModel, showConnections]);
 
     useEffect(() => {
         if (!state?.authenticated) return;
@@ -201,9 +207,10 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         };
         timer = window.setTimeout(() => void poll(), interval * 1000);
         return () => { active = false; window.clearTimeout(timer); };
-    }, [device]);
+    }, [device, notifyConnectionChange]);
 
     async function signIn() {
+        if (connectionChangeBlocked()) return;
         setBusy(true);
         setError('');
         setShowConnections(true);
@@ -236,6 +243,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
 
     async function connectProvider(event: FormEvent) {
         event.preventDefault();
+        if (connectionChangeBlocked()) return;
         if ((providerChoice === 'azure' || providerChoice === 'local') && !providerUrl.trim()) {
             setShowEndpoint(true);
             setError('Enter the endpoint URL for this connector.');
@@ -266,6 +274,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     }
 
     async function disconnectProvider() {
+        if (connectionChangeBlocked()) return;
         setBusy(true);
         setError('');
         try {
@@ -288,6 +297,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     }
 
     async function signOut() {
+        if (connectionChangeBlocked()) return;
         setBusy(true);
         setError('');
         try {
