@@ -1,8 +1,24 @@
 # Getting Started
 
+VulnScout helps you identify, review, and track vulnerabilities in software
+components using an **SBOM (Software Bill of Materials)**. Import your SBOM and
+existing vulnerability findings, then run scanners to discover additional
+vulnerabilities and refresh their metadata to support prioritisation.
+
+Organise your software into **projects and variants**, use the web interface to
+assess findings and record triage decisions, and export enriched SBOMs or reports.
+The command-line interface also supports automated workflows and CI pipelines.
+
+This guide walks you through importing example data and opening the web interface.
+
 ## Requirements
 
-VulnScout runs locally inside a container. It requires **Docker** or **Podman** installed on the host.
+VulnScout runs locally inside a container. On the host, you need:
+
+- **Git** to clone the repository.
+- **Bash** to run the `vulnscout` launcher.
+- **Docker** or **Podman**, installed and configured so your user can run
+  containers. If your setup uses a container service, ensure it is running.
 
 ---
 
@@ -19,48 +35,52 @@ cd vulnscout
 
 ## First Run
 
-Start VulnScout and import the provided example data:
+### Import the Example Data
+
+Use `./vulnscout add` to parse and import the provided SBOM and vulnerability findings:
 
 ```bash
 ./vulnscout add \
   --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
   --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
-./vulnscout serve
 ```
 
-Then open the web interface:
+The script automatically manages the container lifecycle (Docker or Podman):
+it pulls the image if needed, starts the container, and imports the input files.
+This command does not start the web interface.
 
-```
-http://localhost:7275
-```
-
-The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, and imports the input files; `serve` then starts the web interface.
-
+A **project** groups a software product's data; a **variant** represents a
+specific build or target within that project.
 The import uses project `default` and variant `default`. It loads the supplied
 findings but does not run additional scanners or refresh provider metadata.
 See [VulnScout CLI](vulnscout-script.md) for `scan` and `refresh`.
 
-If you need proxy settings or API keys **before** this import, run
-`./vulnscout start` first to generate the default configuration, then use
-`./vulnscout config set <key> <value>` and `./vulnscout restart`.
-Do not create a partial configuration with `config set` before initialization;
-see [Configuration](vulnscout-script.md#configuration).
+For other sample inputs and their import commands, see [Bundled Examples](examples.md).
 
-Once the initial import finishes, background scans, vulnerability-data refreshes, SBOM uploads, and document exports appear in the web interface's **Operation queue**. See {ref}`Operation Queue <operation-queue>` for progress, cancellation, and recovery after a reload.
+### Starting the Web Interface
 
-For the Zephyr SPDX 3 JSON-LD example, Yocto SPDX 2 archives, and CycloneDX
-exports, see [Bundled Examples](examples.md). Import the four Zephyr companion
-documents together into the same project and variant.
+**API keys are not required to view the imported example data.** If you need
+proxy settings or API keys for external services, configure them before starting
+the web interface with `./vulnscout config set <key> <value>`, then run
+`./vulnscout restart`. See [Configuration](vulnscout-script.md#configuration).
 
----
+The preceding `add` command has already initialised VulnScout. If you skipped it,
+run `./vulnscout start` before using `config set` so the default configuration
+exists.
 
-## Starting the Web Interface
-
-If you have already loaded your data and just want to start the web interface:
+After the import finishes, start the web interface:
 
 ```bash
 ./vulnscout serve
 ```
+
+Then open <http://localhost:7275> in your browser. On subsequent runs, use
+`./vulnscout serve` again; you do not need to re-import the same data.
+
+In the navigation bar, select project **default** and variant **default**.
+Open **Vulnerabilities** to inspect the imported findings and select a
+vulnerability to view its details. See [Interactive Mode](interactive-mode.md)
+for filtering findings, recording assessments, and exporting results.
 
 Press `Ctrl+C` to stop the web server and return to your shell. The container keeps running in the background.
 
