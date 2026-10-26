@@ -8,13 +8,14 @@ VulnScout Documentation
    getting-started
    examples
    vulnscout-script
-   container-entrypoint
    interactive-mode
    ai-assessments
    custom-data-format
-   agent-chat
    templates
    ci_conditions
    api
    dev_guide
+   container-entrypoint
+   agent-chat
    yocto-integration
+   zephyr-integration
