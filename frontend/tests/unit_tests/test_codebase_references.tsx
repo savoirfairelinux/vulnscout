@@ -146,3 +146,12 @@ test("selection changes do not leak late uploads into the new variant", async ()
     expect(screen.queryByRole("button", { name: "Delete reference source.zip" })).not.toBeInTheDocument();
     expect(notify).not.toHaveBeenCalled();
 });
+
+test("help tooltips toggle and close when clicking elsewhere", () => {
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Codebase references help" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reference description help" }));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(2);
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+});
