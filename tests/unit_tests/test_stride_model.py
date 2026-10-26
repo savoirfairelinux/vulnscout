@@ -82,7 +82,18 @@ def test_interaction_name_optional():
 def test_interaction_endpoint_must_exist():
     m = _model()
     m["interactions"][0]["destination_id"] = "C9"
-    assert "interactions[0].destination_id" in _fields(m)
+    assert _fields(m) == {"interactions[0].destination_id": "references an unknown id"}
+
+
+@pytest.mark.parametrize("blank", ["", "  ", None])
+def test_interaction_endpoints_required(blank):
+    m = _model()
+    m["interactions"][0]["source_id"] = blank
+    m["interactions"][0]["destination_id"] = blank
+    assert _fields(m) == {
+        "interactions[0].source_id": "is required",
+        "interactions[0].destination_id": "is required",
+    }
 
 
 def test_interaction_endpoints_must_differ():
@@ -94,7 +105,24 @@ def test_interaction_endpoints_must_differ():
 def test_unknown_category_rejected():
     m = _model()
     m["threats"][0]["category"] = "phishing"
-    assert "threats[0].category" in _fields(m)
+    assert _fields(m)["threats[0].category"].startswith("must be one of")
+
+
+@pytest.mark.parametrize("blank", ["", None])
+def test_threat_category_required(blank):
+    m = _model()
+    m["threats"][0]["category"] = blank
+    assert _fields(m) == {"threats[0].category": "is required"}
+
+
+@pytest.mark.parametrize("targets", [[], None, "missing"])
+def test_threat_target_required(targets):
+    m = _model()
+    if targets == "missing":
+        del m["threats"][0]["target_ids"]
+    else:
+        m["threats"][0]["target_ids"] = targets
+    assert _fields(m) == {"threats[0].target_ids": "is required"}
 
 
 def test_threat_target_must_exist():
@@ -106,7 +134,13 @@ def test_threat_target_must_exist():
 def test_risk_threat_must_exist():
     m = _model()
     m["risks"][0]["threat_id"] = "T4"
-    assert "risks[0].threat_id" in _fields(m)
+    assert _fields(m) == {"risks[0].threat_id": "references an unknown id"}
+
+
+def test_risk_threat_required():
+    m = _model()
+    m["risks"][0]["threat_id"] = ""
+    assert _fields(m) == {"risks[0].threat_id": "is required"}
 
 
 def test_several_risks_may_share_a_threat():

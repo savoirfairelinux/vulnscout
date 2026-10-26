@@ -2,6 +2,7 @@ import { useRef } from "react";
 import type { VariantDraft, StrideThreat } from "../../handlers/context";
 import { STRIDE_CATEGORIES, nextId } from "../../helpers/strideModel";
 import FieldErrorText from "./FieldErrorText";
+import { RequiredMark, RequiredNote } from "./RequiredMark";
 import { describeField } from "./fieldErrors";
 import { CELL, CELL_FIELD, RemoveButton, TH } from "./SystemTables";
 import { BUTTON_SECONDARY, FIELD, HELP } from "./styles";
@@ -53,7 +54,7 @@ function ThreatRow({ draft, threat, index, errors, disabled, onEdit, onRemove }:
             <td className={CELL}>
                 <select className={FIELD} aria-label={`Threat ${threat.id} STRIDE category`} value={threat.category}
                     disabled={disabled} onChange={e => onEdit(index, { category: e.target.value })}
-                    {...describeField(categoryPath, errors)}>
+                    aria-required="true" {...describeField(categoryPath, errors)}>
                     {STRIDE_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
                 </select>
                 <FieldErrorText path={categoryPath} errors={errors} />
@@ -94,13 +95,15 @@ function ThreatModelTab({ draft, onDraftChange, fieldErrors, disabled = false }:
             <FieldErrorText path="threat_model" errors={fieldErrors} />
             <div className="space-y-2">
                 <h3 id="ai-variant-threats-heading" className="text-sm font-semibold text-zinc-200">Threats</h3>
+                <RequiredNote />
                 <div className="overflow-x-auto">
                     <table aria-labelledby="ai-variant-threats-heading" className="w-full min-w-[40rem] table-auto border-collapse">
                         <thead>
                             <tr>
-                                {['ID', 'STRIDE category', 'Description', 'Targets'].map(h => (
-                                    <th key={h} scope="col" className={TH}>{h}</th>
-                                ))}
+                                <th scope="col" className={TH}>ID</th>
+                                <th scope="col" className={TH}>STRIDE category<RequiredMark /></th>
+                                <th scope="col" className={TH}>Description</th>
+                                <th scope="col" className={TH}>Targets<RequiredMark /></th>
                                 <th scope="col" className={TH}><span className="sr-only">Remove</span></th>
                             </tr>
                         </thead>

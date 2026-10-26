@@ -366,6 +366,9 @@ Two body shapes are accepted.
 `stride` (`components`, `interactions`, `threats`, `risks`).
 Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
 (for example `"threat_model": "A threat model is required."`).
+A blank required STRIDE field reports `is required` (for example
+`"interactions[0].destination_id": "is required"`); a non-empty id that matches no row reports
+`references an unknown id`.
 
 **Legacy shape** (no `stride`) accepts the four text fields `variant_description`, `codebase_path`, `environment`
 and `other_info`. Each is replaced by the sent value (omitted means null). It never changes `codebase_source` or the

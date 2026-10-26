@@ -5,7 +5,7 @@ import Context, { ContextSaveError } from '../../src/handlers/context';
 import type { MergedContext, StrideModel } from '../../src/handlers/context';
 import {
     STRIDE_CATEGORIES, RATING_OPTIONS, emptyStrideModel, emptyDraft, draftFromContext,
-    draftsEqual, nextId, isReferenced, hasThreatModel,
+    draftsEqual, nextId, isReferenced, hasThreatModel, requiredFieldErrors,
 } from '../../src/helpers/strideModel';
 
 beforeEach(() => fetchMock.resetMocks());
@@ -118,6 +118,29 @@ describe('hasThreatModel', () => {
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), interactions: populated.interactions } })).toBe(true);
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), threats: populated.threats } })).toBe(true);
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), risks: populated.risks } })).toBe(false);
+    });
+});
+
+describe('requiredFieldErrors', () => {
+    test('is empty for a complete model', () => {
+        expect(requiredFieldErrors(populated)).toEqual({});
+    });
+
+    test('names every blank required field by its server path', () => {
+        const model: StrideModel = {
+            components: [{ ...populated.components[0], name: '  ' }],
+            interactions: [{ ...populated.interactions[0], source_id: '', destination_id: '' }],
+            threats: [{ ...populated.threats[0], category: '', target_ids: [] }],
+            risks: [{ ...populated.risks[0], threat_id: '' }],
+        };
+        expect(requiredFieldErrors(model)).toEqual({
+            'components[0].name': 'Enter a component name.',
+            'interactions[0].source_id': 'Select a source component.',
+            'interactions[0].destination_id': 'Select a destination component.',
+            'threats[0].category': 'Select a STRIDE category.',
+            'threats[0].target_ids': 'Select at least one target.',
+            'risks[0].threat_id': 'Select a threat.',
+        });
     });
 });
 

@@ -1,6 +1,7 @@
 import type { Rating, StrideRisk, VariantDraft } from "../../handlers/context";
 import { RATING_OPTIONS } from "../../helpers/strideModel";
 import FieldErrorText from "./FieldErrorText";
+import { RequiredMark, RequiredNote } from "./RequiredMark";
 import { describeField } from "./fieldErrors";
 import { CELL, CELL_FIELD, RemoveButton, TH } from "./SystemTables";
 import { BUTTON_SECONDARY, FIELD, HELP } from "./styles";
@@ -13,7 +14,7 @@ type Props = {
 };
 
 const DESCRIPTION_PREVIEW = 40;
-const HEADERS = ['Threat', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision'];
+const HEADERS = ['Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision'];
 
 const threatLabel = (id: string, description: string) =>
     description.trim() === '' ? id : `${id}: ${description.trim().slice(0, DESCRIPTION_PREVIEW)}`;
@@ -59,7 +60,7 @@ function RiskRow({ draft, risk, index, errors, disabled, onEdit, onRemove }: Rea
             <td className={CELL}>
                 <select className={FIELD} aria-label={`Risk ${n} threat`} value={risk.threat_id} disabled={disabled}
                     onChange={e => onEdit(index, { threat_id: e.target.value })}
-                    {...describeField(path('threat_id'), errors)}>
+                    aria-required="true" {...describeField(path('threat_id'), errors)}>
                     {draft.stride.threats.map(t => (
                         <option key={t.id} value={t.id}>{threatLabel(t.id, t.description)}</option>
                     ))}
@@ -95,10 +96,12 @@ function RisksTab({ draft, onDraftChange, fieldErrors, disabled = false }: Reado
         <div className="space-y-4">
             <div className="space-y-2">
                 <h3 id="ai-variant-risks-heading" className="text-sm font-semibold text-zinc-200">Risks</h3>
+                <RequiredNote />
                 <div className="overflow-x-auto">
                     <table aria-labelledby="ai-variant-risks-heading" className="w-full min-w-[40rem] table-auto border-collapse">
                         <thead>
                             <tr>
+                                <th scope="col" className={TH}>Threat<RequiredMark /></th>
                                 {HEADERS.map(h => <th key={h} scope="col" className={TH}>{h}</th>)}
                                 <th scope="col" className={TH}><span className="sr-only">Remove</span></th>
                             </tr>

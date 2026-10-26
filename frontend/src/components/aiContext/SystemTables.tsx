@@ -2,6 +2,7 @@ import type { MutableRefObject, ReactNode } from "react";
 import type { StrideComponent, StrideInteraction, VariantDraft } from "../../handlers/context";
 import { isReferenced, nextId } from "../../helpers/strideModel";
 import FieldErrorText from "./FieldErrorText";
+import { RequiredMark, RequiredNote } from "./RequiredMark";
 import { describeField } from "./fieldErrors";
 import { BUTTON_SECONDARY, FIELD, HELP } from "./styles";
 
@@ -18,17 +19,19 @@ export const CELL = "px-1 py-1 align-top";
 export const CELL_FIELD = `${FIELD} resize-y`;
 const BLOCKED_HINT = 'Remove its interactions, threat targets and risks first.';
 
-type Column<T> = { key: keyof T & string; header: string; label: string; kind: 'input' | 'text' | 'source' | 'destination' };
+type Column<T> = {
+    key: keyof T & string; header: string; label: string; kind: 'input' | 'text' | 'source' | 'destination'; required?: boolean;
+};
 
 const COMPONENT_COLUMNS: Column<StrideComponent>[] = [
-    { key: 'name', header: 'Name', label: 'name', kind: 'input' },
+    { key: 'name', header: 'Name', label: 'name', kind: 'input', required: true },
     { key: 'description', header: 'Description / role', label: 'description', kind: 'text' },
     { key: 'trust_zone', header: 'Trust zone', label: 'trust zone', kind: 'text' },
 ];
 const INTERACTION_COLUMNS: Column<StrideInteraction>[] = [
     { key: 'name', header: 'Name', label: 'name', kind: 'input' },
-    { key: 'source_id', header: 'Source', label: 'source', kind: 'source' },
-    { key: 'destination_id', header: 'Destination', label: 'destination', kind: 'destination' },
+    { key: 'source_id', header: 'Source', label: 'source', kind: 'source', required: true },
+    { key: 'destination_id', header: 'Destination', label: 'destination', kind: 'destination', required: true },
     { key: 'interface', header: 'Interface / protocol', label: 'interface', kind: 'input' },
     { key: 'data', header: 'Data / commands', label: 'data', kind: 'text' },
     { key: 'trust_boundary', header: 'Trust boundary', label: 'trust boundary', kind: 'input' },
@@ -85,7 +88,7 @@ function Cell<T extends { id: string }>({ row, index, col, noun, prefix, compone
     const path = `${prefix}[${index}].${col.key}`;
     const value = String((row as Record<string, unknown>)[col.key] ?? '');
     const label = `${noun === 'component' ? 'Component' : 'Interaction'} ${row.id} ${col.label}`;
-    const aria = describeField(path, errors);
+    const aria = { ...describeField(path, errors), 'aria-required': col.required ? true : undefined };
     const onChange = (v: string) => onEdit(index, col.key, v);
     let control: ReactNode;
     if (col.kind === 'source' || col.kind === 'destination') {
@@ -133,7 +136,9 @@ function EntityTable<T extends { id: string }>(props: Readonly<TableProps<T>>) {
                     <thead>
                         <tr>
                             <th scope="col" className={TH}>ID</th>
-                            {columns.map(col => <th key={col.key} scope="col" className={TH}>{col.header}</th>)}
+                            {columns.map(col => (
+                                <th key={col.key} scope="col" className={TH}>{col.header}{col.required && <RequiredMark />}</th>
+                            ))}
                             <th scope="col" className={TH}><span className="sr-only">Remove</span></th>
                         </tr>
                     </thead>
@@ -169,6 +174,7 @@ function SystemTables({ draft, onDraftChange, fieldErrors, removedIds, disabled 
 
     return (
         <>
+            <RequiredNote />
             <EntityTable<StrideComponent>
                 title="Components" noun="component" prefix="components" addLabel="Add component"
                 rows={stride.components} columns={COMPONENT_COLUMNS} components={stride.components}

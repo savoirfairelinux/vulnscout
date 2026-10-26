@@ -117,6 +117,9 @@ def _row_id(row: dict[str, Any], path: str, pattern: re.Pattern[str], seen: set[
 
 def _ref(row: dict[str, Any], key: str, path: str, known: set[str], errs: _Errors) -> str:
     value = row.get(key)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        errs.add(path, "is required")
+        return ""
     if not isinstance(value, str) or value not in known:
         errs.add(path, "references an unknown id")
         return value if isinstance(value, str) else ""
@@ -159,7 +162,8 @@ def _interactions(raw: object, component_ids: set[str], errs: _Errors) -> tuple[
 
 
 def _target_ids(value: object, path: str, known: set[str], errs: _Errors) -> list[str]:
-    if value is None:
+    if value is None or value == []:
+        errs.add(path, "is required")
         return []
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         errs.add(path, "must be a list of ids")
@@ -175,7 +179,9 @@ def _threats(raw: object, target_pool: set[str], errs: _Errors) -> tuple[list[di
     for i, row in enumerate(_rows(raw, "threats", errs)):
         p = f"threats[{i}]"
         category = row.get("category")
-        if category not in STRIDE_CATEGORIES:
+        if category is None or category == "":
+            errs.add(f"{p}.category", "is required")
+        elif category not in STRIDE_CATEGORIES:
             errs.add(f"{p}.category", f"must be one of {', '.join(STRIDE_CATEGORIES)}")
         out.append({
             "id": _row_id(row, f"{p}.id", _THREAT_ID, seen, errs),
