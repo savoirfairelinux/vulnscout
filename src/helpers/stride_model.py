@@ -144,11 +144,15 @@ def _interactions(raw: object, component_ids: set[str], errs: _Errors) -> tuple[
     out = []
     for i, row in enumerate(_rows(raw, "interactions", errs)):
         p = f"interactions[{i}]"
+        source = _ref(row, "source_id", f"{p}.source_id", component_ids, errs)
+        destination = _ref(row, "destination_id", f"{p}.destination_id", component_ids, errs)
+        if source in component_ids and source == destination:
+            errs.add(f"{p}.destination_id", "must differ from the source")
         out.append({
             "id": _row_id(row, f"{p}.id", _INTERACTION_ID, seen, errs),
             "name": _text(row.get("name"), f"{p}.name", errs),
-            "source_id": _ref(row, "source_id", f"{p}.source_id", component_ids, errs),
-            "destination_id": _ref(row, "destination_id", f"{p}.destination_id", component_ids, errs),
+            "source_id": source,
+            "destination_id": destination,
             "interface": _text(row.get("interface"), f"{p}.interface", errs),
             "data": _text(row.get("data"), f"{p}.data", errs),
             "trust_boundary": _text(row.get("trust_boundary"), f"{p}.trust_boundary", errs),

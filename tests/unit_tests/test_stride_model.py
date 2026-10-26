@@ -85,6 +85,12 @@ def test_interaction_endpoint_must_exist():
     assert "interactions[0].destination_id" in _fields(m)
 
 
+def test_interaction_endpoints_must_differ():
+    m = _model()
+    m["interactions"][0]["destination_id"] = m["interactions"][0]["source_id"]
+    assert _fields(m) == {"interactions[0].destination_id": "must differ from the source"}
+
+
 def test_unknown_category_rejected():
     m = _model()
     m["threats"][0]["category"] = "phishing"
