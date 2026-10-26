@@ -19,3 +19,4 @@ VulnScout Documentation
    agent-chat
    yocto-integration
    zephyr-integration
+   license
