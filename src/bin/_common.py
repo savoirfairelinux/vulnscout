@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-import click
+from ._console import echo
 
 if TYPE_CHECKING:
     from ..models.project import Project
@@ -30,7 +30,7 @@ def resolve_project(project: str) -> Project:
 
     project_obj = ProjectController.get_by_name(project)
     if not project_obj:
-        click.echo(f"Error: project not found: {project}")
+        echo(f"Error: project not found: {project}", role="error")
         raise SystemExit(1)
     return project_obj
 
@@ -65,12 +65,12 @@ def resolve_project_variant(project: str, variant: str | None, *, create: bool =
     else:
         _proj = ProjectController.get_by_name(project)
         if not _proj:
-            click.echo(f"Error: project not found: {project}")
+            echo(f"Error: project not found: {project}", role="error")
             raise SystemExit(1)
         project_obj = _proj
         _var = DBVariant.get_by_name_and_project(variant_name, project_obj.id)
         if not _var:
-            click.echo(f"Error: variant not found: {variant_name}")
+            echo(f"Error: variant not found: {variant_name}", role="error")
             raise SystemExit(1)
         variant_obj = _var
 

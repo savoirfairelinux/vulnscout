@@ -3,6 +3,7 @@
 """VulnScout JSON and OpenVEX custom-assessment import/export commands."""
 
 import click
+from ._console import Command, echo
 import json as _json
 import os
 from flask.cli import with_appcontext
@@ -53,21 +54,21 @@ def _load_json_file(file_path: str) -> dict:
 def _print_custom_data_import_result(result: dict) -> None:
     if result.get("status") != "success":
         for error in result.get("errors", []):
-            click.echo(f"  {error}", err=True)
+            echo(f"  {error}", err=True, role="error")
         raise click.ClickException("Failed to import VulnScout JSON data.")
     for error in result.get("errors", []):
-        click.echo(f"  Warning: {error}", err=True)
-    click.echo(
+        echo(f"  Warning: {error}", err=True, role="warning")
+    echo(
         f"Imported {result['assessments_imported']} assessments"
         f" ({result['assessments_skipped']} skipped as duplicates),"
         f" {result['ai_assessments_imported']} AI assessments"
         f" ({result['ai_assessments_skipped']} skipped as duplicates),"
         f" {result['cvss_imported']} CVSS,"
-        f" {result['time_estimates_imported']} time estimates"
+        f" {result['time_estimates_imported']} time estimates", role="warning"
     )
 
 
-@click.command("export-custom-vulnscout-data")
+@click.command("export-custom-vulnscout-data", cls=Command)
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
 @click.option("--project", "-p", required=True, help="Project name.")
@@ -101,10 +102,10 @@ def export_custom_vulnscout_data_command(output_dir: str, project: str, variant:
         data = reconcile_review_export(_load_json_file(output_path), data)
     with open(output_path, "w") as file:
         _json.dump(data, file, indent=2)
-    click.echo(f"Custom VulnScout data exported: {output_path}")
+    echo(f"Custom VulnScout data exported: {output_path}", role="success")
 
 
-@click.command("import-custom-vulnscout-data")
+@click.command("import-custom-vulnscout-data", cls=Command)
 @click.argument("file_path")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option(
@@ -136,7 +137,7 @@ def import_custom_vulnscout_data_command(
     ))
 
 
-@click.command("export-custom-openvex-assessments")
+@click.command("export-custom-openvex-assessments", cls=Command)
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
 @click.option("--project", "-p", default="default", show_default=True, help="Project name.")
@@ -186,7 +187,7 @@ def export_custom_openvex_assessments_command(
             stale_path = paths[variant_obj.id]
             if variant_obj.id not in exported_ids and _is_project_export(stale_path, project_obj.name):
                 os.remove(stale_path)
-                click.echo(f"Removed stale export: {stale_path}")
+                echo(f"Removed stale export: {stale_path}", role="success")
     for variant_obj, handmade in exports:
         document = build_openvex_doc(handmade, author, now_iso, variant_ids=[variant_obj.id])
         output_path = paths[variant_obj.id]
@@ -195,10 +196,10 @@ def export_custom_openvex_assessments_command(
         document[_PROJECT_MARKER] = project_obj.name
         with open(output_path, "w") as file:
             _json.dump(document, file, indent=2)
-        click.echo(f"Custom OpenVEX assessments exported: {output_path}")
+        echo(f"Custom OpenVEX assessments exported: {output_path}", role="success")
 
 
-@click.command("import-custom-openvex-assessments")
+@click.command("import-custom-openvex-assessments", cls=Command)
 @click.argument("file_path")
 @click.option("--project", "-p", default="default", show_default=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
@@ -237,8 +238,8 @@ def import_custom_openvex_assessments_command(
         use_original_timestamps=use_original_timestamps,
     )
     for error in total_errors:
-        click.echo(f"  Warning: {error}", err=True)
-    click.echo(
+        echo(f"  Warning: {error}", err=True, role="warning")
+    echo(
         f"Imported {len(total_created)} OpenVEX assessments"
-        f" ({total_skipped} skipped as duplicates)"
+        f" ({total_skipped} skipped as duplicates)", role="warning"
     )

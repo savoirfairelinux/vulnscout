@@ -10,6 +10,7 @@ from ..controllers.scans import ScanController
 from ..models.project import Project as ProjectModel
 from ..models.scan import Scan as ScanModel
 import click
+from ._console import Command, color_enabled, echo, style
 import json
 import typing
 import uuid
@@ -29,13 +30,14 @@ def _echo_object_list(
         # array "lazily"
         click.echo_via_pager(json.dumps(
             [to_dict(obj) for obj in objects],
-            indent=4)
+            indent=4),
+            color=False,
         )
     else:
-        click.echo_via_pager(pretty_format(obj) for obj in objects)
+        click.echo_via_pager((style(pretty_format(obj)) for obj in objects), color=color_enabled())
 
 
-@click.command("list-projects")
+@click.command("list-projects", cls=Command)
 @click.option("--json", "json_format", is_flag=True)
 @with_appcontext
 def list_projects_command(json_format: bool):
@@ -48,7 +50,7 @@ def list_projects_command(json_format: bool):
     _echo_object_list(json_format, projects, _format_project_pretty, ProjectModel.to_dict)
 
 
-@click.command("list-scans")
+@click.command("list-scans", cls=Command)
 @click.option("--json", "json_format", is_flag=True)
 @with_appcontext
 def list_scans_command(json_format: bool = False):
@@ -63,7 +65,7 @@ def list_scans_command(json_format: bool = False):
     _echo_object_list(json_format, scans, _format_scan_pretty, ScanModel.to_dict)
 
 
-@click.command("delete-scan")
+@click.command("delete-scan", cls=Command)
 @click.argument("scan-id", type=click.UUID)
 @click.option("--dry-run", is_flag=True, help="Show the scan that would be deleted without deleting it.")
 @with_appcontext
@@ -72,16 +74,16 @@ def delete_scan_command(scan_id: uuid.UUID, dry_run: bool):
         scan = ScanController.get(scan_id)
         if scan is None:
             raise click.ClickException(f"Scan not found: {scan_id}")
-        click.echo(
+        echo(
             f"Would delete scan {scan.id} ({scan.variant.project.name}/{scan.variant.name}, "
-            f"{scan.timestamp.isoformat()}): {scan.description or ''}"
+            f"{scan.timestamp.isoformat()}): {scan.description or ''}", role="warning"
         )
         return
     ScanController.delete(scan_id)
-    click.echo(f"Successfully deleted scan {scan_id}")
+    echo(f"Successfully deleted scan {scan_id}", role="success")
 
 
-@click.command("delete-outdated")
+@click.command("delete-outdated", cls=Command)
 @click.option("--dry-run", is_flag=True, help="List outdated data without deleting it.")
 @with_appcontext
 def delete_outdated_command(dry_run: bool):
@@ -92,21 +94,21 @@ def delete_outdated_command(dry_run: bool):
         preview = outdated_cleanup.outdated_data_preview()
         packages = typing.cast("list[dict[str, typing.Any]]", preview["packages"])
         assessments = typing.cast("list[dict[str, typing.Any]]", preview["assessments"])
-        click.echo(f"Would delete {len(packages)} outdated package links and {len(assessments)} assessments")
+        echo(f"Would delete {len(packages)} outdated package links and {len(assessments)} assessments", role="warning")
         for package in packages:
-            click.echo(
+            echo(
                 f"  package {package['package']} in {package['project']}/{package['variant']}"
-                f" ({len(package['vulnerabilities'])} vulnerabilities)"
+                f" ({len(package['vulnerabilities'])} vulnerabilities)", role="info"
             )
         for assessment in assessments:
-            click.echo(
+            echo(
                 f"  assessment {assessment['vulnerability']} on {assessment['package']}"
-                f" in {assessment['project']}/{assessment['variant']}"
+                f" in {assessment['project']}/{assessment['variant']}", role="info"
             )
         return
 
     summary = outdated_cleanup.delete_outdated_data()
-    click.echo(
+    echo(
         "Deleted outdated data: "
         f"{summary['assessments_deleted']} assessments, "
         f"{summary['observations_deleted']} observations, "
@@ -114,11 +116,11 @@ def delete_outdated_command(dry_run: bool):
         f"{summary['sbom_observations_deleted']} SBOM vulnerability records, "
         f"{summary['findings_deleted']} findings, "
         f"{summary['vulnerabilities_deleted']} vulnerabilities, "
-        f"{summary['packages_deleted']} packages"
+        f"{summary['packages_deleted']} packages", role="success"
     )
 
 
-@click.command("delete-empty-scans")
+@click.command("delete-empty-scans", cls=Command)
 @click.option("--dry-run", is_flag=True, help="List empty scans without deleting them.")
 @with_appcontext
 def delete_empty_scans_command(dry_run: bool):
@@ -127,17 +129,17 @@ def delete_empty_scans_command(dry_run: bool):
 
     if dry_run:
         scans = outdated_cleanup.empty_scans_preview()
-        click.echo(f"Would delete {len(scans)} empty scans")
+        echo(f"Would delete {len(scans)} empty scans", role="warning")
         for scan in scans:
             line = f"  {scan['id']} {scan['project']}/{scan['variant']} {scan['timestamp']} {scan['description']}"
-            click.echo(line.rstrip())
+            echo(line.rstrip(), role="info")
         return
 
     summary = outdated_cleanup.delete_empty_scans()
-    click.echo(f"Deleted {summary['scans_deleted']} empty scans")
+    echo(f"Deleted {summary['scans_deleted']} empty scans", role="success")
 
 
-@click.command("delete-orphaned-vulns")
+@click.command("delete-orphaned-vulns", cls=Command)
 @click.option("--dry-run", is_flag=True, help="List orphaned vulnerabilities without deleting them.")
 @with_appcontext
 def delete_orphaned_vulnerabilities_command(dry_run: bool):
@@ -146,14 +148,14 @@ def delete_orphaned_vulnerabilities_command(dry_run: bool):
 
     if dry_run:
         vulnerabilities = outdated_cleanup.orphaned_vulnerabilities_preview()
-        click.echo(f"Would delete {len(vulnerabilities)} orphaned vulnerabilities")
+        echo(f"Would delete {len(vulnerabilities)} orphaned vulnerabilities", role="warning")
         for vulnerability in vulnerabilities:
-            click.echo(f"  {vulnerability['id']} ({vulnerability['assessments']} assessments)")
+            echo(f"  {vulnerability['id']} ({vulnerability['assessments']} assessments)", role="info")
         return
 
     summary = outdated_cleanup.delete_orphaned_vulnerabilities()
-    click.echo(
+    echo(
         f"Deleted {summary['vulnerabilities_deleted']} orphaned vulnerabilities, "
         f"{summary['assessments_deleted']} assessments, "
-        f"{summary['findings_deleted']} findings"
+        f"{summary['findings_deleted']} findings", role="success"
     )

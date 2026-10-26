@@ -19,10 +19,10 @@ from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
-from ..helpers.verbose import verbose, warn
 from ..helpers.env_vars import get_bool_env
 from ..extensions import batch_session, db as _db
 import click
+from ._console import Command, echo, print_message, verbose, warn
 import json
 import os
 from itertools import chain
@@ -171,7 +171,8 @@ def evaluate_condition(
             data["new"] = False
         if parser.evaluate(condition, data):
             failed_vulns.append(vuln_id)
-            print(f"Vulnerability triggered fail condition: {vuln_id}")  # output in stdout to be catched by the CI
+            # Keep this message on stdout for CI consumers.
+            print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
     return failed_vulns
 
 
@@ -285,22 +286,22 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             elif fmt == "grype" or (fmt is None and "matches" in data):
                 grype.load_from_dict(data)
             else:
-                print(f"Warning: unknown format for {doc.path}, skipping")
+                print_message(f"Warning: unknown format for {doc.path}, skipping", role="warning")
                 continue
             doc.dependencies_recorded = True
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
         except SQLAlchemyError as e:
             _db.session.rollback()
-            print(f"Error importing {document_path}: {e}")
+            print_message(f"Error importing {document_path}: {e}", role="error")
             raise
         except Exception as e:
             if not use_fastspdx:
-                print(f"Error parsing {document_path}: {e}")
-                print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
+                print_message(f"Error parsing {document_path}: {e}", role="error")
+                print_message("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error", role="error")
                 raise
             else:
-                print(f"Ignored: Error parsing {document_path}: {e}")
+                print_message(f"Ignored: Error parsing {document_path}: {e}", role="warning")
         finally:
             pkgCtrl.current_sbom_document = None
     pkgCtrl.flush_spdx_dependencies()
@@ -352,7 +353,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     }
 
 
-@click.command("merge")
+@click.command("merge", cls=Command)
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
@@ -403,7 +404,7 @@ def create_project_context(
     scan = ScanController.create(scan_description, variant_obj.id, scan_type=scan_type,
                                  scan_source=scan_source,
                                  run_id=(run_id or new_queue_id()) if scan_type == "tool" else None)
-    click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}")
+    echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}", role="info")
 
     format_groups: list[tuple[tuple, str]] = [
         (spdx_inputs, "spdx"),
@@ -417,10 +418,10 @@ def create_project_context(
         for sbom_file in files:
             abs_path = os.path.abspath(sbom_file)
             SBOMDocumentController.create(abs_path, os.path.basename(sbom_file), scan.id, format=fmt)
-            click.echo(f"  + [{fmt}] {sbom_file}")
+            echo(f"  + [{fmt}] {sbom_file}", role="info")
 
 
-@click.command("process")
+@click.command("process", cls=Command)
 @click.option(
     "--refresh-vulnerability-data",
     is_flag=True,
@@ -442,7 +443,7 @@ def process_command(
     )
 
 
-@click.command("refresh-vulnerability-data")
+@click.command("refresh-vulnerability-data", cls=Command)
 @click.option("--project", "project_name", default=None, help="Refresh vulnerabilities in this project only.")
 @click.option("--variant", "variant_name", default=None, help="Refresh vulnerabilities in this project variant only.")
 @with_appcontext
@@ -465,8 +466,8 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
     failed_sources = refresh_vulnerability_sources(
         controllers,
         controllers.vulnerabilities.vulnerabilities,
-        on_source_start=lambda label, step, total: click.echo(
-            f"Refreshing {label} data (step {step} of {total})..."
+        on_source_start=lambda label, step, total: echo(
+            f"Refreshing {label} data (step {step} of {total})...", role="info"
         ),
     )
     if failed_sources:
@@ -474,7 +475,7 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
         raise click.ClickException(
             f"{', '.join(unique_failed)} vulnerability-data refresh failed."
         )
-    click.echo("Vulnerability data refresh complete.")
+    echo("Vulnerability data refresh complete.", role="success")
 
 
 def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None:
@@ -490,7 +491,7 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
     verbose(f"{log_prefix}: Populating observations table")
     try:
         if not scan:
-            print("Warning: no scan provided — skipping observation creation.")
+            print_message("Warning: no scan provided — skipping observation creation.", role="warning")
             return
 
         # 1. Collect package_ids referenced by this scan's SBOM documents
@@ -538,7 +539,7 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
                 _db.session.bulk_save_objects(new_observations)
             verbose(f"{log_prefix}: Observations created for scan {scan.id} ({len(new_observations)} new)")
     except Exception as e:
-        print(f"Warning: could not populate observations table: {e}")
+        print_message(f"Warning: could not populate observations table: {e}", role="warning")
 
 
 def _condition_scope(project_name: str | None, variant_name: str | None):
@@ -612,8 +613,8 @@ def _run_main(
         failed_sources = refresh_vulnerability_sources(
             controllers,
             vulnCtrl._encountered_this_run,
-            on_source_start=lambda label, step, total: click.echo(
-                f"Refreshing {label} data (step {step} of {total})..."
+            on_source_start=lambda label, step, total: echo(
+                f"Refreshing {label} data (step {step} of {total})...", role="info"
             ),
         )
         if failed_sources:
@@ -621,7 +622,7 @@ def _run_main(
             raise click.ClickException(
                 f"{', '.join(unique_failed)} vulnerability-data refresh failed."
             )
-        click.echo("Vulnerability data refresh complete.")
+        echo("Vulnerability data refresh complete.", role="success")
 
     failed_vulns = []
     if match_condition:

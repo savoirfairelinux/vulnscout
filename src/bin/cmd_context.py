@@ -6,6 +6,7 @@
 import json as _json
 
 import click
+from ._console import Command, echo
 from flask.cli import with_appcontext
 
 from ..extensions import db
@@ -19,7 +20,7 @@ from ..helpers.context_io import (
 from ._common import resolve_project, resolve_project_variant
 
 
-@click.command("export-context")
+@click.command("export-context", cls=Command)
 @click.option("--output", "-o", default="./context-export.json", show_default=True,
               help="File to write the exported context to.")
 @click.option("--project", "-p", default=None,
@@ -30,7 +31,7 @@ from ._common import resolve_project, resolve_project_variant
 def export_context_command(output: str, project: str | None, variant: str | None) -> None:
     """Export AI assessment context as a versioned JSON document."""
     if variant and not project:
-        click.echo("Error: --variant requires --project.", err=True)
+        echo("Error: --variant requires --project.", err=True, role="error")
         raise SystemExit(1)
 
     if project and variant:
@@ -50,10 +51,10 @@ def export_context_command(output: str, project: str | None, variant: str | None
         _json.dump(document, fh, indent=2)
 
     count = sum(len(group["variants"]) for group in projects)
-    click.echo(f"Context exported: {output} ({count} entr{'y' if count == 1 else 'ies'})")
+    echo(f"Context exported: {output} ({count} entr{'y' if count == 1 else 'ies'})", role="success")
 
 
-@click.command("import-context")
+@click.command("import-context", cls=Command)
 @click.argument("file_path")
 @click.option("--project", "-p", default=None,
               help="Import every entry into this project, keeping its variant names.")
@@ -70,17 +71,17 @@ def import_context_command(file_path: str, project: str | None, variant: str | N
     and must name an existing project/variant.
     """
     if variant and not project:
-        click.echo("Error: --variant requires --project.", err=True)
+        echo("Error: --variant requires --project.", err=True, role="error")
         raise SystemExit(1)
 
     try:
         with open(file_path) as fh:
             data = _json.load(fh)
     except FileNotFoundError:
-        click.echo(f"Error: file not found: {file_path}", err=True)
+        echo(f"Error: file not found: {file_path}", err=True, role="error")
         raise SystemExit(1)
     except (ValueError, OSError):
-        click.echo("Error: invalid JSON file.", err=True)
+        echo("Error: invalid JSON file.", err=True, role="error")
         raise SystemExit(1)
 
     try:
@@ -92,7 +93,7 @@ def import_context_command(file_path: str, project: str | None, variant: str | N
                 resolve_project(project)
             entries = retarget_entries(entries, project, variant)
     except ValueError as exc:
-        click.echo(f"Error: {exc}", err=True)
+        echo(f"Error: {exc}", err=True, role="error")
         raise SystemExit(1)
 
     result = import_entries(entries)
@@ -101,7 +102,7 @@ def import_context_command(file_path: str, project: str | None, variant: str | N
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
-        click.echo(f"Error: failed to import context: {exc}", err=True)
+        echo(f"Error: failed to import context: {exc}", err=True, role="error")
         raise SystemExit(1)
 
     imported = result["imported"]
@@ -109,13 +110,14 @@ def import_context_command(file_path: str, project: str | None, variant: str | N
     failed = result["failed"]
 
     for item in ignored:
-        click.echo(f"  Ignored {_label(item)}: {item.get('reason', '')}", err=True)
+        echo(f"  Ignored {_label(item)}: {item.get('reason', '')}", err=True, role="warning")
     for item in failed:
-        click.echo(f"  Failed {_label(item)}: {item.get('reason', '')}", err=True)
+        echo(f"  Failed {_label(item)}: {item.get('reason', '')}", err=True, role="error")
 
-    click.echo(
+    echo(
         f"Imported {len(imported)} context entr{'y' if len(imported) == 1 else 'ies'}"
-        f" ({len(ignored)} ignored, {len(failed)} failed)"
+        f" ({len(ignored)} ignored, {len(failed)} failed)",
+        role="error" if failed else "warning" if ignored else "success",
     )
 
     if failed:
