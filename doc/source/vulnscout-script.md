@@ -141,7 +141,7 @@ advisories without affected-file information cannot use this refinement.
 This does not evaluate Kconfig expressions or infer release versions from Git
 revisions. Yocto BitBake recipe inputs and SPDX 2 package/file inventories
 remain available for inspection but cannot by themselves enable compiled-source
-refinement. See [Source files](interactive-mode.md#source-files).
+refinement. See [Recorded files](interactive-mode.md#recorded-files).
 
 ## Shell completion
 
