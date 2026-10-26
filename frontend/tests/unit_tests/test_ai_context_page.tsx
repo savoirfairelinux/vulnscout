@@ -1104,7 +1104,7 @@ describe('AIContext page', () => {
     });
 
     describe('copy from', () => {
-        const COPY_WARNING = 'This replaces the whole draft of this variant. Uploaded codebase references are not copied. Nothing is saved until you click Save changes.';
+        const COPY_WARNING = 'This replaces the whole draft of this variant. Uploaded codebase references are not copied: when the source uses them, this variant keeps its own codebase source and paths. Nothing is saved until you click Save changes.';
         const sourceContext = () => {
             const base = variantContext('v3', 'Source TM', [{ id: 'f9', original_name: 'other.zip', description: null }]);
             return {
@@ -1170,8 +1170,8 @@ describe('AIContext page', () => {
             expect(banner.closest('[role="alert"]')).toHaveClass('bg-blue-800');
             expect(screen.getByLabelText('Variant description')).toHaveValue('Copied desc');
             expect(screen.getByLabelText('Environment')).toHaveValue('Plant');
-            expect(screen.getByRole('radio', { name: 'Codebase references' })).toBeChecked();
-            expect(screen.getByRole('button', { name: 'Delete reference source.zip' })).toBeInTheDocument();
+            expect(screen.getByRole('radio', { name: 'Codebase paths' })).toBeChecked();
+            expect(screen.getByRole('button', { name: 'Delete reference source.zip', hidden: true })).toBeInTheDocument();
             expect(screen.queryByText('other.zip')).not.toBeInTheDocument();
             expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
             expect(backend.requests.filter(r => r.method !== 'GET')).toHaveLength(0);
@@ -1179,7 +1179,8 @@ describe('AIContext page', () => {
             await user.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
-            expect(body).toMatchObject({ other_info: 'Copied info', codebase_path: '/copied', system: { scope: 'Source TM' } });
+            expect(body).toMatchObject({ other_info: 'Copied info', codebase_source: 'paths', system: { scope: 'Source TM' } });
+            expect(body.codebase_path).not.toBe('/copied');
         });
 
         test('copy clears the field errors of the replaced draft', async () => {
@@ -1208,7 +1209,7 @@ describe('AIContext page', () => {
             await copyFrom(user, 'Variant 2');
 
             expect(screen.getByLabelText('System scope and assets')).toHaveValue('');
-            expect(within(screen.getByRole('radiogroup', { name: 'Codebase source' })).getByRole('radio', { name: 'Codebase references' })).toBeChecked();
+            expect(within(screen.getByRole('radiogroup', { name: 'Codebase source' })).getByRole('radio', { name: 'Codebase paths' })).toBeChecked();
             ['Variant description', 'Environment', 'Other information']
                 .forEach(name => expect(screen.getByRole('textbox', { name })).toHaveValue(''));
             await user.click(screen.getByRole('button', { name: 'Save changes' }));

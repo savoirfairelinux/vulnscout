@@ -343,7 +343,9 @@ function Explorer() {
         const pairOrSingle = currentBaseVariantId && currentVariantId
             ? [currentBaseVariantId, currentVariantId]
             : currentVariantId ? [currentVariantId] : undefined;
-        return { projectId: currentProjectId, variantIds: currentVariantIds ?? pairOrSingle, revision };
+        // A whole-project selection has no variant ids; the default variant used to load data is not a scope.
+        const wholeProject = frontendScope?.mode === 'select' && frontendScope.variant_ids.length === 0;
+        return { projectId: currentProjectId, variantIds: wholeProject ? undefined : (currentVariantIds ?? pairOrSingle), revision };
     }, [frontendScope, scopeRevision, currentProjectId, currentVariantId, currentBaseVariantId, currentVariantIds]);
 
     const handleScanComplete = useCallback(() => {

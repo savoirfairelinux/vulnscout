@@ -86,7 +86,7 @@ function CopyFromDialog({ isOpen, currentVariantId, projects, onCopy, onClose }:
                     </div>
                 )}
                 <p className={WARNING}>
-                    This replaces the whole draft of this variant. Uploaded codebase references are not copied. Nothing is saved until you click Save changes.
+                    This replaces the whole draft of this variant. Uploaded codebase references are not copied: when the source uses them, this variant keeps its own codebase source and paths. Nothing is saved until you click Save changes.
                 </p>
             </div>
         </ModalShell>

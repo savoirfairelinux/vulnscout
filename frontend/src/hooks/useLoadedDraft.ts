@@ -13,8 +13,9 @@ export type LoadedDraft<T> = DraftState<T> & {
     /**
      * Adopt a saved value as the baseline, and as the draft unless the draft
      * was edited after `sent` went out (those edits stay, as unsaved changes).
+     * Returns false when such newer edits were kept.
      */
-    commit: (saved: T, sent: T) => void;
+    commit: (saved: T, sent: T) => boolean;
     /** Drop edits: the draft goes back to the baseline. */
     reset: () => void;
     reload: () => void;
@@ -39,6 +40,8 @@ export function useLoadedDraft<T>(
     const onErrorRef = useRef(onError);
     const equalRef = useRef(equal);
     const loadIdRef = useRef(0);
+    const stateRef = useRef(state);
+    stateRef.current = state;
     const keyRef = useRef<string | null>(null);
     useEffect(() => {
         loadRef.current = load;
@@ -75,12 +78,19 @@ export function useLoadedDraft<T>(
     // Responses arriving after unmount are ignored.
     useEffect(() => () => { loadIdRef.current += 1; }, []);
 
-    const setDraft = useCallback((draft: T) => setState(prev => ({ ...prev, draft })), []);
-    const commit = useCallback((saved: T, sent: T) => setState(prev => (
-        !equalRef.current(prev.draft, sent)
-            ? { ...prev, baseline: saved }
-            : { ...prev, draft: saved, baseline: saved, commits: prev.commits + 1 }
-    )), []);
+    const setDraft = useCallback((draft: T) => {
+        stateRef.current = { ...stateRef.current, draft };
+        setState(prev => ({ ...prev, draft }));
+    }, []);
+    const commit = useCallback((saved: T, sent: T) => {
+        const unchanged = equalRef.current(stateRef.current.draft, sent);
+        setState(prev => (
+            !equalRef.current(prev.draft, sent)
+                ? { ...prev, baseline: saved }
+                : { ...prev, draft: saved, baseline: saved, commits: prev.commits + 1 }
+        ));
+        return unchanged;
+    }, []);
     const reset = useCallback(() => setState(prev => (
         prev.baseline === null ? prev : { ...prev, draft: prev.baseline, epoch: prev.epoch + 1 }
     )), []);
