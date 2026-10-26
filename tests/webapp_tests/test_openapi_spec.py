@@ -499,6 +499,37 @@ def test_stored_review_matches_its_request_and_response_contract(client, contrac
     )
 
 
+def test_stride_editor_save_matches_context_contracts(client, contract_data):
+    spec = client.get("/api/openapi").get_json()
+    payload = {
+        "variant_description": "Gateway", "environment": None, "other_info": None,
+        "codebase_source": "paths", "codebase_path": "/src",
+        "system": {"scope": "Gateway firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
+        "stride": {
+            "components": [{"id": "C1", "name": "Web UI"}, {"id": "C2", "name": "Daemon"}],
+            "interactions": [{"id": "I1", "source_id": "C1", "destination_id": "C2"}],
+            "threats": [{"id": "T1", "category": "tampering", "target_ids": ["I1"]}],
+            "risks": [{"threat_id": "T1", "likelihood": "high", "impact": None}],
+        },
+    }
+    path = "/api/variants/{variant_id}/context"
+    operation = spec["paths"][path]["put"]
+    _assert_payload_matches(spec, operation["requestBody"]["content"]["application/json"]["schema"], payload)
+    response = client.put(path.format(**contract_data), json=payload)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    _assert_payload_matches(
+        spec, operation["responses"]["200"]["content"]["application/json"]["schema"], response.get_json(),
+    )
+    exported = client.get("/api/context/export")
+    assert exported.status_code == 200
+    variants = [v for p in exported.get_json()["projects"] for v in p["variants"]]
+    assert any(v["stride_model"]["threats"] for v in variants)
+    _assert_payload_matches(
+        spec, spec["paths"]["/api/context/export"]["get"]["responses"]["200"]["content"]["application/json"]["schema"],
+        exported.get_json(),
+    )
+
+
 def test_runtime_sse_matches_its_documented_media_type(client):
     spec = client.get("/api/openapi").get_json()
     response = client.get("/api/events/stream", buffered=False)

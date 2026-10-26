@@ -367,7 +367,8 @@ Two body shapes are accepted.
 Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
 (for example `"threat_model": "A threat model is required."`).
 A blank required STRIDE field reports `is required` (for example
-`"interactions[0].destination_id": "is required"`); a non-empty id that matches no row reports
+`"interactions[0].destination_id": "is required"`); a threat needs a category and at least one target
+(`"threats[0].target_ids": "is required"`). A non-empty id that matches no row reports
 `references an unknown id`.
 
 **Legacy shape** (no `stride`) accepts the four text fields `variant_description`, `codebase_path`, `environment`
@@ -389,6 +390,56 @@ export all context. Import accepts an exported context JSON document and applies
 Export format `2.0` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields.
 Every entry is imported through the editor path, so it needs a valid `codebase_source` and a non-empty threat model;
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
+
+```json
+{
+  "version": "2.0",
+  "exported_at": "2026-01-01T12:00:00+00:00",
+  "projects": [{
+    "project_name": "demo",
+    "project_description": "Required. Describes the project.",
+    "variants": [{
+      "variant_name": "x86",
+      "variant_description": "text or null",
+      "environment": "text or null",
+      "other_info": "text or null",
+      "codebase_source": "paths",
+      "codebase_path": "/src/app;/src/lib",
+      "system": {"scope": "", "actors": "", "entry_points": "", "trust_boundaries": ""},
+      "stride_model": {
+        "components": [
+          {"id": "C1", "name": "Updater", "description": "", "trust_zone": ""},
+          {"id": "C2", "name": "Server", "description": "", "trust_zone": ""}
+        ],
+        "interactions": [
+          {"id": "I1", "name": "Download", "source_id": "C1", "destination_id": "C2",
+           "interface": "HTTPS", "data": "firmware", "trust_boundary": ""}
+        ],
+        "threats": [
+          {"id": "T1", "category": "tampering", "description": "Image swapped", "target_ids": ["I1"]}
+        ],
+        "risks": [
+          {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""}
+        ]
+      }
+    }]
+  }]
+}
+```
+
+Rules checked on import, with the same messages as the editor save:
+
+- IDs are `C<n>`, `I<n>` and `T<n>`, unique per table. Interactions refer to components, threats to components or
+  interactions, and risks to threats.
+- Required: the project description, a component `name`, an interaction `source_id` and `destination_id` (two different
+  components), a threat `category` (`spoofing`, `tampering`, `repudiation`, `information_disclosure`,
+  `denial_of_service` or `elevation_of_privilege`) with at least one non-repeated `target_ids` entry, and a risk
+  `threat_id`. `likelihood` and `impact` are `low`, `medium`, `high` or `null`.
+- The system fields and STRIDE tables together must render a non-empty threat model.
+- At most 500 rows per table and 20,000 characters per text field.
+
+`version` and `exported_at` are ignored on import, and a bare list of projects is accepted. The response lists
+`imported`, `ignored` (project or variant not found) and `failed` (with the validation reason) entries. Failed entries are skipped; the imported ones are committed together.
 
 ### Manage Codebase References
 

@@ -9,6 +9,8 @@ Package string IDs and vulnerability identifiers are not database UUIDs.
 
 from typing import Any
 
+from .stride_model import MAX_ROWS, RATINGS, STRIDE_CATEGORIES, SYSTEM_KEYS
+
 
 def _ref(name: str) -> dict[str, Any]:
     return {"$ref": f"#/components/schemas/{name}"}
@@ -80,6 +82,13 @@ _CONTEXT_FIELDS = {
         "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
     )
 }
+# Variant context fields stored as plain text; the threat model and risks are rendered from STRIDE.
+_CONTEXT_TEXT_FIELDS = {
+    name: _TEXT for name in ("variant_description", "codebase_path", "environment", "other_info")
+}
+_CODEBASE_SOURCE = {"type": "string", "enum": ["paths", "references"]}
+_STRIDE_ROWS = {"maxItems": MAX_ROWS}
+_RATING = {"type": "string", "enum": [*RATINGS, None], "nullable": True}
 _EFFORT_KEYS = ("optimistic", "likely", "pessimistic")
 _SCAN_PACKAGE_FIELDS = {
     "package_id": _UUID, "package_name": _STRING, "package_version": _STRING,
@@ -402,10 +411,40 @@ SCHEMAS: dict[str, Any] = {
     "ProjectContext": _object({
         "project_id": _UUID, "description": _TEXT,
     }, ("project_id", "description")),
+    "ContextSystem": _object({key: _TEXT for key in SYSTEM_KEYS}),
+    "StrideModel": _object({
+        "components": _array(_object({
+            "id": {"type": "string", "pattern": r"^C[1-9]\d*$"}, "name": _STRING,
+            "description": _TEXT, "trust_zone": _TEXT,
+        }, ("id", "name")), **_STRIDE_ROWS),
+        "interactions": _array(_object({
+            "id": {"type": "string", "pattern": r"^I[1-9]\d*$"}, "name": _TEXT,
+            "source_id": _STRING, "destination_id": _STRING,
+            "interface": _TEXT, "data": _TEXT, "trust_boundary": _TEXT,
+        }, ("id", "source_id", "destination_id")), **_STRIDE_ROWS),
+        "threats": _array(_object({
+            "id": {"type": "string", "pattern": r"^T[1-9]\d*$"},
+            "category": {"type": "string", "enum": list(STRIDE_CATEGORIES)},
+            "description": _TEXT,
+            "target_ids": _array(_STRING, minItems=1, description="Component or interaction IDs."),
+        }, ("id", "category", "target_ids")), **_STRIDE_ROWS),
+        "risks": _array(_object({
+            "threat_id": _STRING,
+            "likelihood": _RATING, "impact": _RATING,
+            "mitigation": _TEXT, "residual": _TEXT,
+        }, ("threat_id",)), **_STRIDE_ROWS),
+    }, description="Structured STRIDE model; rows reference earlier rows by ID."),
+    "VariantContextEditor": _object({
+        "codebase_source": _CODEBASE_SOURCE, "codebase_path": _TEXT,
+        "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
+        "files": _array(_ref("ContextFile")), "updated_at": _DATE,
+    }, ("codebase_source", "codebase_path", "system", "stride", "files", "updated_at"),
+        description="Stored editor values, independent of the selected codebase source."),
     "VariantContext": _object({
         "variant_id": _UUID, **_CONTEXT_FIELDS, "updated_at": _DATE,
-        "files": _array(_ref("ContextFile")),
-    }, ("variant_id", "files")),
+        "files": _array(_ref("ContextFile")), "editor": _ref("VariantContextEditor"),
+    }, ("variant_id", "files", "editor"),
+        description="Top-level fields are what agents see: threat_model and risks are rendered from STRIDE."),
     "MergedContext": _object({
         "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
@@ -570,10 +609,13 @@ SCHEMAS: dict[str, Any] = {
     },
     "ContextExportProject": _object({
         "project_name": _STRING, "project_description": _TEXT,
-        "variants": _array(_object({"variant_name": _STRING, **_CONTEXT_FIELDS}, ("variant_name",))),
+        "variants": _array(_object({
+            "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS, "codebase_source": _CODEBASE_SOURCE,
+            "system": _ref("ContextSystem"), "stride_model": _ref("StrideModel"),
+        }, ("variant_name",))),
     }, ("project_name", "project_description", "variants")),
     "ContextExport": _object({
-        "version": {"type": "string", "example": "1.0"},
+        "version": {"type": "string", "example": "2.0"},
         "exported_at": _DATE, "projects": _array(_ref("ContextExportProject")),
     }, ("version", "exported_at", "projects")),
     "ContextImportEntry": _object({"project_name": _TEXT, "variant_name": _TEXT, "reason": _STRING}),
@@ -771,7 +813,14 @@ SCHEMAS.update({
         "status": {"type": "string", "enum": ["dismissed"]}, "op_id": _STRING,
     }, ("status", "op_id")),
     "ProjectContextUpdate": _object({"description": _TEXT}),
-    "VariantContextUpdate": _object(_CONTEXT_FIELDS),
+    "VariantContextUpdate": _object({
+        **_CONTEXT_TEXT_FIELDS, "codebase_source": _CODEBASE_SOURCE,
+        "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
+    }, description=(
+        "With stride, an editor save storing every field (codebase_source required; the STRIDE "
+        "model must describe a threat model). Without stride, a full replacement of the text fields; "
+        "threat_model and risks are read-only."
+    )),
     "SbomUploadAccepted": _object({
         "op_id": _STRING, "scan_id": _UUID, "message": _STRING,
     }, ("op_id", "scan_id", "message")),

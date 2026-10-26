@@ -618,7 +618,8 @@ hold exactly one entry. `-v` without `-p` is rejected.
 Create the target project and variants first, for example by importing their
 SBOMs. Context import does not create them: unmatched entries are ignored, and
 retargeting requires an existing destination. Imported context overwrites the
-matching scope's existing context.
+matching scope's existing context. The file format and its validation rules are
+described in the [API reference](api.md).
 
 ---
 
