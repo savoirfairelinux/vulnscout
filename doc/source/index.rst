@@ -6,7 +6,6 @@ VulnScout Documentation
    :caption: Contents:
 
    getting-started
-   examples
    vulnscout-script
    vulnscout-workflow
    interactive-mode

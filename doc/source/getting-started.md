@@ -98,3 +98,10 @@ To stop and remove the container entirely:
 The database, configuration, and exports remain in `.vulnscout/cache/` and
 `.vulnscout/outputs/` beside the launcher unless you configured other paths.
 Stopping the container does not reset your data.
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+examples
+```
