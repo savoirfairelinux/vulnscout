@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="252" viewBox="0 0 1040 252" role="img" aria-labelledby="pipeline-title pipeline-description">
+  <title id="pipeline-title">VulnScout full pipeline</title>
+  <desc id="pipeline-description">Import SBOMs and findings, enrich with scans and metadata, assess product impact, enforce CI policy, and share reports, SBOMs, and VEX. AI assistance is optional during assessment. Repeat the lifecycle as inputs or intelligence change.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#536477"/>
+    </marker>
+  </defs>
+  <g font-family="Arial, sans-serif" text-anchor="middle">
+    <g fill="#ffffff" stroke="#c5ced8" stroke-width="1.5">
+      <rect x="12" y="12" width="184" height="100" rx="10"/>
+      <rect x="220" y="12" width="184" height="100" rx="10"/>
+      <rect x="428" y="12" width="184" height="100" rx="10"/>
+      <rect x="636" y="12" width="184" height="100" rx="10"/>
+      <rect x="844" y="12" width="184" height="100" rx="10"/>
+    </g>
+    <g stroke-width="5">
+      <path d="M 28 13 H 180" stroke="#2f96b3"/>
+      <path d="M 236 13 H 388" stroke="#5f9d72"/>
+      <path d="M 444 13 H 596" stroke="#d4864f"/>
+      <path d="M 652 13 H 804" stroke="#7b729c"/>
+      <path d="M 860 13 H 1012" stroke="#9a6d3c"/>
+    </g>
+    <g fill="#536477" font-size="14">
+      <text x="104" y="37">01</text>
+      <text x="312" y="37">02</text>
+      <text x="520" y="37">03</text>
+      <text x="728" y="37">04</text>
+      <text x="936" y="37">05</text>
+    </g>
+    <g fill="#172d46" font-size="22" font-weight="700">
+      <text x="104" y="65">Import</text>
+      <text x="312" y="65">Enrich</text>
+      <text x="520" y="65">Assess</text>
+      <text x="728" y="65">Enforce</text>
+      <text x="936" y="65">Share</text>
+    </g>
+    <g fill="#36475a" font-size="14">
+      <text x="104" y="90">SBOM + findings</text>
+      <text x="312" y="90">Scans + metadata</text>
+      <text x="520" y="90">Status + rationale</text>
+      <text x="728" y="90">CI match policy</text>
+      <text x="936" y="90">Reports, SBOM, VEX</text>
+    </g>
+    <g fill="none" stroke="#536477" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M 198 62 H 216"/>
+      <path d="M 406 62 H 424"/>
+      <path d="M 614 62 H 632"/>
+      <path d="M 822 62 H 840"/>
+      <path d="M 936 116 V 220 H 104 V 116"/>
+    </g>
+    <path d="M 520 114 V 145" fill="none" stroke="#2a7d96" stroke-width="2" stroke-dasharray="5 4"/>
+    <rect x="428" y="145" width="184" height="54" rx="8" fill="#f2f9fb" stroke="#2a7d96" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="520" y="167" fill="#172d46" font-size="15" font-weight="700">Optional AI assistance</text>
+    <text x="520" y="187" fill="#36475a" font-size="13">Human-reviewed suggestions</text>
+    <text x="520" y="244" fill="#36475a" font-size="14">Repeat as inputs, advisories, or product context change</text>
+  </g>
+</svg>

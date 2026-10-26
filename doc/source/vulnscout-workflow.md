@@ -1,27 +1,42 @@
 # VulnScout Workflow
 
-These guides cover individual tasks, from importing an SBOM to scanning,
-reviewing findings, and generating outputs. For command syntax and scope
-options, see [VulnScout CLI](vulnscout-script.md).
+The **VulnScout full pipeline** turns an existing SBOM into scoped vulnerability
+findings, product assessments, executable policy, and shareable evidence.
+It starts after SBOM generation and follows the same operating model as the
+[VulnScout website](https://vulnscout.io/) and training:
 
-Start by importing your inputs. Run vulnerability scanners if you need additional
-findings, and refresh vulnerability metadata when current provider data is
-needed. You can then review results in the web interface, generate reports and
-exports, or evaluate match conditions in CI.
+![VulnScout full pipeline: Import, Enrich, Assess, Enforce, and Share, with optional AI assistance during assessment.](_static/vulnscout-pipeline.svg)
 
-Choose the guide for the task you want to perform:
+| Stage | Purpose | Result |
+| --- | --- | --- |
+| [Import](workflow-import.md) | Load SBOMs and any existing findings into a project and variant. | A scoped inventory and initial evidence. |
+| [Enrich](workflow-enrich.md) | Scan for additional findings and refresh existing vulnerability metadata. | Broader discovery coverage and updated intelligence. |
+| [Assess](workflow-assess.md) | Investigate product impact and record evidence-backed decisions, optionally assisted by AI. | Human-owned assessments and rationale. |
+| [Enforce](workflow-enforce.md) | Evaluate a versioned vulnerability policy in CI. | A policy result distinguishable from an execution error. |
+| [Share](workflow-share.md) | Generate reports, enriched SBOMs, VEX, or assessment-exchange files. | Artifacts for reviewers, customers, and downstream tools. |
+
+This is a repeatable lifecycle, not a mandatory command sequence. Revisit
+enrichment and assessments when advisories, builds, or deployment context change.
+Scanning discovers findings; refreshing enriches findings already recorded.
+AI assistance is optional, and proposed AI assessments require human approval
+before becoming official.
+
+In CI, generate required reports and exports **before the final
+`match-condition`** so a policy failure does not prevent their creation. See
+[Enforce](workflow-enforce.md) for execution order and exit codes.
+
+For startup, configuration, and cleanup, see
+[Supporting Tasks](workflow-supporting-tasks.md). For command syntax and
+project/variant options, see [VulnScout CLI](vulnscout-script.md).
 
 ```{toctree}
+:hidden:
 :maxdepth: 2
 
-cli-inputs
-vulnerability-scanning
-monitor-vulnerabilities
-vulnerability-data
-cli-web-interface
-cli-data-maintenance
-reports
-exports
-cli-assessments
-cli-configuration
+workflow-import
+workflow-enrich
+workflow-assess
+workflow-enforce
+workflow-share
+workflow-supporting-tasks
 ```
