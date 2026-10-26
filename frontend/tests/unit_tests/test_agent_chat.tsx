@@ -41,6 +41,7 @@ afterEach(() => jest.useRealTimers());
 test('device flow polls at the interval returned by the server', async () => {
     jest.useFakeTimers();
     const requests: string[] = [];
+    enqueueAgentMessages([{ id: 'waiting', key: 'waiting', kind: 'assess', title: 'Waiting assessment', text: 'Assess waiting' }], context);
     global.fetch = async input => {
         const path = String(input);
         requests.push(path);
@@ -48,6 +49,7 @@ test('device flow polls at the interval returned by the server', async () => {
             ? { status: 'pending', interval: 2 } : { status: 'connected', login: 'tester' });
         if (path.endsWith('/auth')) return jsonResponse({ user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', interval: 1 });
         if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) return jsonResponse({ reply: 'Assessment completed', model: 'auto', usage });
         return jsonResponse(signedOut);
     };
 
@@ -67,7 +69,12 @@ test('device flow polls at the interval returned by the server', async () => {
     await act(async () => { jest.advanceTimersByTime(1000); await Promise.resolve(); });
     expect(requests.filter(item => item.endsWith('/auth/poll'))).toHaveLength(2);
     expect(screen.getByText('Connection verified')).toBeInTheDocument();
+    expect(getAgentQueue().map(task => task.id)).toEqual(['waiting']);
+    expect(requests.filter(item => item.endsWith('/messages'))).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Start using' }));
+    await act(async () => { await Promise.resolve(); });
+    expect(getAgentHistory().map(task => task.id)).toEqual(['waiting']);
+    expect(requests.filter(item => item.endsWith('/messages'))).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Configure model provider' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
 });
@@ -116,6 +123,61 @@ test('connects a local provider when already signed in and restores the GitHub a
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent model' })).toHaveValue('auto'));
     fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+});
+
+test('preserves actions queued before an initial provider connection', async () => {
+    let connected = false;
+    const sent: string[] = [];
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/provider') && options?.method === 'POST') {
+            connected = true;
+            return jsonResponse({ provider: 'openai', model: 'auto' });
+        }
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) {
+            sent.push(JSON.parse(String(options?.body)).message);
+            return jsonResponse({ reply: 'Completed', model: 'auto', usage });
+        }
+        return jsonResponse(connected ? { ...signedIn, provider: 'openai', login: null } : signedOut);
+    };
+    enqueueAgentMessages([{ id: 'waiting', key: 'waiting', kind: 'assess', title: 'Waiting', text: 'Assess waiting' }],
+        context, 'Selection', 'per-action');
+    const conversationId = getAgentQueue()[0].conversationId;
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    await screen.findByText('Select a connector');
+    fireEvent.click(screen.getByRole('radio', { name: /^openai/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.change(screen.getByLabelText('Provider API key'), { target: { value: 'test-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify connection' }));
+    await screen.findByText('Connection verified');
+    expect(getAgentQueue()[0]).toMatchObject({ id: 'waiting', conversationId, status: 'queued' });
+    expect(sent).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Start using' }));
+    await waitFor(() => expect(getAgentQueue()).toEqual([]));
+    expect(sent).toEqual(['Assess waiting']);
+    expect(getAgentHistory()[0]).toMatchObject({ id: 'waiting', conversationId });
+});
+
+test('blocks provider changes if new work arrives while connection settings are open', async () => {
+    const changes: string[] = [];
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (options?.method === 'POST' || options?.method === 'DELETE') changes.push(path);
+        return jsonResponse(path.endsWith('/models') ? models : signedIn);
+    };
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure model provider' }));
+    act(() => enqueueAgentMessages([{ id: 'waiting', key: 'waiting', kind: 'assess', title: 'Waiting', text: 'Assess waiting' }], context));
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^openai/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.change(screen.getByLabelText('Provider API key'), { target: { value: 'test-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify connection' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Finish or remove queued AI requests');
+    expect(changes).toEqual([]);
+    expect(getAgentQueue()[0]).toMatchObject({ id: 'waiting', status: 'queued' });
 });
 
 test('connector wizard shows only the selected authentication fields', async () => {
@@ -624,10 +686,14 @@ test.each(['missing', 'partial', 'unchanged', 'stale', 'read failure', 'changed 
         expect(screen.getByRole('button', { name: 'AI queue (2), paused' })).toBeInTheDocument();
         expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveAttribute('placeholder', expect.stringContaining('paused'));
         expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(getAgentConversation().messages).toEqual([]);
+        expect(within(screen.getByRole('log', { name: 'Agent conversation' })).queryByText('Finished')).not.toBeInTheDocument();
         finishedTurn = false;
         fireEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
         await waitFor(() => expect(getAgentQueue()).toEqual([]));
         expect(attempts).toBe(3);
+        expect(getAgentConversation().messages.filter(message => message.role === 'assistant' && message.taskId === 'first'))
+            .toEqual([expect.objectContaining({ content: 'Finished' })]);
         expect(screen.queryByRole('button', { name: /paused/ })).not.toBeInTheDocument();
     },
 );
