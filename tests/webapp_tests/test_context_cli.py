@@ -11,12 +11,21 @@ import pytest
 from src.bin.webapp import create_app
 
 
+def _entry(variant_name, notes):
+    """An import entry whose STRIDE threat model holds only *notes*."""
+    return {"variant_name": variant_name, "codebase_source": "paths", "stride_model": {"notes": notes}}
+
+
+def _save(variant_id, notes, **fields):
+    from src.models.variant_context import VariantContext
+    VariantContext.save_editor(variant_id, {**fields, "codebase_source": "paths", "stride": {"notes": notes}})
+
+
 def _build_db(app):
     from src.extensions import db
     from src.models.project import Project
     from src.models.variant import Variant
     from src.models.project_context import ProjectContext
-    from src.models.variant_context import VariantContext
 
     with app.app_context():
         db.drop_all()
@@ -30,12 +39,8 @@ def _build_db(app):
         Variant.create("VariantB1", project_b.id)
 
         ProjectContext.upsert(project_a.id, description="ProjectA description")
-        VariantContext.upsert(
-            variant_a1.id,
-            variant_description="A1 variant desc",
-            threat_model="A1 threat model",
-        )
-        VariantContext.upsert(variant_a2.id, threat_model="A2 threat model")
+        _save(variant_a1.id, "A1 threat model", variant_description="A1 variant desc")
+        _save(variant_a2.id, "A2 threat model")
 
         return {
             "project_a_id": str(project_a.id),
@@ -144,10 +149,7 @@ class TestImportContextCLI:
             "projects": [{
                 "project_name": "ProjectA",
                 "project_description": "New description",
-                "variants": [{
-                    "variant_name": "VariantA1",
-                    "threat_model": "new threat model",
-                }],
+                "variants": [_entry("VariantA1", "new threat model")],
             }],
         }
         path = self._write(tmp_path, payload)
@@ -165,10 +167,7 @@ class TestImportContextCLI:
         payload = [{
             "project_name": "ProjectA",
             "project_description": "d",
-            "variants": [{
-                "variant_name": "VariantA1",
-                "threat_model": "t",
-            }],
+            "variants": [_entry("VariantA1", "t")],
         }]
         path = self._write(tmp_path, payload)
         result = app.test_cli_runner().invoke(args=["import-context", path])
@@ -178,11 +177,11 @@ class TestImportContextCLI:
     def test_import_reports_ignored_and_failed(self, app, tmp_path):
         payload = [
             {"project_name": "ProjectA", "project_description": "d", "variants": [
-                {"variant_name": "VariantA1", "threat_model": "t"},
-                {"variant_name": "NoSuchVariant", "threat_model": "t"},
+                _entry("VariantA1", "t"),
+                _entry("NoSuchVariant", "t"),
             ]},
             {"project_name": "ProjectB", "project_description": "d", "variants": [
-                {"variant_name": "VariantB1"},  # missing threat_model
+                {"variant_name": "VariantB1", "codebase_source": "paths"},  # no threat model
             ]},
         ]
         path = self._write(tmp_path, payload)
@@ -196,8 +195,8 @@ class TestImportContextCLI:
     def test_import_ignored_only_exits_zero(self, app, tmp_path):
         payload = [
             {"project_name": "ProjectA", "project_description": "d", "variants": [
-                {"variant_name": "VariantA1", "threat_model": "t"},
-                {"variant_name": "NoSuchVariant", "threat_model": "t"},
+                _entry("VariantA1", "t"),
+                _entry("NoSuchVariant", "t"),
             ]},
         ]
         path = self._write(tmp_path, payload)
@@ -221,7 +220,7 @@ class TestImportContextCLI:
         assert "projects" in result.output.lower()
 
     @staticmethod
-    def _threat_model(app, project_name, variant_name):
+    def _notes(app, project_name, variant_name):
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.variant_context import VariantContext
@@ -230,11 +229,11 @@ class TestImportContextCLI:
             project = Project.get_by_name(project_name)
             variant = Variant.get_by_name_and_project(variant_name, project.id)
             context = VariantContext.get_by_variant(variant.id)
-            return context.threat_model if context else None
+            return context.stride_model["notes"] if context else None
 
     def test_import_project_retargets_entries_keeping_variant_names(self, app, tmp_path):
         payload = [{"project_name": "Elsewhere", "project_description": "moved", "variants": [
-            {"variant_name": "VariantA2", "threat_model": "retargeted"},
+            _entry("VariantA2", "retargeted"),
         ]}]
         path = self._write(tmp_path, payload)
 
@@ -242,14 +241,14 @@ class TestImportContextCLI:
 
         assert result.exit_code == 0, result.output
         assert "Imported 1 context entry" in result.output
-        assert self._threat_model(app, "ProjectA", "VariantA2") == "retargeted"
+        assert self._notes(app, "ProjectA", "VariantA2") == "retargeted"
 
     def test_import_project_rejects_file_with_several_projects(self, app, tmp_path):
         payload = [
             {"project_name": "ProjectA", "project_description": "d", "variants": [
-                {"variant_name": "VariantA1", "threat_model": "t"}]},
+                _entry("VariantA1", "t")]},
             {"project_name": "ProjectB", "project_description": "d", "variants": [
-                {"variant_name": "VariantB1", "threat_model": "t"}]},
+                _entry("VariantB1", "t")]},
         ]
         path = self._write(tmp_path, payload)
 
@@ -257,11 +256,11 @@ class TestImportContextCLI:
 
         assert result.exit_code == 1
         assert "names more than one project (ProjectA, ProjectB)" in result.output
-        assert self._threat_model(app, "ProjectA", "VariantA1") == "A1 threat model"
+        assert self._notes(app, "ProjectA", "VariantA1") == "A1 threat model"
 
     def test_import_project_variant_retargets_single_entry(self, app, tmp_path):
         payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
-            {"variant_name": "VariantA1", "threat_model": "copied"},
+            _entry("VariantA1", "copied"),
         ]}]
         path = self._write(tmp_path, payload)
 
@@ -269,13 +268,13 @@ class TestImportContextCLI:
             args=["import-context", "--project", "ProjectB", "--variant", "VariantB1", path])
 
         assert result.exit_code == 0, result.output
-        assert self._threat_model(app, "ProjectB", "VariantB1") == "copied"
-        assert self._threat_model(app, "ProjectA", "VariantA1") == "A1 threat model"
+        assert self._notes(app, "ProjectB", "VariantB1") == "copied"
+        assert self._notes(app, "ProjectA", "VariantA1") == "A1 threat model"
 
     def test_import_project_variant_requires_exactly_one_entry(self, app, tmp_path):
         payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
-            {"variant_name": "VariantA1", "threat_model": "t"},
-            {"variant_name": "VariantA2", "threat_model": "t"},
+            _entry("VariantA1", "t"),
+            _entry("VariantA2", "t"),
         ]}]
         path = self._write(tmp_path, payload)
 
@@ -291,14 +290,14 @@ class TestImportContextCLI:
     ])
     def test_import_retarget_to_missing_target_fails(self, app, tmp_path, flags):
         payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
-            {"variant_name": "VariantA1", "threat_model": "t"}]}]
+            _entry("VariantA1", "t")]}]
         path = self._write(tmp_path, payload)
 
         result = app.test_cli_runner().invoke(args=["import-context", *flags, path])
 
         assert result.exit_code == 1
         assert "not found" in result.output
-        assert self._threat_model(app, "ProjectA", "VariantA1") == "A1 threat model"
+        assert self._notes(app, "ProjectA", "VariantA1") == "A1 threat model"
 
     def test_import_variant_without_project_errors(self, app, tmp_path):
         path = self._write(tmp_path, [])

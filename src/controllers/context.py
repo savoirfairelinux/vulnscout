@@ -70,8 +70,6 @@ class VariantContextController:
         variant_description: Optional[str] = None,
         codebase_path: Optional[str] = None,
         environment: Optional[str] = None,
-        threat_model: Optional[str] = None,
-        risks: Optional[str] = None,
         other_info: Optional[str] = None,
         commit: bool = True,
     ) -> VariantContext:
@@ -82,8 +80,6 @@ class VariantContextController:
             variant_description=variant_description,
             codebase_path=codebase_path,
             environment=environment,
-            threat_model=threat_model,
-            risks=risks,
             other_info=other_info,
             commit=commit,
         )

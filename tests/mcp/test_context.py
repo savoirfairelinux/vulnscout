@@ -264,7 +264,6 @@ class TestUpdateVariantContextImpl:
                 client,
                 "v1",
                 codebase_path="/repo/src",
-                threat_model="CVSS >= 7",
             )
         body = json.loads(route.calls[0].request.content)
         # All fields are always sent, even when None, per full-replacement semantics.
@@ -272,8 +271,6 @@ class TestUpdateVariantContextImpl:
             "variant_description": None,
             "codebase_path": "/repo/src",
             "environment": None,
-            "threat_model": "CVSS >= 7",
-            "risks": None,
             "other_info": None,
         }
         assert "threat_model=CVSS >= 7" in result
@@ -284,14 +281,5 @@ class TestUpdateVariantContextImpl:
             respx.put(f"{BASE_URL}/api/variants/v1/context").mock(
                 return_value=httpx.Response(404, json={"error": "Variant not found"})
             )
-            result = _update_variant_context_impl(client, "v1", threat_model="x")
+            result = _update_variant_context_impl(client, "v1", environment="x")
         assert result == "Error: Variant not found"
-
-    def test_stride_variant_conflict_reports_server_message(self, client):
-        message = "This variant uses the STRIDE editor; edit its threat model and risks in the AI Context page."
-        with respx.mock:
-            respx.put(f"{BASE_URL}/api/variants/v1/context").mock(
-                return_value=httpx.Response(409, json={"error": message})
-            )
-            result = _update_variant_context_impl(client, "v1", threat_model="x")
-        assert result == f"Error: {message}"

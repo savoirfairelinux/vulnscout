@@ -12,6 +12,11 @@ import pytest
 from src.bin.webapp import create_app
 
 
+def _tm(notes):
+    """Entry fields whose STRIDE threat model holds only *notes*."""
+    return {"codebase_source": "paths", "stride_model": {"notes": notes}}
+
+
 def _setup_db(app):
     """Create two projects, each with variants and some context."""
     from src.extensions import db
@@ -37,23 +42,16 @@ def _setup_db(app):
         ProjectContext.upsert(project_a.id, description="ProjectA description")
         ProjectContext.upsert(project_b.id, description="ProjectB description")
 
-        VariantContext.upsert(
-            variant_a1.id,
-            variant_description="A1 variant desc",
-            codebase_path="/src/a1",
-            environment="prod",
-            threat_model="A1 threat model",
-            risks="A1 risks",
-            other_info="A1 other",
-        )
-        VariantContext.upsert(
-            variant_a2.id,
-            threat_model="A2 threat model",
-        )
-        VariantContext.upsert(
-            variant_b1.id,
-            threat_model="B1 threat model",
-        )
+        VariantContext.save_editor(variant_a1.id, {
+            "variant_description": "A1 variant desc",
+            "codebase_source": "paths",
+            "codebase_path": "/src/a1",
+            "environment": "prod",
+            "other_info": "A1 other",
+            "stride": {"notes": "A1 threat model", "risk_notes": "A1 risks"},
+        })
+        VariantContext.save_editor(variant_a2.id, {"codebase_source": "paths", "stride": {"notes": "A2 threat model"}})
+        VariantContext.save_editor(variant_b1.id, {"codebase_source": "paths", "stride": {"notes": "B1 threat model"}})
 
         return {
             "project_a_id": str(project_a.id),
@@ -177,9 +175,10 @@ class TestExportContext:
         assert entry["variant_description"] == "A1 variant desc"
         assert entry["codebase_path"] == "/src/a1"
         assert entry["environment"] == "prod"
-        assert entry["threat_model"] == "A1 threat model"
-        assert entry["risks"] == "A1 risks"
+        assert entry["stride_model"]["notes"] == "A1 threat model"
+        assert entry["stride_model"]["risk_notes"] == "A1 risks"
         assert entry["other_info"] == "A1 other"
+        assert not {"editor_mode", "threat_model", "risks"} & set(entry)
 
     def test_export_single_variant(self, client_and_data):
         client, data = client_and_data
@@ -269,10 +268,7 @@ class TestImportContext:
             "projects": [{
                 "project_name": "ProjectA",
                 "project_description": "From envelope",
-                "variants": [{
-                    "variant_name": "VariantA1",
-                    "threat_model": "t",
-                }],
+                "variants": [{"variant_name": "VariantA1", **_tm("t")}],
             }],
         }
         response = self._post(client, payload)
@@ -297,8 +293,8 @@ class TestImportContext:
             "variant_name": "VariantA1",
             "description": "New ProjectA description",
             "variant_description": "new variant desc",
-            "threat_model": "new threat model",
-            "risks": "new risks",
+            "codebase_source": "paths",
+            "stride_model": {"notes": "new threat model", "risk_notes": "new risks"},
         }])
         assert response.status_code == 200
         body = json.loads(response.data)
@@ -313,8 +309,8 @@ class TestImportContext:
         entry = next(e for e in exported if e["variant_name"] == "VariantA1")
         assert entry["description"] == "New ProjectA description"
         assert entry["variant_description"] == "new variant desc"
-        assert entry["threat_model"] == "new threat model"
-        assert entry["risks"] == "new risks"
+        assert entry["stride_model"]["notes"] == "new threat model"
+        assert entry["stride_model"]["risk_notes"] == "new risks"
         # Field omitted from the import is cleared (full overwrite).
         assert entry["codebase_path"] is None
 
@@ -324,7 +320,7 @@ class TestImportContext:
             "project_name": "NoSuchProject",
             "variant_name": "VariantA1",
             "description": "d",
-            "threat_model": "t",
+            **_tm("t"),
         }]).data)
         assert body["imported"] == []
         assert len(body["ignored"]) == 1
@@ -336,7 +332,7 @@ class TestImportContext:
             "project_name": "ProjectA",
             "variant_name": "NoSuchVariant",
             "description": "d",
-            "threat_model": "t",
+            **_tm("t"),
         }]).data)
         assert body["imported"] == []
         assert body["ignored"][0]["reason"] == "Variant not found"
@@ -347,47 +343,43 @@ class TestImportContext:
             "project_name": "ProjectA",
             "variant_name": "VariantA1",
             "description": "  ",  # blank
-            # threat_model missing
+            **_tm("t"),
         }]).data)
         assert body["imported"] == []
-        assert len(body["failed"]) == 1
-        reason = body["failed"][0]["reason"]
-        assert "description" in reason
-        assert "threat_model" in reason
+        assert body["failed"][0]["reason"] == "Missing mandatory field(s): description"
 
     def test_import_missing_identity_ignored(self, client_and_data):
         client, _ = client_and_data
         body = json.loads(self._post_entries(client, [
-            {"description": "d", "threat_model": "t"}
+            {"description": "d", **_tm("t")}
         ]).data)
         assert body["ignored"][0]["reason"] == "Missing project_name or variant_name"
 
-    def test_import_ignores_unknown_and_nontext_fields(self, client_and_data):
+    def test_import_ignores_unknown_fields(self, client_and_data):
         client, _ = client_and_data
         body = json.loads(self._post_entries(client, [{
             "project_name": "ProjectB",
             "variant_name": "VariantB1",
             "description": "d",
-            "threat_model": "t",
-            "risks": 12345,          # non-text -> ignored (cleared)
-            "bogus_field": "hello",  # unknown -> ignored
+            **_tm("t"),
+            "bogus_field": "hello",
         }]).data)
         assert body["imported"] == [
             {"project_name": "ProjectB", "variant_name": "VariantB1"}
         ]
         exported = _export_variants(client)
         entry = next(e for e in exported if e["variant_name"] == "VariantB1")
-        assert entry["risks"] is None
+        assert "bogus_field" not in entry
 
     def test_import_mixed_batch(self, client_and_data):
         client, _ = client_and_data
         body = json.loads(self._post_entries(client, [
             {"project_name": "ProjectA", "variant_name": "VariantA1",
-             "description": "d", "threat_model": "t"},
+             "description": "d", **_tm("t")},
             {"project_name": "ProjectA", "variant_name": "NoSuchVariant",
-             "description": "d", "threat_model": "t"},
+             "description": "d", **_tm("t")},
             {"project_name": "ProjectB", "variant_name": "VariantB1",
-             "description": "d"},  # missing threat_model
+             "description": "d", **_tm("")},  # empty threat model
         ]).data)
         assert len(body["imported"]) == 1
         assert len(body["ignored"]) == 1
@@ -423,10 +415,8 @@ def _make_stride(app, variant_id, **overrides):
     from src.models.variant_context import VariantContext
     payload = {
         "variant_description": "stride desc",
-        "editor_mode": "stride",
         "codebase_source": "paths",
         "codebase_path": "/src/s",
-        "free": {"threat_model": "hidden free", "risks": None},
         "system": {"scope": "Firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
         "stride": _STRIDE_MODEL,
     }
@@ -449,16 +439,14 @@ class TestExportImportV2:
         assert body["version"] == "2.0"
         entries = _export_variants(client)
         stride = next(e for e in entries if e["variant_name"] == "VariantA2")
-        assert stride["editor_mode"] == "stride"
         assert stride["codebase_source"] == "paths"
         assert stride["system"]["scope"] == "Firmware"
         assert stride["stride_model"] == _STRIDE_MODEL
-        # Stored Free text, not the agent rendering.
-        assert stride["threat_model"] == "hidden free"
-        legacy = next(e for e in entries if e["variant_name"] == "VariantA1")
-        assert legacy["editor_mode"] == "free"
-        assert set(legacy["system"]) == {"scope", "actors", "entry_points", "trust_boundaries"}
-        assert legacy["stride_model"]["components"] == []
+        # Stored data only, not the agent rendering.
+        assert not {"editor_mode", "threat_model", "risks"} & set(stride)
+        other = next(e for e in entries if e["variant_name"] == "VariantA1")
+        assert set(other["system"]) == {"scope", "actors", "entry_points", "trust_boundaries"}
+        assert other["stride_model"]["components"] == []
 
     def test_export_import_round_trip_stride(self, app_with_data):
         from src.extensions import db
@@ -480,46 +468,27 @@ class TestExportImportV2:
         before.pop("updated_at"), after.pop("updated_at")
         assert after == before
 
-    def test_import_v1_onto_free_variant_unchanged(self, client_and_data):
+    def test_import_v1_text_entry_fails(self, client_and_data):
         client, _ = client_and_data
         result = json.loads(_post_json(client, {"version": "1.0", "projects": [{
-            "project_name": "ProjectA", "project_description": "d",
-            "variants": [{"variant_name": "VariantA1", "threat_model": "legacy tm", "risks": "r"}],
-        }]}).data)
-        assert len(result["imported"]) == 1
-        entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
-        assert entry["threat_model"] == "legacy tm"
-        assert entry["editor_mode"] == "free"
-
-    def test_import_v1_onto_stride_variant_fails_entry(self, app_with_data):
-        app, data = app_with_data
-        _make_stride(app, data["variant_a2_id"])
-        client = app.test_client()
-        result = json.loads(_post_json(client, [{
             "project_name": "ProjectA", "project_description": "should not apply",
-            "variants": [
-                {"variant_name": "VariantA2", "threat_model": "different", "risks": "x"},
-                {"variant_name": "VariantA1", "threat_model": "ok"},
-            ],
-        }]).data)
-        assert result["failed"] == [{
-            "project_name": "ProjectA", "variant_name": "VariantA2",
-            "reason": "This variant uses the STRIDE editor; edit its threat model and risks in the AI Context page.",
-        }]
-        assert result["imported"] == [{"project_name": "ProjectA", "variant_name": "VariantA1"}]
-        entries = _export_variants(client)
-        stride = next(e for e in entries if e["variant_name"] == "VariantA2")
-        assert stride["stride_model"] == _STRIDE_MODEL
+            "variants": [{"variant_name": "VariantA1", "codebase_source": "paths",
+                          "threat_model": "legacy tm", "risks": "r"}],
+        }]}).data)
+        assert result["imported"] == []
+        assert result["failed"][0]["reason"].endswith("A threat model is required.")
+        entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
+        assert entry["stride_model"]["notes"] == "A1 threat model"
+        assert entry["description"] == "ProjectA description"
 
     def test_import_v2_invalid_model_fails_entry(self, client_and_data):
         client, _ = client_and_data
         result = json.loads(_post_json(client, [{
             "project_name": "ProjectA", "project_description": "d",
             "variants": [
-                {"variant_name": "VariantA1", "editor_mode": "stride", "codebase_source": "paths",
+                {"variant_name": "VariantA1", "codebase_source": "paths",
                  "stride_model": {"components": "nope"}},
-                {"variant_name": "VariantA2", "editor_mode": "free", "codebase_source": "paths",
-                 "threat_model": "free ok"},
+                {"variant_name": "VariantA2", **_tm("ok")},
             ],
         }]).data)
         failed = {f["variant_name"]: f["reason"] for f in result["failed"]}
@@ -533,8 +502,7 @@ class TestExportImportV2:
         client, _ = client_and_data
         result = json.loads(_post_json(client, [{
             "project_name": "ProjectA", "project_description": "d",
-            "variants": [{"variant_name": "VariantA1", "editor_mode": "free", "codebase_source": "paths",
-                          "threat_model": ""}],
+            "variants": [{"variant_name": "VariantA1", **_tm("")}],
         }]).data)
         assert result["failed"][0]["reason"] .endswith("A threat model is required.")
         assert result["imported"] == []
@@ -549,10 +517,8 @@ def _stride_editor_payload():
         "variant_description": "Flow gateway",
         "environment": "Linux",
         "other_info": None,
-        "editor_mode": "stride",
         "codebase_source": "references",
         "codebase_path": "/src/kept",
-        "free": {"threat_model": None, "risks": None},
         "system": {"scope": "Firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
         "stride": _STRIDE_MODEL,
     }
@@ -593,7 +559,8 @@ def test_stride_flow_end_to_end(app_with_data, tmp_path, monkeypatch):
     assert [f["id"] for f in merged["files"]] == [json.loads(upload.data)["id"]]
 
     legacy = client.put(f"/api/variants/{variant_id}/context", json={"threat_model": "legacy"})
-    assert legacy.status_code == 409
+    assert legacy.status_code == 400
+    assert set(json.loads(legacy.data)["fields"]) == {"threat_model"}
 
     exported = json.loads(client.get("/api/context/export").data)
     with app.app_context():

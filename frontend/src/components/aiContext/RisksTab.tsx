@@ -80,7 +80,7 @@ function RiskRow({ draft, risk, index, errors, disabled, onEdit, onRemove }: Rea
     );
 }
 
-function StrideRisks({ draft, onDraftChange, fieldErrors, disabled }: Readonly<Required<Props>>) {
+function RisksTab({ draft, onDraftChange, fieldErrors, disabled = false }: Readonly<Props>) {
     const { stride } = draft;
     const update = (patch: Partial<typeof stride>) => onDraftChange({ ...draft, stride: { ...stride, ...patch } });
     const noThreats = stride.threats.length === 0;
@@ -125,22 +125,6 @@ function StrideRisks({ draft, onDraftChange, fieldErrors, disabled }: Readonly<R
                     onChange={e => update({ risk_notes: e.target.value })} {...describeField('risk_notes', fieldErrors)} />
                 <FieldErrorText path="risk_notes" errors={fieldErrors} />
             </div>
-        </div>
-    );
-}
-
-function RisksTab({ draft, onDraftChange, fieldErrors, disabled = false }: Readonly<Props>) {
-    if (draft.editor_mode === 'stride') {
-        return <StrideRisks draft={draft} onDraftChange={onDraftChange} fieldErrors={fieldErrors} disabled={disabled} />;
-    }
-    return (
-        <div>
-            <label className={LABEL} htmlFor="ai-variant-free-risks">Risks</label>
-            <textarea id="ai-variant-free-risks" className={`${TEXTAREA} min-h-[160px]`} value={draft.free.risks}
-                disabled={disabled}
-                onChange={e => onDraftChange({ ...draft, free: { ...draft.free, risks: e.target.value } })}
-                {...describeField('risks', fieldErrors)} />
-            <FieldErrorText path="risks" errors={fieldErrors} />
         </div>
     );
 }

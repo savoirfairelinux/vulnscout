@@ -338,10 +338,9 @@ Returns the merged project and variant context, including uploaded codebase refe
 (`files`: `id`, `original_name`, `description`; no server filesystem paths). Both UUID parameters are required,
 and the variant must belong to the selected project.
 
-The agent-facing keys are plain text: `threat_model` and `risks` are the stored text in Free mode and a rendered
-text in STRIDE mode. `codebase_path` is `null` when the codebase source is references, and `files` is `[]` when it
-is paths. An additive `editor` object carries the raw editor data (mode, system and STRIDE data, and both stored
-codebase values).
+The agent-facing keys are plain text: `threat_model` and `risks` are rendered from the variant's STRIDE model.
+`codebase_path` is `null` when the codebase source is references, and `files` is `[]` when it is paths. An additive
+`editor` object carries the raw editor data (system and STRIDE data, and both stored codebase values).
 
 ### Get or Update Project Context
 
@@ -360,21 +359,19 @@ PUT /api/variants/<variant_id>/context
 
 Two body shapes are accepted.
 
-**Editor shape** (body contains `editor_mode`) is the full draft saved by the AI Context page:
-`variant_description`, `environment`, `other_info`, `editor_mode` (`"stride"` or `"free"`),
+**Editor shape** (body contains `stride`) is the full draft saved by the AI Context page:
+`variant_description`, `environment`, `other_info`,
 `codebase_source` (`"paths"` or `"references"`), `codebase_path`,
-`free` (`threat_model`, `risks`), `system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
+`system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
 `stride` (`components`, `interactions`, `threats`, `notes`, `risks`, `risk_notes`).
 Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
 (for example `"threat_model": "A threat model is required."`).
 
-**Legacy shape** (no `editor_mode`) accepts the six text fields `variant_description`, `codebase_path`, `environment`,
-`threat_model`, `risks` and `other_info`. Each is replaced by the sent value (omitted means null), except in the two
-cases below. It never changes `editor_mode`, `codebase_source` or the system and STRIDE data. On a STRIDE variant, a
-`threat_model` or `risks` value that differs from the current agent-facing text returns `409` with
-`{"error": "This variant uses the STRIDE editor; edit its threat model and risks in the AI Context page."}`;
-null, omitted or unchanged values are ignored (the stored Free text is kept) and the other fields still update. On a
-variant whose codebase source is references, a null `codebase_path` keeps the stored paths.
+**Legacy shape** (no `stride`) accepts the four text fields `variant_description`, `codebase_path`, `environment`
+and `other_info`. Each is replaced by the sent value (omitted means null). It never changes `codebase_source` or the
+system and STRIDE data; on a variant whose codebase source is references, a null `codebase_path` keeps the stored
+paths. The threat model and risks are read-only here: a non-null `threat_model` or `risks` returns `400` with a
+`fields` entry for each.
 
 ### Import or Export Context
 
@@ -386,10 +383,9 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-Export format `2.0` adds `editor_mode`, `codebase_source`, `system` and `stride_model` per variant; `threat_model` and
-`risks` in the file are the stored Free text. Entries with `editor_mode` are imported through the editor path; others
-are treated as legacy, so `1.0` files still import. A legacy entry whose text differs from a STRIDE variant's is
-reported under `failed` with the 409 message above.
+Export format `2.0` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields.
+Every entry is imported through the editor path, so it needs a valid `codebase_source` and a non-empty threat model;
+`1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 
 ### Manage Codebase References
 

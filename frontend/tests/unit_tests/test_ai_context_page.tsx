@@ -53,10 +53,9 @@ function variantContext(variantId: string, threat: string, files: FileRow[] = []
         project_id: 'p1', description: 'ignored', variant_id: variantId, variant_description: null,
         codebase_path: null, environment: null, threat_model: threat, risks: null, other_info: null, files,
         editor: {
-            editor_mode: 'free', codebase_source: 'paths', codebase_path: null,
-            free: { threat_model: threat, risks: null },
+            codebase_source: 'paths', codebase_path: null,
             system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
-            stride: emptyStrideModel(), files, updated_at: null,
+            stride: { ...emptyStrideModel(), notes: threat }, files, updated_at: null,
         },
     };
 }
@@ -409,6 +408,7 @@ describe('AIContext page', () => {
             expect(screen.getByText('Variant')).toBeInTheDocument();
             expect(screen.getByRole('button', { name: 'Copy from…' })).toBeInTheDocument();
             expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+            expect(screen.queryByRole('radiogroup', { name: 'Editor mode' })).not.toBeInTheDocument();
             const fields = ['Variant description', 'Environment', 'Other information']
                 .map(name => screen.getByRole('textbox', { name }));
             fields.slice(1).forEach((field, index) => {
@@ -492,24 +492,6 @@ describe('AIContext page', () => {
             expect(body.codebase_path).toBe('/src/a;/src/c');
         });
 
-        test('switching editor mode Free to STRIDE pre-fills notes', async () => {
-            const backend = mockBackend();
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            const mode = screen.getByRole('radiogroup', { name: 'Editor mode' });
-            expect(within(mode).getByRole('radio', { name: 'Free' })).toBeChecked();
-
-            fireEvent.click(within(mode).getByRole('radio', { name: 'STRIDE' }));
-            expect(within(mode).getByRole('radio', { name: 'STRIDE' })).toBeChecked();
-            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-
-            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
-            const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
-            expect(body.editor_mode).toBe('stride');
-            expect(body.stride.notes).toBe('TM');
-            expect(body.free.threat_model).toBe('TM');
-        });
-
         test('Save changes disabled until the draft differs from saved', async () => {
             mockBackend();
             renderPage({ projectId: 'p1' });
@@ -538,10 +520,9 @@ describe('AIContext page', () => {
             expect(puts).toHaveLength(1);
             expect(JSON.parse(puts[0].body ?? '{}')).toEqual({
                 variant_description: 'Gateway', environment: 'Lab', other_info: null,
-                editor_mode: 'free', codebase_source: 'paths', codebase_path: null,
-                free: { threat_model: 'TM', risks: null },
+                codebase_source: 'paths', codebase_path: null,
                 system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
-                stride: emptyStrideModel(),
+                stride: { ...emptyStrideModel(), notes: 'TM' },
             });
         });
 
@@ -691,7 +672,6 @@ describe('AIContext page', () => {
             const mocked = mockBackend(backend);
             const utils = renderPage({ projectId: 'p1' });
             await openVariant1();
-            fireEvent.click(screen.getByRole('radio', { name: 'STRIDE' }));
             fireEvent.click(variantTab('System'));
             return { backend: mocked, ...utils };
         }
@@ -700,17 +680,6 @@ describe('AIContext page', () => {
             const inputs = screen.getAllByLabelText(/^Component C\d+ name$/);
             fireEvent.change(inputs[inputs.length - 1], { target: { value: name } });
         };
-
-        test('free mode shows only the note', async () => {
-            mockBackend();
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            fireEvent.click(variantTab('System'));
-
-            expect(screen.getByText('In Free mode, describe the system and its interactions in Threat model.')).toBeInTheDocument();
-            expect(screen.queryByLabelText('System scope and assets')).not.toBeInTheDocument();
-            expect(screen.queryByRole('table', { name: 'Components' })).not.toBeInTheDocument();
-        });
 
         test('STRIDE mode shows the four system fields and both tables with column headers', async () => {
             await openSystemTab();
@@ -889,7 +858,6 @@ describe('AIContext page', () => {
             const mocked = mockBackend(backend);
             const utils = renderPage({ projectId: 'p1' });
             await openVariant1();
-            fireEvent.click(screen.getByRole('radio', { name: 'STRIDE' }));
             fireEvent.click(variantTab(tab));
             return { backend: mocked, ...utils };
         }
@@ -900,21 +868,6 @@ describe('AIContext page', () => {
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             return JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
         };
-
-        test('free mode binds the threat model and risks textareas to the free fields', async () => {
-            const backend = mockBackend();
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            fireEvent.click(variantTab('Threat model'));
-            expect(screen.getByText('Switching to STRIDE keeps existing free text as additional notes.')).toBeInTheDocument();
-            fireEvent.change(screen.getByRole('textbox', { name: 'Threat model' }), { target: { value: 'TM2' } });
-            fireEvent.click(variantTab('Risks'));
-            fireEvent.change(screen.getByRole('textbox', { name: 'Risks' }), { target: { value: 'R2' } });
-
-            const body = await saveBody(backend);
-
-            expect(body.free).toEqual({ threat_model: 'TM2', risks: 'R2' });
-        });
 
         test('threat table lists STRIDE category labels and defaults a new threat to spoofing', async () => {
             await openStride();
@@ -1039,7 +992,7 @@ describe('AIContext page', () => {
             expect(within(screen.getByLabelText('Risk 1 threat')).getByRole('option').textContent).toBe('T1');
         });
 
-        async function failWith(fields: Record<string, string>, prepare: () => void = () => {}) {
+        async function failWith(fields: Record<string, string>, prepare: () => void) {
             await openStride({ variantPutError: { error: 'Invalid variant context', fields } });
             prepare();
             fireEvent.click(variantTab('Context'));
@@ -1069,22 +1022,15 @@ describe('AIContext page', () => {
             expect(screen.getByLabelText('Additional risk notes')).toHaveAccessibleDescription('bad');
         });
 
-        test('a free-mode threat_model error opens the Threat model tab', async () => {
-            mockBackend({ variantPutError: { error: 'Invalid variant context', fields: { threat_model: 'required' } } });
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            fireEvent.click(variantTab('Threat model'));
-            fireEvent.change(screen.getByRole('textbox', { name: 'Threat model' }), { target: { value: 'x' } });
-            fireEvent.click(variantTab('Context'));
-            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        test('a threat_model 400 error opens the Threat model tab and shows the message', async () => {
+            await failWith({ threat_model: 'A threat model is required.' }, addThreat);
 
-            expect(await screen.findByText('required')).toBeInTheDocument();
             expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
-            expect(screen.getByRole('textbox', { name: 'Threat model' })).toHaveAccessibleDescription(/required/);
+            expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('A threat model is required.')).toBeVisible();
         });
 
         test('an unrecognised or merely prefixed path falls back to the Context tab', async () => {
-            await failWith({ 'notesX': 'odd' });
+            await failWith({ 'notesX': 'odd' }, addThreat);
 
             expect(variantTab('Context')).toHaveAttribute('aria-selected', 'true');
         });
@@ -1103,8 +1049,7 @@ describe('AIContext page', () => {
             project_id: 'p1', description: 'Desc', variant_id: variantId, variant_description: null, codebase_path: null,
             environment: null, threat_model: null, risks: null, other_info: null, files: [],
             editor: {
-                editor_mode: 'stride', codebase_source: 'references', codebase_path: null,
-                free: { threat_model: null, risks: null },
+                codebase_source: 'references', codebase_path: null,
                 system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
                 stride: emptyStrideModel(), files: [], updated_at: null,
             },
@@ -1167,7 +1112,7 @@ describe('AIContext page', () => {
             await user.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
-            expect(body).toMatchObject({ other_info: 'Copied info', codebase_path: '/copied', free: { threat_model: 'Source TM' } });
+            expect(body).toMatchObject({ other_info: 'Copied info', codebase_path: '/copied', stride: { notes: 'Source TM' } });
         });
 
         test('copy clears the field errors of the replaced draft', async () => {
@@ -1195,7 +1140,7 @@ describe('AIContext page', () => {
 
             await copyFrom(user, 'Variant 2');
 
-            expect(within(screen.getByRole('radiogroup', { name: 'Editor mode' })).getByRole('radio', { name: 'STRIDE' })).toBeChecked();
+            expect(screen.getByLabelText('Additional notes')).toHaveValue('');
             expect(within(screen.getByRole('radiogroup', { name: 'Codebase source' })).getByRole('radio', { name: 'Codebase references' })).toBeChecked();
             ['Variant description', 'Environment', 'Other information']
                 .forEach(name => expect(screen.getByRole('textbox', { name })).toHaveValue(''));

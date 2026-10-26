@@ -28,12 +28,8 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-EDITOR_MODES = ("stride", "free")
 CODEBASE_SOURCES = ("paths", "references")
 
-STRIDE_CONFLICT_MESSAGE = (
-    "This variant uses the STRIDE editor; edit its threat model and risks in the AI Context page."
-)
 THREAT_MODEL_REQUIRED = "A threat model is required."
 
 # Editor payload key -> column for the four system-description fields.
@@ -42,20 +38,11 @@ _SYSTEM_COLUMNS: dict[str, str] = {key: f"system_{key}" for key in SYSTEM_KEYS}
 _EDITOR_TEXT_KEYS = ("variant_description", "environment", "other_info", "codebase_path")
 
 
-class StrideWriteConflict(Exception):
-    """Raised when a legacy write sends threat-model/risks text to a STRIDE variant."""
-
-    def __init__(self) -> None:
-        super().__init__(STRIDE_CONFLICT_MESSAGE)
-
-
 def default_editor_block() -> dict:
     """Editor block for a variant that has no context row yet."""
     return {
-        "editor_mode": "stride",
         "codebase_source": "references",
         "codebase_path": None,
-        "free": {"threat_model": None, "risks": None},
         "system": {key: None for key in SYSTEM_KEYS},
         "stride": empty_stride_model(),
         "files": [],
@@ -95,32 +82,20 @@ def _editor_values(payload: object) -> dict[str, typing.Any]:
     if not isinstance(payload, dict):
         raise StrideValidationError({"body": "must be an object"})
     errors: dict[str, str] = {}
-    free = payload.get("free") if payload.get("free") is not None else {}
-    if not isinstance(free, dict):
-        errors["free"] = "must be an object"
-        free = {}
     values: dict[str, typing.Any] = {
         key: _optional_text(payload.get(key), key, errors) for key in _EDITOR_TEXT_KEYS
     }
-    values["editor_mode"] = _choice(payload.get("editor_mode"), "editor_mode", EDITOR_MODES, errors)
     values["codebase_source"] = _choice(
         payload.get("codebase_source"), "codebase_source", CODEBASE_SOURCES, errors
     )
-    values["threat_model"] = _optional_text(free.get("threat_model"), "free.threat_model", errors)
-    values["risks"] = _optional_text(free.get("risks"), "free.risks", errors)
     system = _validated(normalize_system, payload.get("system"), errors) or {}
     for key, column in _SYSTEM_COLUMNS.items():
         values[column] = _blank_to_none(system.get(key))
     stride_raw = payload.get("stride")
     stride = _validated(normalize_stride_model, empty_stride_model() if stride_raw is None else stride_raw, errors)
     values["stride_model"] = stride
-    if not errors:
-        if values["editor_mode"] == "free":
-            agent_text = values["threat_model"]
-        else:
-            agent_text = render_threat_model({k: values[c] for k, c in _SYSTEM_COLUMNS.items()}, stride)
-        if not agent_text:
-            errors["threat_model"] = THREAT_MODEL_REQUIRED
+    if not errors and not render_threat_model({k: values[c] for k, c in _SYSTEM_COLUMNS.items()}, stride):
+        errors["threat_model"] = THREAT_MODEL_REQUIRED
     if errors:
         raise StrideValidationError(errors)
     return values
@@ -215,16 +190,11 @@ class VariantContext(Base):
     variant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     codebase_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str | None] = mapped_column(Text, nullable=True)
-    threat_model: Mapped[str | None] = mapped_column(Text, nullable=True)
-    risks: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Bumped only when a field's value actually changes; AI assessments older
     # than this were written against a previous context.  NULL = never modified.
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    editor_mode: Mapped[str] = mapped_column(
-        sa.String, nullable=False, default="free", server_default="free"
-    )
     codebase_source: Mapped[str] = mapped_column(
         sa.String, nullable=False, default="paths", server_default="paths"
     )
@@ -244,16 +214,12 @@ class VariantContext(Base):
         return {key: getattr(self, column) for key, column in _SYSTEM_COLUMNS.items()}
 
     def agent_threat_model(self) -> str | None:
-        """Threat model text the agent sees: Free text, or the STRIDE rendering."""
-        if self.editor_mode == "stride":
-            return render_threat_model(self._system(), self.stride_model)
-        return self.threat_model
+        """Threat model text the agent sees: the rendering of the system and STRIDE model."""
+        return render_threat_model(self._system(), self.stride_model)
 
     def agent_risks(self) -> str | None:
-        """Risks text the agent sees: Free text, or the STRIDE rendering."""
-        if self.editor_mode == "stride":
-            return render_risks(self.stride_model)
-        return self.risks
+        """Risks text the agent sees: the rendering of the STRIDE model's risks."""
+        return render_risks(self.stride_model)
 
     def to_dict(self) -> dict:
         updated_at = ensure_utc_iso(self.updated_at) if self.updated_at else None
@@ -270,10 +236,8 @@ class VariantContext(Base):
             "updated_at": updated_at,
             "files": files if uses_references else [],
             "editor": {
-                "editor_mode": self.editor_mode,
                 "codebase_source": self.codebase_source,
                 "codebase_path": self.codebase_path,
-                "free": {"threat_model": self.threat_model, "risks": self.risks},
                 "system": self._system(),
                 "stride": self.stride_model if self.stride_model is not None else empty_stride_model(),
                 "files": files,
@@ -297,11 +261,10 @@ class VariantContext(Base):
         variant_description: str | None = None,
         codebase_path: str | None = None,
         environment: str | None = None,
-        threat_model: str | None = None,
-        risks: str | None = None,
         other_info: str | None = None,
         commit: bool = True,
     ) -> "VariantContext":
+        """Full replacement of the text fields; the threat model and risks come from STRIDE."""
         existing = VariantContext.get_by_variant(variant_id)
         if existing is not None:
             new_values: dict[str, typing.Any] = {
@@ -313,32 +276,20 @@ class VariantContext(Base):
             if codebase_path is None and existing.codebase_source == "references":
                 # Paths are hidden from legacy readers on a references variant.
                 del new_values["codebase_path"]
-            if existing.editor_mode == "stride":
-                # The Free text is hidden on STRIDE variants; a legacy writer
-                # must not believe it changed what the agent sees.  Echoing
-                # back the rendered text it read is not a change.
-                if threat_model not in (None, existing.agent_threat_model()) or \
-                        risks not in (None, existing.agent_risks()):
-                    raise StrideWriteConflict()
-            else:
-                new_values.update(threat_model=threat_model, risks=risks)
             existing._apply(new_values)
             if commit:
                 db.session.commit()
             return existing
         has_content = any(
             v is not None
-            for v in (variant_description, codebase_path, environment, threat_model, risks, other_info)
+            for v in (variant_description, codebase_path, environment, other_info)
         )
         vc = VariantContext(
             variant_id=variant_id,
             variant_description=variant_description,
             codebase_path=codebase_path,
             environment=environment,
-            threat_model=threat_model,
-            risks=risks,
             other_info=other_info,
-            editor_mode="free",
             updated_at=datetime.now(timezone.utc) if has_content else None,
         )
         db.session.add(vc)
@@ -358,7 +309,7 @@ class VariantContext(Base):
 
     @staticmethod
     def save_editor(variant_id: uuid.UUID, payload: dict, commit: bool = True) -> "VariantContext":
-        """Store an editor-shape payload (both modes' data); raises ``StrideValidationError``."""
+        """Store an editor-shape payload; raises ``StrideValidationError``."""
         values = _editor_values(payload)
         existing = VariantContext.get_by_variant(variant_id)
         if existing is None:

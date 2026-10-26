@@ -159,7 +159,7 @@ editor_fields = importlib.import_module(
 )
 
 EDITOR_COLUMNS = {
-    "editor_mode", "codebase_source", "system_scope", "system_actors",
+    "codebase_source", "system_scope", "system_actors",
     "system_entry_points", "system_trust_boundaries", "stride_model",
 }
 
@@ -167,7 +167,8 @@ EDITOR_COLUMNS = {
 def _create_editor_pre_upgrade_schema(connection):
     connection.exec_driver_sql(
         "CREATE TABLE variant_context ("
-        "id VARCHAR PRIMARY KEY, variant_id VARCHAR, codebase_path TEXT, updated_at DATETIME)"
+        "id VARCHAR PRIMARY KEY, variant_id VARCHAR, codebase_path TEXT, "
+        "threat_model TEXT, risks TEXT, updated_at DATETIME)"
     )
     connection.exec_driver_sql(
         "CREATE TABLE context_files (id VARCHAR PRIMARY KEY, variant_context_id VARCHAR)"
@@ -195,15 +196,16 @@ def test_editor_fields_migration_defaults():
         editor_fields.upgrade()
 
         rows = connection.exec_driver_sql(
-            "SELECT id, editor_mode, codebase_source, updated_at, stride_model, "
+            "SELECT id, codebase_source, updated_at, stride_model, "
             "system_scope, system_actors, system_entry_points, system_trust_boundaries "
             "FROM variant_context"
         ).mappings().all()
+        columns = _column_names(connection, "variant_context")
 
+    assert not {"threat_model", "risks", "editor_mode"} & columns
     by_id = {r["id"]: r for r in rows}
-    assert {k: (v["editor_mode"], v["codebase_source"]) for k, v in by_id.items()} == {
-        "A": ("free", "references"), "B": ("free", "references"),
-        "C": ("free", "paths"), "D": ("free", "paths"),
+    assert {k: v["codebase_source"] for k, v in by_id.items()} == {
+        "A": "references", "B": "references", "C": "paths", "D": "paths",
     }
     for row in rows:
         assert row["updated_at"] == "2026-01-01T00:00:00Z"
@@ -227,3 +229,4 @@ def test_editor_fields_downgrade_drops_columns():
         columns = _column_names(connection, "variant_context")
 
     assert not (EDITOR_COLUMNS & columns)
+    assert {"threat_model", "risks"} <= columns

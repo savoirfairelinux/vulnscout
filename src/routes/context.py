@@ -22,7 +22,6 @@ from ..models.project import Project
 from ..models.variant import Variant
 from ..models.variant_context import (
     ContextFile,
-    StrideWriteConflict,
     VariantContext,
     default_editor_block,
 )
@@ -35,6 +34,11 @@ logger = logging.getLogger(__name__)
 _AGENT_VARIANT_KEYS = (
     "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
 )
+
+
+# Agent-facing text rendered from the STRIDE model; text writes are rejected.
+_STRIDE_TEXT_KEYS = ("threat_model", "risks")
+STRIDE_TEXT_READ_ONLY = "is generated from the STRIDE model; edit it in the AI Context page"
 
 
 def _get_cache_dir() -> str:
@@ -139,15 +143,15 @@ def init_app(app):
     def put_variant_context(variant_id):
         """Create or update context for a variant.
 
-        A body with ``editor_mode`` is an editor-shape save (both modes' data);
-        otherwise it is a legacy full-replacement write of the text fields.
+        A body with ``stride`` is an editor-shape save; otherwise it is a
+        full-replacement write of the text fields. The threat model and risks
+        are rendered from the STRIDE model and cannot be written as text.
 
         OpenAPI:
         body VariantContextUpdate required Variant context fields.
         response 200 VariantContext Updated variant context.
         response 400 Error Invalid variant identifier or context fields.
         response 404 Error Variant not found.
-        response 409 Error Legacy threat model or risks write on a STRIDE variant.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:
@@ -155,22 +159,21 @@ def init_app(app):
         assert variant_uuid is not None
         body = request.get_json(silent=True) or {}
         try:
-            if 'editor_mode' in body:
+            if 'stride' in body:
                 vc = VariantContextController.save_editor(variant_uuid, body)
             else:
+                text_fields = {key: body.get(key) for key in _STRIDE_TEXT_KEYS if body.get(key) is not None}
+                if text_fields:
+                    raise StrideValidationError({key: STRIDE_TEXT_READ_ONLY for key in text_fields})
                 vc = VariantContextController.upsert(
                     variant_uuid,
                     variant_description=body.get('variant_description'),
                     codebase_path=body.get('codebase_path'),
                     environment=body.get('environment'),
-                    threat_model=body.get('threat_model'),
-                    risks=body.get('risks'),
                     other_info=body.get('other_info'),
                 )
         except StrideValidationError as exc:
             return jsonify({"error": str(exc), "fields": exc.fields}), 400
-        except StrideWriteConflict as exc:
-            return jsonify({"error": str(exc)}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))

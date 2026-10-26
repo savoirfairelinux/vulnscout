@@ -74,7 +74,7 @@ function ThreatRow({ draft, threat, index, errors, disabled, onEdit, onRemove }:
     );
 }
 
-function StrideThreats({ draft, onDraftChange, fieldErrors, disabled }: Readonly<Required<Props>>) {
+function ThreatModelTab({ draft, onDraftChange, fieldErrors, disabled = false }: Readonly<Props>) {
     const removedIds = useRef<string[]>([]);
     const { stride } = draft;
     const update = (patch: Partial<typeof stride>) => onDraftChange({ ...draft, stride: { ...stride, ...patch } });
@@ -91,6 +91,7 @@ function StrideThreats({ draft, onDraftChange, fieldErrors, disabled }: Readonly
     };
     return (
         <div className="space-y-4">
+            <FieldErrorText path="threat_model" errors={fieldErrors} />
             <div className="space-y-2">
                 <h3 id="ai-variant-threats-heading" className="text-sm font-semibold text-zinc-200">Threats</h3>
                 <div className="overflow-x-auto">
@@ -120,25 +121,6 @@ function StrideThreats({ draft, onDraftChange, fieldErrors, disabled }: Readonly
                     onChange={e => update({ notes: e.target.value })} {...describeField('notes', fieldErrors)} />
                 <FieldErrorText path="notes" errors={fieldErrors} />
             </div>
-        </div>
-    );
-}
-
-function ThreatModelTab({ draft, onDraftChange, fieldErrors, disabled = false }: Readonly<Props>) {
-    if (draft.editor_mode === 'stride') {
-        return <StrideThreats draft={draft} onDraftChange={onDraftChange} fieldErrors={fieldErrors} disabled={disabled} />;
-    }
-    return (
-        <div>
-            <label className={LABEL} htmlFor="ai-variant-threat-model">Threat model</label>
-            <textarea id="ai-variant-threat-model" className={`${TEXTAREA} min-h-[160px]`} value={draft.free.threat_model}
-                disabled={disabled}
-                onChange={e => onDraftChange({ ...draft, free: { ...draft.free, threat_model: e.target.value } })}
-                {...describeField('threat_model', fieldErrors, 'ai-variant-threat-model-help')} />
-            <p id="ai-variant-threat-model-help" className={`${HELP} mt-1`}>
-                Switching to STRIDE keeps existing free text as additional notes.
-            </p>
-            <FieldErrorText path="threat_model" errors={fieldErrors} />
         </div>
     );
 }
