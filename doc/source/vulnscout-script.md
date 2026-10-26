@@ -64,6 +64,17 @@ Example:
   --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ```
 
+## Source evidence and CVE refinement
+
+For imported SPDX 3 Build-profile evidence, the local engine also receives
+compiled-source paths from the selected variant's active SBOMs. When an advisory
+identifies affected files, the engine can record a `not_affected` VEX assessment
+if none were compiled. The finding remains available for review; it is not
+deleted. Missing or incomplete build evidence retains ordinary matching, and
+advisories without affected-file information cannot use this refinement.
+This does not evaluate Kconfig expressions or infer release versions from Git
+revisions. See [Source files](interactive-mode.md#source-files).
+
 ## Shell completion
 
 Bash completion for commands, options and fixed values (scan types, export and import kinds, `--format`, `--timestamps`):

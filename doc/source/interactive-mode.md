@@ -64,6 +64,32 @@ The interactive mode is where you investigate each CVE and record your triage de
 2. Open [Vulnerability Details](web-vulnerability-details.md), read the advisory, inspect the affected packages, and check the build and deployment evidence.
 3. Record a supported status, justification, impact, and notes; optionally document a workaround or estimate remediation effort. See [AI Assessments](ai-assessments.md) for assisted analysis and human approval.
 
+### Source files
+
+**Source Files** counts the source files associated with a package in the
+selected active SBOMs. Click the count to inspect paths, original SPDX file
+properties (including recorded hashes and license information), source documents,
+and build-input associations. The details view supports filtering by path or
+document. Object files, libraries, and final build outputs are stored as file
+records but are not counted as source files.
+
+SPDX 3 `software_File`, `contains`, and Build-profile `hasInput`/`hasOutput`
+relationships are resolved across companion documents of the **same import
+scan**, including West's `app.jsonld`, `zephyr.jsonld`, and `build.jsonld`.
+Source/build package consolidation preserves those associations.
+**Build input** means explicit build evidence exists; **Listed only** does not
+prove compilation, and neither proves inclusion in the final firmware.
+
+**Not recorded** means file evidence is unavailable, not that there are zero
+source files. Reimport the original companion SBOMs together to populate older
+imports. Other SBOM formats currently do not populate this inventory.
+Outdated packages show **Not in active scan**.
+
+The local advisory engine uses resolved compiled-source paths for CVE refinement
+only when the inventory is complete and the advisory supplies affected-file
+information. Missing references or unproven source files disable this refinement;
+they do not justify discarding a CVE. Kconfig expressions are not evaluated.
+
 ## Web Interface Guides
 
 Choose the guide for the screen or task you are using:
