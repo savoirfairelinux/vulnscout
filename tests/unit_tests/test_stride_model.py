@@ -298,3 +298,22 @@ def test_risk_with_unknown_threat_renders_id_only():
     m = _risk_model(likelihood="low")
     m["risks"][0]["threat_id"] = "T9"
     assert render_risks(m) == "- T9 \u2014 Likelihood: Low"
+
+
+def test_threat_target_ids_must_not_repeat():
+    m = _model()
+    m["threats"][0]["target_ids"] = ["C1", "C1"]
+    assert _fields(m) == {"threats[0].target_ids": "must not repeat an id"}
+
+
+def test_rendered_target_text_is_bounded():
+    big = "x" * 20000
+    m = {
+        "components": [{"id": f"C{i}", "name": big, "description": "", "trust_zone": ""} for i in range(1, 21)],
+        "interactions": [],
+        "threats": [{"id": "T1", "category": "spoofing", "description": "", "target_ids": [f"C{i}" for i in range(1, 21)]}],
+        "risks": [],
+    }
+    with pytest.raises(StrideValidationError) as exc:
+        normalize_stride_model(m)
+    assert "threats" in exc.value.fields

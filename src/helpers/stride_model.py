@@ -32,6 +32,9 @@ RATINGS: tuple[str, ...] = ("low", "medium", "high")
 RATING_LABELS: dict[str, str] = {"low": "Low", "medium": "Medium", "high": "High"}
 MAX_ROWS = 500
 MAX_TEXT = 20000
+# Budgets for what one model may store and what rendering it for the agent expands to.
+MAX_MODEL_CHARS = 1_000_000
+MAX_EXPANDED_TARGET_CHARS = 200_000
 SYSTEM_KEYS: tuple[str, ...] = ("scope", "actors", "entry_points", "trust_boundaries")
 
 _COMPONENT_ID = re.compile(r"^C[1-9]\d*$")
@@ -170,6 +173,8 @@ def _target_ids(value: object, path: str, known: set[str], errs: _Errors) -> lis
         return []
     if any(v not in known for v in value):
         errs.add(path, "references an unknown id")
+    if len(set(value)) != len(value):
+        errs.add(path, "must not repeat an id")
     return list(value)
 
 
@@ -229,8 +234,32 @@ def normalize_stride_model(raw: object) -> dict[str, Any]:
         "threats": threats,
         "risks": _risks(raw.get("risks"), threat_ids, errs),
     }
+    _check_budgets(model, errs)
     errs.raise_if_any()
     return model
+
+
+def _text_size(value: object) -> int:
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, dict):
+        return sum(_text_size(v) for v in value.values())
+    if isinstance(value, list):
+        return sum(_text_size(v) for v in value)
+    return 0
+
+
+def _check_budgets(model: dict[str, Any], errs: _Errors) -> None:
+    """Bound the stored size and the size of the rendered threat model."""
+    if _text_size(model) > MAX_MODEL_CHARS:
+        errs.add("model", f"must have at most {MAX_MODEL_CHARS} characters of text")
+        return
+    names = {row["id"]: row.get("name") or "" for row in [*model["components"], *model["interactions"]]}
+    expanded = sum(
+        len(t) + len(names.get(t, "")) + 1 for threat in model["threats"] for t in threat["target_ids"]
+    )
+    if expanded > MAX_EXPANDED_TARGET_CHARS:
+        errs.add("threats", "reference too much component and interaction text through their targets")
 
 
 def normalize_system(raw: object) -> dict[str, Optional[str]]:
