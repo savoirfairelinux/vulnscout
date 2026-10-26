@@ -53,7 +53,8 @@ A **project** groups a software product's data; a **variant** represents a
 specific build or target within that project.
 The import uses project `default` and variant `default`. It loads the supplied
 findings but does not run additional scanners or refresh provider metadata.
-See [VulnScout CLI](vulnscout-script.md) for `scan` and `refresh`.
+See [Vulnerability Scanning](vulnerability-scanning.md) for `scan` and
+[Refresh Vulnerability Data](vulnerability-data.md) for `refresh`.
 
 For other sample inputs and their import commands, see [Bundled Examples](examples.md).
 
@@ -62,7 +63,7 @@ For other sample inputs and their import commands, see [Bundled Examples](exampl
 **API keys are not required to view the imported example data.** If you need
 proxy settings or API keys for external services, configure them before starting
 the web interface with `./vulnscout config set <key> <value>`, then run
-`./vulnscout restart`. See [Configuration](vulnscout-script.md#configuration).
+`./vulnscout restart`. See [Configuration](cli-configuration.md#configuration).
 
 The preceding `add` command has already initialised VulnScout. If you skipped it,
 run `./vulnscout start` before using `config set` so the default configuration

@@ -36,5 +36,7 @@ tag-value `.spdx` files are not supported by the current import pipeline.
 
 Importing findings, running additional scanners, refreshing vulnerability metadata,
 and enforcing CI conditions are separate host commands. See
-[VulnScout CLI](vulnscout-script.md) for their scope, local advisory database setup,
-and initialization requirements.
+[VulnScout CLI](vulnscout-script.md) for command scope,
+[Vulnerability Scanning](vulnerability-scanning.md) for local advisory database
+setup, and [Configuration](cli-configuration.md#configuration) for initialization
+requirements.
