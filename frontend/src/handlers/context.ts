@@ -126,6 +126,7 @@ type ContextExport = {
 
 export type {
     VariantContextData,
+    MergedContext,
     ImportResult,
     ContextExport,
     ContextFile,
