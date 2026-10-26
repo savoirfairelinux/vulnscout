@@ -401,6 +401,15 @@ feeds and CVEList V5). Matching uses local data, but automatic database updates
 are enabled by default: first use clones the databases, and each scan refreshes
 them. OSV uses its network API.
 
+For imported SPDX 3 Build-profile evidence, the local engine also receives
+compiled-source paths from the selected variant's active SBOMs. When an advisory
+identifies affected files, the engine can record a `not_affected` VEX assessment
+if none were compiled. The finding remains available for review; it is not
+deleted. Missing or incomplete build evidence retains ordinary matching, and
+advisories without affected-file information cannot use this refinement.
+This does not evaluate Kconfig expressions or infer release versions from Git
+revisions. See [Source files](interactive-mode.md#source-files).
+
 ```bash
 ./vulnscout -p demo -v x86 scan sbom-cve-check
 ```

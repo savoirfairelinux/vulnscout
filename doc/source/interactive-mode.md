@@ -95,7 +95,7 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ### Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Source Files, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
@@ -118,6 +118,32 @@ visible in the evidence; unrelated tags and genuinely different releases still
 produce a conflict.
 
 Reimport older SBOMs to populate source revisions from the original files.
+
+### Source files
+
+**Source Files** counts the source files associated with a package in the
+selected active SBOMs. Click the count to inspect paths, original SPDX file
+properties (including recorded hashes and license information), source documents,
+and build-input associations. The details view supports filtering by path or
+document. Object files, libraries, and final build outputs are stored as file
+records but are not counted as source files.
+
+SPDX 3 `software_File`, `contains`, and Build-profile `hasInput`/`hasOutput`
+relationships are resolved across companion documents of the **same import
+scan**, including West's `app.jsonld`, `zephyr.jsonld`, and `build.jsonld`.
+Source/build package consolidation preserves those associations.
+**Build input** means explicit build evidence exists; **Listed only** does not
+prove compilation, and neither proves inclusion in the final firmware.
+
+**Not recorded** means file evidence is unavailable, not that there are zero
+source files. Reimport the original companion SBOMs together to populate older
+imports. Other SBOM formats currently do not populate this inventory.
+Outdated packages show **Not in active scan**.
+
+The local advisory engine uses resolved compiled-source paths for CVE refinement
+only when the inventory is complete and the advisory supplies affected-file
+information. Missing references or unproven source files disable this refinement;
+they do not justify discarding a CVE. Kconfig expressions are not evaluated.
 
 ### Zephyr JSON-LD components
 
