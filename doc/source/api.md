@@ -363,7 +363,7 @@ Two body shapes are accepted.
 `variant_description`, `environment`, `other_info`,
 `codebase_source` (`"paths"` or `"references"`), `codebase_path`,
 `system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
-`stride` (`components`, `interactions`, `threats`, `notes`, `risks`, `risk_notes`).
+`stride` (`components`, `interactions`, `threats`, `risks`).
 Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
 (for example `"threat_model": "A threat model is required."`).
 

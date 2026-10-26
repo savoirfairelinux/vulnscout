@@ -26,7 +26,7 @@ export const RATING_OPTIONS: readonly {
 const SYSTEM_KEYS: (keyof SystemFields)[] = ['scope', 'actors', 'entry_points', 'trust_boundaries'];
 
 export function emptyStrideModel(): StrideModel {
-    return { components: [], interactions: [], threats: [], notes: '', risks: [], risk_notes: '' };
+    return { components: [], interactions: [], threats: [], risks: [] };
 }
 
 export function emptyDraft(): VariantDraft {
@@ -46,9 +46,7 @@ function cloneStride(model: StrideModel): StrideModel {
         components: model.components.map(c => ({ ...c })),
         interactions: model.interactions.map(i => ({ ...i })),
         threats: model.threats.map(t => ({ ...t, target_ids: [...t.target_ids] })),
-        notes: model.notes,
         risks: model.risks.map(r => ({ ...r })),
-        risk_notes: model.risk_notes,
     };
 }
 
@@ -97,12 +95,11 @@ const hasText = (value: string): boolean => value.trim() !== '';
 
 /** Mirrors the server: whether the STRIDE threat model renders to non-empty text. */
 export function hasThreatModel(draft: VariantDraft): boolean {
-    const { components, interactions, threats, notes } = draft.stride;
+    const { components, interactions, threats } = draft.stride;
     return (
         SYSTEM_KEYS.some(key => hasText(draft.system[key])) ||
         components.length > 0 ||
         interactions.length > 0 ||
-        threats.length > 0 ||
-        hasText(notes)
+        threats.length > 0
     );
 }

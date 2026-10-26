@@ -3,7 +3,7 @@ import { RATING_OPTIONS } from "../../helpers/strideModel";
 import FieldErrorText from "./FieldErrorText";
 import { describeField } from "./fieldErrors";
 import { CELL, CELL_FIELD, RemoveButton, TH } from "./SystemTables";
-import { BUTTON_SECONDARY, FIELD, HELP, LABEL, TEXTAREA } from "./styles";
+import { BUTTON_SECONDARY, FIELD, HELP } from "./styles";
 
 type Props = {
     draft: VariantDraft;
@@ -118,12 +118,6 @@ function RisksTab({ draft, onDraftChange, fieldErrors, disabled = false }: Reado
                     Add risk
                 </button>
                 {noThreats && <p id="ai-variant-risks-add-hint" className={HELP}>Add a threat first.</p>}
-            </div>
-            <div>
-                <label className={LABEL} htmlFor="ai-variant-risk-notes">Additional risk notes</label>
-                <textarea id="ai-variant-risk-notes" className={TEXTAREA} value={stride.risk_notes} disabled={disabled}
-                    onChange={e => update({ risk_notes: e.target.value })} {...describeField('risk_notes', fieldErrors)} />
-                <FieldErrorText path="risk_notes" errors={fieldErrors} />
             </div>
         </div>
     );

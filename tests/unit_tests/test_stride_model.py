@@ -135,7 +135,14 @@ def test_row_cap():
 
 
 def test_text_cap():
-    assert "notes" in _fields(_model(notes="x" * (MAX_TEXT + 1)))
+    m = _model()
+    m["components"][0]["description"] = "x" * (MAX_TEXT + 1)
+    assert "components[0].description" in _fields(m)
+
+
+def test_stale_notes_keys_dropped():
+    model = normalize_stride_model(_model(notes="n", risk_notes="r"))
+    assert set(model) == {"components", "interactions", "threats", "risks"}
 
 
 def test_non_object_rejected():
@@ -173,14 +180,13 @@ def test_system_rejects_non_string():
 
 def test_full_render_matches_shape():
     system = {"scope": "Gateway", "actors": None, "entry_points": "", "trust_boundaries": "LAN/WAN"}
-    assert render_threat_model(system, _model(notes="Check OTA")) == (
+    assert render_threat_model(system, _model()) == (
         "System scope and assets:\nGateway\n\n"
         "Trust boundaries:\nLAN/WAN\n\n"
         "Components:\n- C1 OTA updater (trust zone: device)\n- C2 Update server (trust zone: cloud)\n\n"
         "Interactions:\n- I1 Download: C1 OTA updater -> C2 Update server; interface: HTTPS; "
         "data: image; trust boundary: internet\n\n"
-        "Threats:\nTampering\n- T1 [C1 OTA updater, I1 Download]: Swap image\n\n"
-        "Additional notes:\nCheck OTA")
+        "Threats:\nTampering\n- T1 [C1 OTA updater, I1 Download]: Swap image")
 
 
 def test_all_empty_is_none():
@@ -246,19 +252,6 @@ def test_risk_line_without_rating_starts_with_mitigation():
 def test_unrated_empty_risk_skipped_and_none():
     assert render_risks(_risk_model()) is None
     assert render_risks(None) is None
-
-
-def test_risk_notes_appended():
-    m = _risk_model(impact="low")
-    m["risk_notes"] = "Review yearly"
-    assert render_risks(m) == (
-        "- T1 Tampering, Swap image \u2014 Impact: Low\n\nAdditional risk notes:\nReview yearly")
-
-
-def test_risk_notes_alone_rendered():
-    m = _risk_model()
-    m["risk_notes"] = "Only notes"
-    assert render_risks(m) == "Additional risk notes:\nOnly notes"
 
 
 def test_long_threat_description_truncated():

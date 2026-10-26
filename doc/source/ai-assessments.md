@@ -188,7 +188,7 @@ you save. Uploaded references are never copied.
 references, the default, or paths; only the selected one is shown, the other is
 kept), environment and other information. The other tabs edit a STRIDE model:
 system text fields with Components and Interactions tables (System), a Threats
-table with notes (Threat model) and a likelihood/impact/mitigation row per
+table (Threat model) and a likelihood/impact/mitigation row per
 threat (Risks).
 
 Agents receive `threat_model` and `risks` as a plain-text rendering of these

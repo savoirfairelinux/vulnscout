@@ -52,9 +52,7 @@ def empty_stride_model() -> dict[str, Any]:
         "components": [],
         "interactions": [],
         "threats": [],
-        "notes": "",
         "risks": [],
-        "risk_notes": "",
     }
 
 
@@ -223,9 +221,7 @@ def normalize_stride_model(raw: object) -> dict[str, Any]:
         "components": components,
         "interactions": interactions,
         "threats": threats,
-        "notes": _text(raw.get("notes"), "notes", errs),
         "risks": _risks(raw.get("risks"), threat_ids, errs),
-        "risk_notes": _text(raw.get("risk_notes"), "risk_notes", errs),
     }
     errs.raise_if_any()
     return model
@@ -327,7 +323,6 @@ def _model_sections(model: dict[str, Any]) -> list[str]:
     groups = _threat_groups(threats, names)
     if groups:
         out.append("Threats:\n" + "\n".join(groups))
-    out.extend(_titled_section("Additional notes", model.get("notes")))
     return out
 
 
@@ -374,6 +369,4 @@ def render_risks(model: Optional[dict[str, Any]]) -> Optional[str]:
         detail = _risk_detail(risk)
         if detail:
             lines.append(f"- {_threat_summary(risk['threat_id'], threats.get(risk['threat_id']))} — {detail}")
-    sections = ["\n".join(lines)] if lines else []
-    sections.extend(_titled_section("Additional risk notes", model.get("risk_notes")))
-    return "\n\n".join(sections) if sections else None
+    return "\n".join(lines) if lines else None

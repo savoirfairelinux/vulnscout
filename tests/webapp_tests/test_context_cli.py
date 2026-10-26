@@ -11,14 +11,18 @@ import pytest
 from src.bin.webapp import create_app
 
 
-def _entry(variant_name, notes):
-    """An import entry whose STRIDE threat model holds only *notes*."""
-    return {"variant_name": variant_name, "codebase_source": "paths", "stride_model": {"notes": notes}}
+def _stride(label):
+    """A STRIDE model whose only content is one component named *label*."""
+    return {"components": [{"id": "C1", "name": label}]}
 
 
-def _save(variant_id, notes, **fields):
+def _entry(variant_name, label):
+    return {"variant_name": variant_name, "codebase_source": "paths", "stride_model": _stride(label)}
+
+
+def _save(variant_id, label, **fields):
     from src.models.variant_context import VariantContext
-    VariantContext.save_editor(variant_id, {**fields, "codebase_source": "paths", "stride": {"notes": notes}})
+    VariantContext.save_editor(variant_id, {**fields, "codebase_source": "paths", "stride": _stride(label)})
 
 
 def _build_db(app):
@@ -220,7 +224,7 @@ class TestImportContextCLI:
         assert "projects" in result.output.lower()
 
     @staticmethod
-    def _notes(app, project_name, variant_name):
+    def _label(app, project_name, variant_name):
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.variant_context import VariantContext
@@ -229,7 +233,7 @@ class TestImportContextCLI:
             project = Project.get_by_name(project_name)
             variant = Variant.get_by_name_and_project(variant_name, project.id)
             context = VariantContext.get_by_variant(variant.id)
-            return context.stride_model["notes"] if context else None
+            return context.stride_model["components"][0]["name"] if context else None
 
     def test_import_project_retargets_entries_keeping_variant_names(self, app, tmp_path):
         payload = [{"project_name": "Elsewhere", "project_description": "moved", "variants": [
@@ -241,7 +245,7 @@ class TestImportContextCLI:
 
         assert result.exit_code == 0, result.output
         assert "Imported 1 context entry" in result.output
-        assert self._notes(app, "ProjectA", "VariantA2") == "retargeted"
+        assert self._label(app, "ProjectA", "VariantA2") == "retargeted"
 
     def test_import_project_rejects_file_with_several_projects(self, app, tmp_path):
         payload = [
@@ -256,7 +260,7 @@ class TestImportContextCLI:
 
         assert result.exit_code == 1
         assert "names more than one project (ProjectA, ProjectB)" in result.output
-        assert self._notes(app, "ProjectA", "VariantA1") == "A1 threat model"
+        assert self._label(app, "ProjectA", "VariantA1") == "A1 threat model"
 
     def test_import_project_variant_retargets_single_entry(self, app, tmp_path):
         payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
@@ -268,8 +272,8 @@ class TestImportContextCLI:
             args=["import-context", "--project", "ProjectB", "--variant", "VariantB1", path])
 
         assert result.exit_code == 0, result.output
-        assert self._notes(app, "ProjectB", "VariantB1") == "copied"
-        assert self._notes(app, "ProjectA", "VariantA1") == "A1 threat model"
+        assert self._label(app, "ProjectB", "VariantB1") == "copied"
+        assert self._label(app, "ProjectA", "VariantA1") == "A1 threat model"
 
     def test_import_project_variant_requires_exactly_one_entry(self, app, tmp_path):
         payload = [{"project_name": "ProjectA", "project_description": "d", "variants": [
@@ -297,7 +301,7 @@ class TestImportContextCLI:
 
         assert result.exit_code == 1
         assert "not found" in result.output
-        assert self._notes(app, "ProjectA", "VariantA1") == "A1 threat model"
+        assert self._label(app, "ProjectA", "VariantA1") == "A1 threat model"
 
     def test_import_variant_without_project_errors(self, app, tmp_path):
         path = self._write(tmp_path, [])
