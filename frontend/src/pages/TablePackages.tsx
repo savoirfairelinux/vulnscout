@@ -163,7 +163,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
     const defaultVisibleColumns = useMemo(() => {
-        const cols = ['Name', 'Release version', 'Source revision', 'Source Files', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
+        const cols = ['Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
         if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
         return cols;
     }, [hasSupplierInfo]);
@@ -187,9 +187,13 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }, [dependencyColumnDefaulted, setDependencyColumnDefaulted, setVisibleColumns]);
     const [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted] = useLocalStorageState(`${preferenceKey}.sourceFilesColumnDefaulted`, false);
     useEffect(() => {
-        if (sourceFilesColumnDefaulted) return;
-        setSourceFilesColumnDefaulted(true);
-        setVisibleColumns(columns => columns.includes('Source Files') ? columns : [...columns, 'Source Files']);
+        if (!sourceFilesColumnDefaulted) setSourceFilesColumnDefaulted(true);
+        setVisibleColumns(columns => {
+            const renamed = columns.includes('Source Files')
+                ? columns.map(column => column === 'Source Files' ? 'Recorded Files' : column) : columns;
+            return sourceFilesColumnDefaulted || renamed.includes('Recorded Files')
+                ? renamed : [...renamed, 'Recorded Files'];
+        });
     }, [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted, setVisibleColumns]);
     const variantIdsKey = variantIds?.join(',');
     const showDependencyColumn = visibleColumns.includes('Dependency');
@@ -303,7 +307,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         'version': 'Release version',
         'source_revision': 'Source revision',
         'dependencies': 'Dependency',
-        'source_files': 'Source Files',
+        'source_files': 'Recorded Files',
         'cpe': 'CPE',
         'purl': 'PURL',
         'supplier': 'Supplier',
@@ -359,14 +363,20 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
             }),
             columnHelper.accessor(row => row.source_file_count ?? -1, {
                 id: 'source_files',
-                header: () => <div className="flex items-center justify-center">Source Files</div>,
+                header: () => <div className="flex items-center justify-center">Recorded Files</div>,
+                HintText: <p>
+                    Non-binary file records associated with this component in the imported SBOMs.
+                    May include source code, patches, licenses, and configuration files;
+                    not necessarily a complete source inventory.
+                </p>,
+                HintAriaLabel: 'Recorded files helper',
                 cell: info => {
                     const pkg = info.row.original;
                     if (pkg.outdated) return <span className="text-neutral-400">Not in active scan</span>;
                     if (pkg.source_file_count == null) return <span className="text-neutral-400"
-                        title="Reimport the original SPDX SBOMs to record source files">Not recorded</span>;
+                        title="Reimport the original SPDX SBOMs to record file evidence">Not recorded</span>;
                     return <button type="button" onClick={() => setSelectedSourcePackage(pkg.id)}
-                        aria-label={`View source files for ${pkg.name}`}
+                        aria-label={`View recorded files for ${pkg.name}`}
                         className="h-full w-full p-4 text-cyan-300 hover:bg-slate-700 hover:underline">
                         {pkg.source_file_count}
                     </button>;
@@ -644,7 +654,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }, [filteredPackages, showDependencyColumn, dependencyCounts]);
 
     return (<>
-        {selectedSourcePackage && <Suspense fallback={<div role="status">Loading source files...</div>}>
+        {selectedSourcePackage && <Suspense fallback={<div role="status">Loading recorded files...</div>}>
             <SourceFileModal variantId={variantId} projectId={projectId} variantIds={variantIds}
                 compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
                 packageId={selectedSourcePackage} onClose={() => setSelectedSourcePackage(null)} />
@@ -768,7 +778,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     'Name',
                     'Release version',
                     'Source revision',
-                    'Source Files',
+                    'Recorded Files',
                     'Dependency',
                     'CPE',
                     'PURL',
