@@ -29,8 +29,13 @@ _vulnscout_complete() {
         -p|--project|-v|--variant|--condition) return 0 ;;
         --format) mapfile -t COMPREPLY < <(compgen -W "pdf html" -- "$cur"); return 0 ;;
         --timestamps) mapfile -t COMPREPLY < <(compgen -W "original current" -- "$cur"); return 0 ;;
-        --spdx|--cdx|--cve-check|--yocto-vex|--openvex|--grype)
+        --spdx|--cdx|--cve-check|--yocto-vex|--openvex)
             _vulnscout_files "$cur"; return 0 ;;
+        --grype)
+            # 'scan --grype' is a flag; only 'add --grype' takes a path.
+            if [ "$verb" != scan ]; then
+                _vulnscout_files "$cur"; return 0
+            fi ;;
     esac
 
     local globals="--dev -h --help --version"
@@ -56,7 +61,7 @@ _vulnscout_complete() {
                 [[ "$t" == "$cur"* ]] && COMPREPLY+=("$prefix$t")
             done
             if [ -z "$prefix" ]; then
-                mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -W "$scope $globals" -- "$cur")
+                mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(compgen -W "--grype --nvd --osv --sbom-cve-check --all $scope $globals" -- "$cur")
             fi
             return 0 ;;
         report)
@@ -257,15 +262,25 @@ Examples:
 EOF
             ;;
         scan) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]
+Usage: vulnscout [-p <project>] [-v <variant>] scan [scanner options] [types|all]
 
-Run vulnerability scans. Types: grype, nvd, osv, sbom-cve-check, all (default: all).
+Run vulnerability scans. All selected scanners run together as one scan run,
+in the order grype, nvd, osv, sbom-cve-check. Without a selection, all run.
+Scanner options (repeatable and combinable; duplicates are ignored):
+    --grype                 Run Grype on the variant's SBOM
+    --nvd                   Run the NVD scan
+    --osv                   Run the OSV scan
+    --sbom-cve-check        Run the sbom-cve-check scan
+    --all                   Run every scanner (default)
+Scanner types may also be given as arguments, separated by spaces or commas:
+grype, nvd, osv, sbom-cve-check, all.
 Options:
     -p, --project <name>    Project (default: "default")
     -v, --variant <name>    Variant (default: "default")
 
 Examples:
     vulnscout scan
+    vulnscout scan --grype --osv --sbom-cve-check
     vulnscout -p demo -v x86 scan nvd,osv
 EOF
             ;;
@@ -1008,19 +1023,42 @@ verb_add() {
     exec_container "${SCOPE_ARGS[@]}" "${PENDING_ARGS[@]}"
 }
 
-verb_scan() {
-    local selection="all" arg
-    for arg in "$@"; do
-        if [[ "$arg" == -* ]]; then
-            reject_option scan "$arg"
+# Print the canonical selection for the given scan types: "all", or the
+# de-duplicated types in execution order (grype, nvd, osv, sbom-cve-check).
+normalize_scan_selection() {
+    local scan_type selected=" $* " selection=""
+    if [ $# -eq 0 ] || [[ "$selected" == *" all "* ]]; then
+        echo all
+        return
+    fi
+    for scan_type in grype nvd osv sbom-cve-check; do
+        if [[ "$selected" == *" $scan_type "* ]]; then
+            selection+="${selection:+,}$scan_type"
         fi
     done
-    if [ $# -gt 0 ]; then
-        selection="$(IFS=,; echo "$*")"
-    fi
-    validate_scan_types "$selection" scan
+    echo "$selection"
+}
+
+verb_scan() {
+    local -a requested=() scan_types=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --grype|--nvd|--osv|--sbom-cve-check|--all)
+                requested+=("${1#--}") ;;
+            -*)
+                die "'scan' does not accept option $1. Expected --grype, --nvd, --osv, --sbom-cve-check, or --all." ;;
+            *)
+                validate_scan_types "$1" scan || exit 1
+                IFS=',' read -r -a scan_types <<< "$1"
+                requested+=("${scan_types[@]}") ;;
+        esac
+        shift
+    done
+    local selection
+    selection="$(normalize_scan_selection "${requested[@]}")"
     ensure_running
     set_explicit_scope_args
+    # One entrypoint call: all selected scanners share one scan run (transaction block).
     exec_container "${SCOPE_ARGS[@]}" --perform-scans "$selection"
 }
 

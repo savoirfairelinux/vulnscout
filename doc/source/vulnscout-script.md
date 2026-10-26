@@ -17,7 +17,7 @@ Releases before v0.24 used flags instead of commands. They still work until v0.2
 | Command | Purpose | `-p` | `-v` |
 |---|---|---|---|
 | `add --spdx\|--cdx\|--cve-check\|--yocto-vex\|--openvex\|--grype <path>` | Import input files. Options repeat and mix; one call is processed as one import. | default `default` | default `default` |
-| `scan [grype\|nvd\|osv\|sbom-cve-check\|all]` | Run scanners on the current data. No type means `all`. | default `default` | default `default` |
+| `scan [--grype] [--nvd] [--osv] [--sbom-cve-check] [--all]` | Run the selected scanners together on the current data. Positional types (`scan nvd,osv`) also work; no selection means `all`. | default `default` | default `default` |
 | `refresh` | Refresh EPSS, NVD, ENISA EUVD and GitHub Advisory data. | optional; all data when omitted | optional; needs `-p` |
 | `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional; needs `-p` |
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
@@ -327,7 +327,7 @@ VulnScout can run Grype on the current database contents:
 ./vulnscout -p demo -v x86 scan grype
 ```
 
-`scan` accepts `grype`, `nvd` (CPE-based), `osv` (PURL-based), and `sbom-cve-check` (local advisory databases). Select several with commas (`scan nvd,osv`) or spaces (`scan nvd osv`). With no type, or with `all`, every available scanner runs. Scans always run in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh is a separate command (`refresh`).
+`scan` accepts `grype`, `nvd` (CPE-based), `osv` (PURL-based), and `sbom-cve-check` (local advisory databases). Select several with repeatable scanner flags (`scan --grype --osv --sbom-cve-check`), commas (`scan nvd,osv`), or spaces (`scan nvd osv`); the forms can be mixed and duplicates are ignored. With no selection, or with `all`/`--all`, every available scanner runs. All selected scanners run in one invocation, always in the order Grype, NVD, OSV, sbom-cve-check. Vulnerability-data refresh is a separate command (`refresh`).
 
 All tool scans produced by one `scan` invocation share a fresh run ID, including
 Grype results. The Scan page displays multiple steps for the same variant as one

@@ -106,6 +106,15 @@ def test_scan_types_and_comma_lists(completion_script):
     assert complete(completion_script, ["vulnscout", "scan", "nvd,o"]) == ["nvd,osv"]
 
 
+def test_scan_scanner_flags(tmp_path, completion_script):
+    flags = {"--grype", "--nvd", "--osv", "--sbom-cve-check", "--all"}
+    assert set(complete(completion_script, ["vulnscout", "scan", "-"])) >= flags
+    assert set(complete(completion_script, ["vulnscout", "scan", "--grype", "--"])) >= flags
+    (tmp_path / "sbom.json").write_text("{}")
+    assert "sbom.json" not in complete(completion_script, ["vulnscout", "scan", "--grype", ""], cwd=tmp_path)
+    assert "sbom.json" in complete(completion_script, ["vulnscout", "add", "--grype", ""], cwd=tmp_path)
+
+
 def test_fixed_values(completion_script):
     assert set(complete(completion_script, ["vulnscout", "report", "--format", ""])) == {"pdf", "html"}
     assert set(complete(completion_script, ["vulnscout", "import", "custom-data", "--timestamps", ""])) == {"original", "current"}

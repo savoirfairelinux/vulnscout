@@ -272,7 +272,8 @@ run_ok
 assert_stdout "Usage: vulnscout [global options] <command>"
 
 run_ok scan --help
-assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [types|all]"
+assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [scanner options] [types|all]"
+assert_stdout "vulnscout scan --grype --osv --sbom-cve-check"
 assert_stdout "Examples:"
 if [ -s "$VULNSCOUT_TEST_LOG" ]; then
     echo "Help must not call the container engine." >&2
@@ -348,9 +349,38 @@ assert_log "/scan/src/entrypoint.sh --project demo --perform-scans nvd\,osv"
 run_ok scan grype,sbom-cve-check -v x86
 assert_log "/scan/src/entrypoint.sh --variant x86 --perform-scans grype\,sbom-cve-check"
 
+# Scanner flags select a subset; it runs in one entrypoint call (one scan run).
+run_ok scan --grype --osv --sbom-cve-check
+assert_log "/scan/src/entrypoint.sh --perform-scans grype\,osv\,sbom-cve-check"
+if [ "$(grep -c "/scan/src/entrypoint.sh" "$VULNSCOUT_TEST_LOG")" -ne 1 ]; then
+    echo "Expected one entrypoint call for a multi-scanner selection." >&2
+    cat "$VULNSCOUT_TEST_LOG" >&2
+    exit 1
+fi
+
+run_ok -p demo scan --sbom-cve-check --nvd --osv --nvd -v x86
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --perform-scans nvd\,osv\,sbom-cve-check"
+
+run_ok scan --osv
+assert_log "/scan/src/entrypoint.sh --perform-scans osv"
+
+run_ok scan --all
+assert_log "/scan/src/entrypoint.sh --perform-scans all"
+
+run_ok scan --nvd --all
+assert_log "/scan/src/entrypoint.sh --perform-scans all"
+
+run_ok scan osv --grype nvd,osv
+assert_log "/scan/src/entrypoint.sh --perform-scans grype\,nvd\,osv"
+
+run_ok scan all
+assert_log "/scan/src/entrypoint.sh --perform-scans all"
+
 expect_fail "unknown scan type 'x'" scan x
+expect_fail "unknown scan type 'x'" scan --nvd x
 expect_fail "scan requires scan types" scan nvd,
-expect_fail "'scan' does not accept option --all." scan --all
+expect_fail "'scan' does not accept option --foo. Expected --grype, --nvd, --osv, --sbom-cve-check, or --all." scan --nvd --foo
+expect_fail "'scan' does not accept option --grype=x." scan --grype=x
 
 # --- match-condition ---
 run_ok match-condition affected

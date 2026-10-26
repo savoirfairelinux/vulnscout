@@ -17,8 +17,23 @@ from src.routes._scan_diff import invalidate_scan_list_cache
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("legacy,fail_nvd", [(False, False), (True, True)])
-def test_entrypoint_batches_form_distinct_api_transaction_blocks(tmp_path, monkeypatch, legacy, fail_nvd):
+ALL_SOURCES = ["grype", "nvd", "osv", "scc"]
+
+
+@pytest.mark.parametrize(
+    "args,fail_nvd,expected_sources",
+    [
+        (["--perform-scans", "all"], False, ALL_SOURCES),
+        (["--perform-grype-scan", "--perform-nvd-scan", "--perform-osv-scan",
+          "--perform-sbom-cve-check-scan"], True, ["grype", "osv", "scc"]),
+        # What 'vulnscout scan --grype --osv --sbom-cve-check' sends to the entrypoint.
+        (["--perform-scans", "grype,osv,sbom-cve-check"], False, ["grype", "osv", "scc"]),
+    ],
+    ids=["all", "legacy", "subset"],
+)
+def test_entrypoint_batches_form_distinct_api_transaction_blocks(
+    tmp_path, monkeypatch, args, fail_nvd, expected_sources,
+):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     flask = fake_bin / "flask"
@@ -69,8 +84,6 @@ def test_entrypoint_batches_form_distinct_api_transaction_blocks(tmp_path, monke
 
     seed = invoke("--add-cdx", str(ROOT / "tests" / "end_to_end_tests" / "input_cdx.json"))
     assert seed.returncode == 0, seed.stdout + seed.stderr
-    args = (["--perform-grype-scan", "--perform-nvd-scan", "--perform-osv-scan",
-             "--perform-sbom-cve-check-scan"] if legacy else ["--perform-scans", "all"])
     for _ in range(2):
         result = invoke(*args)
         assert (result.returncode != 0) is fail_nvd, result.stdout + result.stderr
@@ -91,7 +104,6 @@ def test_entrypoint_batches_form_distinct_api_transaction_blocks(tmp_path, monke
         run_ids = {scan["run_id"] for scan in steps}
         assert None not in run_ids
         assert len(run_ids) == 2
-        expected_sources = ["grype", "osv", "scc"] if fail_nvd else ["grype", "nvd", "osv", "scc"]
         for run_id in run_ids:
             members = [scan for scan in steps if scan["run_id"] == run_id]
             assert len(members) == len(expected_sources)
