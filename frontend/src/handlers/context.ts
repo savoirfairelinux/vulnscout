@@ -18,7 +18,6 @@ type VariantContext = VariantContextData & {
     editor: VariantEditorData;
 };
 
-type EditorMode = 'stride' | 'free';
 type CodebaseSource = 'paths' | 'references';
 type Rating = 'low' | 'medium' | 'high' | null;
 
@@ -62,10 +61,8 @@ type SystemFields = {
 
 /** Editor-shaped view of a variant's context, as returned by the backend. */
 type VariantEditorData = {
-    editor_mode: EditorMode;
     codebase_source: CodebaseSource;
     codebase_path: string | null;
-    free: { threat_model: string | null; risks: string | null };
     system: SystemFields;
     stride: StrideModel;
     files: ContextFile[];
@@ -77,10 +74,8 @@ type VariantDraft = {
     variant_description: string;
     environment: string;
     other_info: string;
-    editor_mode: EditorMode;
     codebase_source: CodebaseSource;
     codebase_paths: string[];
-    free: { threat_model: string; risks: string };
     system: Record<keyof SystemFields, string>;
     stride: StrideModel;
 };
@@ -99,13 +94,10 @@ type VariantEntry = {
     variant_description: string | null;
     codebase_path: string | null;
     environment: string | null;
-    threat_model: string | null;
-    risks: string | null;
     other_info: string | null;
-    editor_mode?: EditorMode;
-    codebase_source?: CodebaseSource;
-    system?: SystemFields;
-    stride_model?: StrideModel;
+    codebase_source: CodebaseSource;
+    system: SystemFields;
+    stride_model: StrideModel;
 };
 
 /** One project with its variants nested underneath. */
@@ -145,7 +137,6 @@ export type {
     ImportResult,
     ContextExport,
     ContextFile,
-    EditorMode,
     CodebaseSource,
     Rating,
     StrideComponent,
@@ -261,13 +252,8 @@ class Context {
             variant_description: blankToNull(draft.variant_description),
             environment: blankToNull(draft.environment),
             other_info: blankToNull(draft.other_info),
-            editor_mode: draft.editor_mode,
             codebase_source: draft.codebase_source,
             codebase_path: joinCodebasePaths(draft.codebase_paths),
-            free: {
-                threat_model: blankToNull(draft.free.threat_model),
-                risks: blankToNull(draft.free.risks),
-            },
             system: {
                 scope: blankToNull(draft.system.scope),
                 actors: blankToNull(draft.system.actors),

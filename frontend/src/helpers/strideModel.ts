@@ -1,5 +1,5 @@
 import type {
-    EditorMode, MergedContext, Rating, StrideModel, SystemFields, VariantDraft,
+    MergedContext, Rating, StrideModel, SystemFields, VariantDraft,
 } from '../handlers/context';
 import { splitCodebasePaths } from '../handlers/context';
 
@@ -34,10 +34,8 @@ export function emptyDraft(): VariantDraft {
         variant_description: '',
         environment: '',
         other_info: '',
-        editor_mode: 'stride',
         codebase_source: 'references',
         codebase_paths: [],
-        free: { threat_model: '', risks: '' },
         system: { scope: '', actors: '', entry_points: '', trust_boundaries: '' },
         stride: emptyStrideModel(),
     };
@@ -60,13 +58,8 @@ export function draftFromContext(ctx: MergedContext): VariantDraft {
         variant_description: ctx.variant_description ?? '',
         environment: ctx.environment ?? '',
         other_info: ctx.other_info ?? '',
-        editor_mode: editor.editor_mode,
         codebase_source: editor.codebase_source,
         codebase_paths: splitCodebasePaths(editor.codebase_path),
-        free: {
-            threat_model: editor.free.threat_model ?? '',
-            risks: editor.free.risks ?? '',
-        },
         system: {
             scope: editor.system.scope ?? '',
             actors: editor.system.actors ?? '',
@@ -102,9 +95,8 @@ export function isReferenced(model: StrideModel, id: string): boolean {
 
 const hasText = (value: string): boolean => value.trim() !== '';
 
-/** Mirrors the server: whether the active mode's threat model renders to non-empty text. */
+/** Mirrors the server: whether the STRIDE threat model renders to non-empty text. */
 export function hasThreatModel(draft: VariantDraft): boolean {
-    if (draft.editor_mode === 'free') return hasText(draft.free.threat_model);
     const { components, interactions, threats, notes } = draft.stride;
     return (
         SYSTEM_KEYS.some(key => hasText(draft.system[key])) ||
@@ -113,17 +105,4 @@ export function hasThreatModel(draft: VariantDraft): boolean {
         threats.length > 0 ||
         hasText(notes)
     );
-}
-
-/** Switch mode; entering an empty STRIDE model seeds its notes from the free text. Free text is kept. */
-export function switchEditorMode(draft: VariantDraft, mode: EditorMode): VariantDraft {
-    if (mode === 'stride' && !hasThreatModel({ ...draft, editor_mode: 'stride' }) &&
-        draft.stride.risks.length === 0 && !hasText(draft.stride.risk_notes)) {
-        return {
-            ...draft,
-            editor_mode: mode,
-            stride: { ...draft.stride, notes: draft.free.threat_model, risk_notes: draft.free.risks },
-        };
-    }
-    return { ...draft, editor_mode: mode };
 }

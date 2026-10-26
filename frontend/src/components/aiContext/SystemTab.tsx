@@ -3,7 +3,7 @@ import type { VariantDraft, SystemFields } from "../../handlers/context";
 import FieldErrorText from "./FieldErrorText";
 import { describeField } from "./fieldErrors";
 import SystemTables from "./SystemTables";
-import { HELP, LABEL, TEXTAREA } from "./styles";
+import { LABEL, TEXTAREA } from "./styles";
 
 type Props = {
     draft: VariantDraft;
@@ -22,10 +22,6 @@ const FIELDS: { key: keyof SystemFields; label: string }[] = [
 function SystemTab({ draft, onDraftChange, fieldErrors, disabled = false }: Readonly<Props>) {
     // Ids removed since this draft was loaded; never handed out again before a save.
     const removedIds = useRef<string[]>([]);
-
-    if (draft.editor_mode === 'free') {
-        return <p className={HELP}>In Free mode, describe the system and its interactions in Threat model.</p>;
-    }
     return (
         <div className="space-y-4">
             {FIELDS.map(({ key, label }) => {

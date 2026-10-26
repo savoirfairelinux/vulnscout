@@ -1,5 +1,4 @@
 import type { ContextFile, VariantDraft } from "../../handlers/context";
-import { switchEditorMode } from "../../helpers/strideModel";
 import CodebaseReferences from "../CodebaseReferences";
 import FieldErrorText from "./FieldErrorText";
 import { describeField } from "./fieldErrors";
@@ -22,10 +21,6 @@ type Choice<T extends string> = { value: T; label: string };
 const SOURCES: Choice<VariantDraft['codebase_source']>[] = [
     { value: 'references', label: 'Codebase references' },
     { value: 'paths', label: 'Codebase paths' },
-];
-const MODES: Choice<VariantDraft['editor_mode']>[] = [
-    { value: 'stride', label: 'STRIDE' },
-    { value: 'free', label: 'Free' },
 ];
 
 const fieldId = (key: string) => `ai-variant-${key.replace(/_/g, '-')}`;
@@ -152,14 +147,6 @@ function ContextTab({ draft, onDraftChange, variantId, files, notify, fieldError
                 </div>
             </div>
             <div>{textArea('environment', 'Environment')}</div>
-            <RadioGroup
-                name="editor_mode"
-                label="Editor mode"
-                options={MODES}
-                value={draft.editor_mode}
-                onChange={value => onDraftChange(switchEditorMode(draft, value))}
-                errors={fieldErrors}
-            />
             <div>{textArea('other_info', 'Other information')}</div>
         </div>
     );

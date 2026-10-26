@@ -122,16 +122,12 @@ def _update_variant_context_impl(
     variant_description: Optional[str] = None,
     codebase_path: Optional[str] = None,
     environment: Optional[str] = None,
-    threat_model: Optional[str] = None,
-    risks: Optional[str] = None,
     other_info: Optional[str] = None,
 ) -> str:
     fields = {
         "variant_description": variant_description,
         "codebase_path": codebase_path,
         "environment": environment,
-        "threat_model": threat_model,
-        "risks": risks,
         "other_info": other_info,
     }
     try:
@@ -294,11 +290,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         variant_description: Optional[str] = None,
         codebase_path: Optional[str] = None,
         environment: Optional[str] = None,
-        threat_model: Optional[str] = None,
-        risks: Optional[str] = None,
         other_info: Optional[str] = None,
     ) -> str:
-        """Set the context fields of a variant by its UUID.
+        """Set the text context fields of a variant by its UUID.
 
         IMPORTANT: This is a FULL REPLACEMENT, not a partial update. Every
         call replaces all fields at once — any field left as null (including
@@ -308,20 +302,16 @@ def register_tools(server, client: VulnScoutClient) -> None:
         value back explicitly. If only the project/variant names are known,
         resolve variant_id first with find_variant_id.
 
-        Rejected (409) for STRIDE-mode variants when threat_model or risks is
-        set to a value that differs from the current one; other fields still
-        update when those two are omitted. Passing back the unchanged
-        values from get_merged_context is accepted. On a variant that uses
-        uploaded references, codebase_path may be omitted to keep the stored
-        paths.
+        The threat model and risks are generated from the variant's STRIDE
+        model, which is edited in the AI Context page; this tool cannot
+        change them. On a variant that uses uploaded references,
+        codebase_path may be omitted to keep the stored paths.
 
         Args:
             variant_id: UUID of the variant to update.
             variant_description: Free-text description of this variant.
             codebase_path: Path(s) to the codebase for this variant.
             environment: Free-text description of the deployment environment.
-            threat_model: Free-text threat model notes for this variant.
-            risks: Free-text notes about known risks for this variant.
             other_info: Any other free-text notes about this variant.
         """
         return _update_variant_context_impl(
@@ -330,7 +320,5 @@ def register_tools(server, client: VulnScoutClient) -> None:
             variant_description=variant_description,
             codebase_path=codebase_path,
             environment=environment,
-            threat_model=threat_model,
-            risks=risks,
             other_info=other_info,
         )

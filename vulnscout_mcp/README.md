@@ -126,7 +126,7 @@ python vulnscout_mcp/server.py
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
 | `get_project_context`          | Get context fields for a project by UUID                             |
 | `update_project_context`       | Update the description of a project                                  |
-| `update_variant_context`       | Replace all context fields for a variant by UUID (full replacement; omitted fields are cleared). Rejected (409) for STRIDE-mode variants when `threat_model` or `risks` is set to a value that differs from the current one; passing back the unchanged values from `get_merged_context` is accepted, and other fields still update when those two are omitted |
+| `update_variant_context`       | Replace the text context fields (`variant_description`, `codebase_path`, `environment`, `other_info`) of a variant by UUID (full replacement; omitted fields are cleared). The threat model and risks are generated from the variant's STRIDE model and are edited in the AI Context page |
 | `get_custom_assessment`        | Fetch a single user/custom assessment, with any existing per-target AI reviews |
 | `list_custom_assessments`      | List user/custom assessments, optionally scoped to a project variant |
 | `write_assessment_review`      | Save an AI review of one (variant, package) target of a user/custom assessment |

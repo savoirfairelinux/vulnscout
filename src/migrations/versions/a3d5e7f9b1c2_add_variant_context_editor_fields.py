@@ -1,4 +1,4 @@
-"""add variant context editor mode, codebase source and STRIDE fields
+"""add variant context codebase source and STRIDE fields, drop free-text threat model
 
 Revision ID: a3d5e7f9b1c2
 Revises: e9b72c4a1d60
@@ -14,12 +14,14 @@ down_revision = 'e9b72c4a1d60'
 branch_labels = None
 depends_on = None
 
+# Free-text threat model and risks, replaced by the rendering of the STRIDE model.
+FREE_TEXT_COLUMNS = ('threat_model', 'risks')
+
 
 def upgrade():
     # Columns may already exist (schema built from current models, then stamped).
     existing = {column['name'] for column in sa.inspect(op.get_bind()).get_columns('variant_context')}
     columns = [
-        sa.Column('editor_mode', sa.String(), nullable=False, server_default='free'),
         sa.Column('codebase_source', sa.String(), nullable=False, server_default='paths'),
         sa.Column('system_scope', sa.Text(), nullable=True),
         sa.Column('system_actors', sa.Text(), nullable=True),
@@ -28,10 +30,13 @@ def upgrade():
         sa.Column('stride_model', sa.JSON(), nullable=True),
     ]
     missing = [column for column in columns if column.name not in existing]
-    if missing:
+    obsolete = [name for name in FREE_TEXT_COLUMNS if name in existing]
+    if missing or obsolete:
         with op.batch_alter_table('variant_context') as batch_op:
             for column in missing:
                 batch_op.add_column(column)
+            for name in obsolete:
+                batch_op.drop_column(name)
     if 'codebase_source' in existing:
         # Already populated; re-running the backfill could override a user's choice.
         return
@@ -46,10 +51,11 @@ def upgrade():
 
 def downgrade():
     with op.batch_alter_table('variant_context') as batch_op:
+        batch_op.add_column(sa.Column('threat_model', sa.Text(), nullable=True))
+        batch_op.add_column(sa.Column('risks', sa.Text(), nullable=True))
         batch_op.drop_column('stride_model')
         batch_op.drop_column('system_trust_boundaries')
         batch_op.drop_column('system_entry_points')
         batch_op.drop_column('system_actors')
         batch_op.drop_column('system_scope')
         batch_op.drop_column('codebase_source')
-        batch_op.drop_column('editor_mode')

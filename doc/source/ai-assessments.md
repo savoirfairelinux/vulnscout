@@ -164,7 +164,7 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, environment, threat model, risks, other info) |
 | `list_codebase_files` / `read_codebase_file` / `search_codebase` | Browse, read and search uploaded codebase references for a variant, including inside the container |
 | `get_project_context` / `update_project_context` | Read / replace a project's description |
-| `update_variant_context`   | Replace a variant's context fields (description, environment, threat model, risks, other info) — full replacement, not a partial update; rejected (409) for STRIDE-mode variants when threat model or risks is set to a value that differs from the current one; passing back the unchanged values from `get_merged_context` is accepted, and other fields still update when those two are omitted |
+| `update_variant_context`   | Replace a variant's text context fields (description, codebase path, environment, other info) — full replacement, not a partial update; the threat model and risks are generated from the STRIDE model and can only be edited in the AI Context page |
 | `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |
 | `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
 | `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
@@ -186,19 +186,16 @@ you save. Uploaded references are never copied.
 
 **Context** holds the variant description, the **Codebase source** (uploaded
 references, the default, or paths; only the selected one is shown, the other is
-kept), environment, **Editor mode** and other information.
+kept), environment and other information. The other tabs edit a STRIDE model:
+system text fields with Components and Interactions tables (System), a Threats
+table with notes (Threat model) and a likelihood/impact/mitigation row per
+threat (Risks).
 
-- **STRIDE** mode edits structured data: system text fields, Components and
-  Interactions tables (System), a Threats table with notes (Threat model) and
-  a likelihood/impact/mitigation row per threat (Risks).
-- **Free** mode edits plain text for the threat model and risks.
-
-Both modes keep their data when you switch. Agents receive plain text in both
-cases: `threat_model` and `risks` are the stored text in Free mode and a text
-rendering of the tables in STRIDE mode. `codebase_path` is only sent when the
-source is paths, and uploaded references are only listed when the source is
-references. Writes from the MCP `update_variant_context` tool cannot change a
-STRIDE variant's threat model or risks; edit them in the page.
+Agents receive `threat_model` and `risks` as a plain-text rendering of these
+tables. `codebase_path` is only sent when the source is paths, and uploaded
+references are only listed when the source is references. The MCP
+`update_variant_context` tool cannot change the threat model or risks; edit them
+in the page.
 
 ## Codebase references on the AI Context page
 

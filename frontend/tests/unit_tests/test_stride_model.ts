@@ -5,7 +5,7 @@ import Context, { ContextSaveError } from '../../src/handlers/context';
 import type { MergedContext, StrideModel } from '../../src/handlers/context';
 import {
     STRIDE_CATEGORIES, RATING_OPTIONS, emptyStrideModel, emptyDraft, draftFromContext,
-    draftsEqual, nextId, isReferenced, hasThreatModel, switchEditorMode,
+    draftsEqual, nextId, isReferenced, hasThreatModel,
 } from '../../src/helpers/strideModel';
 
 beforeEach(() => fetchMock.resetMocks());
@@ -15,8 +15,7 @@ function ctxWithEditor(editor: Partial<MergedContext['editor']> = {}): MergedCon
         project_id: 'p1', description: null, variant_id: 'v1', variant_description: 'VD',
         codebase_path: null, environment: null, threat_model: null, risks: null, other_info: null,
         editor: {
-            editor_mode: 'stride', codebase_source: 'paths', codebase_path: null,
-            free: { threat_model: null, risks: null },
+            codebase_source: 'paths', codebase_path: null,
             system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
             stride: emptyStrideModel(), files: [], updated_at: null,
             ...editor,
@@ -50,9 +49,8 @@ describe('constants', () => {
 });
 
 describe('drafts', () => {
-    test('emptyDraft defaults to STRIDE mode and references source', () => {
+    test('emptyDraft defaults to the references source and an empty STRIDE model', () => {
         const d = emptyDraft();
-        expect(d.editor_mode).toBe('stride');
         expect(d.codebase_source).toBe('references');
         expect(d.codebase_paths).toEqual([]);
         expect(d.stride).toEqual(emptyStrideModel());
@@ -60,17 +58,14 @@ describe('drafts', () => {
 
     test('draftFromContext maps nulls to empty strings and reads the editor block', () => {
         const d = draftFromContext(ctxWithEditor({
-            editor_mode: 'free', codebase_source: 'references', codebase_path: ' /src/a;;/src/b ;',
-            free: { threat_model: 'TM', risks: null },
+            codebase_source: 'references', codebase_path: ' /src/a;;/src/b ;',
             system: { scope: 'S', actors: null, entry_points: null, trust_boundaries: null },
         }));
         expect(d.variant_description).toBe('VD');
         expect(d.environment).toBe('');
         expect(d.other_info).toBe('');
-        expect(d.editor_mode).toBe('free');
         expect(d.codebase_source).toBe('references');
         expect(d.codebase_paths).toEqual(['/src/a', '/src/b']);
-        expect(d.free).toEqual({ threat_model: 'TM', risks: '' });
         expect(d.system).toEqual({ scope: 'S', actors: '', entry_points: '', trust_boundaries: '' });
     });
 
@@ -116,15 +111,7 @@ describe('ids and references', () => {
 });
 
 describe('hasThreatModel', () => {
-    test('free mode uses trimmed free threat model only', () => {
-        const base = { ...emptyDraft(), editor_mode: 'free' as const };
-        expect(hasThreatModel(base)).toBe(false);
-        expect(hasThreatModel({ ...base, free: { threat_model: '  ', risks: 'r' } })).toBe(false);
-        expect(hasThreatModel({ ...base, free: { threat_model: 'x', risks: '' } })).toBe(true);
-        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), notes: 'n' } })).toBe(false);
-    });
-
-    test('stride mode counts system fields, rows and notes but not risks', () => {
+    test('counts system fields, rows and notes but not risks', () => {
         const base = emptyDraft();
         expect(hasThreatModel(base)).toBe(false);
         expect(hasThreatModel({ ...base, system: { ...base.system, scope: 'x' } })).toBe(true);
@@ -134,43 +121,6 @@ describe('hasThreatModel', () => {
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), interactions: populated.interactions } })).toBe(true);
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), threats: populated.threats } })).toBe(true);
         expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), risks: populated.risks, risk_notes: 'rn' } })).toBe(false);
-        expect(hasThreatModel({ ...base, free: { threat_model: 'ignored', risks: '' } })).toBe(false);
-    });
-});
-
-describe('switchEditorMode', () => {
-    test('switching Free to STRIDE pre-fills notes when STRIDE is empty', () => {
-        const d = { ...emptyDraft(), editor_mode: 'free' as const, free: { threat_model: 'TM', risks: 'R' } };
-        const s = switchEditorMode(d, 'stride');
-        expect(s.editor_mode).toBe('stride');
-        expect(s.stride.notes).toBe('TM');
-        expect(s.stride.risk_notes).toBe('R');
-        expect(s.free.threat_model).toBe('TM');
-        expect(d.stride.notes).toBe('');
-    });
-
-    test('switching to STRIDE keeps existing STRIDE data untouched', () => {
-        const d = {
-            ...emptyDraft(), editor_mode: 'free' as const,
-            free: { threat_model: 'TM', risks: 'R' }, stride: populated,
-        };
-        const s = switchEditorMode(d, 'stride');
-        expect(s.stride).toEqual(populated);
-    });
-
-    test('non-empty system fields also block the pre-fill', () => {
-        const d = {
-            ...emptyDraft(), editor_mode: 'free' as const,
-            free: { threat_model: 'TM', risks: 'R' }, system: { ...emptyDraft().system, scope: 'S' },
-        };
-        expect(switchEditorMode(d, 'stride').stride.notes).toBe('');
-    });
-
-    test('switching to Free only changes the mode', () => {
-        const d = { ...emptyDraft(), stride: populated };
-        const s = switchEditorMode(d, 'free');
-        expect(s.editor_mode).toBe('free');
-        expect(s.stride).toEqual(populated);
     });
 });
 
@@ -179,7 +129,7 @@ describe('Context.saveVariantEditor', () => {
         fetchMock.mockResponseOnce(JSON.stringify(ctxWithEditor()));
         const draft = {
             ...emptyDraft(), variant_description: ' ', environment: '', other_info: 'info',
-            free: { threat_model: '', risks: ' ' }, codebase_paths: ['', ' '],
+            codebase_paths: ['', ' '],
         };
         await Context.saveVariantEditor('v 1', draft);
         const [url, init] = fetchMock.mock.calls[0];
@@ -190,9 +140,9 @@ describe('Context.saveVariantEditor', () => {
         expect(body.environment).toBeNull();
         expect(body.other_info).toBe('info');
         expect(body.codebase_path).toBeNull();
-        expect(body.free).toEqual({ threat_model: null, risks: null });
         expect(body.system).toEqual({ scope: null, actors: null, entry_points: null, trust_boundaries: null });
-        expect(body.editor_mode).toBe('stride');
+        expect(body).not.toHaveProperty('editor_mode');
+        expect(body).not.toHaveProperty('free');
         expect(body.codebase_source).toBe('references');
         expect(body.stride).toEqual(emptyStrideModel());
     });
