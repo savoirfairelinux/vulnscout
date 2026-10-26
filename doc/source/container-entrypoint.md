@@ -17,7 +17,7 @@ podman exec <container> /scan/src/entrypoint.sh [OPTIONS]
 
 ## Container Lifecycle
 
-When the container starts with no arguments, it enters **daemon mode** — it stays alive and waits for commands sent via `docker exec` (or `podman exec`). This is the mode used by the `./vulnscout` host wrapper.
+When the container starts with no arguments, it enters **daemon mode** — it stays alive and waits for commands sent via `docker exec` (or `podman exec`). This is the mode used by the `./vulnscout` host wrapper, which removes the container again once a command finishes, except for `serve`, `start`, `restart` and `update`.
 
 ### Standalone Docker setup
 

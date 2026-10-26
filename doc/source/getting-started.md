@@ -34,7 +34,7 @@ Then open the web interface:
 http://localhost:7275
 ```
 
-The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, and imports the input files; `serve` then starts the web interface.
+The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, imports the input files, and removes the container once the command finishes; `serve` then starts the web interface and keeps the container running.
 
 The import uses project `default` and variant `default`. It loads the supplied
 findings but does not run additional scanners or refresh provider metadata.
@@ -62,7 +62,8 @@ If you have already loaded your data and just want to start the web interface:
 ./vulnscout serve
 ```
 
-Press `Ctrl+C` to stop the web server and return to your shell. The container keeps running in the background.
+Press `Ctrl+C` to stop the web server and return to your shell. The container keeps running in the background
+until another command, such as `add` or `scan`, finishes, or until you stop it.
 
 ---
 

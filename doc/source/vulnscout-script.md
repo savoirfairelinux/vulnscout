@@ -46,7 +46,21 @@ Global options can appear before or after the command:
 
 ## Container Lifecycle
 
-The `vulnscout` script manages the container automatically (using Docker or Podman, whichever is available). You can also control it explicitly:
+The `vulnscout` script manages the container automatically (using Docker or Podman, whichever is available).
+Each command that runs in the container starts it when needed and removes it once it finishes,
+so `docker ps` (or `podman ps`) no longer lists it. The exit status of the command is kept.
+Data in the cache and outputs directories persists between runs.
+
+The container is kept running only:
+
+- by `serve`, while the web interface runs and after it is stopped with `Ctrl+C`;
+- by `start` and `restart`, and by `update` when it replaces a running container;
+- while another VulnScout command, such as a `serve` session, still runs in it.
+
+Interrupting a command with `Ctrl+C` removes the container if that command started it,
+which aborts the operation still running inside.
+
+You can also control the container explicitly:
 
 ```bash
 # Start the container (done automatically by most commands)
@@ -432,7 +446,8 @@ it does not make Grype, OSV, or remote vulnerability-data refreshes offline.
 Set `SBOM_CVE_CHECK_AUTO_UPDATE` back to `1` and restart to resume updates.
 
 The host `scan nvd` command does not expose NVD API mode. If needed, invoke the
-lower-level command in a running container (replace its name if configured):
+lower-level command in a running container (run `./vulnscout start` first and
+replace its name if configured):
 
 ```bash
 docker exec vulnscout flask --app src.bin.webapp nvd-scan \

@@ -28,6 +28,20 @@ case "$1" in
         ;;
     exec)
         log_call "$@"
+        if [ "${3:-}" = pgrep ]; then
+            # Busy: another VulnScout command still runs in the container.
+            if [ -n "${VULNSCOUT_TEST_BUSY:-}" ]; then
+                exit 0
+            fi
+            exit 1
+        fi
+        if [ -n "${VULNSCOUT_TEST_BLOCK_DIR:-}" ] && [ "${3:-}" = /scan/src/entrypoint.sh ]; then
+            touch "$VULNSCOUT_TEST_BLOCK_DIR/started"
+            for _ in $(seq 100); do
+                [ -e "$VULNSCOUT_TEST_BLOCK_DIR/release" ] && break
+                sleep 0.1
+            done
+        fi
         exit "${VULNSCOUT_TEST_EXEC_EXIT:-0}"
         ;;
     rm|run|pull)
@@ -597,5 +611,146 @@ expect_fail "usage: vulnscout config set <key> <value>" config set ONLY_KEY
 expect_fail "'config' does not accept --project or --variant." -p demo config list
 expect_fail "unknown config action 'show'." config show
 expect_fail "'config' needs get, set, unset, or list." config
+
+# --- container lifecycle ---
+# assert_log_order <first> <second>: <second> is logged after the first <first>.
+assert_log_order() {
+    local first second
+    first="$(awk -v p="$1" 'index($0, p) { print NR; exit }' "$VULNSCOUT_TEST_LOG")"
+    second="$(awk -v p="$2" 'index($0, p) { n = NR } END { print n }' "$VULNSCOUT_TEST_LOG")"
+    if [ -z "$first" ] || [ -z "$second" ] || [ "$first" -ge "$second" ]; then
+        echo "Expected container call containing '$2' after '$1'." >&2
+        cat "$VULNSCOUT_TEST_LOG" >&2
+        exit 1
+    fi
+}
+
+# The container must not be removed after the last logged call.
+refute_removed_last() {
+    if [ "$(tail -n 1 "$VULNSCOUT_TEST_LOG")" = "rm -f vulnscout " ]; then
+        echo "The container was removed after the command." >&2
+        cat "$VULNSCOUT_TEST_LOG" >&2
+        exit 1
+    fi
+}
+
+wait_for_file() {
+    local _
+    for _ in $(seq 100); do
+        [ -e "$1" ] && return 0
+        sleep 0.1
+    done
+    echo "Timed out waiting for $1." >&2
+    exit 1
+}
+
+# Every command that runs in the container removes it once no other command uses it.
+run_ok -p demo -v x86 add --spdx "$SBOM"
+assert_log "exec vulnscout pgrep -f"
+assert_log_order "/scan/src/entrypoint.sh --project demo --variant x86 --add-spdx" "rm -f vulnscout"
+
+lifecycle_cmds=(
+    "scan"
+    "match-condition affected"
+    "refresh"
+    "report summary.adoc"
+    "export spdx"
+    "import custom-data $DATA"
+    "delete outdated --yes"
+    "delete scan 42 --dry-run"
+    "list projects"
+    "asset add $TEST_DIR/logo.png"
+    "--refresh-vulnerability-data"
+    "--list-scans"
+    "--delete-outdated"
+)
+for cmd in "${lifecycle_cmds[@]}"; do
+    read -r -a cmd_args <<< "$cmd"
+    VULNSCOUT_NO_DEPRECATION_WARNING=1 run_ok "${cmd_args[@]}"
+    assert_log_order "/scan/src/entrypoint.sh" "rm -f vulnscout"
+done
+
+# A container started on demand is removed too.
+export VULNSCOUT_TEST_NOT_RUNNING=1
+run_ok list scans
+assert_log_order "run -d --name vulnscout" "/scan/src/entrypoint.sh --list-scans"
+assert_log_order "/scan/src/entrypoint.sh --list-scans" "rm -f vulnscout"
+unset VULNSCOUT_TEST_NOT_RUNNING
+
+# A container still used by another command (e.g. a serve session) keeps running.
+export VULNSCOUT_TEST_BUSY=1
+run_ok scan
+assert_log "exec vulnscout pgrep -f"
+refute_log "rm -f vulnscout"
+unset VULNSCOUT_TEST_BUSY
+
+# The entrypoint status is propagated after the container is removed.
+for code in 1 2 7; do
+    export VULNSCOUT_TEST_EXEC_EXIT="$code"
+    reset_log
+    status=0
+    "$ROOT_DIR/vulnscout" add --cdx "$SBOM" < /dev/null > /dev/null 2>&1 || status=$?
+    unset VULNSCOUT_TEST_EXEC_EXIT
+    if [ "$status" -ne "$code" ]; then
+        echo "Expected exit $code after removing the container, got $status." >&2
+        exit 1
+    fi
+    assert_log_order "/scan/src/entrypoint.sh --add-cdx" "rm -f vulnscout"
+done
+
+# Commands that do not run in the container leave it alone.
+for cmd in "version" "config list" "--help" "scan --help"; do
+    read -r -a cmd_args <<< "$cmd"
+    run_ok "${cmd_args[@]}"
+    refute_log "rm -f"
+    refute_log "pgrep"
+done
+
+# serve, start and restart keep the container running.
+run_ok serve
+refute_log "pgrep"
+refute_removed_last
+# Ending the session stops the web server, so later commands can remove the container.
+if [ "$(grep -cF "exec vulnscout pkill -f flask." "$VULNSCOUT_TEST_LOG")" -ne 2 ]; then
+    echo "serve must stop the web server before starting it and when the session ends." >&2
+    cat "$VULNSCOUT_TEST_LOG" >&2
+    exit 1
+fi
+for cmd in start restart --start --restart; do
+    VULNSCOUT_NO_DEPRECATION_WARNING=1 run_ok "$cmd"
+    refute_log "pgrep"
+    refute_removed_last
+done
+
+# An interrupted command aborts by removing the container it started.
+export VULNSCOUT_TEST_BLOCK_DIR="$TEST_DIR/block"
+mkdir -p "$VULNSCOUT_TEST_BLOCK_DIR"
+reset_log
+VULNSCOUT_TEST_NOT_RUNNING=1 "$ROOT_DIR/vulnscout" scan < /dev/null > /dev/null 2>&1 &
+pid=$!
+wait_for_file "$VULNSCOUT_TEST_BLOCK_DIR/started"
+kill -HUP "$pid"
+touch "$VULNSCOUT_TEST_BLOCK_DIR/release"
+status=0
+wait "$pid" || status=$?
+if [ "$status" -ne 129 ]; then
+    echo "An interrupted command must exit 129 on SIGHUP, got $status." >&2
+    exit 1
+fi
+assert_log_order "/scan/src/entrypoint.sh --perform-scans all" "rm -f vulnscout"
+refute_log "pgrep"
+
+# Interrupting a command in a container used elsewhere keeps it running.
+rm -f "$VULNSCOUT_TEST_BLOCK_DIR"/*
+reset_log
+VULNSCOUT_TEST_BUSY=1 "$ROOT_DIR/vulnscout" scan < /dev/null > /dev/null 2>&1 &
+pid=$!
+wait_for_file "$VULNSCOUT_TEST_BLOCK_DIR/started"
+kill -HUP "$pid"
+touch "$VULNSCOUT_TEST_BLOCK_DIR/release"
+wait "$pid" || true
+assert_log "exec vulnscout pgrep -f"
+refute_log "rm -f vulnscout"
+unset VULNSCOUT_TEST_BLOCK_DIR
 
 echo "Host wrapper scope tests passed."

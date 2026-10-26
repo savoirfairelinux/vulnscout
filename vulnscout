@@ -190,6 +190,13 @@ MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false
 
+# Container lifecycle for this invocation, applied by on_exit.
+CONTAINER_USED=false
+CONTAINER_STARTED=false
+KEEP_CONTAINER=false
+SERVE_STARTED=false
+INTERRUPTED=false
+
 VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.25"
 LEGACY_TOKENS=()
 SCOPE_ARGS=()
@@ -395,7 +402,8 @@ EOF
         start) cat <<'EOF'
 Usage: vulnscout start
 
-Start the container. Other commands start it when needed.
+Start the container and keep it running. Other commands start it when
+needed and remove it when they finish; serve keeps it running.
 
 Examples:
     vulnscout start
@@ -470,12 +478,72 @@ container_has_dev_mount() {
 ensure_running() {
     if ! call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo "Container not running, starting..."
+        CONTAINER_STARTED=true
         do_start
     elif [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ] && ! container_has_dev_mount; then
         # Otherwise the container keeps serving the image's src/, ignoring local changes
         echo "Container running without dev mode, restarting..."
+        CONTAINER_STARTED=true
         do_start
     fi
+    CONTAINER_USED=true
+}
+
+remove_container() {
+    call_container_engine rm -f "$CONTAINER_NAME" > /dev/null 2>&1 || true
+}
+
+stop_web_server() {
+    call_container_engine exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
+}
+
+# True while a VulnScout command (for example a serve session) still runs in the container.
+container_busy() {
+    call_container_engine exec "$CONTAINER_NAME" pgrep -f '[/]scan/src/entrypoint\.sh --' > /dev/null 2>&1
+}
+
+# Commands other than serve, start and restart do not leave the container running.
+release_container() {
+    if [ "$KEEP_CONTAINER" = true ]; then
+        return 0
+    fi
+    if [ "$INTERRUPTED" = true ] && [ "$CONTAINER_STARTED" = true ]; then
+        # The interrupted command keeps running in the container; removing it aborts the command.
+        remove_container
+    elif [ "$CONTAINER_USED" = true ] && ! container_busy; then
+        remove_container
+    fi
+}
+
+on_exit() {
+    if declare -F _cleanup_frontend > /dev/null; then
+        _cleanup_frontend
+    fi
+    if [ "$SERVE_STARTED" = true ]; then
+        # Ctrl-C ends only the local engine client, not the web server inside the container.
+        stop_web_server
+    fi
+    release_container
+}
+
+on_signal() {
+    INTERRUPTED=true
+    trap - "$1"
+    kill -s "$1" "$$"
+}
+
+# Start the web UI in the running container; the container stays up after the session.
+start_serve_session() {
+    ensure_running
+    KEEP_CONTAINER=true
+    trap - INT HUP
+    # Kill any previous Flask process to free port 7275
+    stop_web_server
+    sleep 1
+    if [ "$DEV_MODE" = true ]; then
+        start_frontend_dev
+    fi
+    SERVE_STARTED=true
 }
 
 die() {
@@ -868,7 +936,8 @@ start_frontend_dev() {
             rm -f "$SCRIPT_DIR/.vulnscout-npm.pid"
         fi
     }
-    trap _cleanup_frontend SIGINT SIGTERM EXIT
+    # on_exit also runs _cleanup_frontend.
+    trap _cleanup_frontend SIGINT SIGTERM
 }
 
 # require_value <option> <remaining argc> <next token>
@@ -934,6 +1003,7 @@ require_file() {
 verb_start() {
     reject_scope start
     require_no_args start "$@"
+    KEEP_CONTAINER=true
     do_start
     if [ "$DEV_MODE" = true ]; then
         start_frontend_dev
@@ -949,6 +1019,7 @@ verb_stop() {
 verb_restart() {
     reject_scope restart
     require_no_args restart "$@"
+    KEEP_CONTAINER=true
     call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
     do_start
     if [ "$DEV_MODE" = true ]; then
@@ -971,13 +1042,7 @@ verb_version() {
 verb_serve() {
     reject_scope serve
     require_no_args serve "$@"
-    ensure_running
-    # Kill any previous Flask process to free port 7275
-    call_container_engine exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
-    sleep 1
-    if [ "$DEV_MODE" = true ]; then
-        start_frontend_dev
-    fi
+    start_serve_session
     exec_container --serve
 }
 
@@ -1544,6 +1609,7 @@ parse_legacy() {
             --json)
                 DATA_ARGS+=(--json); shift ;;
             start|--start)
+                KEEP_CONTAINER=true
                 do_start
                 if [ "$DEV_MODE" = true ]; then
                     start_frontend_dev
@@ -1552,6 +1618,7 @@ parse_legacy() {
             stop|--stop)
                 call_container_engine rm -f "$CONTAINER_NAME"; shift ;;
             restart|--restart)
+                KEEP_CONTAINER=true
                 call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
                 do_start
                 if [ "$DEV_MODE" = true ]; then
@@ -1582,13 +1649,7 @@ parse_legacy() {
     # Auto-trigger scan if inputs were staged: one entrypoint call handles move + scan
     local _exit=0
     if [ "$SERVE_REQUESTED" = true ]; then
-        ensure_running
-        # Kill any previous Flask process to free port 7275
-        call_container_engine exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
-        sleep 1
-        if [ "$DEV_MODE" = true ]; then
-            start_frontend_dev
-        fi
+        start_serve_session
         exec_container --project "$PROJECT" --variant "$VARIANT" ${PENDING_ARGS[@]+"${PENDING_ARGS[@]}"} --serve || _exit=$?
     elif [ ${#PENDING_ARGS[@]} -gt 0 ]; then
         local -a scan_args=()
@@ -1622,6 +1683,9 @@ parse_legacy() {
 }
 
 main() {
+    trap on_exit EXIT
+    trap 'on_signal INT' INT
+    trap 'on_signal HUP' HUP
     if [ $# -eq 0 ]; then
         show_help
         return 0

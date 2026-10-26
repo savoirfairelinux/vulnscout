@@ -123,7 +123,7 @@ Copilot) via `vulnscout_mcp/run_server.py`.
 
 ===  Container Lifecycle
 
-The `vulnscout` script manages the container lifecycle. The container runs in the background and accepts commands via `docker exec`.
+The `vulnscout` script manages the container lifecycle. Commands run in the container via `docker exec` (or `podman exec`); once a command finishes, the script removes the container. `serve`, `start`, `restart` and `update` keep it running.
 
 [source,shell]
 ----
