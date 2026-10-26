@@ -46,8 +46,8 @@ test.each([
 
 test.each([
     [[], 'Package is no longer available'],
-    [[{ source_files: null }], 'Source files were not recorded'],
-    [[{ source_files: [{}] }], 'Invalid source file response'],
+    [[{ source_files: null }], 'Files were not recorded'],
+    [[{ source_files: [{}] }], 'Invalid recorded file response'],
 ])('invalid or unknown inventory is explicit', async (data, message) => {
     jest.spyOn(global, 'fetch').mockResolvedValue(response(data));
     await expect(Packages.sourceFiles('lib')).rejects.toThrow(String(message));
@@ -55,7 +55,7 @@ test.each([
 
 test('HTTP errors are not reported as an empty file inventory', async () => {
     jest.spyOn(global, 'fetch').mockResolvedValue(response({}, false));
-    await expect(Packages.sourceFiles('lib')).rejects.toThrow('Unable to load source files');
+    await expect(Packages.sourceFiles('lib')).rejects.toThrow('Unable to load recorded files');
 });
 
 test('details expose paths, hashes, source documents, and build evidence with filtering', async () => {
@@ -73,11 +73,11 @@ test('details expose paths, hashes, source documents, and build evidence with fi
     expect(screen.getAllByText('zephyr.jsonld').length).toBe(2);
     expect(screen.getAllByText(/012345/).length).toBe(2);
     expect(screen.getByText(/compile-lz4/)).toBeTruthy();
-    await user.type(screen.getByLabelText('Filter source files'), 'lz4');
+    await user.type(screen.getByLabelText('Filter recorded files'), 'lz4');
     expect(screen.queryByText('lib/listed.c')).toBeNull();
-    await user.clear(screen.getByLabelText('Filter source files'));
-    await user.type(screen.getByLabelText('Filter source files'), 'missing');
-    expect(screen.getByText('No source files match this filter.')).toBeTruthy();
+    await user.clear(screen.getByLabelText('Filter recorded files'));
+    await user.type(screen.getByLabelText('Filter recorded files'), 'missing');
+    expect(screen.getByText('No recorded files match this filter.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Close modal' }));
     expect(close).toHaveBeenCalled();
     expect(load).toHaveBeenCalledWith(pkg.id, 'variant', undefined, undefined, undefined, undefined);
@@ -90,7 +90,7 @@ test('empty inventory and retry remain distinguishable from failures', async () 
     render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Unavailable');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText(/No source files are associated/)).toBeTruthy();
+    expect(await screen.findByText(/No files are recorded/)).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(2);
 });
 
@@ -105,7 +105,7 @@ test.each([true, false])('recipe inputs do not claim compilation (explicit flag:
     render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
     expect(await screen.findByText('fix.patch')).toBeTruthy();
     expect(screen.getByText('Recipe input (not compilation)')).toBeTruthy();
-    expect(screen.getByText('1 source files; 0 with compilation evidence.')).toBeTruthy();
+    expect(screen.getByText('Recorded files: 1; compiled source files: 0.')).toBeTruthy();
 });
 
 test('changing scope ignores a late response from the previous scope', async () => {
@@ -115,12 +115,12 @@ test('changing scope ignores a late response from the previous scope', async () 
         .mockResolvedValueOnce({ files: [], complete: true });
     const { rerender } = render(<SourceFileModal packageId={pkg.id} variantId="one" onClose={() => {}} />);
     rerender(<SourceFileModal packageId={pkg.id} variantId="two" onClose={() => {}} />);
-    expect(await screen.findByText(/No source files are associated/)).toBeTruthy();
+    expect(await screen.findByText(/No files are recorded/)).toBeTruthy();
     await act(async () => finish({ files: [file], complete: true }));
     expect(screen.queryByText(file.path)).toBeNull();
 });
 
-test('SBOM source counts open details and remain visible with older column preferences', async () => {
+test('SBOM recorded counts explain the inventory and open details with older column preferences', async () => {
     Element.prototype.getBoundingClientRect = () => ({
         width: 1000, height: 1000, top: 0, bottom: 1000, left: 0, right: 1000, x: 0, y: 0, toJSON: () => {},
     });
@@ -130,10 +130,33 @@ test('SBOM source counts open details and remain visible with older column prefe
     render(<TablePackages packages={[pkg, { ...pkg, id: 'unknown@1', name: 'unknown', source_file_count: null }]}
         preferenceScopeKey="source-legacy" variantId="variant" />);
     await screen.findAllByText('Deps: 0 / Req by: 0');
-    const button = await screen.findByRole('button', { name: 'View source files for lz4' });
+    const button = await screen.findByRole('button', { name: 'View recorded files for lz4' });
     expect(button).toHaveTextContent('1');
     expect(screen.getByText('Not recorded')).toBeTruthy();
-    await userEvent.setup().click(button);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Recorded files helper' }));
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'Non-binary file records associated with this component in the imported SBOMs. '
+        + 'May include source code, patches, licenses, and configuration files; '
+        + 'not necessarily a complete source inventory.',
+    );
+    await user.click(button);
     expect(await screen.findByTestId('source-file-modal')).toBeTruthy();
     await waitFor(() => expect(screen.getByText(file.path)).toBeTruthy());
+    expect(screen.getByRole('dialog', { name: `Recorded Files: ${pkg.id}` })).toBeTruthy();
+});
+
+test.each([true, false])('renaming saved columns preserves file column visibility (%s)', async visible => {
+    const key = 'vulnscout.tables.packages.recorded-migration';
+    const columns = visible ? ['Name', 'Source Files'] : ['Name'];
+    localStorage.setItem(`${key}.visibleColumns`, JSON.stringify(columns));
+    localStorage.setItem(`${key}.sourceFilesColumnDefaulted`, 'true');
+    localStorage.setItem(`${key}.revisionColumnDefaulted`, 'true');
+    localStorage.setItem(`${key}.dependencyColumnDefaulted`, 'true');
+    jest.spyOn(global, 'fetch').mockResolvedValue(response({ counts: {}, unrecorded: [] }));
+    render(<TablePackages packages={[]} preferenceScopeKey="recorded-migration" />);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(`${key}.visibleColumns`)!)).toEqual(
+        visible ? ['Name', 'Recorded Files'] : ['Name'],
+    ));
+    expect(screen.queryByRole('button', { name: 'Recorded files helper' }) !== null).toBe(visible);
 });

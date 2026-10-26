@@ -36,7 +36,7 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
                 }
             })
             .catch(reason => {
-                if (!cancelled) setError(reason instanceof Error ? reason.message : 'Unable to load source files');
+                if (!cancelled) setError(reason instanceof Error ? reason.message : 'Unable to load recorded files');
             })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
@@ -44,24 +44,25 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
     const visible = useMemo(() => files.filter(file =>
         `${file.path} ${file.document_name}`.toLowerCase().includes(search.toLowerCase())), [files, search]);
 
-    return <ModalShell isOpen title={`Source Files: ${packageId}`} size="wide" onClose={onClose}
+    return <ModalShell isOpen title={`Recorded Files: ${packageId}`} size="wide" onClose={onClose}
         testId="source-file-modal">
         <div className="space-y-4 p-4 text-neutral-200">
-            {loading && <p role="status">Loading source files...</p>}
+            {loading && <p role="status">Loading recorded files...</p>}
             {error && <div role="alert">
                 <p>{error}</p>
                 <ModalButton onClick={() => setRetry(value => value + 1)}>Retry</ModalButton>
             </div>}
             {!loading && !error && <>
-                <p>{files.length} source files; {files.filter(hasCompilationEvidence).length} with compilation evidence.</p>
+                <p>Recorded files: {files.length}; compiled source files: {files.filter(hasCompilationEvidence).length}.</p>
                 <p className="text-sm text-neutral-400">
-                    Listed files alone do not prove compilation or inclusion in the final firmware.
+                    Recorded files may include source code, patches, licenses, and configuration files.
+                    Listing alone does not prove compilation or inclusion in the final firmware.
                     {!complete && ' Evidence is incomplete or unproven; compiled-source CVE refinement is disabled.'}
                 </p>
-                <input aria-label="Filter source files" value={search} onChange={event => setSearch(event.target.value)}
+                <input aria-label="Filter recorded files" value={search} onChange={event => setSearch(event.target.value)}
                     placeholder="Filter by path or SBOM document" className="w-full rounded bg-neutral-800 p-2" />
-                {files.length === 0 && <p>No source files are associated with this package in the selected SBOMs.</p>}
-                {files.length > 0 && visible.length === 0 && <p>No source files match this filter.</p>}
+                {files.length === 0 && <p>No files are recorded for this package in the selected SBOMs.</p>}
+                {files.length > 0 && visible.length === 0 && <p>No recorded files match this filter.</p>}
                 <div className="space-y-2">
                     {visible.map(file => <details key={`${file.document_id}:${file.spdx_id}`}
                         className="rounded border border-neutral-700 p-3">

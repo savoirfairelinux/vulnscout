@@ -153,12 +153,12 @@ class Packages {
         url.searchParams.set('package_id', packageId);
         url.searchParams.set('include_source_files', 'true');
         const response = await fetch(url.toString(), { mode: 'cors' });
-        if (!response.ok) throw new Error('Unable to load source files');
+        if (!response.ok) throw new Error('Unable to load recorded files');
         const data = await response.json();
         if (!Array.isArray(data) || data.length !== 1) throw new Error('Package is no longer available in this scope');
-        if (data[0].source_files === null) throw new Error('Source files were not recorded; reimport the original SBOMs');
+        if (data[0].source_files === null) throw new Error('Files were not recorded; reimport the original SBOMs');
         const files: unknown = data[0].source_files;
-        if (!Array.isArray(files) || !files.every(isSourceFile)) throw new Error('Invalid source file response');
+        if (!Array.isArray(files) || !files.every(isSourceFile)) throw new Error('Invalid recorded file response');
         return { files, complete: data[0].compiled_sources_complete === true };
     }
 

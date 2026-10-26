@@ -95,7 +95,7 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ### Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Source Files, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Recorded Files, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
@@ -119,14 +119,19 @@ produce a conflict.
 
 Reimport older SBOMs to populate source revisions from the original files.
 
-### Source files
+(source-files)=
+### Recorded files
 
-**Source Files** counts the source files associated with a package in the
-selected active SBOMs. Click the count to inspect paths, original SPDX file
+**Recorded Files** counts the non-binary file records associated with a package
+in the selected active SBOMs. These may include source code, patches, licenses,
+and configuration files; they are not necessarily a complete source inventory.
+The column's help tooltip explains this distinction. Click the count to inspect
+paths, original SPDX file
 properties (including recorded hashes and license information), source documents,
 and build-input associations. The details view supports filtering by path or
 document. Object files, libraries, and final build outputs are stored as file
-records but are not counted as source files.
+records but are not included in this count. The details separately report
+the number of files with compilation evidence.
 
 SPDX 3 `software_File`, `contains`, and Build-profile `hasInput`/`hasOutput`
 relationships are resolved across companion documents of the **same import
@@ -136,7 +141,7 @@ SPDX 2.2/2.3 `files`, package `hasFiles`, `CONTAINS`, and `CONTAINED_BY`
 relationships also populate the inventory, including namespaced
 `DocumentRef-*` references between companion documents.
 Original SPDX 2 checksums, licenses, and file types remain visible in the details.
-Explicit binary file types and installed package outputs are not source files.
+Explicit binary file types and installed package outputs are excluded from **Recorded Files**.
 
 **Build input** means compilation evidence exists; **Listed only** does not
 prove compilation, and neither proves inclusion in the final firmware.
@@ -145,8 +150,8 @@ recipe inputs are shown as **Recipe input (not compilation)**: patches,
 licenses, configuration files, and source archives are not a list of compiled
 translation units. SPDX 2 package provenance likewise does not prove compilation.
 
-**Not recorded** means file evidence is unavailable, not that there are zero
-source files. Reimport the original companion SBOMs together to populate older
+**Not recorded** means file evidence is unavailable, not an empty recorded
+inventory. Reimport the original companion SBOMs together to populate older
 imports. Non-SPDX SBOM formats currently do not populate this inventory.
 SPDX 2 packages with `filesAnalyzed: false` and no associated file records also
 remain **Not recorded**, including package-only VulnScout exports.
