@@ -23,7 +23,7 @@ type Column<T> = { key: keyof T & string; header: string; label: string; kind: '
 const COMPONENT_COLUMNS: Column<StrideComponent>[] = [
     { key: 'name', header: 'Name', label: 'name', kind: 'input' },
     { key: 'description', header: 'Description / role', label: 'description', kind: 'text' },
-    { key: 'trust_zone', header: 'Trust zone', label: 'trust zone', kind: 'input' },
+    { key: 'trust_zone', header: 'Trust zone', label: 'trust zone', kind: 'text' },
 ];
 const INTERACTION_COLUMNS: Column<StrideInteraction>[] = [
     { key: 'name', header: 'Name', label: 'name', kind: 'input' },

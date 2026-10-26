@@ -728,6 +728,7 @@ describe('AIContext page', () => {
             const { backend } = await openSystemTab();
             fireEvent.change(screen.getByLabelText('System scope and assets'), { target: { value: 'Gateway' } });
             addComponent('Broker');
+            expect(screen.getByLabelText('Component C1 trust zone').tagName).toBe('TEXTAREA');
             fireEvent.change(screen.getByLabelText('Component C1 trust zone'), { target: { value: 'DMZ' } });
             addComponent('Temp');
             expect(screen.getByLabelText('Component C2 name')).toHaveValue('Temp');
