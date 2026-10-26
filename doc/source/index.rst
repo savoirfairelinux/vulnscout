@@ -5,7 +5,6 @@ VulnScout Documentation
    :maxdepth: 3
    :caption: Contents:
 
-   introduction
    getting-started
    examples
    vulnscout-script
