@@ -46,6 +46,7 @@ import {
 import type { RefreshMode } from "../helpers/refreshSources";
 import CustomExportContentManager from "../components/CustomExportContentManager";
 import NativePackageSettings from "../components/NativePackageSettings";
+import FileInputButton from "../components/FileInputButton";
 import type { AgentViewContext } from "../types/agent";
 
 type Props = {
@@ -1474,18 +1475,18 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
                 </div>
               ))}
               {/* New file browse row */}
-              <input
-                key={importFiles.length}
-                type="file"
-                accept=".json,.jsonld,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
-                onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
-                disabled={importBusy}
-                aria-labelledby="sbom-files-label"
-                className={
-                  inputClass +
-                  " disabled:opacity-50 disabled:cursor-not-allowed file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-900 file:text-cyan-300 hover:file:bg-cyan-800"
-                }
-              />
+              <div className={inputClass}>
+                <FileInputButton
+                  key={importFiles.length}
+                  accept=".json,.jsonld,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
+                  onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
+                  disabled={importBusy}
+                  aria-labelledby="sbom-files-label"
+                  buttonLabel="Choose file"
+                  status="No file chosen"
+                  buttonClassName="px-3 py-1 rounded-lg text-sm font-semibold bg-cyan-900 text-cyan-300 hover:bg-cyan-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
               <p className="text-xs text-zinc-400">
                 Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto), SPDX 3 JSON-LD
                 (<code>.jsonld</code>), or tar archives

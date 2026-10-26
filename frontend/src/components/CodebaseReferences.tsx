@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Context, { type ContextFile } from "../handlers/context";
 import Assessments from "../handlers/assessments";
 import ConfirmationModal from "./ConfirmationModal";
+import FileInputButton from "./FileInputButton";
 
 type Action = { kind: "upload"; files: File[]; description: string } | { kind: "delete"; file: ContextFile };
 
@@ -107,13 +108,12 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
                 <label htmlFor="ai-codebase-files" className="block text-sm text-zinc-300 mb-2">
                     {busy ? "Updating references..." : "Drag and drop files here, or choose files"}
                 </label>
-                <input
+                <FileInputButton
                     id="ai-codebase-files"
-                    type="file"
+                    buttonLabel="Choose files"
                     multiple
                     aria-label="Upload codebase references"
                     disabled={unavailable}
-                    className="text-sm text-zinc-300 max-w-full"
                     onChange={event => {
                         const selected = Array.from(event.target.files ?? []);
                         event.target.value = "";
