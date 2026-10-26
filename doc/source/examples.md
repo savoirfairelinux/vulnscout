@@ -95,15 +95,8 @@ and the VEX in the same `add` command, in either order: the VEX uses BOM-Link UR
 (`urn:cdx:<BOM UUID>/<version>#<component reference>`) to refer to the BOM's
 components.
 
-Local `bom-ref` affects retain path-order resolution when multiple BOMs reuse a
-reference. Only BOM-Link references can resolve against a later inventory;
-detached VEX documents mixing both forms preserve their original local mapping.
-If a VEX also contains components, its inventory is imported at its original
-path position before unresolved external affects are replayed.
-BOM-Links use a separate UUID/version-qualified inventory index, so unrelated
-local references cannot redirect a qualified target. If no qualified target
-exists, an exact component `bom-ref` in the current document is retained as a
-local fallback, including during deferred replay.
+For cross-document matching rules, see
+[CycloneDX VEX Reference Resolution](sbom-scan-reference.md#cyclonedx-vex-reference-resolution).
 
 The bundled files contain 97 components (93 distinct name/version packages) and
 3,133 distinct CVE IDs, forming 7,063 distinct package/CVE findings. These findings

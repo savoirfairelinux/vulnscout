@@ -30,7 +30,7 @@ These files are bundled under `example/zephyr/`. See
 import commands.
 
 Release versions and Git revisions are displayed separately in the SBOM table;
-see [Interactive mode](interactive-mode.md#column-visibility).
+see [SBOM Table](web-sbom.md#column-visibility).
 
 ---
 

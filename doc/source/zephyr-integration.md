@@ -80,3 +80,5 @@ See [Input Sources](cli-inputs.md) for supported filenames,
 [Vulnerability Scanning](vulnerability-scanning.md) for scanner setup, and
 [Interactive Mode](interactive-mode.md) for reviewing imported packages and
 findings.
+For component badges and consolidation rules, see
+[Zephyr JSON-LD Provenance](sbom-scan-reference.md#zephyr-json-ld-provenance).

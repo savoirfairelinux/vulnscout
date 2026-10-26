@@ -320,7 +320,7 @@ and remove queued requests without altering your selection.
 Unresolved targets prevent the entire selection from being queued.
 An agent reply alone is not proof of a saved review: queued reviews succeed only
 once every expected target has a fresh, non-stale review. A failed action pauses
-the queue; use **Retry failed action** in **Up next** or remove the failed action
+the queue; use **Retry failed action** in its conversation or remove the failed action
 to continue.
 
 The agent independently derives a conclusion for **each (variant, package)
@@ -363,7 +363,7 @@ support and vendor/distribution backports are separate questions.
 - **The agent cannot read a host source directory** — upload codebase
   references; **Codebase Path** does not mount that directory.
 - **A request failed** — inspect the error and **Activity** before retrying.
-  For queued work, use **Retry failed action** in **Up next**, or remove the
+  For queued work, use **Retry failed action** in its conversation, or remove the
   failed action. If a stream was interrupted, check for a saved result before
   retrying a write.
 
