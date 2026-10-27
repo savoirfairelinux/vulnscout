@@ -22,7 +22,7 @@ from another terminal.
 Import all four companion documents in a single invocation:
 
 ```bash
-./vulnscout -p zephyr_demo -v mbedtls_native_sim add \
+./vulnscout add -p zephyr_demo -v mbedtls_native_sim \
   --spdx "$(pwd)/example/zephyr/app.jsonld" \
   --spdx "$(pwd)/example/zephyr/build.jsonld" \
   --spdx "$(pwd)/example/zephyr/modules-deps.jsonld" \
@@ -37,7 +37,7 @@ These SBOMs provide a component inventory, not precomputed vulnerability
 findings. Request vulnerability discovery after the import:
 
 ```bash
-./vulnscout -p zephyr_demo -v mbedtls_native_sim scan all
+./vulnscout scan -p zephyr_demo -v mbedtls_native_sim all
 ```
 
 Scanners may require network access and credentials. `all` includes NVD and
@@ -45,14 +45,14 @@ sbom-cve-check local database setup: first use downloads the advisory databases,
 and updates run before each local scan by default. See
 [scanner setup and offline mode](vulnerability-scanning.md#performing-an-sbom-cve-check-scan).
 Discovery does not automatically refresh all provider metadata; run
-`./vulnscout -p zephyr_demo -v mbedtls_native_sim refresh` when enrichment is needed.
+`./vulnscout refresh -p zephyr_demo -v mbedtls_native_sim` when enrichment is needed.
 
 ## Yocto Wrynose SPDX 3
 
 Import the SPDX 3 SBOM together with its CVE-check results:
 
 ```bash
-./vulnscout -p yocto_demo -v wrynose add \
+./vulnscout add -p yocto_demo -v wrynose \
   --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
   --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ```
@@ -62,7 +62,7 @@ Import the SPDX 3 SBOM together with its CVE-check results:
 Pass the SPDX archive directly; VulnScout extracts its documents:
 
 ```bash
-./vulnscout -p yocto_demo -v scarthgap add \
+./vulnscout add -p yocto_demo -v scarthgap \
   --spdx "$(pwd)/example/yocto-scarthgap-spdx2/core-image-minimal-stm32mp25-eval.spdx.tar.zst" \
   --cve-check "$(pwd)/example/yocto-scarthgap-spdx2/core-image-minimal-stm32mp25-eval.scouted.json"
 ```
@@ -75,7 +75,7 @@ it with `add --cve-check`.
 Import the original SPDX 2 archive and CVE-check results:
 
 ```bash
-./vulnscout -p yocto_demo -v spdx2 add \
+./vulnscout add -p yocto_demo -v spdx2 \
   --spdx "$(pwd)/example/yocto-scarthgap-spdx2/core-image-minimal-stm32mp25-eval.spdx.tar.zst" \
   --cve-check "$(pwd)/example/yocto-scarthgap-spdx2/core-image-minimal-stm32mp25-eval.scouted.json"
 ```
@@ -83,7 +83,7 @@ Import the original SPDX 2 archive and CVE-check results:
 Alternatively, use the CycloneDX exports in a separate variant:
 
 ```bash
-./vulnscout -p yocto_demo -v cyclonedx add \
+./vulnscout add -p yocto_demo -v cyclonedx \
   --cdx "$(pwd)/example/yocto-scarthgap-cdx/bom.json" \
   --cdx "$(pwd)/example/yocto-scarthgap-cdx/vex.json"
 ```

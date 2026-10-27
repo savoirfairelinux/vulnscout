@@ -15,20 +15,20 @@ After import, pending AI assessments are available from the Review page's **AI
 Assessments** tab for approval or rejection.
 
 ```bash
-./vulnscout -p demo export custom-data
+./vulnscout export -p demo custom-data
 ```
 
 Export one variant:
 
 ```bash
-./vulnscout -p demo -v x86 export custom-data
+./vulnscout export -p demo -v x86 custom-data
 ```
 
 Add `--amend` to reconcile current review data with the existing file in the
 output directory:
 
 ```bash
-./vulnscout -p demo export custom-data --amend
+./vulnscout export -p demo custom-data --amend
 ```
 
 `import custom-data` restores entries according to the variant metadata stored in the file, so it rejects `-v`. Imported assessments use the current system time by default. Add `--timestamps original` to preserve assessment timestamps from the file; `--timestamps current` selects the default explicitly.
@@ -38,9 +38,9 @@ not instance-local variant UUIDs. Legacy version 1 files remain importable;
 unsupported future versions are rejected explicitly.
 
 ```bash
-./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json
+./vulnscout import -p demo custom-data /path/to/custom_vulnscout_data_all.json
 
-./vulnscout -p demo import custom-data /path/to/custom_vulnscout_data_all.json --timestamps original
+./vulnscout import -p demo custom-data /path/to/custom_vulnscout_data_all.json --timestamps original
 ```
 
 ## OpenVEX
@@ -56,16 +56,16 @@ when two variant names map to the same file name; export them one at a time with
 
 ```bash
 # Export a variant
-./vulnscout -p demo -v x86 export custom-openvex
+./vulnscout export -p demo -v x86 custom-openvex
 
 # Export every variant of the project
-./vulnscout -p demo export custom-openvex
+./vulnscout export -p demo custom-openvex
 
 # Import into a variant
-./vulnscout -p demo -v x86 import custom-openvex /path/to/custom_openvex_x86.json
+./vulnscout import -p demo -v x86 custom-openvex /path/to/custom_openvex_x86.json
 
 # Ignore OpenVEX statement timestamps and use the current system time
-./vulnscout -p demo -v x86 import custom-openvex /path/to/custom_openvex_x86.json --timestamps current
+./vulnscout import -p demo -v x86 custom-openvex /path/to/custom_openvex_x86.json --timestamps current
 ```
 
 OpenVEX imports preserve statement timestamps by default. Add
@@ -78,16 +78,16 @@ OpenVEX imports preserve statement timestamps by default. Add
 `context-export.json`. `import context` restores it:
 
 ```bash
-./vulnscout -p demo export context
+./vulnscout export -p demo context
 
 # Import into the projects and variants named in the file
 ./vulnscout import context /path/to/context-export.json
 
 # Import every entry into project "staging", keeping variant names
-./vulnscout -p staging import context /path/to/context-export.json
+./vulnscout import -p staging context /path/to/context-export.json
 
 # Import a single-entry file into one variant
-./vulnscout -p staging -v x86 import context /path/to/context-export.json
+./vulnscout import -p staging -v x86 context /path/to/context-export.json
 ```
 
 With `-p`, the file must name a single project. With `-p` and `-v`, it must

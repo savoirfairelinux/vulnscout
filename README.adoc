@@ -81,6 +81,8 @@ Open http://localhost:7275/ and select project *default* and variant *default*
 in the navigation bar, then open *Vulnerabilities*.
 A *project* groups a software product's data; a *variant* represents a build,
 target, or deployment within it.
+Place `-p <project>` and `-v <variant>` after the command when selecting a
+different scope.
 
 On subsequent runs, use `./vulnscout serve` without reimporting the same data.
 Press `Ctrl+C` to stop the web server; the container remains running.
