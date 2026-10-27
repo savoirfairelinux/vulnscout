@@ -14,5 +14,9 @@ The **Active vulnerabilities** chart tracks pending and exploitable
 vulnerabilities over the selected time interval, from 24 hours to one year.
 Status-chart counts are per vulnerability per status: when variants disagree,
 one CVE can appear in more than one status segment, so the sum of segments is
-not necessarily the number of distinct vulnerabilities. A discovery-source
-breakdown can likewise count a vulnerability under several sources.
+not necessarily the number of distinct vulnerabilities.
+
+The discovery-source chart attributes each vulnerability to exactly one primary
+source, chosen using a fixed priority order when several sources are recorded.
+Findings observed by multiple scanners count only once in this chart, not once
+per source. Vulnerabilities without a recorded discovery source are omitted.

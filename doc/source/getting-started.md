@@ -13,12 +13,9 @@ This guide walks you through importing example data and opening the web interfac
 
 ## Requirements
 
-VulnScout runs locally inside a container. On the host, you need:
-
-- **Git** to clone the repository.
-- **Bash** to run the `vulnscout` launcher.
-- **Docker** or **Podman**, installed and configured so your user can run
-  containers. If your setup uses a container service, ensure it is running.
+VulnScout runs locally inside a container. You need **Docker** or **Podman**,
+installed and configured so your user can run containers. If your setup uses a
+container service, ensure it is running.
 
 ---
 
@@ -59,15 +56,6 @@ See [Vulnerability Scanning](vulnerability-scanning.md) for `scan` and
 For other sample inputs and their import commands, see [Bundled Examples](examples.md).
 
 ### Starting the Web Interface
-
-**API keys are not required to view the imported example data.** If you need
-proxy settings or API keys for external services, configure them before starting
-the web interface with `./vulnscout config set <key> <value>`, then run
-`./vulnscout restart`. See [Configuration](cli-configuration.md#configuration).
-
-The preceding `add` command has already initialised VulnScout. If you skipped it,
-run `./vulnscout start` before using `config set` so the default configuration
-exists.
 
 After the import finishes, start the web interface:
 
