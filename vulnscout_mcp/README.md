@@ -8,7 +8,7 @@ An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that e
 - **Read assessments**, either a single assessment by ID or the full history for a given CVE.
 - **Look up vulnerabilities** with variant-scoped details.
 - **Review user-authored assessments** with a separate AI second opinion per (variant, package) target, without changing the original assessment.
-- **Read and update variant context** (deployment environment, platform, objectives profile, notes) by variant UUID or by project/variant name.
+- **Read and update variant context** (description, environment, codebase source/paths, notes, and the read-only STRIDE-rendered threat model and risks) by variant UUID or by project/variant name.
 - **Inspect uploaded codebase references**: list, read and search source files and ZIP/TAR/TAR.GZ/TGZ members through HTTP, without filesystem access or archive extraction.
 - **Explore SBOM dependencies**: discover active sources/packages and trace direct or transitive dependencies and reverse dependents within a board variant, retaining per-source version evidence.
 - Thin, dependency-light implementation: a single `httpx`-based API client plus tool modules registered on the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)'s `MCPServer`.
@@ -117,7 +117,7 @@ python vulnscout_mcp/server.py
 | `find_project_id`              | Resolve a project name to its UUID                                   |
 | `find_variant_id`              | Resolve a project/variant name pair to a variant UUID                |
 | `list_variants`                | List all variants across every project (id, name, project_id)        |
-| `get_merged_context`           | Get the merged project + variant context for a variant               |
+| `get_merged_context`           | Get the merged project + variant context for a variant: `codebase_source` (`paths` exposes `codebase_path`, `references` exposes `files`), environment, other info, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats) |
 | `list_dependency_documents`    | Paginate active SBOM sources and relationship-recording coverage for a variant |
 | `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
 | `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
@@ -126,7 +126,7 @@ python vulnscout_mcp/server.py
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
 | `get_project_context`          | Get context fields for a project by UUID                             |
 | `update_project_context`       | Update the description of a project                                  |
-| `update_variant_context`       | Replace the text context fields (`variant_description`, `codebase_path`, `environment`, `other_info`) of a variant by UUID (full replacement; omitted fields are cleared). The threat model and risks are generated from the variant's STRIDE model and are edited in the AI Context page |
+| `update_variant_context`       | Replace the text context fields (`variant_description`, `codebase_path`, `environment`, `other_info`) of a variant by UUID (full replacement; omitted fields are cleared). The threat model, risks and codebase source are edited in the AI Context page; a variant with no context yet is created with codebase source `paths` when `codebase_path` is given, else `references` |
 | `get_custom_assessment`        | Fetch a single user/custom assessment, with any existing per-target AI reviews |
 | `list_custom_assessments`      | List user/custom assessments, optionally scoped to a project variant |
 | `write_assessment_review`      | Save an AI review of one (variant, package) target of a user/custom assessment |
