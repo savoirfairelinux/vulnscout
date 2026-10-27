@@ -401,6 +401,21 @@ feeds and CVEList V5). Matching uses local data, but automatic database updates
 are enabled by default: first use clones the databases, and each scan refreshes
 them. OSV uses its network API.
 
+For imported SPDX 3 Build-profile evidence, the local engine also receives
+compiled-source paths from the selected variant's active SBOMs. When an advisory
+identifies affected files, the engine can record a `not_affected` VEX assessment
+if none were compiled. The finding remains available for review; it is not
+deleted. Missing or incomplete build evidence retains ordinary matching, and
+advisories without affected-file information cannot use this refinement.
+This does not evaluate Kconfig expressions or infer release versions from Git
+revisions. Yocto BitBake recipe inputs and SPDX 2 package/file inventories
+remain available for inspection but cannot by themselves enable compiled-source
+refinement. Compilation proof currently recognizes West Zephyr CMake compiler
+targets with recorded compiler flags, not unknown, packaging, or generator-only
+tasks. Unresolved containment and unaccounted artifact/package inputs disable
+refinement rather than treating a partial source list as complete.
+See [Recorded files](interactive-mode.md#recorded-files).
+
 ```bash
 ./vulnscout -p demo -v x86 scan sbom-cve-check
 ```
