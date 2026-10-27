@@ -106,6 +106,8 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 value to inspect its source information and the full revision. Missing values
 are shown as **—**; contradictory values are flagged as **Conflicting metadata**.
 A release version and a commit hash describe separate fields, not a conflict.
+A trailing `+git` marker is ignored for release comparison, so `2.43+git` and
+`2.43` agree; original identifier values remain in the evidence.
 CPE update fields are included in the release: version `4.5.0` with update
 `rc2` represents `4.5.0-rc2`, not the final `4.5.0` release. Hostap tags such as
 `hostap_2_11` are displayed as `2.11` when the PURL explicitly identifies the

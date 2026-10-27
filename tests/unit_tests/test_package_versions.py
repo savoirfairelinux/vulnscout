@@ -77,6 +77,66 @@ def test_conflicts_with_the_reported_release_are_not_hidden():
     assert info["release_version"] is None
 
 
+@pytest.mark.parametrize("reported,purl_version,cpe_version", [
+    ("2.43", "2.43+git", "2.43"),
+    ("2.43+git", "2.43", "2.43"),
+    ("2.43", "2.43", "2.43+git"),
+    ("v2.43+git", "v2.43+git", "2.43"),
+    (REVISION, "2.43+git", "2.43"),
+])
+def test_git_suffix_matches_release_identifiers_without_changing_evidence(reported, purl_version, cpe_version):
+    purl = f"pkg:generic/glibc@{purl_version}"
+    cpe = f"cpe:2.3:a:gnu:glibc:{cpe_version}:*:*:*:*:*:*:*"
+    info = package_version_info(reported, [purl], [cpe])
+    assert info["release_version"] == "2.43"
+    assert not info["version_conflict"]
+    assert info["version_evidence"] == [
+        {"version": reported, "source": "sbom", "identifier": reported},
+        {"version": purl_version, "source": "purl", "identifier": purl},
+        {"version": cpe_version, "source": "cpe", "identifier": cpe},
+    ]
+
+
+@pytest.mark.parametrize("reported", ["2.43+git", "v2.43+git", "V2.43+git"])
+def test_git_suffix_alone_identifies_the_base_release(reported):
+    info = package_version_info(reported, [], [])
+    assert info["release_version"] == "2.43"
+    assert not info["version_conflict"]
+    assert info["version_evidence"][0]["version"] == reported
+
+
+@pytest.mark.parametrize("other", [
+    "2.44+git", "2.43-rc1+git", "2.43+github", "2.43+git1", "2.43+vendor", "2.43+git-custom",
+])
+def test_git_suffix_normalization_preserves_real_release_conflicts(other):
+    info = package_version_info("2.43", [f"pkg:generic/glibc@{other}"], [])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+@pytest.mark.parametrize("cpe", [
+    "cpe:2.3:a:gnu:glibc:2.43:rc1:*:*:*:*:*:*",
+    "cpe:/a:gnu:glibc:2.43:rc1",
+])
+def test_git_suffix_does_not_hide_concrete_cpe_updates(cpe):
+    info = package_version_info("2.43+git", ["pkg:generic/glibc@2.43+git"], [cpe])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+def test_git_suffix_metadata_does_not_change_package_identity_or_identifiers():
+    purl = "pkg:generic/glibc@2.43%2Bgit"
+    package = Package("glibc", "2.43+git", purl=[purl])
+    assert package.string_id == "glibc@2.43"
+    assert package.purl == [purl]
+    assert package.version_info["release_version"] == "2.43"
+    assert not package.version_info["version_conflict"]
+    data = package.to_dict()
+    assert data["version"] == "2.43"
+    assert {"version": "2.43+git", "source": "purl", "identifier": purl} in data["version_evidence"]
+    assert Package.from_dict(data).version_info == package.version_info
+
+
 def test_conflicting_revisions_are_explicit():
     info = package_version_info(REVISION, [f"pkg:generic/lib@{'b' * 40}"], [])
     assert info["revision_conflict"]

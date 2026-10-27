@@ -43,7 +43,7 @@ def git_revision_from_url(value: str) -> str | None:
 
 
 def _release_key(value: str) -> str:
-    return re.sub(r"^[vV](?=\d)", "", value)
+    return re.sub(r"^[vV](?=\d)", "", value.removesuffix("+git"))
 
 
 def _purl_release_key(purl: PackageURL) -> str:
@@ -96,11 +96,12 @@ def package_version_info(version: str | None, purls: list[str], cpes: list[str],
                          source_revisions: list[str] | None = None) -> PackageVersionInfo:
     """Derive display metadata using only explicit, persisted SBOM identifiers.
 
-    Git-style ``v`` prefixes on numeric versions are equivalent. CPE values are
-    case-insensitive and concrete CPE updates are part of the release. Hostap and
-    Trusted Firmware-M numeric tags are normalized only when their PURL identifies
-    the upstream repository. Other tag aliases and commit-to-release lookups are
-    not inferred. Original identifier and tag spellings remain in the evidence.
+    Git-style ``v`` prefixes on numeric versions and trailing ``+git`` markers are
+    ignored for release comparison. CPE values are case-insensitive and concrete
+    CPE updates are part of the release. Hostap and Trusted Firmware-M numeric
+    tags are normalized only when their PURL identifies the upstream repository.
+    Other tag aliases and commit-to-release lookups are not inferred. Original
+    identifier and tag spellings remain in the evidence.
     """
     evidence: list[VersionEvidence] = []
     tag_aliases: dict[str, str] = {}
