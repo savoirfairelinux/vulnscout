@@ -7,6 +7,7 @@
 
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
+from ..helpers.logging import configure_console_logging
 from ..extensions import db, migrate, setup_write_serialization
 from ..controllers.operation_queue import queue as operation_queue
 from ..controllers.event_bus import operation_events
@@ -109,6 +110,7 @@ def _schedule_background_tasks(app):
 
 
 def create_app():
+    configure_console_logging()
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
     # Local deployments intentionally run without app-level request-size caps.
