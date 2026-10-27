@@ -96,6 +96,8 @@ type VariantEntry = {
     codebase_source: CodebaseSource;
     system: SystemFields;
     stride_model: StrideModel;
+    /** Uploaded references by name only; ignored on import. */
+    files?: { original_name: string; description: string | null }[];
 };
 
 /** One project with its variants nested underneath. */

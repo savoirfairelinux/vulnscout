@@ -456,6 +456,34 @@ class TestExportImportV2:
         assert set(other["system"]) == {"scope", "actors", "entry_points", "trust_boundaries"}
         assert other["stride_model"]["interactions"] == []
 
+    def test_export_lists_files_and_import_ignores_them(self, app_with_data):
+        import uuid
+        from src.extensions import db
+        from src.models.variant_context import ContextFile, VariantContext
+        app, data = app_with_data
+        _make_stride(app, data["variant_a2_id"], codebase_source="references")
+        with app.app_context():
+            vc = VariantContext.get_by_variant(uuid.UUID(data["variant_a2_id"]))
+            for name, description in (("src.zip", "Firmware sources"), ("app.c", None)):
+                db.session.add(ContextFile(variant_context_id=vc.id, original_name=name,
+                                           file_path=f"/nonexistent/{name}", description=description))
+            db.session.commit()
+        client = app.test_client()
+        entries = _export_variants(client)
+        exported = next(e for e in entries if e["variant_name"] == "VariantA2")
+        assert exported["files"] == [
+            {"original_name": "app.c", "description": None},
+            {"original_name": "src.zip", "description": "Firmware sources"},
+        ]
+        assert next(e for e in entries if e["variant_name"] == "VariantA1")["files"] == []
+
+        exported["files"] = [{"original_name": "other.c", "description": "not uploaded"}]
+        result = json.loads(_post_json(client, _nest([exported])).data)
+        assert result["failed"] == [] and len(result["imported"]) == 1
+        with app.app_context():
+            vc = VariantContext.get_by_variant(uuid.UUID(data["variant_a2_id"]))
+            assert sorted(f.original_name for f in vc.files) == ["app.c", "src.zip"]
+
     def test_export_import_round_trip_stride(self, app_with_data):
         from src.extensions import db
         from src.models.variant_context import VariantContext
