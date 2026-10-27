@@ -14,7 +14,9 @@ from src.controllers import ControllersCache
 from src.controllers.scc_adapter import build_comp_build
 from src.extensions import db
 from src.helpers.active_scans import package_snapshots_for_sbom_scans
-from src.models import Package, PackageSourceFile, Project, SBOMDocument, SBOMFile, Scan, Variant
+from src.models import (
+    Package, PackageSourceFile, Project, SBOMBuild, SBOMDocument, SBOMFile, SBOMFileBuild, Scan, Variant,
+)
 
 
 @pytest.fixture
@@ -123,10 +125,98 @@ def test_companion_files_builds_and_properties_survive_input_cleanup(app, tmp_pa
 def test_reimport_replaces_instead_of_duplicating_files(app, tmp_path):
     variant, scan = _import(tmp_path, _documents())
     count = db.session.query(PackageSourceFile).count()
+    files = _package(app, variant)["source_files"]
     read_inputs(ControllersCache(), scan.id)
     assert db.session.query(SBOMFile).count() == 2
     assert db.session.query(PackageSourceFile).count() == count
+    assert db.session.query(SBOMBuild).count() == 1
+    assert db.session.query(SBOMFileBuild).count() == 1
     assert _package(app, variant)["source_file_count"] == 1
+    assert _package(app, variant)["source_files"] == files
+
+
+def test_build_metadata_is_stored_once_for_many_output_packages(app, tmp_path):
+    from sqlalchemy import inspect
+    from src.models import SBOMPackage
+
+    documents = _documents()
+    prefix = "https://example.org/evidence/"
+    source_graph = documents["z-source.jsonld"]["@graph"]
+    source_refs = [prefix + "file"]
+    for index in range(1, 7):
+        ref = prefix + f"file-{index}"
+        source_refs.append(ref)
+        source_graph.extend([
+            {"type": "software_File", "spdxId": ref, "name": f"src/enabled-{index}.c"},
+            {"type": "Relationship", "relationshipType": "contains", "from": prefix + "source", "to": [ref]},
+        ])
+    build_graph = documents["a-build.jsonld"]["@graph"]
+    targets = [prefix + "output"]
+    for index in range(1, 820):
+        ref = prefix + f"package-{index}"
+        targets.append(ref)
+        build_graph.append({"type": "software_Package", "spdxId": ref,
+                            "name": f"lib-output-{index}", "software_packageVersion": "1.0"})
+    for node in build_graph:
+        if node.get("relationshipType") == "hasInput":
+            node["to"] = source_refs
+        elif node.get("relationshipType") == "hasOutput":
+            node["to"] = targets
+        elif node.get("type") == "build_Build":
+            node["build_parameter"] = [{"key": "flags", "value": "x" * 8192}]
+    variant, scan = _import(tmp_path, documents)
+    assert db.session.query(PackageSourceFile).count() == 7 * 821
+    assert db.session.query(SBOMBuild).count() == 1
+    assert db.session.query(SBOMFileBuild).count() == 7
+    assert "builds" not in {column["name"] for column in inspect(db.engine).get_columns("package_source_files")}
+    build = db.session.scalars(db.select(SBOMBuild)).one()
+    assert build.outputs == sorted(targets)
+    assert build.parameters == [{"key": "flags", "value": "x" * 8192}]
+    page_count = db.session.execute(db.text("PRAGMA page_count")).scalar_one()
+    page_size = db.session.execute(db.text("PRAGMA page_size")).scalar_one()
+    assert page_count * page_size < 10 * 1024 * 1024
+    row = app.test_client().get("/api/packages", query_string={
+        "variant_id": str(variant.id), "package_id": "lib@1.0", "include_source_files": "true",
+    }).get_json()[0]
+    assert row["source_file_count"] == 7
+    assert row["compiled_sources_complete"]
+    assert row["source_files"][0]["builds"][0]["outputs"] == sorted(targets)
+    evidence = SBOMPackage.evidence_for_documents({doc.id for doc in SBOMDocument.get_by_scan(scan.id)})
+    builds = [item["source_files"][0]["builds"][0] for item in evidence.values()]
+    assert len(builds) == 821
+    assert all(value is builds[0] for value in builds)
+
+
+def test_multiple_builds_of_a_file_preserve_distinct_evidence(app, tmp_path):
+    documents = _documents()
+    prefix = "https://example.org/evidence/"
+    documents["a-build.jsonld"]["@graph"].extend([
+        {"type": "build_Build", "spdxId": prefix + "other-build", "build_buildType": "urn:other-compile",
+         "build_parameter": [{"key": "flags", "value": "-DOTHER=1"}]},
+        {"type": "Relationship", "relationshipType": "hasInput",
+         "from": prefix + "other-build", "to": [prefix + "file"]},
+        {"type": "Relationship", "relationshipType": "hasOutput",
+         "from": prefix + "other-build", "to": [prefix + "output"]},
+    ])
+    variant, _ = _import(tmp_path, documents)
+    assert db.session.query(SBOMBuild).count() == 2
+    assert db.session.query(SBOMFileBuild).count() == 2
+    builds = _package(app, variant)["source_files"][0]["builds"]
+    assert {build["build_type"] for build in builds} == {"urn:compile", "urn:other-compile"}
+    assert all(build["compiled"] for build in builds)
+
+
+def test_deleting_a_build_document_removes_its_file_evidence(app, tmp_path):
+    variant, scan = _import(tmp_path, _documents())
+    build_document = next(document for document in SBOMDocument.get_by_scan(scan.id)
+                          if document.source_name == "a-build.jsonld")
+    build_document.delete()
+    assert db.session.query(SBOMBuild).count() == 0
+    assert db.session.query(SBOMFileBuild).count() == 0
+    row = _package(app, variant, "lib-sources")
+    assert row["source_file_count"] == 1
+    assert row["source_files"][0]["builds"] == []
+    assert not row["compiled_sources_complete"]
 
 
 def test_intermediate_objects_are_retained_but_not_used_as_source_files(app, tmp_path):
@@ -246,6 +336,8 @@ def test_variants_and_superseded_scans_do_not_share_file_evidence(app, tmp_path)
     other_scan.delete()
     assert db.session.query(SBOMFile).count() == 0
     assert db.session.query(PackageSourceFile).count() == 0
+    assert db.session.query(SBOMBuild).count() == 0
+    assert db.session.query(SBOMFileBuild).count() == 0
 
 
 def test_companion_references_never_resolve_from_another_scan(app, tmp_path):
@@ -336,9 +428,13 @@ def test_source_migration_roundtrip_is_idempotent_and_keeps_existing_packages(ap
     with db.engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
         migration.downgrade()
         assert not inspect(connection).has_table("sbom_files")
+        assert not inspect(connection).has_table("sbom_builds")
+        assert not inspect(connection).has_table("sbom_file_builds")
         migration.upgrade()
         migration.upgrade()
         assert inspect(connection).has_table("package_source_files")
+        assert inspect(connection).has_table("sbom_builds")
+        assert inspect(connection).has_table("sbom_file_builds")
     db.session.expire_all()
     assert db.session.query(Package).count() == package_count
     assert _package(app, variant)["source_file_count"] is None
