@@ -102,16 +102,6 @@ See link:doc/source/getting-started.md[Getting Started] for the full first-run
 guide and link:doc/source/examples.md[Bundled Examples] for alternative Yocto
 and Zephyr datasets with their project/variant-scoped commands.
 
-=== CLI Colors
-
-Human-readable output is colored automatically on terminals; stdout and stderr
-are detected separately, so redirected output stays plain. A non-empty
-`NO_COLOR` (for example, `NO_COLOR=1 ./vulnscout --help`) or `TERM=dumb` disables
-colors. JSON, shell completion, configuration values, and generated files remain
-plain. This applies to the host launcher, container entrypoint, and custom Flask
-commands; see link:doc/source/container-entrypoint.md#output-colors[Output colors]
-for the palette and container forwarding behavior.
-
 == Architecture
 
 image::doc/source/_static/vulnscout-architecture.svg[VulnScout architecture showing CLI and web access, core services, scanners, storage, and the Copilot SDK and MCP tool loop]
