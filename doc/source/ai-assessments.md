@@ -161,10 +161,10 @@ Once configured, the agent can call these tools (prefixed with `vulnscout-`):
 | `get_vulnerability`        | Retrieve a vulnerability with variant-scoped details        |
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
 | `list_variants`            | List every variant across all projects                      |
-| `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, environment, threat model, risks, other info) |
+| `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, codebase source, environment, STRIDE-rendered threat model and risks, other info) |
 | `list_codebase_files` / `read_codebase_file` / `search_codebase` | Browse, read and search uploaded codebase references for a variant, including inside the container |
 | `get_project_context` / `update_project_context` | Read / replace a project's description |
-| `update_variant_context`   | Replace a variant's text context fields (description, codebase path, environment, other info) — full replacement, not a partial update; the threat model and risks are generated from the STRIDE model and can only be edited in the AI Context page |
+| `update_variant_context`   | Replace a variant's text context fields (description, codebase path, environment, other info) — full replacement, not a partial update; the threat model, risks and codebase source can only be edited in the AI Context page. A variant with no context yet is created with codebase source paths when a codebase path is given, otherwise references |
 | `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |
 | `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
 | `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
@@ -195,10 +195,20 @@ targets (at least one component or interaction), and risk threat. **Save changes
 cell; it opens the tab and explains each missing value next to its cell.
 
 Agents receive `threat_model` and `risks` as a plain-text rendering of these
-tables. `codebase_path` is only sent when the source is paths, and uploaded
-references are only listed when the source is references. The MCP
-`update_variant_context` tool cannot change the threat model or risks; edit them
-in the page.
+tables, with the `C#`, `I#` and `T#` IDs kept; threats that have no rating,
+mitigation or residual decision are left out of `risks`. `codebase_path` is
+only sent when the source is paths, and uploaded references are only listed
+when the source is references; `get_merged_context` also reports the
+`codebase_source`. The MCP `update_variant_context` tool cannot change the
+threat model, risks or codebase source; edit them in the page.
+
+The assessment skills and the embedded Agent use the STRIDE model per variant.
+They map the affected component to Components and Interactions, check
+reachability against entry points and trust boundaries, match the CVE's impact
+to Threats by STRIDE category, and cite the IDs. Mitigations and residual
+decisions in Risks are treated as declarations: they can lower the impact, but
+support `not_affected` only when source or configuration evidence confirms
+them.
 
 ## Codebase references on the AI Context page
 
@@ -264,8 +274,8 @@ The skill resolves platform context using three tiers:
 
 1. **MCP fetch** — if you provide a `project_name` (and optionally one or more
    variant names), the skill fetches each variant's context from VulnScout via
-   the MCP tools. The resolved `variant_id`s are required to submit the
-   assessment.
+   the MCP tools, including its STRIDE threat model and risks. The resolved
+   `variant_id`s are required to submit the assessment.
 2. **Inline context** — if you describe the platform (package manager, build
    system, deployment environment) directly in the prompt, the skill uses that.
 3. **Default fallback** — otherwise it proceeds with generic default

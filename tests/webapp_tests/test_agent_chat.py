@@ -92,6 +92,7 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     instructions = captured["system_message"]["content"]
     assert all(term in instructions for term in ("next_offset", "max_depth=0", "runtime usage",
                                                  "backports", "unknown", "no web research", "read-only"))
+    assert all(term in instructions for term in ("STRIDE", "T# threats", "corroborates"))
 
 
 def test_agent_rejects_remote_requests(client):

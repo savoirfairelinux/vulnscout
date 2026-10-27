@@ -27,7 +27,10 @@ agent through a structured workflow:
 1. **Research** the vulnerability from public sources (NVD, GitHub Security Advisories)
 2. **Analyze** whether the affected component is present in the target project, and at
    what version
-3. **Assess** the impact against the project's defined security objectives
+3. **Assess** the impact against the project's defined security objectives, using each
+   variant's STRIDE threat model and risks from VulnScout (reachability through entry
+   points and trust boundaries, matching threats; declared mitigations count only
+   when source or configuration evidence confirms them)
 4. **Report** a status (`affected`, `fixed`, `not_affected`, or `under_investigation`)
    with a concise justification
 5. **Submit** the assessment via the `vulnscout-write_assessment` MCP tool
