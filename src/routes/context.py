@@ -306,10 +306,8 @@ def init_app(app):
 
         vc = VariantContext.get_by_variant(variant_uuid)
         if vc is None:
-            # A variant whose first context is an upload uses its references.
-            vc = VariantContext.upsert(variant_uuid, commit=False)
-            vc.codebase_source = "references"
-            db.session.commit()
+            # Created without paths, so the variant uses its references.
+            vc = VariantContext.upsert(variant_uuid)
 
         dest_dir = os.path.join(_get_cache_dir(), "context-files", str(vc.id))
         file_path = os.path.join(dest_dir, str(file_id))

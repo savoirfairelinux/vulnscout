@@ -886,9 +886,15 @@ class TestLegacyWrite:
     def test_legacy_create_has_no_stride_model(self, app, variant):
         from src.models.variant_context import VariantContext
         vc = VariantContext.upsert(variant.id, environment="x")
-        assert vc.codebase_source == "paths"
+        assert vc.codebase_source == "references"
         assert vc.stride_model is None
         assert vc.agent_threat_model() is None
+
+    def test_legacy_create_with_codebase_path_uses_paths(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, codebase_path="/src")
+        assert vc.codebase_source == "paths"
+        assert vc.to_dict()["codebase_path"] == "/src"
 
 
 class TestAgentView:
@@ -967,6 +973,18 @@ class TestAgentView:
         assert data["editor"]["codebase_source"] == "paths"
         assert data["codebase_path"] == "/src"
         assert data["files"] == []
+
+    def test_upload_after_text_only_create_is_visible_to_agents(self, client, project, variant, tmp_path):
+        from io import BytesIO
+        client.put(f"/api/variants/{variant.id}/context", json={"environment": "Yocto"})
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"code"), "main.c")},
+            )
+        assert resp.status_code == 201
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert data["editor"]["codebase_source"] == "references"
+        assert [f["id"] for f in data["files"]] == [resp.get_json()["id"]]
 
     def test_get_context_default_editor_block(self, client, project, variant):
         from src.models.variant_context import default_editor_block

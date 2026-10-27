@@ -819,7 +819,8 @@ SCHEMAS.update({
     }, description=(
         "With stride, an editor save storing every field (codebase_source required; the STRIDE "
         "model must describe a threat model). Without stride, a full replacement of the text fields; "
-        "threat_model and risks are read-only."
+        "threat_model and risks are read-only, and a new context uses codebase_source paths when "
+        "codebase_path is given, otherwise references."
     )),
     "SbomUploadAccepted": _object({
         "op_id": _STRING, "scan_id": _UUID, "message": _STRING,
