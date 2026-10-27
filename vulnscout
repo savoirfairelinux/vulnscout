@@ -98,7 +98,7 @@ _vulnscout_complete() {
 
     local globals="--dev -h --help --version"
     local scope=""
-    if [[ " $data_verbs " == *" $verb "* || -z "$verb" ]]; then
+    if [[ " $data_verbs " == *" $verb "* ]]; then
         scope="-p --project -v --variant"
     fi
 
@@ -1482,12 +1482,16 @@ parse_new() {
     local -a rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            -p|--project)
+            -p|--project|-v|--variant)
+                if [ ${#rest[@]} -eq 0 ]; then
+                    die "'$1' is a command option; put it after the command (e.g. 'vulnscout export $1 <value> ...')."
+                fi
                 require_value "$1" "$#" "${2:-}"
-                PROJECT="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
-            -v|--variant)
-                require_value "$1" "$#" "${2:-}"
-                VARIANT="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
+                case "$1" in
+                    -p|--project) PROJECT="$2"; PROJECT_SPECIFIED=true ;;
+                    *) VARIANT="$2"; VARIANT_SPECIFIED=true ;;
+                esac
+                shift 2 ;;
             --dev)
                 DEV_MODE=true; shift ;;
             -h|--help)
