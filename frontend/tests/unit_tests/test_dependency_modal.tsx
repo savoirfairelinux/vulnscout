@@ -141,7 +141,12 @@ test('shows both directions and follows the selected SBOM source', async () => {
     render(<DependencyModalView documents={documents} packageId="app" onSelectPackage={selectPackage} />);
     const user = userEvent.setup();
 
-    expect(screen.getAllByText('In 3 / Out 0')).toHaveLength(2);
+    const summaries = screen.getAllByText('Deps: 3 / Req by: 0');
+    expect(summaries).toHaveLength(2);
+    for (const summary of summaries) {
+        expect(summary.getAttribute('title')).toBe(
+            'Deps: direct dependencies of this package. Req by: packages that directly depend on this package.');
+    }
     expect(screen.getByLabelText('Dependency diagram').querySelectorAll('.react-flow__node')).toHaveLength(4);
     const tree = within(screen.getByRole('tree', { name: 'Depends on' }));
     expect(tree.getByRole('button', { name: 'lib@1.0' })).toBeTruthy();
@@ -151,11 +156,11 @@ test('shows both directions and follows the selected SBOM source', async () => {
     expect(tree.getAllByRole('button', { name: 'util@1.0' })).toHaveLength(2);
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'SBOM source' }), 'doc-two');
-    expect(screen.getAllByText('In 1 / Out 0')).toHaveLength(2);
+    expect(screen.getAllByText('Deps: 1 / Req by: 0')).toHaveLength(2);
     expect(screen.getByLabelText('Dependency diagram').querySelectorAll('.react-flow__node')).toHaveLength(2);
 });
 
-test('distinguishes incoming and outgoing dependencies per variant', async () => {
+test('distinguishes dependencies and dependents per variant', async () => {
     const pkg = (id: string) => ({ id, name: id, version: '1.0' });
     const variantDocuments: DependencyDocument[] = [
         { id: 'beta-doc', source_name: 'beta.spdx.json', variant_id: 'beta', variant_name: 'beta', dependencies_recorded: true,
@@ -173,9 +178,9 @@ test('distinguishes incoming and outgoing dependencies per variant', async () =>
     const legend = () => within(screen.getByRole('list', { name: 'Variants' }));
     const x = (id: string) => Number(/translate\(([-\d.]+)px/.exec(node(id).style.transform)![1]);
 
-    expect(screen.getByText('In 2 / Out 2')).toBeTruthy();
+    expect(screen.getByText('Deps: 2 / Req by: 2')).toBeTruthy();
     expect(legend().getAllByRole('listitem').map(item => item.textContent)).toEqual([
-        'alphaIn 2 / Out 1', 'betaIn 1 / Out 1',
+        'alphaDeps: 2 / Req by: 1', 'betaDeps: 1 / Req by: 1',
     ]);
     expect(x('lib')).toBeLessThan(x('app'));
     expect(x('core')).toBeGreaterThan(x('app'));
@@ -190,15 +195,15 @@ test('distinguishes incoming and outgoing dependencies per variant', async () =>
 
     await userEvent.setup().click(legend().getByRole('checkbox', { name: 'alpha' }));
     expect(legend().getByRole('checkbox', { name: 'alpha' })).toHaveProperty('checked', false);
-    expect(screen.getAllByText('In 1 / Out 1')).toHaveLength(2);
+    expect(screen.getAllByText('Deps: 1 / Req by: 1')).toHaveLength(2);
     expect(legend().getAllByRole('listitem').map(item => item.textContent)).toEqual([
-        'alphaIn 2 / Out 1', 'betaIn 1 / Out 1',
+        'alphaDeps: 2 / Req by: 1', 'betaDeps: 1 / Req by: 1',
     ]);
     expect(screen.getByLabelText('Dependency diagram').querySelectorAll('.react-flow__node')).toHaveLength(3);
     expect(node('lib').style.background).toBe('rgb(253, 164, 175)');
 
     await userEvent.setup().click(legend().getByRole('checkbox', { name: 'beta' }));
-    expect(screen.getByText('In 0 / Out 0')).toBeTruthy();
+    expect(screen.getByText('Deps: 0 / Req by: 0')).toBeTruthy();
     expect(screen.getByLabelText('Dependency diagram').querySelectorAll('.react-flow__node')).toHaveLength(1);
 });
 
@@ -208,7 +213,7 @@ test('marks variants whose SBOMs were imported without dependency support', () =
         packages: [{ id: 'app', name: 'app', version: '1.0' }], edges: [],
     }]} packageId="app" onSelectPackage={() => {}} />);
     expect(within(screen.getByRole('list', { name: 'Variants' })).getAllByRole('listitem')
-        .map(item => item.textContent)).toEqual(['alphaIn 2 / Out 0', 'betaNot recorded']);
+        .map(item => item.textContent)).toEqual(['alphaDeps: 2 / Req by: 0', 'betaNot recorded']);
 });
 
 test('shows every neighbour in a single diagram', () => {
@@ -219,7 +224,7 @@ test('shows every neighbour in a single diagram', () => {
     render(<DependencyModalView documents={[{ id: 'big', source_name: 'big.spdx.json', variant_id: 'v1',
         variant_name: 'alpha', dependencies_recorded: true, packages, edges }]} packageId="pkg-0" onSelectPackage={() => {}} />);
 
-    expect(screen.getAllByText('In 0 / Out 14')).toHaveLength(2);
+    expect(screen.getAllByText('Deps: 0 / Req by: 14')).toHaveLength(2);
     expect(screen.getByRole('heading', { name: 'Required by (14)' })).toBeTruthy();
     expect(screen.getByLabelText('Dependency diagram').querySelectorAll('.react-flow__node')).toHaveLength(15);
     const columns = new Set([...screen.getByLabelText('Dependency diagram')

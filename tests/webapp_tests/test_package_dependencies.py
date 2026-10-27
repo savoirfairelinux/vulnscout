@@ -802,6 +802,8 @@ def test_conflicting_legacy_analyst_records_abort_without_data_loss(app, tmp_pat
      'pkg:generic/trusted-firmware-m@TF-Mv2.3.1'
      '?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m',
      'cpe:2.3:o:arm:trusted_firmware-m:2.3.1:-:*:*:*:*:*:*', '2.3.1'),
+    ('glibc', '2.43+git', 'pkg:generic/glibc@2.43+git',
+     'cpe:2.3:a:gnu:glibc:2.43:*:*:*:*:*:*:*', '2.43'),
 ])
 def test_equivalent_zephyr_version_spellings_agree_in_stored_packages_and_graphs(
         app, tmp_path, name, version, purl, cpe, release):

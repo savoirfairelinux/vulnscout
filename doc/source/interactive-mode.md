@@ -95,7 +95,7 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ### Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's incoming and outgoing dependency counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **In** + **Out** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](#dependency-graph); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
@@ -106,6 +106,8 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 value to inspect its source information and the full revision. Missing values
 are shown as **—**; contradictory values are flagged as **Conflicting metadata**.
 A release version and a commit hash describe separate fields, not a conflict.
+A trailing `+git` marker is ignored for release comparison, so `2.43+git` and
+`2.43` agree; original identifier values remain in the evidence.
 CPE update fields are included in the release: version `4.5.0` with update
 `rc2` represents `4.5.0-rc2`, not the final `4.5.0` release. Hostap tags such as
 `hostap_2_11` are displayed as `2.11` when the PURL explicitly identifies the
@@ -184,7 +186,7 @@ Each row has a **Show Vulnerabilities** button that navigates to the Vulnerabili
 
 ## Dependency Graph
 
-The **Dependency** column of the SBOM table shows how many packages each package depends on (**In**) and how many packages depend on it (**Out**). Click the cell to open the graph and expandable trees for both directions. The graph shows every direct dependency (left, flowing in) and dependent (right, flowing out) of the package in a single diagram; zoom and pan to explore large ones. The **Variants** list beside the graph gives each variant a color, its own **In** / **Out** counts, and a checkbox to show or hide its relationships (all variants are shown by default). Select an SBOM source to narrow the graph and its version/revision labels to one active document. Neighbouring packages in the graph use the colors of the variants where the relationship exists, split into stripes when it exists in several. Dependency graphs are loaded only when opened, and packages without relationships show zero counts. Outdated packages show **Not in active scan** because dependency data covers active scans only.
+The **Dependency** column of the SBOM table shows how many packages each package directly depends on (**Deps**) and how many packages directly depend on it (**Req by**). Hover the counts for definitions. Click the cell to open the graph and expandable trees for both directions. The graph shows every direct dependency (left, flowing in) and dependent (right, flowing out) of the package in a single diagram; zoom and pan to explore large ones. The **Variants** list beside the graph gives each variant a color, its own **Deps** / **Req by** counts, and a checkbox to show or hide its relationships (all variants are shown by default). Select an SBOM source to narrow the graph and its version/revision labels to one active document. Neighbouring packages in the graph use the colors of the variants where the relationship exists, split into stripes when it exists in several. Dependency graphs are loaded only when opened, and packages without relationships show zero counts. Outdated packages show **Not in active scan** because dependency data covers active scans only.
 
 ### Supported SBOM Formats
 

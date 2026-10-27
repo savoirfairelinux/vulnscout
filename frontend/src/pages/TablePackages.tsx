@@ -361,9 +361,10 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     return <button type="button"
                         className="flex items-center justify-center gap-2 w-full h-full p-4 text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
                         onClick={() => setSelectedDependencyPackage(info.row.original.id)}
+                        title="Deps: direct dependencies of this package. Req by: packages that directly depend on this package."
                         aria-label={`View dependency graph for ${info.row.original.name}`}>
                         <FontAwesomeIcon icon={faDiagramProject} />
-                        {dependencyError ? 'Unavailable' : counts ? `In ${counts.in} / Out ${counts.out}` : 'Loading…'}
+                        {dependencyError ? 'Unavailable' : counts ? `Deps: ${counts.in} / Req by: ${counts.out}` : 'Loading…'}
                     </button>;
                 },
                 sortDescFirst: true,

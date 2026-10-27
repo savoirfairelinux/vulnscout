@@ -1,7 +1,7 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import type { MouseEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faCommentDots, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faCommentDots } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import { ROUTES } from '../routes';
@@ -186,12 +186,6 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
           defaultScope={defaultScope}
           onApply={onApply}
         />
-      </li>
-
-      <li>
-        <a href={`${import.meta.env.VITE_API_URL ?? ''}/api/openapi/ui`} target="_blank" rel="noopener noreferrer" aria-label="API documentation" title="API documentation" className={`flex h-full items-center px-4 py-2 ${bgHoverColor}`}>
-          <FontAwesomeIcon icon={faBook} />
-        </a>
       </li>
 
       {/* === Settings === */}
