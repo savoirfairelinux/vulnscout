@@ -138,7 +138,9 @@ def package_snapshots_for_sbom_scans(scan_ids: list[uuid.UUID]) -> list[Package]
     document_ids = set(db.session.scalars(
         db.select(SBOMDocument.id).where(SBOMDocument.scan_id.in_(scan_ids))
     ))
-    evidence = SBOMPackage.evidence_for_documents(document_ids, require_recorded_identifiers=True)
+    evidence = SBOMPackage.evidence_for_documents(
+        document_ids, require_recorded_identifiers=True, include_source_files=True,
+    )
     if not evidence:
         return []
     packages = db.session.scalars(db.select(Package).where(Package.id.in_(evidence.keys())))
