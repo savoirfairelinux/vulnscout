@@ -57,9 +57,9 @@ link:doc/source/exports.md[Exporting SBOM Files] for format details.
 
 == Quick Start
 
-On the host, install *Git*, *Bash*, and a working *Docker or Podman* setup
-that your user can run. VulnScout runs inside the container; normal use does
-not require a host Python or Node.js installation.
+On the host, you need a working *Docker or Podman* setup that your user can run.
+VulnScout runs inside the container; normal use does not require a host Python
+or Node.js installation.
 
 Clone the repository, import the bundled Yocto example, then start the interface:
 
@@ -74,7 +74,7 @@ cd vulnscout
 ----
 
 The launcher pulls the image if needed, starts the container, and imports the
-supplied packages and findings. *API keys are not required to view this example.*
+supplied packages and findings.
 Import alone does not request additional scans or a complete metadata refresh.
 
 Open http://localhost:7275/ and select project *default* and variant *default*
@@ -95,11 +95,8 @@ By default, the database and configuration remain in `.vulnscout/cache/`, and
 exports remain in `.vulnscout/outputs/` beside the launcher. Stopping the
 container does not reset them.
 
-For proxies, API keys, or custom runtime settings, follow
+For custom runtime settings, follow
 link:doc/source/cli-configuration.md[Container Lifecycle and Configuration].
-The example import initializes defaults; if configuring before the first import,
-run `./vulnscout start` before `config set`. Restart after changing web-service
-settings. Arbitrary exported host variables are not automatically forwarded.
 
 See link:doc/source/getting-started.md[Getting Started] for the full first-run
 guide and link:doc/source/examples.md[Bundled Examples] for alternative Yocto

@@ -24,6 +24,17 @@ within their project.
 Deleting a project or variant permanently removes its associated data and
 requires confirmation. Export important review data before deleting it.
 
+## SBOM Imports
+
+SBOM uploads on a variant page default to **Complete refresh**. After parsing,
+VulnScout refreshes NVD, EPSS, GHSA, and ENISA EUVD metadata for vulnerabilities
+encountered in the import. This can make external provider requests and lengthen
+the upload operation.
+
+To import without enrichment, choose **Custom refresh** and deselect every source
+before uploading. Selected refreshes enrich the imported findings; they do not
+run additional vulnerability scanners.
+
 ## Native-Package Scan Defaults
 
 In **Settings → General → Global native-package exclusions**, choose whether to exclude native packages by default and edit the exceptions under **Native packages to scan by default** (one name per line or comma-separated). Saving applies these defaults to projects without saved selections the next time the wizard opens. Existing project selections take precedence and are not overwritten. Disabling global exclusion scans all native packages by default while retaining the exception list.
