@@ -3,6 +3,10 @@ from typing import Optional
 from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
 
 
+def _codebase_source(ctx: dict) -> str | None:
+    return (ctx.get("editor") or {}).get("codebase_source")
+
+
 def _fmt_merged_context(ctx: dict) -> str:
     files = ctx.get("files") or []
     file_names = json.dumps(files, ensure_ascii=True) if files else "(none)"
@@ -11,6 +15,7 @@ def _fmt_merged_context(ctx: dict) -> str:
         f"description={ctx.get('description')}\n"
         f"variant_id={ctx.get('variant_id')}\n"
         f"variant_description={ctx.get('variant_description')}\n"
+        f"codebase_source={_codebase_source(ctx)}\n"
         f"codebase_path={ctx.get('codebase_path')}\n"
         f"environment={ctx.get('environment')}\n"
         f"threat_model={ctx.get('threat_model')}\n"
@@ -33,6 +38,7 @@ def _fmt_variant_context(ctx: dict) -> str:
     return (
         f"variant_id={ctx.get('variant_id')}\n"
         f"variant_description={ctx.get('variant_description')}\n"
+        f"codebase_source={_codebase_source(ctx)}\n"
         f"codebase_path={ctx.get('codebase_path')}\n"
         f"environment={ctx.get('environment')}\n"
         f"threat_model={ctx.get('threat_model')}\n"
@@ -193,12 +199,33 @@ def register_tools(server, client: VulnScoutClient) -> None:
         """Get the merged context for a project + variant pair.
 
         Returns the project's description together with the variant's
-        variant_description, codebase_path, environment, threat_model, risks,
-        other_info, and uploaded reference metadata (id, original_name, description).
-        Use list_codebase_files, read_codebase_file, and search_codebase to inspect
-        those references through the API, including from inside a container.
-        codebase_path may contain
-        multiple paths separated by semicolons (e.g. "/src/app;/src/lib").
+        variant_description, codebase_source, codebase_path, environment,
+        threat_model, risks, other_info, and uploaded reference metadata
+        (files: id, original_name, description).
+
+        codebase_source is "paths" or "references" and decides which
+        source evidence is exposed: with "paths", codebase_path is set and
+        files is empty; with "references", codebase_path is None and files
+        lists the uploads. codebase_path may contain multiple paths separated
+        by semicolons (e.g. "/src/app;/src/lib"); it is a hint for an external
+        client with filesystem access, not a container mount. Use
+        list_codebase_files, read_codebase_file, and search_codebase to
+        inspect uploaded references through the API.
+
+        threat_model and risks are read-only plain-text renderings of the
+        variant's STRIDE model, edited in the AI Context page (None when
+        empty). threat_model has these sections, each only when filled:
+        "System scope and assets", "Actors and access", "Entry points and
+        data flows", "Trust boundaries", then "Components" (lines like
+        "- C1 name (trust zone: ...): description"), "Interactions"
+        ("- I1 name: C1 a -> C2 b; interface: ...; data: ...; trust
+        boundary: ..."), and "Threats" grouped by STRIDE category
+        ("- T1 [C1 a, I1 x]: description"). risks has one line per rated
+        threat: "- T1 Category, description — Likelihood: ..., Impact:
+        .... Mitigation: .... Residual risk / decision: ...". Threats with
+        no rating, mitigation or residual decision are omitted from risks.
+        Mitigations and residual decisions are user-declared, not verified.
+
         Both IDs are required; the variant must belong to the given project.
         If only the project/variant names are known, resolve them first with
         find_project_id and find_variant_id.
@@ -304,8 +331,12 @@ def register_tools(server, client: VulnScoutClient) -> None:
 
         The threat model and risks are generated from the variant's STRIDE
         model, which is edited in the AI Context page; this tool cannot
-        change them. On a variant that uses uploaded references,
-        codebase_path may be omitted to keep the stored paths.
+        change them, nor the codebase_source. codebase_path is only exposed
+        to agents when codebase_source is "paths". On a variant that uses
+        uploaded references, codebase_path may be omitted to keep the
+        stored (hidden) paths. A variant with no context yet is created
+        with codebase_source "paths" when codebase_path is given, else
+        "references".
 
         Args:
             variant_id: UUID of the variant to update.

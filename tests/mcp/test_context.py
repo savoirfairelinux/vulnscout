@@ -154,6 +154,7 @@ class TestGetMergedContextImpl:
                         "risks": "none",
                         "other_info": "n/a",
                         "files": [{"id": "f1", "original_name": "report.pdf"}],
+                        "editor": {"codebase_source": "references"},
                     },
                 )
             )
@@ -163,6 +164,7 @@ class TestGetMergedContextImpl:
         assert "/src/app" in result
         assert "CVSS >= 7" in result
         assert "report.pdf" in result
+        assert "codebase_source=references" in result
 
     def test_returns_no_files_placeholder_when_empty(self, client):
         with respx.mock:
@@ -257,6 +259,7 @@ class TestUpdateVariantContextImpl:
                         "risks": None,
                         "other_info": None,
                         "files": [],
+                        "editor": {"codebase_source": "paths"},
                     },
                 )
             )
@@ -275,6 +278,7 @@ class TestUpdateVariantContextImpl:
         }
         assert "threat_model=CVSS >= 7" in result
         assert "codebase_path=/repo/src" in result
+        assert "codebase_source=paths" in result
 
     def test_api_error_returns_error_string(self, client):
         with respx.mock:
