@@ -4,17 +4,17 @@ VulnScout can export the enriched project data as standard SBOM formats. Exporte
 
 ```bash
 # Export as SPDX 3.0 SBOM
-./vulnscout -p demo export spdx
+./vulnscout export -p demo spdx
 
 # Export as CycloneDX 1.6 SBOM
-./vulnscout -p demo export cdx
+./vulnscout export -p demo cdx
 
 # Export as OpenVEX document (vulnerabilities + assessments)
-./vulnscout -p demo export openvex
+./vulnscout export -p demo openvex
 ```
 
 One `export` call can write several formats:
 
 ```bash
-./vulnscout -p demo export spdx cdx openvex
+./vulnscout export -p demo spdx cdx openvex
 ```

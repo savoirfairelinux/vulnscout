@@ -43,7 +43,7 @@ Global options can appear before or after the command:
 | `-h, --help` | Help for the command, or the overview. |
 | `--version` | Same as `version`. |
 
-`-p, --project <name>` and `-v, --variant <name>` are options of the commands marked in the `-p` and `-v` columns above; see `<command> --help`. A command that does not use a scope exits with code 1 when given `-p` or `-v`.
+`-p, --project <name>` and `-v, --variant <name>` are command options, not global options. Place them after the command; see `<command> --help` and the `-p` and `-v` columns above. A command that does not use a scope exits with code 1 when given `-p` or `-v`.
 
 ## Projects and Variants
 
@@ -52,13 +52,13 @@ VulnScout organises data into **projects** and **variants**. A project typically
 Select them with `-p, --project` and `-v, --variant`. Each command documents how it uses them (see [Commands](#commands)); commands that do not use a scope reject these options.
 
 ```text
-./vulnscout -p <name> -v <name> <command>
+./vulnscout <command> -p <name> -v <name>
 ```
 
 Example:
 
 ```bash
-./vulnscout -p demo -v x86 add \
+./vulnscout add -p demo -v x86 \
   --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
   --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ```

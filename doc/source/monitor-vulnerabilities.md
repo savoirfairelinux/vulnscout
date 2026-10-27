@@ -3,8 +3,8 @@
 For CI pipelines or automated scans, import the inputs and then use `match-condition` instead of the web UI:
 
 ```bash
-./vulnscout -p demo add --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
-./vulnscout -p demo match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
+./vulnscout add -p demo --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
+./vulnscout match-condition -p demo "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ```
 
 If vulnerabilities match the condition, `match-condition` exits with **code 2**, allowing CI systems to fail the pipeline. Run `match-condition` last: a shell running with `set -e` stops at the first non-zero exit, so commands after `match-condition` would not run.

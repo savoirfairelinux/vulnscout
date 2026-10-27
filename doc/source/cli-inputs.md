@@ -18,7 +18,7 @@ For Zephyr's West SPDX generator, import the companion documents together into t
 same project and variant:
 
 ```bash
-./vulnscout -p zephyr_demo -v mbedtls_native_sim add \
+./vulnscout add -p zephyr_demo -v mbedtls_native_sim \
   --spdx "$(pwd)/example/zephyr/app.jsonld" \
   --spdx "$(pwd)/example/zephyr/build.jsonld" \
   --spdx "$(pwd)/example/zephyr/modules-deps.jsonld" \
@@ -92,7 +92,7 @@ Import a Grype native JSON file. Files should end with `.grype.json`.
 Repeat or mix input options in one `add` call:
 
 ```bash
-./vulnscout -p demo -v x86 add \
+./vulnscout add -p demo -v x86 \
   --spdx /path/to/sbom.spdx.json \
   --cve-check /path/to/cve-check.json \
   --openvex /path/to/assessments.openvex.json

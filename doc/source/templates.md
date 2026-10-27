@@ -16,7 +16,7 @@ VulnScout uses [Jinja2](https://jinja.palletsprojects.com/) as its templating en
 Pass the file path directly to `report` — it stages and runs the template in one step:
 
 ```bash
-./vulnscout -p demo report /path/to/my-report.adoc
+./vulnscout report -p demo /path/to/my-report.adoc
 ```
 
 ### Automatic Generation

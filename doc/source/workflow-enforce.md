@@ -29,9 +29,9 @@ before the final policy check:
 
 ```bash
 set -e
-./vulnscout -p demo -v x86 report summary.adoc
-./vulnscout -p demo -v x86 export spdx cdx openvex
-./vulnscout -p demo -v x86 match-condition \
+./vulnscout report -p demo -v x86 summary.adoc
+./vulnscout export -p demo -v x86 spdx cdx openvex
+./vulnscout match-condition -p demo -v x86 \
   "cvss >= 7.0 and (pending or affected)"
 ```
 

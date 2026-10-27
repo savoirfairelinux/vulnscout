@@ -46,7 +46,7 @@ Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in
 - **Put `match-condition` last.** A chained legacy call still wrote its reports and exports when the condition matched. With separate calls, a script running with `set -e` stops at the first non-zero exit, so run `match-condition` last or handle its exit code explicitly.
 - **`refresh` uses its own scope.** It refreshes the selected project or variant (every vulnerability without `-p`), not only the vulnerabilities imported by the previous `add`.
 - **Custom OpenVEX without `-v`.** `export custom-openvex` writes every project variant, and `import custom-openvex` targets the project's only variant. The legacy flags still default to the `default` variant.
-- **Scope is validated.** `-p` or `-v` on a command that does not use them exits with code 1 instead of being ignored.
+- **Scope is command-specific.** Put `-p` and `-v` after the command. A command that does not use them exits with code 1 instead of ignoring them.
 - **`delete` confirms on a terminal.** Use `--yes` to skip the prompt and `--dry-run` to preview. Non-interactive runs do not prompt.
 - **Removed spellings.** The undocumented `perform-grype-scan`, `perform-nvd-scan`, `perform-osv-scan`, `perform-sbom-cve-check-scan`, `sbom-cve-check-scan` and `--sbom-cve-check-scan` forms now fail as unknown commands. Use `scan <type>`.
 
@@ -60,10 +60,10 @@ Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in
   --match-condition "cvss >= 9.0" --report summary.adoc --export-cdx
 
 # Commands (one per call)
-./vulnscout -p demo -v x86 add --spdx sbom.spdx.json --cve-check cve.json
-./vulnscout -p demo -v x86 scan nvd,osv
-./vulnscout -p demo -v x86 refresh
-./vulnscout -p demo -v x86 report summary.adoc --condition "cvss >= 9.0"
-./vulnscout -p demo -v x86 export cdx
-./vulnscout -p demo -v x86 match-condition "cvss >= 9.0"   # last: exit 2 fails the job
+./vulnscout add -p demo -v x86 --spdx sbom.spdx.json --cve-check cve.json
+./vulnscout scan -p demo -v x86 nvd,osv
+./vulnscout refresh -p demo -v x86
+./vulnscout report -p demo -v x86 summary.adoc --condition "cvss >= 9.0"
+./vulnscout export -p demo -v x86 cdx
+./vulnscout match-condition -p demo -v x86 "cvss >= 9.0"   # last: exit 2 fails the job
 ```

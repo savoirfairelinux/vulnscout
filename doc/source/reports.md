@@ -5,19 +5,19 @@ Use `-p` to select the report scope; when omitted, the `default` project is used
 
 ```bash
 # Generate a report from a built-in template
-./vulnscout -p demo report summary.adoc
+./vulnscout report -p demo summary.adoc
 
 # Generate a report for one variant only
-./vulnscout -p demo -v x86 report summary.adoc
+./vulnscout report -p demo -v x86 summary.adoc
 
 # Generate a match-condition report
-./vulnscout -p demo report match_condition.adoc --condition "cvss >= 9.0"
+./vulnscout report -p demo match_condition.adoc --condition "cvss >= 9.0"
 
 # Pass a local template file path — stages and runs it in one step
-./vulnscout -p demo report /path/to/my-custom-report.adoc
+./vulnscout report -p demo /path/to/my-custom-report.adoc
 
 # Convert the output
-./vulnscout -p demo report summary.adoc --format pdf
+./vulnscout report -p demo summary.adoc --format pdf
 ```
 
 `--condition` fills the report's list of matching vulnerabilities. A match does not fail `report`; use `match-condition` to fail a CI job. `--format pdf` or `--format html` overrides the format implied by the template extension.
@@ -25,7 +25,7 @@ Use `-p` to select the report scope; when omitted, the `default` project is used
 Multiple reports can be generated in one command:
 
 ```bash
-./vulnscout -p demo report summary.adoc all_assessments.adoc
+./vulnscout report -p demo summary.adoc all_assessments.adoc
 ```
 
 Reports are written to the outputs directory (default: `.vulnscout/outputs/`).
