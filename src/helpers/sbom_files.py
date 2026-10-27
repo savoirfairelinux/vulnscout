@@ -9,7 +9,7 @@ import re
 import uuid
 
 from ..extensions import db
-from ..models import Package, PackageSourceFile, SBOMDocument, SBOMFile, SBOMPackage
+from ..models import Package, PackageSourceFile, SBOMBuild, SBOMDocument, SBOMFile, SBOMFileBuild, SBOMPackage
 from ..models.sbom_file import has_compilation_evidence
 
 logger = logging.getLogger(__name__)
@@ -78,10 +78,15 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         return
     assert len({document.scan_id for document, *_ in documents}) == 1
     document_ids = {document.id for document, *_ in documents}
+    build_ids = db.select(SBOMBuild.id).where(SBOMBuild.sbom_document_id.in_(document_ids))
+    db.session.execute(db.delete(SBOMFileBuild).where(db.or_(
+        SBOMFileBuild.file_document_id.in_(document_ids), SBOMFileBuild.build_id.in_(build_ids),
+    )))
     db.session.execute(db.delete(PackageSourceFile).where(db.or_(
         PackageSourceFile.sbom_document_id.in_(document_ids), PackageSourceFile.file_document_id.in_(document_ids),
     )))
     db.session.execute(db.delete(SBOMFile).where(SBOMFile.sbom_document_id.in_(document_ids)))
+    db.session.execute(db.delete(SBOMBuild).where(SBOMBuild.sbom_document_id.in_(document_ids)))
     canonical = {
         member["id"]: uuid.UUID(group["canonical_package_id"])
         for document, *_ in documents for group in document.jsonld_groups or []
@@ -191,7 +196,7 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         logger.warning("Incomplete SPDX build references in scan %s; compiled-source refinement disabled",
                        documents[0][0].scan_id)
     complete = resolved and all(data.get('_compilation_complete', True) for _, data, *_ in documents)
-    compiled: dict[str, list[dict]] = defaultdict(list)
+    compiled: dict[str, list[SBOMBuild]] = defaultdict(list)
     associations: dict[str, set[str]] = defaultdict(set)
     for ref in files:
         if ref not in artifacts:
@@ -202,18 +207,23 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         build_document, build_node = nodes[build]
         target_owners = {owner for target in outputs[build] for owner in owners[target]}
         target_owners.update(target for target in outputs[build] if target in packages)
-        for source in sources:
-            if source not in files or source in artifacts:
-                continue
-            evidence = {
-                "spdx_id": build, "document_name": build_document.source_name,
-                "build_type": build_node.get('build_buildType'),
-                "parameters": build_node.get('build_parameter', []), "outputs": sorted(outputs[build]),
-            }
-            evidence["compiled"] = has_compilation_evidence([evidence])
-            compiled[source].append(evidence)
+        source_refs = sources.intersection(files).difference(artifacts)
+        if not source_refs:
+            continue
+        record = SBOMBuild(
+            sbom_document_id=build_document.id, spdx_id=build, build_type=build_node.get('build_buildType'),
+            parameters=build_node.get('build_parameter', []), outputs=sorted(outputs[build]),
+            compiled=has_compilation_evidence([{"build_type": build_node.get('build_buildType')}]),
+        )
+        db.session.add(record)
+        for source in source_refs:
+            compiled[source].append(record)
             associations[source].update(target_owners)
     db.session.flush()
+    db.session.add_all(
+        SBOMFileBuild(file_document_id=files[ref].sbom_document_id, spdx_id=ref, build_id=build.id)
+        for ref, builds in compiled.items() for build in builds
+    )
     links = {(link.sbom_document_id, link.package_id): link for link in db.session.scalars(
         db.select(SBOMPackage).where(SBOMPackage.sbom_document_id.in_(document_ids))
     )}
@@ -231,11 +241,11 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
             document_id, package_id = packages[package_ref]
             if (document_id, package_id) not in links:
                 continue
-            if not has_compilation_evidence(compiled[ref]):
+            if not any(build.compiled for build in compiled[ref]):
                 links[document_id, package_id].compiled_sources_complete = False
             association_key = document_id, package_id, file.sbom_document_id, ref
             rows[association_key] = PackageSourceFile(
                 sbom_document_id=document_id, package_id=package_id,
-                file_document_id=file.sbom_document_id, spdx_id=ref, builds=compiled[ref],
+                file_document_id=file.sbom_document_id, spdx_id=ref,
             )
     db.session.add_all(rows.values())
