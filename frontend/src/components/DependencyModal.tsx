@@ -195,7 +195,6 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
     }, [visible, packageIds]);
     const dependencies = useMemo(() => outgoing.get(packageId) ?? [], [outgoing, packageId]);
     const dependents = useMemo(() => incoming.get(packageId) ?? [], [incoming, packageId]);
-    // In counts the dependencies a package pulls in, Out the packages it flows out to.
     const legend = useMemo(() => packageVariants.map(variant => ({
         ...variant,
         recorded: documents.some(doc => doc.variant_id === variant.id && doc.dependencies_recorded
@@ -259,7 +258,9 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
 
     return <section className="flex min-h-0 flex-1 flex-col" aria-label="Package dependencies">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm">
-            <span>In {dependencies.length} / Out {dependents.length}</span>
+            <span title="Deps: direct dependencies of this package. Req by: packages that directly depend on this package.">
+                Deps: {dependencies.length} / Req by: {dependents.length}
+            </span>
             {sources.length > 1 && <label className="flex items-center gap-2">SBOM source
                 <select aria-label="SBOM source" value={documentId} onChange={event => setDocumentId(event.target.value)}
                     className="max-w-56 rounded border border-neutral-600 bg-neutral-800 px-2 py-1">
@@ -294,8 +295,11 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
                             <span aria-hidden="true" className="h-3 w-3 shrink-0 rounded-sm border border-neutral-500"
                                 style={{ backgroundColor: variant.color }} />
                             <span className="min-w-0 flex-1 break-all">{variant.name}</span>
-                            <span className="tabular-nums text-neutral-400">
-                                {variant.recorded ? `In ${variant.in} / Out ${variant.out}` : 'Not recorded'}
+                            <span className="tabular-nums text-neutral-400"
+                                title={variant.recorded
+                                    ? 'Deps: direct dependencies of this package. Req by: packages that directly depend on this package.'
+                                    : undefined}>
+                                {variant.recorded ? `Deps: ${variant.in} / Req by: ${variant.out}` : 'Not recorded'}
                             </span>
                         </label>
                     </li>)}
