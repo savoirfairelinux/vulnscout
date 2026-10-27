@@ -13,6 +13,8 @@ import {
 } from '../handlers/agentQueue';
 import { bulkAssessmentKeyPrefix } from '../helpers/aiAssessment';
 import AgentConversationList from './AgentConversationList';
+import AgentCodeBlock from './AgentCodeBlock';
+import { aiContextFormAction } from '../helpers/aiContextFormAction';
 import { agentScopeEntries } from '../helpers/agentTaskScope';
 type ConnectionState = { authenticated: boolean; login: string | null; configured: boolean; token_connected: boolean; provider: string | null };
 type AgentState = ConnectionState & { messages: Message[]; model: string; usage: Usage };
@@ -21,6 +23,7 @@ type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; l
 type ModelChoice = { id: string; name: string };
 const pageLabels: Record<string, string> = { metrics: 'Overview', packages: 'SBOM', vulnerabilities: 'Vulnerabilities', scans: 'Scans', review: 'Review', exports: 'Export', settings: 'Settings', ai: 'AI context', unknown: 'Page not found' };
 const iconButton = 'flex h-9 w-9 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white';
+const CLIPBOARD_ERROR = 'Clipboard unavailable. Select the text to copy it manually.';
 const skipDiscardKey = 'vulnscout.agent.skipDiscardConfirmation';
 const connectionChangedEvent = 'vulnscout:agent-connection-changed';
 const taskAnchor = (taskId: string) => `agent-task-${taskId}`;
@@ -95,6 +98,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         ?? scope.view?.selectedVariantName ?? scope.view?.selectedProjectName;
     const largeVulnerabilityView = context.page === 'vulnerabilities' && !context.view?.openVulnerabilityId &&
         (context.view?.visibleVulnerabilityIds?.length ?? context.view?.visibleCount ?? 0) > 100;
+    const formAction = inMain ? aiContextFormAction(context) : null;
     const prompts = context.view?.openVulnerabilityId
         ? [{ label: 'Assess this vulnerability', message: assessPrompt(context.view.openVulnerabilityId) }, { label: 'Review existing assessments', message: 'Review the existing assessments for the open vulnerability in the current scope.' }]
         : [{ label: `Summarize ${pageLabel.toLowerCase()}`, message: `Summarize the current ${pageLabel.toLowerCase()} view and its project scope using VulnScout MCP.` }, { label: 'Prioritize next steps', message: 'Review the current scope and recommend the most important next steps. Do not make changes.' }];
@@ -175,7 +179,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             await navigator.clipboard.writeText(text);
             setCopied(key);
         } catch {
-            setError('Clipboard unavailable. Select the text to copy it manually.');
+            setError(CLIPBOARD_ERROR);
         }
     }
 
@@ -625,7 +629,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-neutral-300 pl-4 text-neutral-500 dark:border-neutral-600 dark:text-neutral-400">{children}</blockquote>,
                         a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-700 underline underline-offset-2 dark:text-cyan-400">{children}</a>,
                         code: ({ children }) => <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-xs dark:bg-neutral-800">{children}</code>,
-                        pre: ({ children }) => <pre className="my-3 max-w-full overflow-x-auto rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900 [&_code]:bg-transparent [&_code]:p-0">{children}</pre>,
+                        pre: ({ children }) => <AgentCodeBlock buttonClassName={iconButton} onCopyError={() => setError(CLIPBOARD_ERROR)}>{children}</AgentCodeBlock>,
                         table: ({ children }) => <div tabIndex={0} role="region" aria-label="Response table" className="my-3 max-w-full overflow-x-auto rounded border border-neutral-200 dark:border-neutral-700"><table className="w-full min-w-[360px] border-collapse text-left text-xs leading-5">{children}</table></div>,
                         th: ({ children }) => <th className="border-b border-neutral-200 bg-neutral-50 p-3 font-semibold dark:border-neutral-700 dark:bg-neutral-900">{children}</th>,
                         td: ({ children }) => <td className="border-b border-neutral-200 p-3 align-top dark:border-neutral-800">{children}</td>,
@@ -679,7 +683,8 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 <span className="truncate" title={[pageLabel, scopeLabel].filter(Boolean).join(' / ')}>{pageLabel}{scopeLabel && ` / ${scopeLabel}`}</span>
                 {inMain && context.view?.visibleVulnerabilityIds && <span className="ml-auto shrink-0 tabular-nums">{context.view.visibleVulnerabilityIds.length} displayed</span>}
             </div>
-            {inMain && (context.view?.openVulnerabilityId || (context.page === 'vulnerabilities' && Boolean(context.view?.visibleVulnerabilityIds?.length))) && <div className="flex flex-wrap gap-3 text-xs">
+            {inMain && (formAction || context.view?.openVulnerabilityId || (context.page === 'vulnerabilities' && Boolean(context.view?.visibleVulnerabilityIds?.length))) && <div className="flex flex-wrap gap-3 text-xs">
+                {formAction && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || conversation.archived} onClick={() => send(undefined, formAction.message)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />{formAction.label}</button>}
                 {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} onClick={() => assessInOwnConversations([context.view!.openVulnerabilityId!])} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
                 {context.page === 'vulnerabilities' && !!context.view?.visibleVulnerabilityIds?.length && <button type="button" onClick={() => {
                     if ((context.view?.visibleVulnerabilityIds?.length ?? 0) > 100) {

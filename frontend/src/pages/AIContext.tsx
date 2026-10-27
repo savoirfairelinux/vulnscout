@@ -228,14 +228,16 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const openLabel = selected?.kind === 'variant' ? (openVariant?.name ?? 'this variant') : (projectName || 'the project description');
     const dirty = selected?.kind === 'variant' ? variantDraft.dirty : projectDraft.dirty;
 
+    const agentSection = selected?.kind === 'variant' ? variantTab : selected ? 'project_description' : undefined;
     useEffect(() => {
         onAgentContextChange?.({
             selectedProjectId: projectId,
             selectedProjectName: projectName || undefined,
             selectedVariantId: openVariant?.id,
             selectedVariantName: openVariant?.name,
+            section: agentSection,
         });
-    }, [projectId, projectName, openVariant, onAgentContextChange]);
+    }, [projectId, projectName, openVariant, agentSection, onAgentContextChange]);
 
     const buildSaveTarget = (): SaveTarget | null => {
         if (!projectId || !selected) return null;

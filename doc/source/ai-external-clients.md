@@ -104,6 +104,7 @@ Once configured, the agent can call these assessment and context tools
 | `list_variants`            | List every variant across all projects                      |
 | `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, codebase source, environment, STRIDE-rendered threat model and risks, other info) |
 | `list_codebase_files` / `read_codebase_file` / `search_codebase` | Browse, read and search uploaded codebase references for a variant, including inside the container |
+| `get_ai_context_form_guide` | Return the AI Context form guide: what each field and table expects, and the copy-ready reply format used to help fill it |
 | `get_project_context` / `update_project_context` | Read / replace a project's description |
 | `update_variant_context`   | Replace a variant's text context fields (description, codebase path, environment, other info) — full replacement, not a partial update; the threat model, risks and codebase source can only be edited on the AI Context page. A variant with no context yet is created with codebase source paths when a codebase path is given, otherwise references |
 | `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |

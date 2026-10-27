@@ -163,7 +163,7 @@ an open vulnerability contributes its matching variant UUIDs.
 | Scans | Displayed scan IDs, open result and scan options |
 | Export | Wizard step, type, mode, enabled document groups and selected variants/formats |
 | Settings | Active tab |
-| AI Context | Selected project and variant names and IDs |
+| AI Context | Selected project and variant names and IDs, and the open page or tab |
 
 Unsaved form text and API keys are not included automatically.
 
