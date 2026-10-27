@@ -34,6 +34,13 @@ JSON listings, generated completion scripts, captured run IDs, configuration
 values, status files, and exported SBOMs/reports are never colorized. Third-party
 tools retain their own output behavior.
 
+Flask application and Werkzeug server logs use the same terminal detection and
+opt-outs. Debug messages are dim gray, information is cyan, warnings are yellow,
+errors are red, and critical messages are bold red. Werkzeug's existing
+HTTP-status highlighting is retained in terminals and stripped from plain
+output. Log levels, message text, and tracebacks are unchanged. Explicit logging
+handlers configured by a deployment take precedence over these defaults.
+
 ## Container Lifecycle
 
 When the container starts with no arguments, it enters **daemon mode** — it stays alive and waits for commands sent via `docker exec` (or `podman exec`). This is the mode used by the `./vulnscout` host wrapper.
