@@ -1,6 +1,14 @@
 import json
+from pathlib import Path
 from typing import Optional
 from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+
+
+_FORM_GUIDE = Path(__file__).resolve().parent.parent / "ai_context_form_guide.md"
+
+
+def _ai_context_form_guide_impl() -> str:
+    return _FORM_GUIDE.read_text(encoding="utf-8")
 
 
 def _codebase_source(ctx: dict) -> str | None:
@@ -284,6 +292,19 @@ def register_tools(server, client: VulnScoutClient) -> None:
         return _codebase_source_impl(client, variant_id, file_id, {
             "operation": "search", "query": query, "pattern": pattern, "max_results": max_results,
         })
+
+    @server.tool()
+    def get_ai_context_form_guide() -> str:
+        """Get the field-by-field guide to the AI Context page form.
+
+        Use this when a user asks for help understanding or filling the AI
+        Context form (project description, or a variant's Context, System,
+        Threat model and Risks tabs). Returns, for every field, its exact
+        label, purpose, expected content and an example, plus required cells,
+        row IDs, STRIDE categories, ratings, limits and the copy-ready reply
+        format. Read-only and static: it does not read or change any context.
+        """
+        return _ai_context_form_guide_impl()
 
     @server.tool()
     def get_project_context(project_id: str) -> str:
