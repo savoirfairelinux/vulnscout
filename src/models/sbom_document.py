@@ -11,7 +11,7 @@ from ..extensions import db, Base
 from . import Variant, Scan
 
 if typing.TYPE_CHECKING:
-    from . import SBOMPackage, SBOMObservation, PackageDependency, SBOMFile
+    from . import SBOMPackage, SBOMObservation, PackageDependency, SBOMFile, SBOMBuild
 
 
 class SBOMDocument(Base):
@@ -28,6 +28,7 @@ class SBOMDocument(Base):
     dependencies_recorded: Mapped[bool] = mapped_column(default=False, server_default=false())
     jsonld_groups: Mapped[list[dict] | None] = mapped_column(JSON)
     files: Mapped[list["SBOMFile"]] = relationship(back_populates="sbom_document", cascade="all, delete-orphan")
+    builds: Mapped[list["SBOMBuild"]] = relationship(back_populates="sbom_document", cascade="all, delete-orphan")
 
     scan: Mapped["Scan"] = relationship("Scan", back_populates="sbom_documents")
     sbom_packages: Mapped[list["SBOMPackage"]] = relationship(

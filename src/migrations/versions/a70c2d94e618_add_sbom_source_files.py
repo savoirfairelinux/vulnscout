@@ -34,7 +34,6 @@ def upgrade():
             sa.Column('package_id', sa.Uuid(), primary_key=True),
             sa.Column('file_document_id', sa.Uuid(), primary_key=True),
             sa.Column('spdx_id', sa.Text(), primary_key=True),
-            sa.Column('builds', sa.JSON(), nullable=False),
             sa.ForeignKeyConstraint(
                 ['sbom_document_id', 'package_id'], ['sbom_packages.sbom_document_id', 'sbom_packages.package_id'],
                 ondelete='CASCADE',
@@ -48,10 +47,39 @@ def upgrade():
         index['name'] for index in sa.inspect(connection).get_indexes('package_source_files')
     }:
         op.create_index('ix_package_source_files_file', 'package_source_files', ['file_document_id', 'spdx_id'])
+    if not sa.inspect(connection).has_table('sbom_builds'):
+        op.create_table(
+            'sbom_builds',
+            sa.Column('id', sa.Integer(), primary_key=True),
+            sa.Column('sbom_document_id', sa.Uuid(), sa.ForeignKey('sbom_documents.id'), nullable=False),
+            sa.Column('spdx_id', sa.Text(), nullable=False),
+            sa.Column('build_type', sa.Text(), nullable=True),
+            sa.Column('parameters', sa.JSON(), nullable=False),
+            sa.Column('outputs', sa.JSON(), nullable=False),
+            sa.Column('compiled', sa.Boolean(), nullable=False),
+            sa.UniqueConstraint('sbom_document_id', 'spdx_id'),
+        )
+    if not sa.inspect(connection).has_table('sbom_file_builds'):
+        op.create_table(
+            'sbom_file_builds',
+            sa.Column('file_document_id', sa.Uuid(), primary_key=True),
+            sa.Column('spdx_id', sa.Text(), primary_key=True),
+            sa.Column('build_id', sa.Integer(), sa.ForeignKey('sbom_builds.id', ondelete='CASCADE'), primary_key=True),
+            sa.ForeignKeyConstraint(
+                ['file_document_id', 'spdx_id'], ['sbom_files.sbom_document_id', 'sbom_files.spdx_id'],
+                ondelete='CASCADE',
+            ),
+        )
+    if 'ix_sbom_file_builds_build' not in {
+        index['name'] for index in sa.inspect(connection).get_indexes('sbom_file_builds')
+    }:
+        op.create_index('ix_sbom_file_builds_build', 'sbom_file_builds', ['build_id'])
 
 
 def downgrade():
     op.drop_table('package_source_files')
+    op.drop_table('sbom_file_builds')
+    op.drop_table('sbom_builds')
     op.drop_table('sbom_files')
     with op.batch_alter_table('sbom_packages') as batch:
         batch.drop_column('compiled_sources_complete')
