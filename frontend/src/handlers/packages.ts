@@ -17,7 +17,7 @@ export type SourceFile = {
 };
 
 export const hasCompilationEvidence = (file: SourceFile): boolean => file.builds.some(build =>
-    build.compiled !== false && !/^https?:\/\/openembedded\.org\/bitbake\//.test(String(build.build_type ?? '')));
+    build.compiled === true);
 
 type Package = PackageVersionMetadata & {
     id: string;

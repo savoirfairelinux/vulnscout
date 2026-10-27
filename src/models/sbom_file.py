@@ -6,7 +6,7 @@
 from typing import Any, TYPE_CHECKING, TypedDict
 import uuid
 
-from sqlalchemy import ForeignKey, ForeignKeyConstraint, Index, JSON, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, ForeignKeyConstraint, func, Index, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import Base, db
@@ -30,12 +30,23 @@ class SourceFileEvidence(TypedDict):
     builds: list[dict[str, Any]]
 
 
+class SourceFileCounts(TypedDict):
+    source_file_count: int
+    compiled_source_file_count: int
+
+
 def has_compilation_evidence(builds: list[dict[str, Any]]) -> bool:
-    """Recipe task inputs alone do not establish which source files were compiled."""
+    """Recognize West's compiler targets, not arbitrary build or generator tasks."""
     return any(
-        build.get("compiled", True) and not str(build.get("build_type", "")).startswith((
-            "http://openembedded.org/bitbake/", "https://openembedded.org/bitbake/",
-        ))
+        build.get("compiled", True) is True
+        and build.get("build_type") == "urn:spdx.dev:zephyr-cmake"
+        and isinstance(build.get("parameters"), list)
+        and any(
+            isinstance(parameter, dict)
+            and parameter.get("key") in ("compile:flags:C", "compile:flags:CXX", "compile:flags:ASM")
+            and isinstance(parameter.get("value"), str)
+            for parameter in build["parameters"]
+        )
         for build in builds
     )
 
@@ -116,25 +127,67 @@ class PackageSourceFile(Base):
     file: Mapped["SBOMFile"] = relationship(back_populates="package_links")
 
     @staticmethod
-    def evidence_for_documents(document_ids: set[uuid.UUID]) -> dict[uuid.UUID, list[SourceFileEvidence]]:
+    def counts_for_documents(
+        document_ids: set[uuid.UUID], package_ids: set[uuid.UUID] | None = None,
+    ) -> dict[uuid.UUID, SourceFileCounts]:
+        """Count distinct file records and compiled paths without fetching JSON evidence."""
+        if not document_ids or package_ids == set():
+            return {}
+        filters = [PackageSourceFile.sbom_document_id.in_(document_ids)]
+        if package_ids is not None:
+            filters.append(PackageSourceFile.package_id.in_(package_ids))
+        associations = db.select(
+            PackageSourceFile.package_id, PackageSourceFile.file_document_id, PackageSourceFile.spdx_id,
+        ).where(*filters).distinct().subquery()
+        counts = {
+            package_id: SourceFileCounts(source_file_count=count, compiled_source_file_count=0)
+            for package_id, count in db.session.execute(
+                db.select(associations.c.package_id, func.count()).group_by(associations.c.package_id)
+            )
+        }
+        compiled = db.select(SBOMFileBuild.build_id).join(SBOMBuild).where(
+            SBOMFileBuild.file_document_id == SBOMFile.sbom_document_id,
+            SBOMFileBuild.spdx_id == SBOMFile.spdx_id,
+            SBOMBuild.compiled.is_(True),
+        ).exists()
+        paths = db.select(associations.c.package_id, SBOMFile.path).join(SBOMFile, db.and_(
+            associations.c.file_document_id == SBOMFile.sbom_document_id,
+            associations.c.spdx_id == SBOMFile.spdx_id,
+        )).where(compiled).distinct().subquery()
+        for package_id, count in db.session.execute(
+            db.select(paths.c.package_id, func.count()).group_by(paths.c.package_id)
+        ):
+            counts[package_id]["compiled_source_file_count"] = count
+        return counts
+
+    @staticmethod
+    def evidence_for_documents(
+        document_ids: set[uuid.UUID], package_ids: set[uuid.UUID] | None = None,
+    ) -> dict[uuid.UUID, list[SourceFileEvidence]]:
         """Read only file associations owned by the selected package documents."""
         result: dict[uuid.UUID, dict[tuple, SourceFileEvidence]] = {}
-        if not document_ids:
+        if not document_ids or package_ids == set():
             return {}
+        filters = [PackageSourceFile.sbom_document_id.in_(document_ids)]
+        if package_ids is not None:
+            filters.append(PackageSourceFile.package_id.in_(package_ids))
         build_links = list(db.session.execute(
             db.select(SBOMFileBuild.file_document_id, SBOMFileBuild.spdx_id, SBOMFileBuild.build_id)
             .join(PackageSourceFile, db.and_(
                 PackageSourceFile.file_document_id == SBOMFileBuild.file_document_id,
                 PackageSourceFile.spdx_id == SBOMFileBuild.spdx_id,
             ))
-            .where(PackageSourceFile.sbom_document_id.in_(document_ids))
+            .where(*filters)
             .distinct()
         ))
         build_ids = {build_id for _, _, build_id in build_links}
         builds = {
             build.id: {
                 "spdx_id": build.spdx_id, "document_name": document_name, "build_type": build.build_type,
-                "parameters": build.parameters, "outputs": build.outputs, "compiled": build.compiled,
+                "parameters": build.parameters, "outputs": build.outputs,
+                "compiled": has_compilation_evidence([{
+                    "build_type": build.build_type, "parameters": build.parameters, "compiled": build.compiled,
+                }]),
             }
             for build, document_name in db.session.execute(
                 db.select(SBOMBuild, SBOMDocument.source_name)
@@ -154,7 +207,7 @@ class PackageSourceFile(Base):
             .join(SBOMDocument, SBOMFile.sbom_document_id == SBOMDocument.id)
             .join(Scan, SBOMDocument.scan_id == Scan.id)
             .join(Variant, Scan.variant_id == Variant.id)
-            .where(PackageSourceFile.sbom_document_id.in_(document_ids))
+            .where(*filters)
         )
         for link, file, document_name, scan_id, variant_id, variant_name in rows:
             files = result.setdefault(link.package_id, {})
