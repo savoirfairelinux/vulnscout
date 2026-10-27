@@ -387,7 +387,9 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-Export format `2.0` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields.
+Export format `2.0` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields,
+and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
+contents are not exported, and import ignores `files`.
 Every entry is imported through the editor path, so it needs a valid `codebase_source` and a non-empty threat model;
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 
@@ -421,7 +423,8 @@ Every entry is imported through the editor path, so it needs a valid `codebase_s
         "risks": [
           {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""}
         ]
-      }
+      },
+      "files": [{"original_name": "updater-src.zip", "description": "text or null"}]
     }]
   }]
 }
@@ -456,7 +459,7 @@ Each archive member is capped at 10 MiB, and total expanded archive content is c
 Unsafe paths, duplicate file paths, encrypted ZIP members, links,
 sparse files and special entries are rejected. Archives are never extracted or executed.
 Upload/delete updates the variant context timestamp, marking older pending AI assessments outdated.
-Context JSON import/export includes context data only, not uploaded references; text imports leave existing uploads intact.
+Context JSON import/export does not include uploaded file contents; export lists them by name and description, and imports leave existing uploads intact.
 Upload returns `201` with the file's `id`, `original_name`, and `description`; delete returns an empty `204` response.
 Invalid uploads/UUIDs return `400`, missing variants/references `404`, and upload storage failures `500`.
 

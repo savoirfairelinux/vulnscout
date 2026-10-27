@@ -245,8 +245,9 @@ archive member paths and line numbers.
 References are stored under `VULNSCOUT_CACHE_DIR/context-files` using opaque IDs
 and persist with the cache volume. Delete removes the reference; deleting its
 variant/project also cleans up the associated storage. Text context JSON
-import/export does **not** include source files; importing text leaves existing
-uploads intact. Upload references separately when moving to another instance.
+export lists each variant's uploads by name and description but does **not**
+include their contents; importing text leaves existing uploads intact. Upload
+references separately when moving to another instance.
 
 Only upload code you are authorized to share with the selected AI provider,
 and remove credentials, secrets and unrelated private files first. Uploaded

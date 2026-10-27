@@ -25,6 +25,12 @@ from ..helpers.stride_model import SYSTEM_KEYS, StrideValidationError, empty_str
 EXPORT_VERSION = "2.0"
 
 
+class ExportedFile(TypedDict):
+    """Uploaded codebase reference listed by name; the content is not exported."""
+    original_name: str
+    description: Optional[str]
+
+
 class VariantEntry(TypedDict):
     """One exported variant's context (nested under its project)."""
     variant_name: str
@@ -35,6 +41,7 @@ class VariantEntry(TypedDict):
     codebase_source: str
     system: dict
     stride_model: dict
+    files: list[ExportedFile]
 
 
 class ProjectEntry(TypedDict):
@@ -73,6 +80,10 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
         "environment": vc.environment if vc else None,
         "other_info": vc.other_info if vc else None,
         **editor,  # type: ignore[typeddict-item]
+        "files": [
+            {"original_name": f.original_name, "description": f.description}
+            for f in sorted(vc.files, key=lambda f: f.original_name)
+        ] if vc else [],
     }
 
 
@@ -311,7 +322,10 @@ def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[st
 
 
 def _editor_payload(entry: dict) -> dict:
-    """Map a 2.0 export entry onto the ``save_editor`` payload."""
+    """Map a 2.0 export entry onto the ``save_editor`` payload.
+
+    ``files`` only lists upload names, so it is not imported.
+    """
     return {
         "variant_description": entry.get('variant_description'),
         "environment": entry.get('environment'),

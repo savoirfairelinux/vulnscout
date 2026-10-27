@@ -612,6 +612,10 @@ SCHEMAS: dict[str, Any] = {
         "variants": _array(_object({
             "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS, "codebase_source": _CODEBASE_SOURCE,
             "system": _ref("ContextSystem"), "stride_model": _ref("StrideModel"),
+            "files": _array(
+                _object({"original_name": _STRING, "description": _TEXT}, ("original_name", "description")),
+                description="Uploaded codebase references by name; contents are not exported and import ignores it.",
+            ),
         }, ("variant_name",))),
     }, ("project_name", "project_description", "variants")),
     "ContextExport": _object({
