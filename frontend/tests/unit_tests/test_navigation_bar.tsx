@@ -46,13 +46,10 @@ describe('NavigationBar', () => {
         expect(settingsLink).toHaveAttribute('href', ROUTES.settings);
     });
 
-    test('opens Swagger UI on the configured API server in a new tab', () => {
+    test('does not show an API documentation link', () => {
         renderAt('/');
 
-        const apiLink = screen.getByRole('link', { name: 'API documentation' });
-        expect(apiLink).toHaveAttribute('href', 'http://localhost/api/openapi/ui');
-        expect(apiLink).toHaveAttribute('target', '_blank');
-        expect(apiLink).toHaveAttribute('rel', 'noopener noreferrer');
+        expect(screen.queryByRole('link', { name: 'API documentation' })).not.toBeInTheDocument();
     });
 
     test('marks the current page link with aria-current', () => {
