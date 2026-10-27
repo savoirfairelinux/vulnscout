@@ -287,3 +287,49 @@ class TestUpdateVariantContextImpl:
             )
             result = _update_variant_context_impl(client, "v1", environment="x")
         assert result == "Error: Variant not found"
+
+
+class TestAiContextFormGuide:
+    LABELS = (
+        "Project description", "Variant description", "Codebase source", "Codebase references",
+        "Codebase paths", "Environment", "Other information", "System scope and assets",
+        "Actors and access", "Entry points and data flows", "Trust boundaries", "Components",
+        "Interactions", "Description / role", "Trust zone", "Interface / protocol", "Data / commands",
+        "Trust boundary", "Threats", "STRIDE category", "Targets", "Risks", "Likelihood", "Impact",
+        "Mitigation", "Residual risk / decision", "Not rated", "Add component", "Add interaction",
+        "Add threat", "Add risk", "Save changes",
+    )
+
+    def test_guide_matches_the_shipped_form(self):
+        from pathlib import Path
+        from src.helpers.stride_model import CATEGORY_LABELS, MAX_ROWS, MAX_TEXT, RATING_LABELS
+        from vulnscout_mcp.tools.context import _ai_context_form_guide_impl
+
+        guide = _ai_context_form_guide_impl()
+        root = Path(__file__).resolve().parents[2] / "frontend/src"
+        form = "\n".join(path.read_text() for path in [
+            *(root / "components/aiContext").glob("*.tsx"), root / "helpers/strideModel.ts",
+        ])
+        for label in self.LABELS:
+            assert label in guide, label
+            assert label in form, label
+        assert all(label in guide for label in CATEGORY_LABELS.values())
+        assert all(label in guide for label in RATING_LABELS.values())
+        assert f"{MAX_TEXT:,}" in guide and str(MAX_ROWS) in guide
+
+    def test_guide_defines_copy_ready_reply_without_saving(self):
+        from vulnscout_mcp.tools.context import _ai_context_form_guide_impl
+
+        guide = _ai_context_form_guide_impl()
+        assert all(term in guide for term in (
+            "```text", "[confirm:", "update_variant_context", "unsaved", "C1: ",
+        ))
+
+    def test_real_server_registers_guide_tool(self, monkeypatch):
+        import asyncio
+        from vulnscout_mcp.server import create_server
+
+        monkeypatch.delenv("VULNSCOUT_AGENT_SCOPE", raising=False)
+        tools = asyncio.run(create_server(BASE_URL).list_tools())
+        guide = next(tool for tool in tools if tool.name == "get_ai_context_form_guide")
+        assert "AI Context" in guide.description

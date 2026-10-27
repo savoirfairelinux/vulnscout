@@ -124,6 +124,7 @@ python vulnscout_mcp/server.py
 | `list_codebase_files`          | List paths/sizes in a variant upload; follow `next_offset` for pagination |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
+| `get_ai_context_form_guide`    | Return the static AI Context form guide (fields, tables, STRIDE categories, limits) and the copy-ready reply format for helping users fill it |
 | `get_project_context`          | Get context fields for a project by UUID                             |
 | `update_project_context`       | Update the description of a project                                  |
 | `update_variant_context`       | Replace the text context fields (`variant_description`, `codebase_path`, `environment`, `other_info`) of a variant by UUID (full replacement; omitted fields are cleared). The threat model, risks and codebase source are edited in the AI Context page; a variant with no context yet is created with codebase source `paths` when `codebase_path` is given, else `references` |
