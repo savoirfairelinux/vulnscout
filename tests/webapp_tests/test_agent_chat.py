@@ -93,6 +93,12 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     assert all(term in instructions for term in ("next_offset", "max_depth=0", "runtime usage",
                                                  "backports", "unknown", "no web research", "read-only"))
     assert all(term in instructions for term in ("STRIDE", "T# threats", "corroborates"))
+    assert "get_ai_context_form_guide" in agent.READ_TOOLS
+    assert "get_ai_context_form_guide" not in agent.WRITE_TOOLS
+    assert "mcp:vulnscout-get_ai_context_form_guide" in captured["available_tools"]
+    assert all(term in instructions for term in (
+        "get_ai_context_form_guide", "copy-ready", "view.section", "unsaved", "explicitly asks to save",
+    ))
 
 
 def test_agent_rejects_remote_requests(client):

@@ -449,6 +449,62 @@ test('keyboard send renders structured Markdown, usage, and response copy', asyn
     expect(screen.getByText('SDK cost 0.5000')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy response' }));
     await waitFor(() => expect(copied).toEqual([reply]));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy code block' }));
+    await waitFor(() => expect(copied).toEqual([reply, 'log']));
+    expect(screen.getByRole('button', { name: 'Copy code block' })).toHaveAttribute('title', 'Copied');
+});
+
+test('code block copy reports an unavailable clipboard', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('denied'); } } });
+    global.fetch = async input => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) return jsonResponse({ reply: '```text\nvalue\n```', model: 'auto', usage });
+        return jsonResponse(signedIn);
+    };
+
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    await screen.findByRole('button', { name: 'Summarize vulnerabilities' });
+    const composer = screen.getByRole('textbox', { name: 'Message the agent' });
+    fireEvent.change(composer, { target: { value: 'Give a value' } });
+    fireEvent.keyDown(composer, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy code block' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Clipboard unavailable');
+});
+
+test('AI Context page offers help for the open form tab', async () => {
+    const requests: { message: string }[] = [];
+    global.fetch = async (input, options) => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        if (path.endsWith('/messages')) {
+            requests.push(JSON.parse(String(options?.body)));
+            return jsonResponse({ reply: 'Here are values', model: 'auto', usage });
+        }
+        return jsonResponse(signedIn);
+    };
+    const aiView = { selectedProjectId: 'p1', selectedProjectName: 'Gateway', selectedVariantId: 'v1', selectedVariantName: 'Board A' };
+    const { rerender } = render(<AgentChat onClose={() => undefined} context={{ page: 'ai', view: { ...aiView, section: 'threat_model' } }} />);
+
+    const help = await screen.findByRole('button', { name: 'Help fill this tab' });
+    await waitFor(() => expect(help).toBeEnabled());
+    fireEvent.click(help);
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].message).toContain('Threat model tab of the AI Context form for variant "Board A" of project "Gateway"');
+    expect(requests[0].message).toContain('get_ai_context_form_guide');
+    await screen.findByText('Here are values');
+
+    rerender(<AgentChat onClose={() => undefined} context={{ page: 'ai', view: { selectedProjectId: 'p1', selectedProjectName: 'Gateway', section: 'project_description' } }} />);
+    const projectHelp = await screen.findByRole('button', { name: 'Help write project description' });
+    await waitFor(() => expect(projectHelp).toBeEnabled());
+    fireEvent.click(projectHelp);
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1].message).toContain('Project description in the AI Context form for project "Gateway"');
+
+    rerender(<AgentChat onClose={() => undefined} context={{ page: 'ai', view: aiView }} />);
+    expect(screen.queryByRole('button', { name: /^Help (fill|write)/ })).not.toBeInTheDocument();
+    rerender(<AgentChat onClose={() => undefined} context={context} />);
+    expect(screen.queryByRole('button', { name: /^Help (fill|write)/ })).not.toBeInTheDocument();
 });
 
 test('model rejection restores the choice and retry reloads the connection', async () => {

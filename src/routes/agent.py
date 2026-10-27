@@ -33,6 +33,7 @@ READ_TOOLS = (
     "list_custom_assessments",
     "list_codebase_files", "read_codebase_file", "search_codebase",
     "list_dependency_documents", "list_dependency_packages", "get_package_dependencies",
+    "get_ai_context_form_guide",
 )
 WRITE_TOOLS = (
     "write_assessment", "update_ai_assessment", "update_project_context",
@@ -689,6 +690,12 @@ async def _reply(conversation, message, path, model, scope, publish=None):
                 "You have no web research tools here; disclose that limitation and request authoritative "
                 "support evidence or suggest the external sbom-dependencies skill for live research. "
                 "Dependency and lifecycle analysis is read-only; it must not create VEX assessments. "
+                "When asked to help fill or understand the AI Context form, call get_ai_context_form_guide "
+                "and follow it: read the variant's saved context and use uploads and SBOM packages as "
+                "evidence, focus on the tab in view.section, ask for missing facts one topic at a time, and "
+                "answer with copy-ready values per field label. You cannot see the user's unsaved edits. "
+                "Form help is guidance only: do not call update_project_context or update_variant_context "
+                "unless the user explicitly asks to save. "
                 "Explain what you changed. If a tool returns an error, report it; do not invent results."
             )},
             "enable_config_discovery": False,

@@ -315,7 +315,11 @@ describe('AIContext page', () => {
         await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(1));
         await waitFor(() => expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
             selectedProjectId: 'p1', selectedProjectName: 'Project A',
-            selectedVariantId: 'v1', selectedVariantName: 'Variant 1',
+            selectedVariantId: 'v1', selectedVariantName: 'Variant 1', section: 'context',
+        })));
+        fireEvent.click(variantTab('Threat model'));
+        await waitFor(() => expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
+            selectedVariantId: 'v1', section: 'threat_model',
         })));
 
         agentWrite('update_variant_context');
@@ -323,7 +327,7 @@ describe('AIContext page', () => {
 
         await openProjectDescription();
         expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
-            selectedProjectId: 'p1', selectedVariantId: undefined,
+            selectedProjectId: 'p1', selectedVariantId: undefined, section: 'project_description',
         }));
         backend.description = 'Agent v2';
         agentWrite('update_project_context');

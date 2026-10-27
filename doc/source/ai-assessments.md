@@ -187,7 +187,8 @@ other targets and approved assessments are preserved.
 Responses stream as text arrives. Expand **Activity** to inspect tool names and
 their running, completed, or failed status. This log does not expose internal
 reasoning, tool arguments, or raw tool results; it lasts until the page reloads.
-Each assistant response has a copy action.
+Each assistant response has a copy action, and each code block in a response
+has its own **Copy code block** button.
 
 Expand **Conversation usage** below the composer to inspect cumulative
 input/output tokens when provided by the SDK and reported usage cost. The UI
@@ -238,6 +239,19 @@ to Threats by STRIDE category, and cite the IDs. Mitigations and residual
 decisions in Risks are treated as declarations: they can lower the impact, but
 support `not_affected` only when source or configuration evidence confirms
 them.
+
+### Getting help from the agent
+
+With the agent chat open on the AI Context page, **Help write project
+description** (on the project page) or **Help fill this tab** (on a variant tab)
+asks the embedded Agent to walk you through the open page. The Agent reads the
+form guide (`get_ai_context_form_guide`), the variant's saved context, uploaded
+references and SBOM dependencies, asks for missing facts, and replies with
+copy-ready values: one code block per text field, and one entry per table row
+naming the exact option to pick (for example `C1: OTA updater`). Each code block
+has its own copy button. Unconfirmed values are marked `[confirm: ...]`. The
+Agent does not save the form; paste the values and click **Save changes**. It
+only sees saved context, not unsaved edits.
 
 ## Codebase references on the AI Context page
 
