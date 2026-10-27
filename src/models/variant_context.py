@@ -290,6 +290,8 @@ class VariantContext(Base):
             codebase_path=codebase_path,
             environment=environment,
             other_info=other_info,
+            # Same default as the AI Context page unless the caller supplied paths.
+            codebase_source="paths" if codebase_path is not None else "references",
             updated_at=datetime.now(timezone.utc) if has_content else None,
         )
         db.session.add(vc)
