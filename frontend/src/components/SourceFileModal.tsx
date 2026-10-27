@@ -70,7 +70,7 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
                             <span className="font-mono">{file.path}</span>
                             <span className="ml-3 text-sm text-cyan-300">
                                 {hasCompilationEvidence(file) ? 'Build input'
-                                    : file.builds.length > 0 ? 'Recipe input (not compilation)' : 'Listed only'}
+                                    : file.builds.length > 0 ? 'Build input (not proven compilation)' : 'Listed only'}
                             </span>
                         </summary>
                         <dl className="mt-3 space-y-1 break-all text-sm">
