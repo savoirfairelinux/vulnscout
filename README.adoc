@@ -156,6 +156,117 @@ link:doc/source/container-entrypoint.md[Using Container Entrypoint].
 Migrating older automation? See
 link:doc/source/cli-migration.md[Migrating from Legacy CLI Flags].
 
+== Essential CLI Commands
+
+These are task examples, not a script to run from top to bottom. Replace the
+sample paths, project `demo`, and variant `x86` with your own.
+
+=== Import Inputs
+
+Import an SPDX SBOM together with its CVE-check findings, or use a CycloneDX SBOM:
+
+[source,bash]
+----
+./vulnscout add -p demo -v x86 \
+  --spdx /path/to/sbom.spdx.json --cve-check /path/to/cve-check.json
+
+./vulnscout add -p demo -v x86 --cdx /path/to/bom.json
+----
+
+Options can repeat or mix in one import. See
+link:doc/source/cli-inputs.md[Input Sources] for Yocto VEX, OpenVEX, Grype,
+archives, and supported filenames.
+
+=== Scan and Refresh
+
+Scanning discovers findings; refreshing enriches findings already recorded.
+Importing does not automatically run either operation.
+
+[source,bash]
+----
+./vulnscout scan -p demo -v x86 grype osv
+./vulnscout refresh -p demo -v x86
+----
+
+Use `all` instead of `grype osv` to run every scanner. Scanners may require
+network access and advisory database downloads; see
+link:doc/source/vulnerability-scanning.md[Vulnerability Scanning] and
+link:doc/source/vulnerability-data.md[Refresh Vulnerability Data].
+
+=== Generate Reports and Export Results
+
+[source,bash]
+----
+./vulnscout report -p demo -v x86 summary.adoc
+./vulnscout export -p demo -v x86 spdx cdx openvex
+----
+
+Outputs are written to `.vulnscout/outputs/` by default. Add `--format pdf` to
+`report` for PDF output. See link:doc/source/reports.md[Report Generation] and
+link:doc/source/exports.md[Exporting SBOM Files].
+
+=== Exchange Custom Assessments
+
+Back up or restore a project's assessments with VulnScout JSON, or exchange
+one variant's custom assessments as OpenVEX:
+
+[source,bash]
+----
+./vulnscout export -p demo custom-data
+./vulnscout import -p demo custom-data \
+  /path/to/custom_vulnscout_data_all.json
+
+./vulnscout export -p demo -v x86 custom-openvex
+./vulnscout import -p demo -v x86 custom-openvex \
+  /path/to/custom_openvex_x86.json
+----
+
+The JSON examples cover all project variants. `import custom-data` restores
+the variants named in the file and does not accept `-v`. See
+link:doc/source/cli-assessments.md[Exporting and Importing Custom Assessments]
+for timestamps and merge behavior.
+
+=== Enforce a CI Policy
+
+Run the policy check *after* generating required reports and exports, so a
+match does not prevent artifact creation in a job that stops on errors:
+
+[source,bash]
+----
+./vulnscout match-condition -p demo -v x86 \
+  "cvss >= 7.0 and (pending or affected)"
+----
+
+Exit codes are *0* for no match, *2* for a policy match, and *1* for an execution
+error. This checks stored data; it does not scan or refresh it. See
+link:doc/source/ci_conditions.md[Writing Match Conditions].
+
+=== Help, Lifecycle, and Configuration
+
+[source,bash]
+----
+./vulnscout --help
+./vulnscout scan --help
+./vulnscout list projects
+----
+
+Most commands start the container automatically. On a fresh installation,
+run `start` before the first `config set` to initialize the configuration:
+
+[source,bash]
+----
+./vulnscout start
+./vulnscout config set GRYPE_MEMLIMIT 6GiB
+./vulnscout config get GRYPE_MEMLIMIT
+./vulnscout config list
+----
+
+Use `config unset GRYPE_MEMLIMIT` to remove that override. Run
+`./vulnscout restart` after changes that affect the running web server;
+`./vulnscout stop` stops and removes the container without deleting saved data.
+See link:doc/source/cli-configuration.md[Container Lifecycle and Configuration]
+for runtime settings and which changes require a restart.
+
 == Licence
 
 Copyright (C) 2017-2026 Savoir-faire Linux, Inc.
