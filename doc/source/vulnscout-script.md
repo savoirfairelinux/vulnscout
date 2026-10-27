@@ -410,7 +410,11 @@ advisories without affected-file information cannot use this refinement.
 This does not evaluate Kconfig expressions or infer release versions from Git
 revisions. Yocto BitBake recipe inputs and SPDX 2 package/file inventories
 remain available for inspection but cannot by themselves enable compiled-source
-refinement. See [Recorded files](interactive-mode.md#recorded-files).
+refinement. Compilation proof currently recognizes West Zephyr CMake compiler
+targets with recorded compiler flags, not unknown, packaging, or generator-only
+tasks. Unresolved containment and unaccounted artifact/package inputs disable
+refinement rather than treating a partial source list as complete.
+See [Recorded files](interactive-mode.md#recorded-files).
 
 ```bash
 ./vulnscout -p demo -v x86 scan sbom-cve-check

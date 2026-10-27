@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
-import Packages, { type Package, type SourceFile } from '../../src/handlers/packages';
+import Packages, { hasCompilationEvidence, type Package, type SourceFile } from '../../src/handlers/packages';
 import SourceFileModal from '../../src/components/SourceFileModal';
 import TablePackages from '../../src/pages/TablePackages';
 
@@ -10,7 +10,7 @@ const file: SourceFile = {
     document_id: 'document', document_name: 'zephyr.jsonld',
     scan_id: 'scan', variant_id: 'variant', variant_name: 'default',
     properties: { verifiedUsing: [{ algorithm: 'sha256', hashValue: '012345' }] },
-    builds: [{ spdx_id: 'compile-lz4', build_type: 'urn:compile', outputs: ['liblz4.a'] }],
+    builds: [{ spdx_id: 'compile-lz4', build_type: 'urn:spdx.dev:zephyr-cmake', compiled: true, outputs: ['liblz4.a'] }],
 };
 const pkg: Package = {
     id: 'lz4@1.0', name: 'lz4', version: '1.0', cpe: [], purl: [], vulnerabilities: {}, maxSeverity: {},
@@ -104,7 +104,22 @@ test.each([true, false])('recipe inputs do not claim compilation (explicit flag:
     });
     render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
     expect(await screen.findByText('fix.patch')).toBeTruthy();
-    expect(screen.getByText('Recipe input (not compilation)')).toBeTruthy();
+    expect(screen.getByText('Build input (not proven compilation)')).toBeTruthy();
+    expect(screen.getByText('Recorded files: 1; compiled source files: 0.')).toBeTruthy();
+});
+
+test.each([undefined, false, 'true', 1])('missing or non-boolean compilation proof is not accepted (%s)', compiled => {
+    expect(hasCompilationEvidence({ ...file, builds: [{ build_type: 'urn:packaging', compiled }] })).toBe(false);
+});
+
+test('packaging inputs are not shown as compiled source files', async () => {
+    jest.spyOn(Packages, 'sourceFiles').mockResolvedValue({
+        files: [{ ...file, path: 'manifest.json', builds: [{ build_type: 'urn:packaging', compiled: false }] }],
+        complete: false,
+    });
+    render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
+    expect(await screen.findByText('manifest.json')).toBeTruthy();
+    expect(screen.getByText('Build input (not proven compilation)')).toBeTruthy();
     expect(screen.getByText('Recorded files: 1; compiled source files: 0.')).toBeTruthy();
 });
 

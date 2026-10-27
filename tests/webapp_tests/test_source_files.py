@@ -14,6 +14,7 @@ from src.controllers import ControllersCache
 from src.controllers.scc_adapter import build_comp_build
 from src.extensions import db
 from src.helpers.active_scans import package_snapshots_for_sbom_scans
+from src.models.sbom_file import has_compilation_evidence
 from src.models import (
     Package, PackageSourceFile, Project, SBOMBuild, SBOMDocument, SBOMFile, SBOMFileBuild, Scan, Variant,
 )
@@ -67,8 +68,8 @@ def _documents(path="src/enabled.c", extra=False, unresolved=False):
         {"type": "software_Package", "spdxId": ref("package"), "name": "lib",
          "software_packageVersion": "1.0"},
         {"type": "software_File", "spdxId": ref("output"), "name": "build/lib.a"},
-        {"type": "build_Build", "spdxId": ref("build"), "build_buildType": "urn:compile",
-         "build_parameter": [{"key": "flags", "value": "-DCONFIG_FEATURE=1"}]},
+        {"type": "build_Build", "spdxId": ref("build"), "build_buildType": "urn:spdx.dev:zephyr-cmake",
+         "build_parameter": [{"key": "compile:flags:C", "value": "-DCONFIG_FEATURE=1"}]},
         relation("contains", "package", "output"),
         relation("hasInput", "build", "file", *(["missing"] if unresolved else [])),
         relation("hasOutput", "build", "output"),
@@ -99,6 +100,19 @@ def _package(app, variant, name="lib"):
     return next(row for row in rows if row["name"] == name)
 
 
+def _assert_no_source_exclusion(scan, name="lib"):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from sbom_cve_check.analysis.computed_vuln import vex_assessment_from_compiled_sources
+
+    package = next(package for package in package_snapshots_for_sbom_scans([scan.id]) if package.name == name)
+    assert not package.compiled_sources
+    advisory = SimpleNamespace(affected_sources={"src/vulnerable.c"})
+    assert vex_assessment_from_compiled_sources(
+        build_comp_build(package), (advisory,), datetime.now(timezone.utc),
+    ) is None
+
+
 def test_companion_files_builds_and_properties_survive_input_cleanup(app, tmp_path):
     variant, scan = _import(tmp_path, _documents())
     assert db.session.query(SBOMFile).count() == 2
@@ -110,7 +124,7 @@ def test_companion_files_builds_and_properties_survive_input_cleanup(app, tmp_pa
     assert file["path"] == "src/enabled.c"
     assert file["document_name"] == "z-source.jsonld"
     assert file["properties"]["verifiedUsing"][0]["algorithm"] == "sha256"
-    assert file["builds"][0]["parameters"] == [{"key": "flags", "value": "-DCONFIG_FEATURE=1"}]
+    assert file["builds"][0]["parameters"] == [{"key": "compile:flags:C", "value": "-DCONFIG_FEATURE=1"}]
     assert file["builds"][0]["outputs"] == ["https://example.org/evidence/output"]
     snapshots = package_snapshots_for_sbom_scans([scan.id])
     built = next(package for package in snapshots if package.name == "lib")
@@ -163,7 +177,7 @@ def test_build_metadata_is_stored_once_for_many_output_packages(app, tmp_path):
         elif node.get("relationshipType") == "hasOutput":
             node["to"] = targets
         elif node.get("type") == "build_Build":
-            node["build_parameter"] = [{"key": "flags", "value": "x" * 8192}]
+            node["build_parameter"] = [{"key": "compile:flags:C", "value": "x" * 8192}]
     variant, scan = _import(tmp_path, documents)
     assert db.session.query(PackageSourceFile).count() == 7 * 821
     assert db.session.query(SBOMBuild).count() == 1
@@ -171,7 +185,7 @@ def test_build_metadata_is_stored_once_for_many_output_packages(app, tmp_path):
     assert "builds" not in {column["name"] for column in inspect(db.engine).get_columns("package_source_files")}
     build = db.session.scalars(db.select(SBOMBuild)).one()
     assert build.outputs == sorted(targets)
-    assert build.parameters == [{"key": "flags", "value": "x" * 8192}]
+    assert build.parameters == [{"key": "compile:flags:C", "value": "x" * 8192}]
     page_count = db.session.execute(db.text("PRAGMA page_count")).scalar_one()
     page_size = db.session.execute(db.text("PRAGMA page_size")).scalar_one()
     assert page_count * page_size < 10 * 1024 * 1024
@@ -181,7 +195,9 @@ def test_build_metadata_is_stored_once_for_many_output_packages(app, tmp_path):
     assert row["source_file_count"] == 7
     assert row["compiled_sources_complete"]
     assert row["source_files"][0]["builds"][0]["outputs"] == sorted(targets)
-    evidence = SBOMPackage.evidence_for_documents({doc.id for doc in SBOMDocument.get_by_scan(scan.id)})
+    evidence = SBOMPackage.evidence_for_documents(
+        {doc.id for doc in SBOMDocument.get_by_scan(scan.id)}, include_source_files=True,
+    )
     builds = [item["source_files"][0]["builds"][0] for item in evidence.values()]
     assert len(builds) == 821
     assert all(value is builds[0] for value in builds)
@@ -191,8 +207,8 @@ def test_multiple_builds_of_a_file_preserve_distinct_evidence(app, tmp_path):
     documents = _documents()
     prefix = "https://example.org/evidence/"
     documents["a-build.jsonld"]["@graph"].extend([
-        {"type": "build_Build", "spdxId": prefix + "other-build", "build_buildType": "urn:other-compile",
-         "build_parameter": [{"key": "flags", "value": "-DOTHER=1"}]},
+        {"type": "build_Build", "spdxId": prefix + "other-build", "build_buildType": "urn:spdx.dev:zephyr-cmake",
+         "build_parameter": [{"key": "compile:flags:CXX", "value": "-DOTHER=1"}]},
         {"type": "Relationship", "relationshipType": "hasInput",
          "from": prefix + "other-build", "to": [prefix + "file"]},
         {"type": "Relationship", "relationshipType": "hasOutput",
@@ -202,7 +218,7 @@ def test_multiple_builds_of_a_file_preserve_distinct_evidence(app, tmp_path):
     assert db.session.query(SBOMBuild).count() == 2
     assert db.session.query(SBOMFileBuild).count() == 2
     builds = _package(app, variant)["source_files"][0]["builds"]
-    assert {build["build_type"] for build in builds} == {"urn:compile", "urn:other-compile"}
+    assert {build["parameters"][0]["key"] for build in builds} == {"compile:flags:C", "compile:flags:CXX"}
     assert all(build["compiled"] for build in builds)
 
 
@@ -232,8 +248,178 @@ def test_intermediate_objects_are_retained_but_not_used_as_source_files(app, tmp
     variant, scan = _import(tmp_path, documents)
     assert db.session.query(SBOMFile).count() == 3
     assert _package(app, variant)["source_file_count"] == 1
-    assert all(package.compiled_sources == {"src/enabled.c"}
-               for package in package_snapshots_for_sbom_scans([scan.id]))
+    snapshots = package_snapshots_for_sbom_scans([scan.id])
+    assert next(package for package in snapshots if package.name == "lib-sources").compiled_sources == {"src/enabled.c"}
+    assert not _package(app, variant)["compiled_sources_complete"]
+    _assert_no_source_exclusion(scan)
+
+
+@pytest.mark.parametrize("build_type,parameters", [
+    (None, [{"key": "compile:flags:C", "value": "-O2"}]),
+    ("urn:packaging", [{"key": "compile:flags:C", "value": "-O2"}]),
+    ("urn:copy", []),
+    ("urn:generator", []),
+    ("urn:spdx.dev:zephyr-cmake", [{"key": "cmake:generator", "value": "Ninja"}]),
+    ("urn:spdx.dev:zephyr-cmake", None),
+    ("urn:spdx.dev:zephyr-cmake", [{"key": ["compile:flags:C"], "value": "-O2"}]),
+])
+def test_unproven_builds_cannot_exclude_cves(app, tmp_path, build_type, parameters):
+    documents = _documents(path="manifest.json")
+    build = next(node for node in documents["a-build.jsonld"]["@graph"] if node.get("type") == "build_Build")
+    build["build_buildType"] = build_type
+    build["build_parameter"] = parameters
+    variant, scan = _import(tmp_path, documents)
+    row = _package(app, variant)
+    assert row["source_file_count"] == 1
+    assert row["compiled_source_file_count"] == 0
+    assert not row["source_files"][0]["builds"][0]["compiled"]
+    assert not row["compiled_sources_complete"]
+    _assert_no_source_exclusion(scan)
+
+
+@pytest.mark.parametrize("compiled", [False, True])
+def test_compilation_flags_cannot_make_an_unknown_build_type_compilation(compiled):
+    assert not has_compilation_evidence([{
+        "build_type": "urn:packaging", "compiled": compiled,
+        "parameters": [{"key": "compile:flags:C", "value": "-O2"}],
+    }])
+
+
+@pytest.mark.parametrize("relation", [
+    {"from": "source", "to": ["missing"]},
+    {"from": "source", "to": [7]},
+    {"from": "source", "to": None},
+    {"from": "source"},
+    {"from": None, "to": ["file"]},
+    {"from": "missing", "to": ["file"]},
+])
+def test_unresolved_or_malformed_containment_disables_refinement(app, tmp_path, relation, caplog):
+    documents = _documents()
+    prefix = "https://example.org/evidence/"
+    edge = {"type": "Relationship", "relationshipType": "contains", **relation}
+    if isinstance(edge.get("from"), str):
+        edge["from"] = prefix + edge["from"]
+    if isinstance(edge.get("to"), list):
+        edge["to"] = [prefix + value if isinstance(value, str) else value for value in edge["to"]]
+    documents["z-source.jsonld"]["@graph"].append(edge)
+    variant, scan = _import(tmp_path, documents)
+    row = _package(app, variant)
+    assert row["source_file_count"] == 1
+    assert row["compiled_source_file_count"] == 1
+    assert not row["compiled_sources_complete"]
+    assert "containment references" in caplog.text
+    _assert_no_source_exclusion(scan)
+
+
+def test_unresolved_nested_containment_disables_refinement(app, tmp_path):
+    documents = _documents()
+    prefix = "https://example.org/evidence/"
+    documents["z-source.jsonld"]["@graph"].extend([
+        {"type": "ElementCollection", "spdxId": prefix + "collection"},
+        {"type": "Relationship", "relationshipType": "contains",
+         "from": prefix + "source", "to": [prefix + "collection"]},
+        {"type": "Relationship", "relationshipType": "contains",
+         "from": prefix + "collection", "to": [prefix + "missing"]},
+    ])
+    variant, scan = _import(tmp_path, documents)
+    assert not _package(app, variant)["compiled_sources_complete"]
+    _assert_no_source_exclusion(scan)
+
+
+@pytest.mark.parametrize("package_input", [False, True])
+@pytest.mark.parametrize("direct_source", [False, True])
+def test_multistage_inputs_cannot_hide_source_contributions(app, tmp_path, package_input, direct_source):
+    documents = _documents(path="src/vulnerable.c")
+    prefix = "https://example.org/evidence/"
+    graph = documents["a-build.jsonld"]["@graph"]
+    graph[:] = [node for node in graph if node.get("relationshipType") != "contains"]
+    input_ref = prefix + "output"
+    if package_input:
+        input_ref = prefix + "intermediate-package"
+        graph.extend([
+            {"type": "software_Package", "spdxId": input_ref, "name": "intermediate", "software_packageVersion": "1.0"},
+            {"type": "Relationship", "relationshipType": "contains", "from": input_ref, "to": [prefix + "output"]},
+        ])
+    documents["z-source.jsonld"]["@graph"].extend([
+        {"type": "software_File", "spdxId": prefix + "main", "name": "src/main.c"},
+        {"type": "Relationship", "relationshipType": "contains",
+         "from": prefix + "source", "to": [prefix + "main"]},
+    ])
+    graph.extend([
+        {"type": "software_File", "spdxId": prefix + "executable", "name": "build/main.elf"},
+        {"type": "build_Build", "spdxId": prefix + "final-build", "build_buildType": "urn:spdx.dev:zephyr-cmake",
+         "build_parameter": [{"key": "compile:flags:C", "value": "-O2"}]},
+        {"type": "Relationship", "relationshipType": "hasInput", "from": prefix + "final-build",
+         "to": [input_ref, *([prefix + "main"] if direct_source else [])]},
+        {"type": "Relationship", "relationshipType": "hasOutput",
+         "from": prefix + "final-build", "to": [prefix + "executable"]},
+        {"type": "Relationship", "relationshipType": "contains",
+         "from": prefix + "package", "to": [prefix + "executable"]},
+    ])
+    variant, scan = _import(tmp_path, documents)
+    row = _package(app, variant)
+    assert row["source_file_count"] == int(direct_source)
+    assert not row["compiled_sources_complete"]
+    _assert_no_source_exclusion(scan)
+
+
+def test_package_lists_count_files_without_loading_json_evidence(app, tmp_path):
+    variant, _ = _import(tmp_path, _documents(extra=True))
+    # Invalid JSON makes any accidental loading of full evidence fail the request.
+    db.session.execute(db.text("UPDATE sbom_files SET properties = 'invalid JSON'"))
+    db.session.execute(db.text("UPDATE sbom_builds SET parameters = 'invalid JSON', outputs = 'invalid JSON'"))
+    db.session.commit()
+    response = app.test_client().get("/api/packages", query_string={"variant_id": str(variant.id)})
+    assert response.status_code == 200
+    rows = {row["name"]: row for row in response.get_json()}
+    assert rows["lib"]["source_file_count"] == 1
+    assert rows["lib"]["compiled_source_file_count"] == 1
+    assert rows["lib"]["compiled_sources_complete"]
+    assert rows["lib-sources"]["source_file_count"] == 2
+    assert not rows["lib-sources"]["compiled_sources_complete"]
+    assert all("source_files" not in row for row in rows.values())
+
+
+def test_file_details_do_not_load_unrelated_package_files(app, tmp_path):
+    variant, _ = _import(tmp_path, _documents(extra=True))
+    db.session.execute(db.text("UPDATE sbom_files SET properties = 'invalid JSON' WHERE spdx_id = :ref"),
+                       {"ref": "https://example.org/evidence/listed"})
+    db.session.commit()
+    response = app.test_client().get("/api/packages", query_string={
+        "variant_id": str(variant.id), "package_id": "lib@1.0", "include_source_files": "true",
+    })
+    assert response.status_code == 200
+    row, = response.get_json()
+    assert row["source_file_count"] == 1
+    assert row["source_files"][0]["path"] == "src/enabled.c"
+
+
+def test_count_queries_deduplicate_file_records_and_compiled_paths(app, tmp_path):
+    from src.models import SBOMPackage
+
+    variant, first_scan = _import(tmp_path, _documents())
+    other = Variant.create("other", variant.project_id)
+    _import(tmp_path, _documents(), other)
+    source_document = next(doc for doc in SBOMDocument.get_by_scan(first_scan.id)
+                           if doc.source_name == "z-source.jsonld")
+    package = Package.get_by_string_id("lib@1.0")
+    link = SBOMPackage.create(source_document.id, package.id)
+    link.compiled_sources_complete = True
+    db.session.add(PackageSourceFile(
+        sbom_document_id=source_document.id, package_id=package.id,
+        file_document_id=source_document.id, spdx_id="https://example.org/evidence/file",
+    ))
+    db.session.commit()
+    response = app.test_client().get("/api/packages", query_string={
+        "project_id": str(variant.project_id), "package_id": "lib@1.0",
+    })
+    row, = response.get_json()
+    assert row["source_file_count"] == 2
+    assert row["compiled_source_file_count"] == 1
+    documents = {doc.id for doc in SBOMDocument.get_by_scan(first_scan.id)}
+    assert PackageSourceFile.counts_for_documents(set()) == {}
+    assert PackageSourceFile.counts_for_documents(documents, set()) == {}
+    assert PackageSourceFile.evidence_for_documents(documents, set()) == {}
 
 
 def test_generated_source_is_still_a_source_when_consumed_by_another_build(app, tmp_path):

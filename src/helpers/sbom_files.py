@@ -126,9 +126,9 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
             source, targets = item.get('from'), item.get('to', [])
             if isinstance(targets, str):
                 targets = [targets]
-            if item.get('relationshipType') in {'hasInput', 'hasOutput'} and (
-                not isinstance(source, str) or not isinstance(targets, list)
-                or any(not isinstance(target, str) for target in targets)
+            if item.get('relationshipType') in {'hasInput', 'hasOutput', 'contains'} and (
+                not isinstance(source, str) or not source or not isinstance(targets, list) or not targets
+                or any(not isinstance(target, str) or not target for target in targets)
             ):
                 malformed = True
             if isinstance(source, str) and isinstance(targets, list):
@@ -191,12 +191,19 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         build in nodes and nodes[build][1].get('type') == 'build_Build' and target in nodes
         and (nodes[target][1].get('type') != 'software_File' or target in files)
         for build, target in edges['hasInput'] | edges['hasOutput']
+    ) and all(
+        owner in nodes and target in nodes
+        and (nodes[target][1].get('type') != 'software_File' or target in files)
+        for owner, target in edges['contains']
     )
     if not resolved:
-        logger.warning("Incomplete SPDX build references in scan %s; compiled-source refinement disabled",
-                       documents[0][0].scan_id)
+        logger.warning(
+            "Incomplete SPDX build or containment references in scan %s; compiled-source refinement disabled",
+            documents[0][0].scan_id,
+        )
     complete = resolved and all(data.get('_compilation_complete', True) for _, data, *_ in documents)
     compiled: dict[str, list[SBOMBuild]] = defaultdict(list)
+    incomplete_packages: set[tuple[uuid.UUID, uuid.UUID]] = set()
     associations: dict[str, set[str]] = defaultdict(set)
     for ref in files:
         if ref not in artifacts:
@@ -208,12 +215,17 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         target_owners = {owner for target in outputs[build] for owner in owners[target]}
         target_owners.update(target for target in outputs[build] if target in packages)
         source_refs = sources.intersection(files).difference(artifacts)
+        is_compilation = has_compilation_evidence([{
+            "build_type": build_node.get('build_buildType'), "parameters": build_node.get('build_parameter'),
+        }])
+        if not is_compilation or sources != source_refs:
+            incomplete_packages.update(packages[owner] for owner in target_owners)
         if not source_refs:
             continue
         record = SBOMBuild(
             sbom_document_id=build_document.id, spdx_id=build, build_type=build_node.get('build_buildType'),
             parameters=build_node.get('build_parameter', []), outputs=sorted(outputs[build]),
-            compiled=has_compilation_evidence([{"build_type": build_node.get('build_buildType')}]),
+            compiled=is_compilation,
         )
         db.session.add(record)
         for source in source_refs:
@@ -233,7 +245,9 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     }
     unknown -= {packages[owner] for file_owners in owners.values() for owner in file_owners}
     for link_key, link in links.items():
-        link.compiled_sources_complete = None if link_key in unknown else complete
+        link.compiled_sources_complete = (
+            None if link_key in unknown else complete and link_key not in incomplete_packages
+        )
     rows: dict[tuple, PackageSourceFile] = {}
     for ref, package_refs in associations.items():
         file = files[ref]

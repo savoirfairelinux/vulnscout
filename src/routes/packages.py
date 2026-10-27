@@ -220,12 +220,15 @@ def init_app(app: Flask) -> None:
         package_filter = request.args.get('package_id')
         if package_filter is not None:
             pkgs = [pkg for pkg in pkgs if pkg.string_id == package_filter]
-        evidence = SBOMPackage.evidence_for_documents(source_document_ids)
+        include_source_files = request.args.get('include_source_files', '').lower() in ('1', 'true', 'yes')
+        evidence = SBOMPackage.evidence_for_documents(
+            source_document_ids, include_source_files=include_source_files, package_ids={pkg.id for pkg in pkgs},
+        )
         snapshots = [pkg.with_sbom_evidence(**evidence.get(
             pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
         )) for pkg in pkgs]
         result = [pkg.to_dict() for pkg in snapshots]
-        if request.args.get('include_source_files', '').lower() in ('1', 'true', 'yes'):
+        if include_source_files:
             for item, pkg in zip(result, snapshots):
                 item["source_files"] = pkg.source_files
 

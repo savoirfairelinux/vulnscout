@@ -146,9 +146,12 @@ Explicit binary file types and installed package outputs are excluded from **Rec
 **Build input** means compilation evidence exists; **Listed only** does not
 prove compilation, and neither proves inclusion in the final firmware.
 Yocto SPDX 3 lifecycle-scoped build relationships are supported, but BitBake
-recipe inputs are shown as **Recipe input (not compilation)**: patches,
+recipe inputs are shown as **Build input (not proven compilation)**: patches,
 licenses, configuration files, and source archives are not a list of compiled
 translation units. SPDX 2 package provenance likewise does not prove compilation.
+Compilation proof currently requires a West Zephyr CMake build with recorded
+C, C++, or assembly compiler flags. Unknown build types, packaging/copy tasks,
+and generator-only builds do not qualify.
 
 **Not recorded** means file evidence is unavailable, not an empty recorded
 inventory. Reimport the original companion SBOMs together to populate older
@@ -159,8 +162,14 @@ Outdated packages show **Not in active scan**.
 
 The local advisory engine uses resolved compiled-source paths for CVE refinement
 only when the inventory is complete and the advisory supplies affected-file
-information. Missing references or unproven source files disable this refinement;
-they do not justify discarding a CVE. Kconfig expressions are not evaluated.
+information. Missing or malformed build/containment references disable this
+refinement. Artifact or package inputs whose source contributions are not
+accounted for also leave the affected inventory incomplete; VulnScout does not
+trace sources through intermediate builds.
+Unproven source files also disable refinement. These gaps do not justify
+discarding a CVE. Kconfig expressions are not evaluated.
+Reimport existing SBOMs to recompute compilation proof and completeness with
+these checks.
 
 ### Zephyr JSON-LD components
 
