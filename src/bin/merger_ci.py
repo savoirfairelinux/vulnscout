@@ -14,6 +14,7 @@
 #   cmd_assessments.py — custom VulnScout JSON and OpenVEX import/export commands
 #   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, cleanup commands
 #   cmd_vuln_scan.py   — ``flask nvd-scan`` and ``flask osv-scan``
+#   cmd_ai_assess.py   — ``flask ai-assess``
 
 from ..controllers import ControllersCache
 from ._common import DEFAULT_VARIANT_NAME  # noqa: F401 — intentional re-export
@@ -48,6 +49,7 @@ from .cmd_scans import (
     delete_scan_command,
 )
 from .cmd_vuln_scan import nvd_scan_command, osv_scan_command, sbom_cve_check_scan_command, new_scan_run_id_command
+from .cmd_ai_assess import ai_assess_command
 
 
 def init_app(app) -> None:
@@ -73,6 +75,7 @@ def init_app(app) -> None:
     app.cli.add_command(osv_scan_command)
     app.cli.add_command(sbom_cve_check_scan_command)
     app.cli.add_command(new_scan_run_id_command)
+    app.cli.add_command(ai_assess_command)
 
 
 def main() -> ControllersCache:
