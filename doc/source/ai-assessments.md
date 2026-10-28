@@ -198,6 +198,27 @@ Failures restore the draft for retry. If a stream is interrupted, the backend
 may still finish the request: reload and check the stored result before
 retrying a write.
 
+### Assess from the CLI or CI
+
+`./vulnscout assess` runs the same embedded agent as **Assess with AI**, without a browser. Each result is a **pending AI assessment** to review as described in [Review AI Assessments](#review-ai-assessments). It uses the provider connected in the Agent panel, or `AI_PROVIDER`, `AI_AUTH_CREDENTIALS`, `AI_MODEL` and `AI_BASE_URL` set with `./vulnscout config set`.
+
+```bash
+./vulnscout assess -p demo --filter "pending and (cvss >= 9 or known_exploitable)"
+./vulnscout assess -p demo -v x86 --cve CVE-2024-3094 --cve CVE-2023-4863 --json
+./vulnscout assess -p demo -v x86 -v arm64 --filter "new and cvss >= 7" --dry-run
+./vulnscout assess -p demo --filter "(id == CVE-2024-3094 or id == CVE-2023-4863) and pending"
+```
+
+- Select vulnerabilities with repeatable `--cve` **or** one `--filter` ([match-condition syntax](ci_conditions.md)); use exactly one, as they cannot be combined. To restrict specific IDs with other conditions, list them in the filter with `id == <id>`. Filters see each vulnerability's newest assessment, including pending AI ones.
+- Scope follows `match-condition`: `-p` alone covers every variant, `-p -v` one variant (repeat `-v` to select several), and no scope means `default/default`. Each vulnerability is assessed on its active (variant, package) targets in scope: the package is in the variant's current SBOM and the vulnerability is found by the variant's current scans. Historical/outdated packages and findings are excluded, as in the web UI.
+- As in the web UI, a new AI assessment replaces the earlier pending AI assessment on the same targets. Approved assessments are never changed.
+- CLI runs may only read data and write AI assessments; they cannot change context or reviews, and they do not appear in the browser's **Conversations** queue.
+- `--timeout` limits each agent turn (positive integer, default 600 s). `--model` overrides `AI_MODEL`. `--dry-run` lists the targets without calling the AI.
+- Outcomes: `assessed`, `partial` (some targets written), `no_write`, `failed`, `timeout`, `not_found` (a `--cve` ID with no active target in scope; filter matches without one are skipped), `interrupted`, `planned` (dry run). The command exits **1** if any vulnerability has an outcome other than `assessed` or `planned`, and exits 0 when nothing matched.
+- The summary lists each target under its vulnerability: after a run, `written` with the saved AI assessment IDs, or `not written`; with `--dry-run`, the packages per variant.
+- `--json` prints `{"model", "scope", "results": [{"id", "outcome", "targets", "reply", "usage", "error"}]}` on stdout; progress goes to stderr. `scope` is `{"project", "variants"}`, where `variants` is `null` when every variant of the project is selected. Each `targets` entry is `{"variant_id", "variant", "package", "written", "assessment_ids"}`; `assessment_ids` lists the pending AI assessments saved for the target by this run.
+- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run inside the container after cancelling the current agent turn. The summary still lists what was written, and the exit code is 1. Press Ctrl-C a second time to stop immediately without a summary.
+
 ## AI Context page
 
 The **AI Context** page uses a settings-style layout. The sidebar lists
@@ -366,6 +387,7 @@ support and vendor/distribution backports are separate questions.
   For queued work, use **Retry failed action** in its conversation, or remove the
   failed action. If a stream was interrupted, check for a saved result before
   retrying a write.
+- **`assess` reports `no_write` or `partial`** — the agent replied without recording every target. Read the `reply` in `--json` output, then rerun for those vulnerabilities; a rerun replaces any pending AI assessment it wrote.
 
 ## Optional: External AI Clients
 
