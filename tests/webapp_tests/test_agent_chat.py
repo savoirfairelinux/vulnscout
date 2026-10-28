@@ -1277,3 +1277,95 @@ def test_public_event_projection_excludes_tool_payloads():
     _publish_event(SimpleNamespace(data={"private": "secret"}), records.append)
     _publish_event(SimpleNamespace(data=payloads[0]), None)
     assert len(records) == 5
+
+
+def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
+    """Install a fake SDK client; return (captured create_session options, deleted session ids)."""
+    import asyncio
+    from src.routes import agent
+
+    captured, deleted = {}, []
+
+    class Session:
+        session_id = "assess-session"
+
+        def on(self, callback):
+            pass
+
+        async def send_and_wait(self, message):
+            await asyncio.sleep(delay)
+            return SimpleNamespace(data=SimpleNamespace(content="Assessed"))
+
+        async def disconnect(self):
+            if disconnect_error:
+                raise disconnect_error
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def list_models(self):
+            return [SimpleNamespace(id="model", policy=None)]
+
+        async def create_session(self, **options):
+            captured.update(options)
+            return Session()
+
+        async def resume_session(self, *args, **options):
+            raise AssertionError("ephemeral turns must not resume a session")
+
+        async def delete_session(self, session_id):
+            deleted.append(session_id)
+
+    monkeypatch.setattr(agent, "_sdk_client", lambda token: Client())
+    return captured, deleted
+
+
+def test_ephemeral_assess_turn_limits_tools_and_deletes_its_session(monkeypatch):
+    import asyncio
+    from src.routes import agent
+
+    captured, deleted = _assess_sdk(monkeypatch)
+    conversation = agent.Conversation(session_id="old", session_scope="{}")
+    reply, _ = asyncio.run(agent._reply(
+        conversation, "Assess", agent._mcp_path(), "model", "{}",
+        tools=agent.ASSESS_TOOLS, timeout=5, api_url="http://127.0.0.1:4321", ephemeral=True,
+    ))
+
+    assert reply == "Assessed"
+    server = captured["mcp_servers"]["vulnscout"]
+    assert server["tools"] == list(agent.ASSESS_TOOLS)
+    assert captured["available_tools"] == [f"mcp:vulnscout-{tool}" for tool in agent.ASSESS_TOOLS]
+    assert server["env"]["VULNSCOUT_BASE_URL"] == "http://127.0.0.1:4321"
+    assert set(agent.ASSESS_TOOLS) & set(agent.WRITE_TOOLS) == {"write_assessment"}
+    assert set(agent.READ_TOOLS) <= set(agent.ASSESS_TOOLS)
+    assert deleted == ["assess-session"]
+    assert conversation.session_id == "old"
+
+
+def test_agent_turn_timeout_is_configurable(monkeypatch):
+    import asyncio
+    from src.routes import agent
+
+    _, deleted = _assess_sdk(monkeypatch, delay=1)
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(agent._reply(
+            agent.Conversation(), "Assess", agent._mcp_path(), "model", "{}",
+            timeout=0.01, ephemeral=True,
+        ))
+    assert deleted == ["assess-session"]
+
+
+def test_ephemeral_session_is_deleted_when_disconnect_fails(monkeypatch):
+    import asyncio
+    from src.routes import agent
+
+    _, deleted = _assess_sdk(monkeypatch, disconnect_error=RuntimeError("disconnect failed"))
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        asyncio.run(agent._reply(
+            agent.Conversation(), "Assess", agent._mcp_path(), "model", "{}", ephemeral=True,
+        ))
+    assert deleted == ["assess-session"]
