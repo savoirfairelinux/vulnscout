@@ -59,6 +59,12 @@ describe('NavigationBar', () => {
         expect(screen.getByRole('link', { name: /VulnScout/ })).not.toHaveAttribute('aria-current');
     });
 
+    test('keeps dependency exploration inside the SBOM tab', () => {
+        renderAt(ROUTES.packages);
+        expect(screen.queryByRole('link', { name: 'Dependencies' })).not.toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'SBOM' })).toHaveAttribute('aria-current', 'page');
+    });
+
     test.each(['/settings/projects/Apollo', '/settings/projects/Apollo/Release'])('keeps the settings link current on %s', (path) => {
         renderAt(path);
 
