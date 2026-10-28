@@ -245,6 +245,11 @@ Commands with optional --project and --variant (uses "default" project and varia
                          --project without --variant tests all project variants
                          No scope tests the default project/variant
 
+        Assess vulnerabilities with the embedded AI agent (uses the remaining arguments):
+        --ai-assess --cve <id>... | --filter <expr> [--model <id>] [--timeout <seconds>] [--dry-run] [--json]
+                         --project without --variant assesses all project variants
+                         No scope assesses the default project/variant
+
 Commands only requiring --project (uses default project if not specified):
 
         Import or export custom VulnScout data for a project:
@@ -266,6 +271,7 @@ Examples:
     /scan/src/entrypoint.sh --project test --variant x86 --perform-scans grype,nvd
   /scan/src/entrypoint.sh --project test --match-condition "cvss >= 9.0"
   /scan/src/entrypoint.sh --project test --variant x86 --match-condition "cvss >= 9.0"
+  /scan/src/entrypoint.sh --project test --ai-assess --filter "pending and cvss >= 9"
   /scan/src/entrypoint.sh --serve
   /scan/src/entrypoint.sh --report summary.adoc
   /scan/src/entrypoint.sh --config NVD_API_KEY abc123
@@ -845,6 +851,29 @@ cmd_import_context() {
     setup_user
 }
 
+cmd_ai_assess() {
+    local -a scope_args=()
+    if [[ "$PROJECT_SPECIFIED" == "true" ]]; then scope_args+=(--project "$PROJECT_NAME"); fi
+    if [[ "$VARIANT_SPECIFIED" == "true" ]]; then scope_args+=(--variant "$VARIANT_NAME"); fi
+
+    if [[ -n "${VULNSCOUT_RUN_ID:-}" ]]; then
+        if [[ ! "$VULNSCOUT_RUN_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "Invalid VULNSCOUT_RUN_ID." >&2
+            return 2
+        fi
+        # flask is exec'd below, so this PID is flask's: the host wrapper sends Ctrl-C to it.
+        export VULNSCOUT_AI_ASSESS_PID_FILE="${TMPDIR:-/tmp}/vulnscout-ai-assess-$VULNSCOUT_RUN_ID.pid"
+        echo "$$" > "$VULNSCOUT_AI_ASSESS_PID_FILE"
+    fi
+    # bash delays a trapped signal until the migration finishes, then stops before any AI call.
+    trap 'if [[ -n "${VULNSCOUT_AI_ASSESS_PID_FILE:-}" ]]; then rm -f "$VULNSCOUT_AI_ASSESS_PID_FILE"; fi; exit 130' INT TERM
+
+    cd "$BASE_DIR"
+    # Keep stdout for the command's own output (--json).
+    flask --app src.bin.webapp db upgrade >&2 || return $?
+    exec flask --app src.bin.webapp ai-assess "${scope_args[@]}" "$@"
+}
+
 cmd_config_list() {
     if [ -f "$CONFIG_FILE" ]; then
         console_out info "Config ($CONFIG_FILE):"
@@ -1030,6 +1059,9 @@ while [[ $# -gt 0 ]]; do
             VARIANT_NAME="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
         --json)
             JSON_OUTPUT=true; shift ;;
+        --ai-assess)
+            # Consumes the remaining arguments, like --serve.
+            shift; ai_assess_exit=0; cmd_ai_assess "$@" || ai_assess_exit=$?; exit "$ai_assess_exit" ;;
         --match-condition)
             if [[ "$SERVE_REQUESTED" == "true" ]]; then
                 console_out error "Error: --serve and --match-condition are incompatible."; exit 1
