@@ -98,7 +98,7 @@ _vulnscout_complete() {
 
     local globals="--dev -h --help --version"
     local scope=""
-    if [[ " $data_verbs " == *" $verb "* || -z "$verb" ]]; then
+    if [[ " $data_verbs " == *" $verb "* ]]; then
         scope="-p --project -v --variant"
     fi
 
@@ -315,7 +315,7 @@ Options:
     -v, --variant <name>    Variant (default: "default")
 
 Examples:
-    vulnscout -p demo -v x86 add --spdx sbom.spdx.json
+    vulnscout add -p demo -v x86 --spdx sbom.spdx.json
     vulnscout add --spdx sbom.spdx.json --cve-check cve.json
 EOF
             ;;
@@ -339,7 +339,7 @@ Options:
 Examples:
     vulnscout scan
     vulnscout scan --grype --osv --sbom-cve-check
-    vulnscout -p demo -v x86 scan nvd,osv
+    vulnscout scan -p demo -v x86 nvd,osv
 EOF
             ;;
         match-condition) cat <<'EOF'
@@ -353,7 +353,7 @@ Exit codes: 0 no match, 1 error, 2 match
 
 Examples:
     vulnscout match-condition "cvss >= 9.0"
-    vulnscout -p demo -v x86 match-condition "epss >= 50%"
+    vulnscout match-condition -p demo -v x86 "epss >= 50%"
 EOF
             ;;
         report) cat <<'EOF'
@@ -368,7 +368,7 @@ Options:
 
 Examples:
     vulnscout report summary.adoc
-    vulnscout -p demo -v x86 report summary.adoc --format html
+    vulnscout report -p demo -v x86 summary.adoc --format html
 EOF
             ;;
         export) cat <<'EOF'
@@ -382,7 +382,7 @@ Options:
 
 Examples:
     vulnscout export spdx
-    vulnscout -p demo -v x86 export cdx custom-openvex
+    vulnscout export -p demo -v x86 cdx custom-openvex
 EOF
             ;;
         import) cat <<'EOF'
@@ -399,7 +399,7 @@ SBOMs and scan results are added with 'vulnscout add'.
 
 Examples:
     vulnscout import custom-data custom_data.json
-    vulnscout -p demo -v x86 import custom-openvex custom_openvex_x86.json
+    vulnscout import -p demo -v x86 custom-openvex custom_openvex_x86.json
 EOF
             ;;
         refresh) cat <<'EOF'
@@ -412,7 +412,7 @@ Options:
 
 Examples:
     vulnscout refresh
-    vulnscout -p demo refresh
+    vulnscout refresh -p demo
 EOF
             ;;
         delete) cat <<'EOF'
@@ -1482,12 +1482,16 @@ parse_new() {
     local -a rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            -p|--project)
+            -p|--project|-v|--variant)
+                if [ ${#rest[@]} -eq 0 ]; then
+                    die "'$1' is a command option; put it after the command (e.g. 'vulnscout export $1 <value> ...')."
+                fi
                 require_value "$1" "$#" "${2:-}"
-                PROJECT="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
-            -v|--variant)
-                require_value "$1" "$#" "${2:-}"
-                VARIANT="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
+                case "$1" in
+                    -p|--project) PROJECT="$2"; PROJECT_SPECIFIED=true ;;
+                    *) VARIANT="$2"; VARIANT_SPECIFIED=true ;;
+                esac
+                shift 2 ;;
             --dev)
                 DEV_MODE=true; shift ;;
             -h|--help)
