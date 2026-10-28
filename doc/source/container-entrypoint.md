@@ -155,6 +155,7 @@ The previous `--perform-grype-scan`, `--perform-nvd-scan`, `--perform-osv-scan`,
 | `--import-custom-openvex-assessments <path>` | Import an OpenVEX `.json` file into the selected `--variant` |
 | `--use-current-timestamps` | With either custom import, use the current system time |
 | `--match-condition <expr>` | Exit with code 2 if expression matches stored data for any in-scope vulnerability; it does not refresh EPSS. A project without a variant includes all its variants. Incompatible with `--serve` |
+| `--ai-assess <options>` | Run `flask ai-assess` with the remaining arguments (`--cve <id>`… or `--filter <expr>`, not both; `--variant <name>`… to select several variants, `--model`, `--timeout`, `--dry-run`, `--json`) on the `--project`/`--variant` scope. Must come after `--project`/`--variant`. Exits 1 unless every selected vulnerability is `assessed` or `planned`. With `VULNSCOUT_RUN_ID` set (by the host wrapper), it writes its PID to `$TMPDIR/vulnscout-ai-assess-<id>.pid` so that Ctrl-C can be forwarded to it |
 | `--export-context` | Export selected project/variant AI context to `/scan/outputs/context-export.json` |
 | `--import-context <path>` | Import context into existing scopes named in the file; use `--retarget-context` to override the destination |
 | `--add-asset <path>` | Stage a report image (`png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`) in `/cache/vulnscout/templates/assets/` |
