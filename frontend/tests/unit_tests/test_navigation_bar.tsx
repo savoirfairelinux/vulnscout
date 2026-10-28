@@ -28,6 +28,7 @@ describe('NavigationBar', () => {
     test.each([
         ['VulnScout', ROUTES.metrics],
         ['SBOM', ROUTES.packages],
+        ['Dependencies', ROUTES.dependencies],
         ['Vulnerabilities', ROUTES.vulnerabilities],
         ['Scans', ROUTES.scans],
         ['Review', ROUTES.review],
@@ -57,6 +58,12 @@ describe('NavigationBar', () => {
 
         expect(screen.getByRole('link', { name: 'Vulnerabilities' })).toHaveAttribute('aria-current', 'page');
         expect(screen.getByRole('link', { name: /VulnScout/ })).not.toHaveAttribute('aria-current');
+    });
+
+    test('marks dependencies current independently of the SBOM tab', () => {
+        renderAt(ROUTES.dependencies);
+        expect(screen.getByRole('link', { name: 'Dependencies' })).toHaveAttribute('aria-current', 'page');
+        expect(screen.getByRole('link', { name: 'SBOM' })).not.toHaveAttribute('aria-current');
     });
 
     test.each(['/settings/projects/Apollo', '/settings/projects/Apollo/Release'])('keeps the settings link current on %s', (path) => {

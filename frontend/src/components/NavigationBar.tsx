@@ -1,7 +1,7 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import type { MouseEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faCommentDots } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faCommentDots, faDiagramProject } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import { ROUTES } from '../routes';
@@ -86,6 +86,17 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faBox} className="mr-1" />
               SBOM
+            </span>
+          )}
+        </NavLink>
+      </li>
+
+      <li>
+        <NavLink to={ROUTES.dependencies} onClick={guardedClick(ROUTES.dependencies)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          {({ isActive }) => (
+            <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
+              <FontAwesomeIcon icon={faDiagramProject} className="mr-1" />
+              Dependencies
             </span>
           )}
         </NavLink>

@@ -6,6 +6,7 @@ Source of truth: `src/routes.ts`.
 |-------------------------------------------|----------------------------------------|
 | `/`                                       | Dashboard (Metrics)                    |
 | `/sbom`                                   | SBOM (TablePackages)                   |
+| `/dependencies`                           | Dependency tree explorer               |
 | `/vulnerabilities`                        | Vulnerabilities                        |
 | `/scans`                                  | Scans (ScanHistory)                    |
 | `/review`                                 | Review                                 |
@@ -22,3 +23,6 @@ Source of truth: `src/routes.ts`.
 Settings sub-paths are built and parsed by `SETTINGS_PATHS`,
 `settingsProjectPath`, `settingsVariantPath` and `parseSettingsPath`;
 project and variant ids are URI-encoded.
+
+The dependency explorer accepts `?package=<encoded-package-id>` to explore from one package.
+It uses the shared project/variant selection, including comparison operations.

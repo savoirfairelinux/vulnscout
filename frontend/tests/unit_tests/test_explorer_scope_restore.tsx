@@ -99,7 +99,7 @@ jest.mock('../../src/components/NavigationBar', () => ({
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
             <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
-            {(['metrics', 'packages', 'vulnerabilities', 'scans', 'review', 'exports', 'ai', 'settings'] as TabKey[]).map(tab => (
+            {(['metrics', 'packages', 'dependencies', 'vulnerabilities', 'scans', 'review', 'exports', 'ai', 'settings'] as TabKey[]).map(tab => (
                 <Link key={tab} to={ROUTES[tab]}>{tab}</Link>
             ))}
             <button onClick={onOpenOperationQueue}>progress</button>
@@ -129,6 +129,19 @@ jest.mock('../../src/pages/TablePackages', () => ({
     default: ({ onShowVulns }: { onShowVulns: (packageId: string, ids: string[]) => void }) => (
         <button onClick={() => onShowVulns('pkg-1', ['CVE-1'])}>show package vulnerabilities</button>
     ),
+}));
+jest.mock('../../src/pages/DependencyGraph', () => ({
+    __esModule: true,
+    default: ({ focusedPackageId, onFocusPackage, onClearFocus, ...scope }: {
+        focusedPackageId?: string;
+        onFocusPackage: (id: string) => void;
+        onClearFocus: () => void;
+    }) => <div>
+        <span data-testid="dependency-scope">{JSON.stringify(scope)}</span>
+        <span data-testid="dependency-focus">{focusedPackageId ?? ''}</span>
+        <button onClick={() => onFocusPackage('pkg@1.0+build')}>focus dependency package</button>
+        <button onClick={onClearFocus}>clear dependency focus</button>
+    </div>,
 }));
 // The real table writes the filter props it sees on mount into persisted
 // (localStorage-backed) selections, so what matters is the filter present on
@@ -264,6 +277,29 @@ describe('Explorer saved-scope validation', () => {
         restoreStream();
         jest.clearAllMocks();
         mountFilters.length = 0;
+    });
+
+    test('opens the independent dependencies route with the saved comparison and URL focus', async () => {
+        mockGetFrontendScope.mockReturnValue({
+            ...savedScope('p1', []), mode: 'compare', compare_base_id: 'v1',
+            compare_variant_id: 'v2', compare_operation: 'intersection',
+        });
+        mockProjectsList.mockResolvedValue([{ id: 'p1', name: 'Project' }]);
+        mockVariantsList.mockResolvedValue([{ id: 'v1', name: 'Base', project_id: 'p1' }, { id: 'v2', name: 'Compare', project_id: 'p1' }]);
+        render(<Explorer />, { wrapper: ({ children }) =>
+            <MemoryRouter initialEntries={['/dependencies?package=lib%401.0']}>{children}</MemoryRouter>,
+        });
+        await waitFor(() => expect(JSON.parse(screen.getByTestId('dependency-scope').textContent!)).toMatchObject({
+            variantId: 'v1', projectId: 'p1', compareVariantId: 'v2', operation: 'intersection',
+        }));
+        expect(screen.getByTestId('dependency-focus')).toHaveTextContent('lib@1.0');
+        fireEvent.click(screen.getByRole('button', { name: 'focus dependency package' }));
+        expect(screen.getByTestId('dependency-focus')).toHaveTextContent('pkg@1.0+build');
+        fireEvent.click(screen.getByRole('button', { name: 'clear dependency focus' }));
+        expect(screen.getByTestId('dependency-focus')).toBeEmptyDOMElement();
+        fireEvent.click(screen.getByRole('link', { name: 'packages' }));
+        expect(screen.getByRole('button', { name: 'show package vulnerabilities' })).toBeInTheDocument();
+        expect(screen.queryByTestId('dependency-scope')).not.toBeInTheDocument();
     });
 
     test('shows and opens server operations from an SSE snapshot in a fresh tab', async () => {

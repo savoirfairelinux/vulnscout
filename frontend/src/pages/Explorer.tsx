@@ -15,6 +15,7 @@ import type { Assessment } from "../handlers/assessments";
 import Packages from "../handlers/packages";
 import Vulnerabilities from "../handlers/vulnerabilities";
 import TablePackages from "./TablePackages";
+import DependencyGraph from "./DependencyGraph";
 import TableVulnerabilities from "./TableVulnerabilities";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
@@ -39,6 +40,7 @@ import Variants from '../handlers/variant';
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
         packages: 'SBOM',
+        dependencies: 'Dependencies',
         vulnerabilities: 'Vulnerabilities',
         scans: 'Scans',
         review: 'Review',
@@ -704,6 +706,20 @@ function Explorer() {
                         dataRevision={dataRevision}
                         onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
                         outdatedScopeKey={outdatedPackagesScopeKey}
+                    />
+                } />
+                <Route path={ROUTES.dependencies} element={
+                    <DependencyGraph
+                        key={tablePreferenceScopeKey}
+                        variantId={currentBaseVariantId ?? currentVariantId}
+                        projectId={currentProjectId}
+                        variantIds={currentVariantIds}
+                        compareVariantId={currentBaseVariantId ? currentVariantId : undefined}
+                        operation={currentBaseVariantId ? currentOperation : currentMultiOperation}
+                        dataRevision={dataRevision}
+                        focusedPackageId={new URLSearchParams(location.search).get('package') ?? undefined}
+                        onFocusPackage={packageId => navigate(`${ROUTES.dependencies}?${new URLSearchParams({ package: packageId })}`)}
+                        onClearFocus={() => navigate(ROUTES.dependencies)}
                     />
                 } />
                 <Route path={ROUTES.vulnerabilities} element={
