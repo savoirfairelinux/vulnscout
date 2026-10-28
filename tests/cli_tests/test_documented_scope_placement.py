@@ -8,7 +8,7 @@ from tests.cli_tests.test_completion import ROOT, _run
 
 VERBS = ("start", "stop", "restart", "update", "version", "serve", "add", "scan",
          "match-condition", "refresh", "asset", "report", "export", "import",
-         "delete", "list", "config")
+         "delete", "list", "config", "assess")
 LEADING_SCOPE = re.compile(r"\bvulnscout\s+(?:-p|-v|--project|--variant)\s")
 # Legacy flag-syntax examples are kept in the migration guide on purpose.
 LEGACY_CALL = re.compile(r"\bvulnscout\s+--project\s+\S+\s+--variant\s+\S+\s*\\?$")

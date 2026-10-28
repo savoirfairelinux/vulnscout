@@ -28,6 +28,32 @@ case "$1" in
         ;;
     exec)
         log_call "$@"
+        if [ -n "${VULNSCOUT_TEST_ASSESS_BLOCK:-}" ]; then
+            case " $* " in
+                *" --ai-assess "*)
+                    # A running assessment: "started" stands for its PID file (published once the
+                    # optional gate opens); it reports and exits 1 after the expected forwarded signals.
+                    if [ -n "${VULNSCOUT_TEST_ASSESS_GATE:-}" ]; then
+                        for _ in $(seq 100); do
+                            [ -f "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-gate" ] && break
+                            sleep 0.1
+                        done
+                    fi
+                    : > "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-started"
+                    for _ in $(seq 100); do
+                        forwarded=$(cat "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-forwarded" 2>/dev/null || true)
+                        if [ "$(grep -c . <<< "$forwarded")" -ge "${VULNSCOUT_TEST_ASSESS_SIGNALS:-1}" ]; then
+                            echo REPORT; exit 1
+                        fi
+                        sleep 0.1
+                    done
+                    echo "no signal forwarded" >&2; exit 3 ;;
+                *" sh -c "*)
+                    # Like the container: nothing to signal before the PID file exists.
+                    [ -f "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-started" ] || exit 1
+                    echo "${*: -2}" >> "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-forwarded" ;;
+            esac
+        fi
         exit "${VULNSCOUT_TEST_EXEC_EXIT:-0}"
         ;;
     rm|run|pull)
@@ -404,6 +430,102 @@ fi
 expect_fail "'match-condition' needs exactly one condition expression" match-condition
 expect_fail "'match-condition' needs exactly one condition expression" match-condition a b
 expect_fail "match-condition requires a non-empty condition" match-condition ""
+
+# --- assess ---
+run_ok assess --cve CVE-2024-3094 --cve CVE-2023-4863
+assert_log "/scan/src/entrypoint.sh --ai-assess --cve CVE-2024-3094 --cve CVE-2023-4863"
+refute_log "--project"
+
+run_ok assess -p demo -v x86 --filter "pending and cvss >= 9" --model gpt-5 --timeout 30 --dry-run --json
+assert_log '/scan/src/entrypoint.sh --project demo --ai-assess --variant x86 --filter pending\ and\ cvss\ \>=\ 9 --model gpt-5 --timeout 30 --dry-run --json'
+
+run_ok assess -p demo -v x86 --cve CVE-1 -v arm64 -v x86
+assert_log "/scan/src/entrypoint.sh --project demo --ai-assess --variant x86 --variant arm64 --variant x86 --cve CVE-1"
+
+expect_fail "'assess' needs exactly one of --cve or --filter." assess
+expect_fail "'assess' needs exactly one of --cve or --filter; to combine them, list the IDs in the filter" assess --cve CVE-1 --filter pending
+expect_fail "'assess' accepts only one --filter." assess --filter pending --filter new
+expect_fail "--filter requires a non-empty expression." assess --filter ""
+expect_fail "invalid vulnerability ID 'bad id'." assess --cve "bad id"
+expect_fail "--timeout must be a positive number of seconds." assess --cve CVE-1 --timeout 0
+expect_fail "'assess' --variant requires --project." assess -v x86 --cve CVE-1
+expect_fail "'assess' does not accept option --force." assess --cve CVE-1 --force
+
+# --- assess: Ctrl-C / CI cancel / hangup reach the command in the container ---
+# start_assess [stderr path]: run 'assess' in its own process group, like a foreground job in a terminal.
+start_assess() {
+    reset_log
+    rm -f "$TEST_DIR"/assess-*
+    set -m
+    VULNSCOUT_TEST_ASSESS_BLOCK="$TEST_DIR" "$ROOT_DIR/vulnscout" assess --cve CVE-2024-3094 --json \
+        < /dev/null > "$TEST_DIR/stdout" 2> "${1:-$TEST_DIR/stderr}" &
+    wrapper=$!
+    set +m
+}
+
+wait_until() {
+    for _ in $(seq 100); do "$@" && return 0; sleep 0.1; done
+    echo "timed out waiting for: $*" >&2
+    exit 1
+}
+
+forwarded_count() { [ "$(grep -c . "$TEST_DIR/assess-forwarded" 2>/dev/null)" -ge "$1" ]; }
+
+# signal_job <signal>: what the terminal (Ctrl-C), a CI runner or a hangup sends to the job.
+signal_job() { kill "-$1" -- "-$wrapper"; }
+
+# finish_assess <label> <forwarded signal>...: the container's report, exit 1, and the signals
+# forwarded in order to the run ID that the client passed to the container.
+finish_assess() {
+    local label="$1" status=0 run_id expected
+    shift
+    wait "$wrapper" || status=$?
+    run_id=$(grep -o 'VULNSCOUT_RUN_ID=host-[0-9]*-[0-9]*' "$VULNSCOUT_TEST_LOG" | head -n 1)
+    run_id="${run_id#*=}"
+    expected=$(printf "$run_id %s\n" "$@")
+    if [ "$status" -ne 1 ] || ! grep -qx REPORT "$TEST_DIR/stdout" || [ -z "$run_id" ] ||
+        [ "$(cat "$TEST_DIR/assess-forwarded")" != "$expected" ]; then
+        echo "$label: expected the container's report, exit 1 and forwarded '$*', got $status" >&2
+        cat "$TEST_DIR/stdout" "$TEST_DIR/assess-forwarded" "$VULNSCOUT_TEST_LOG" >&2
+        exit 1
+    fi
+    assert_log "vulnscout-ai-assess-"
+}
+
+for signal in INT TERM HUP; do
+    start_assess
+    wait_until test -f "$TEST_DIR/assess-started"
+    signal_job "$signal"
+    finish_assess "SIG$signal" INT
+done
+
+# A second Ctrl-C stops now (SIGTERM).
+export VULNSCOUT_TEST_ASSESS_SIGNALS=2
+start_assess
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job INT
+wait_until forwarded_count 1
+signal_job INT
+finish_assess "second Ctrl-C" INT TERM
+unset VULNSCOUT_TEST_ASSESS_SIGNALS
+
+# A Ctrl-C before the assessment publishes its PID reaches nothing and does not count as the first one.
+export VULNSCOUT_TEST_ASSESS_GATE=1
+start_assess
+wait_until grep -qF -- "--ai-assess" "$VULNSCOUT_TEST_LOG"
+signal_job INT
+wait_until grep -qF -- " sh -c " "$VULNSCOUT_TEST_LOG"
+: > "$TEST_DIR/assess-gate"
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job INT
+finish_assess "Ctrl-C before start" INT
+unset VULNSCOUT_TEST_ASSESS_GATE
+
+# A broken stderr (closed terminal, full disk) must not stop the forwarding.
+start_assess /dev/full
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job HUP
+finish_assess "SIGHUP with broken stderr" INT
 
 # --- refresh ---
 run_ok refresh
