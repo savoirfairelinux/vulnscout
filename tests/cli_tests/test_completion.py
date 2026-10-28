@@ -94,6 +94,18 @@ def test_scope_value_is_not_taken_as_subcommand(completion_script):
     assert "spdx" in out and "custom-openvex" in out
 
 
+def test_scope_flags_not_offered_before_command(completion_script):
+    out = complete(completion_script, ["vulnscout", "-"])
+    assert "--dev" in out and "-p" not in out and "--project" not in out
+
+
+@pytest.mark.parametrize("flag", ["-p", "--project", "-v", "--variant"])
+def test_scope_flag_before_command_is_rejected(flag, tmp_path):
+    res = _run([flag, "demo", "export", "spdx"], tmp_path)
+    assert res.returncode == 1
+    assert "put it after the command" in res.stderr
+
+
 def test_scope_flags_only_on_data_commands(completion_script):
     assert "-p" in complete(completion_script, ["vulnscout", "export", "-"])
     for verb in ("config", "list", "delete", "asset", "start"):

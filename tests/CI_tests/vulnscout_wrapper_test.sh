@@ -303,23 +303,25 @@ run_ok serve
 assert_log "exec vulnscout pkill -f"
 assert_log "/scan/src/entrypoint.sh --serve"
 
-expect_fail "missing command. Run 'vulnscout --help' for usage." -p cli
+expect_fail "missing command. Run 'vulnscout --help' for usage." --dev
+expect_fail "'-p' is a command option; put it after the command" -p cli
+expect_fail "'--variant' is a command option; put it after the command" --variant x86 export spdx
 expect_fail "Unknown command: frobnicate" frobnicate
 expect_fail "Unknown command: frobnicate" frobnicate --help
 expect_fail "Unknown command: help" help
-expect_fail "'refresh' --variant requires --project." -v x86 refresh
+expect_fail "'refresh' --variant requires --project." refresh -v x86
 refute_log "exec vulnscout"
-expect_fail "'match-condition' --variant requires --project." -v x86 match-condition "cvss >= 9.0"
+expect_fail "'match-condition' --variant requires --project." match-condition -v x86 "cvss >= 9.0"
 refute_log "exec vulnscout"
-expect_fail "'start' does not accept --project or --variant." -p cli start
+expect_fail "'start' does not accept --project or --variant." start -p cli
 expect_fail "'serve' does not accept --project or --variant." serve -v x86
 expect_fail "'stop' does not accept argument 'now'." stop now
 expect_fail "'version' does not accept option --json." version --json
 expect_fail "-p requires a value." scan -p
-expect_fail "--variant requires a value." --variant --dev scan
+expect_fail "--variant requires a value." scan --variant --dev
 
 # --- add ---
-run_ok -p demo -v x86 add --spdx "$SBOM" --cve-check "$DATA"
+run_ok add -p demo -v x86 --spdx "$SBOM" --cve-check "$DATA"
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --add-spdx /tmp/vulnscout_stage_input.spdx.json --add-cve-check /tmp/vulnscout_stage_data.json"
 refute_stderr "deprecated:"
 
@@ -343,7 +345,7 @@ unset VULNSCOUT_TEST_NOT_RUNNING
 run_ok scan
 assert_log "/scan/src/entrypoint.sh --perform-scans all"
 
-run_ok -p demo scan nvd osv
+run_ok scan -p demo nvd osv
 assert_log "/scan/src/entrypoint.sh --project demo --perform-scans nvd\,osv"
 
 run_ok scan grype,sbom-cve-check -v x86
@@ -358,7 +360,7 @@ if [ "$(grep -c "/scan/src/entrypoint.sh" "$VULNSCOUT_TEST_LOG")" -ne 1 ]; then
     exit 1
 fi
 
-run_ok -p demo scan --sbom-cve-check --nvd --osv --nvd -v x86
+run_ok scan -p demo --sbom-cve-check --nvd --osv --nvd -v x86
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --perform-scans nvd\,osv\,sbom-cve-check"
 
 run_ok scan --osv
@@ -387,7 +389,7 @@ run_ok match-condition affected
 assert_log "/scan/src/entrypoint.sh --match-condition affected"
 refute_log "--project"
 
-run_ok -p demo match-condition affected
+run_ok match-condition -p demo affected
 assert_log "/scan/src/entrypoint.sh --project demo --match-condition affected"
 
 export VULNSCOUT_TEST_EXEC_EXIT=2
@@ -412,7 +414,7 @@ run_ok refresh -v x86 -p demo
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --refresh-vulnerability-data"
 
 # Review focus 1 (new grammar): a -p value equal to a legacy token does not select the legacy grammar.
-run_ok -p list-scans refresh
+run_ok refresh -p list-scans
 assert_log "/scan/src/entrypoint.sh --project list-scans --refresh-vulnerability-data"
 refute_stderr "deprecated:"
 
@@ -429,7 +431,7 @@ printf 'png\n' > "$TEST_DIR/logo.png"
 run_ok asset add "$TEST_DIR/logo.png" "$TEST_DIR/logo.png"
 assert_log "/scan/src/entrypoint.sh --add-asset /tmp/vulnscout_stage_logo.png --add-asset /tmp/vulnscout_stage_logo.png"
 
-expect_fail "'asset' does not accept --project or --variant." -p demo asset add "$TEST_DIR/logo.png"
+expect_fail "'asset' does not accept --project or --variant." asset add -p demo "$TEST_DIR/logo.png"
 expect_fail "usage: vulnscout asset add <path>..." asset remove "$TEST_DIR/logo.png"
 expect_fail "'asset add' needs at least one path." asset add
 expect_fail "file not found: $TEST_DIR/missing.png" asset add "$TEST_DIR/missing.png"
@@ -438,7 +440,7 @@ expect_fail "file not found: $TEST_DIR/missing.png" asset add "$TEST_DIR/missing
 run_ok report summary.adoc
 assert_log "/scan/src/entrypoint.sh --project default --report summary.adoc"
 
-run_ok -p demo -v x86 report summary.adoc all_assessments.adoc --format pdf
+run_ok report -p demo -v x86 summary.adoc all_assessments.adoc --format pdf
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --report summary.adoc --report all_assessments.adoc --report-format pdf"
 
 printf '= Custom\n' > "$TEST_DIR/custom.adoc"
@@ -477,10 +479,10 @@ expect_fail "'report' does not accept option --amend." report summary.adoc --ame
 run_ok export spdx cdx
 assert_log "/scan/src/entrypoint.sh --project default --export-spdx --export-cdx"
 
-run_ok -p demo export custom-openvex
+run_ok export -p demo custom-openvex
 assert_log "/scan/src/entrypoint.sh --project demo --export-custom-openvex-assessments --all-variants"
 
-run_ok -p demo -v x86 export custom-openvex --amend
+run_ok export -p demo -v x86 custom-openvex --amend
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --export-custom-openvex-assessments --amend"
 refute_log "--all-variants"
 
@@ -496,33 +498,33 @@ expect_fail "use 'export <kind> --amend'" export custom-data amend
 run_ok import custom-data "$DATA"
 assert_log "/scan/src/entrypoint.sh --project default --import-custom-vulnscout-data /tmp/vulnscout_stage_data.json"
 
-run_ok -p demo import custom-data "$DATA" --timestamps original
+run_ok import -p demo custom-data "$DATA" --timestamps original
 assert_log "/scan/src/entrypoint.sh --project demo --use-original-timestamps --import-custom-vulnscout-data /tmp/vulnscout_stage_data.json"
 
-run_ok -p demo import custom-openvex "$DATA"
+run_ok import -p demo custom-openvex "$DATA"
 assert_log "/scan/src/entrypoint.sh --project demo --all-variants --import-custom-openvex-assessments /tmp/vulnscout_stage_data.json"
 
-run_ok -p demo -v x86 import custom-openvex "$DATA" --timestamps current
+run_ok import -p demo -v x86 custom-openvex "$DATA" --timestamps current
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --use-current-timestamps --import-custom-openvex-assessments /tmp/vulnscout_stage_data.json"
 refute_log "--all-variants"
 
 run_ok import context "$DATA"
 assert_log "/scan/src/entrypoint.sh --import-context /tmp/vulnscout_stage_data.json"
 
-run_ok -p demo import context "$DATA"
+run_ok import -p demo context "$DATA"
 assert_log "/scan/src/entrypoint.sh --project demo --retarget-context --import-context /tmp/vulnscout_stage_data.json"
 
-run_ok -p demo -v x86 import context "$DATA"
+run_ok import -p demo -v x86 context "$DATA"
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --retarget-context --import-context /tmp/vulnscout_stage_data.json"
 
 # Review focus 5: -v without -p fails before anything is staged.
 export VULNSCOUT_TEST_NOT_RUNNING=1
-expect_fail "'import context' --variant requires --project." -v x86 import context "$DATA"
+expect_fail "'import context' --variant requires --project." import context -v x86 "$DATA"
 refute_log "run -d"
 unset VULNSCOUT_TEST_NOT_RUNNING
 
 expect_fail "'import custom-data' does not accept --variant; variants come from the file." \
-    -v x86 import custom-data "$DATA"
+    import custom-data -v x86 "$DATA"
 expect_fail "'import context' does not accept --timestamps." import context "$DATA" --timestamps original
 expect_fail "--timestamps must be original or current, got 'now'." import custom-data "$DATA" --timestamps now
 expect_fail "--timestamps original|current" import custom-data "$DATA" --use-current-timestamps
@@ -549,7 +551,7 @@ assert_log "/scan/src/entrypoint.sh --delete-orphaned-vulns"
 run_ok delete empty-scans
 assert_log "/scan/src/entrypoint.sh --delete-empty-scans"
 
-expect_fail "'delete' does not accept --project or --variant." -p demo delete outdated
+expect_fail "'delete' does not accept --project or --variant." delete -p demo outdated
 expect_fail "'delete scan' needs a scan ID" delete scan
 expect_fail "'delete scan' needs a scan ID" delete scan --yes
 expect_fail "unknown delete target 'everything'." delete everything
@@ -594,7 +596,7 @@ run_ok list scans
 assert_log "/scan/src/entrypoint.sh --list-scans"
 refute_log "--json"
 
-expect_fail "'list' does not accept --project or --variant." -p demo list scans
+expect_fail "'list' does not accept --project or --variant." list -p demo scans
 expect_fail "unknown list target 'variants'." list variants
 expect_fail "'list' needs projects or scans." list
 expect_fail "'list' does not accept option --format." list scans --format json
@@ -624,7 +626,7 @@ expect_fail "config key not set: NVD_API_KEY" config get NVD_API_KEY
 
 expect_fail "invalid config key 'bad-key'" config set bad-key x
 expect_fail "usage: vulnscout config set <key> <value>" config set ONLY_KEY
-expect_fail "'config' does not accept --project or --variant." -p demo config list
+expect_fail "'config' does not accept --project or --variant." config list -p demo
 expect_fail "unknown config action 'show'." config show
 expect_fail "'config' needs get, set, unset, or list." config
 
