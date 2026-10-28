@@ -521,7 +521,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         </dialog>
 
         {view === 'conversations' ? <AgentConversationList activeConversationId={conversation.id} onOpen={openConversation} /> : <>
-        <div ref={conversationLog} className="scrollbar-minimal min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-6" role="log" aria-label="Agent conversation" aria-live="polite" onScroll={event => {
+        <div ref={conversationLog} className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-6" role="log" aria-label="Agent conversation" aria-live="polite" onScroll={event => {
             const log = event.currentTarget;
             followMessages.current = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
             setAwayFromBottom(!followMessages.current);

@@ -1701,7 +1701,7 @@ type VariantScopedSnapshot = {
                 </div>
             )}
                     {/* Scrollable content region (only the body scrolls) */}
-                    <div className="scrollbar-minimal min-w-0 flex-1 overflow-y-auto min-h-0">
+                    <div className="min-w-0 flex-1 overflow-y-auto min-h-0">
 
                     {/* Message Banner - Sticky at top */}
                     {showBanner && (
