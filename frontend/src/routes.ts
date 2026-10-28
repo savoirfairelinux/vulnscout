@@ -10,6 +10,7 @@
 export const ROUTES = {
     metrics: '/',
     packages: '/sbom',
+    dependencies: '/dependencies',
     vulnerabilities: '/vulnerabilities',
     scans: '/scans',
     review: '/review',

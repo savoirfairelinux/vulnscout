@@ -186,6 +186,43 @@ Each row has a **Show Vulnerabilities** button that navigates to the Vulnerabili
 
 ## Dependency Graph
 
+The independent **Dependencies** tab (`/dependencies`) is a tree-first explorer
+for the selected project or variants. It uses the same selection and comparison
+operations as the SBOM table, with an optional **SBOM source** filter.
+
+- **Tree** starts at packages with no recorded parents. Disconnected components,
+  cyclic groups, and unlinked packages are included; these entry points are not
+  necessarily application roots. Expand branches to follow complete transitive
+  paths. Shared dependencies appear on each applicable path; a **Cycle** marker
+  stops expansion when a package is already in that path.
+- **Find a package** searches the entire scope by name, version, or revision,
+  including collapsed branches and packages beyond the current page. Choose a
+  result to explore from that package. **All packages** returns to the overview.
+  The focused package is included in the URL and can be bookmarked.
+- **Depends on** follows outgoing relationships. **Required by** follows reverse
+  relationships to explain what brings a package in. Paths remain within one
+  variant; relationships from different variants are never joined into a path.
+- Select a row to inspect its path, direct and transitive-only unique package
+  counts, release/revision evidence, and SBOM sources. **Explore dependencies**
+  and **Trace dependents** make that package the exploration root.
+- Arrow keys move between rows and expand/collapse branches; Enter or Space
+  selects a package. Branches load 40 siblings at a time, and expanded trees
+  initially render at most 500 rows. Explicit **Show more** controls expose all
+  remaining rows without limiting the underlying dependency data or tree depth.
+- **Graph** is an optional neighborhood diagram for the selected package, with
+  one to three levels and a clearly indicated 120-package limit. Use **Tree**
+  for complete paths. Diagram arrows mean "depends on".
+
+Packages whose SBOMs lack dependency data are labeled **not recorded**, not
+assumed to have no dependencies. An unlinked package is not proof of unused
+code, and SBOM relationships alone do not prove runtime use.
+
+The explorer uses the searchable tree and dependency-path patterns documented
+by [Snyk](https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-projects/view-project-issues-fixes-and-dependencies),
+[GitHub](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/explore-dependencies),
+and [GitLab](https://docs.gitlab.com/user/application_security/dependency_list/).
+It is separate from the SBOM table's per-package modal, which remains unchanged.
+
 The **Dependency** column of the SBOM table shows how many packages each package directly depends on (**Deps**) and how many packages directly depend on it (**Req by**). Hover the counts for definitions. Click the cell to open the graph and expandable trees for both directions. The graph shows every direct dependency (left, flowing in) and dependent (right, flowing out) of the package in a single diagram; zoom and pan to explore large ones. The **Variants** list beside the graph gives each variant a color, its own **Deps** / **Req by** counts, and a checkbox to show or hide its relationships (all variants are shown by default). Select an SBOM source to narrow the graph and its version/revision labels to one active document. Neighbouring packages in the graph use the colors of the variants where the relationship exists, split into stripes when it exists in several. Dependency graphs are loaded only when opened, and packages without relationships show zero counts. Outdated packages show **Not in active scan** because dependency data covers active scans only.
 
 ### Supported SBOM Formats
