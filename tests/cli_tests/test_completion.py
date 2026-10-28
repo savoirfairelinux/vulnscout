@@ -82,7 +82,7 @@ def test_completion_verb_is_hidden(tmp_path, completion_script):
 
 def test_top_level_offers_all_verbs(completion_script):
     out = complete(completion_script, ["vulnscout", ""])
-    for verb in ("add", "scan", "match-condition", "report", "export", "import",
+    for verb in ("add", "scan", "match-condition", "assess", "report", "export", "import",
                  "refresh", "delete", "list", "config", "asset", "start", "stop",
                  "restart", "update", "version", "serve"):
         assert verb in out
@@ -183,3 +183,10 @@ def test_file_candidates_enable_filename_handling(tmp_path, completion_script):
     nested = complete(completion_script, ["vulnscout", "import", "context", "nested dir/"],
                       cwd=tmp_path, compopt_log=log)
     assert nested == ["nested dir/a b.json"]
+
+
+def test_assess_flags(completion_script):
+    out = complete(completion_script, ["vulnscout", "assess", "-"])
+    for flag in ("--cve", "--filter", "--model", "--timeout", "--dry-run", "--json", "-p", "--variant"):
+        assert flag in out
+    assert "--spdx" not in out
