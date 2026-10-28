@@ -78,7 +78,7 @@ export default function AgentConversationList({ activeConversationId, onOpen }: 
         </div>
         {paused && <p role="status" className="mx-4 mb-2 flex items-start gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
             <FontAwesomeIcon icon={faTriangleExclamation} className="mt-0.5" />Queue paused. Open the failed conversation to retry or remove it.</p>}
-        <div className="scrollbar-minimal min-h-0 flex-1 space-y-4 overflow-y-auto px-2 pb-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-2 pb-4">
             <ul aria-label="Main conversation">
                 <li><button type="button" onClick={() => onOpen(MAIN_CONVERSATION)} aria-current={activeConversationId === MAIN_CONVERSATION ? 'true' : undefined}
                     aria-label="Open main conversation"
