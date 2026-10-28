@@ -3,7 +3,7 @@ Savoir-faire Linux
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
 
-image::doc/source/_static/vulnscout_logo.jpeg[VulnScout logo,width=220]
+image::doc/source/_static/vulnscout_logo.png[VulnScout logo,width=220]
 
 image::https://img.shields.io/badge/License-GPL--3.0--only-green.svg[GPL-3.0-only,link=LICENSE.GPL-3.0-only]
 

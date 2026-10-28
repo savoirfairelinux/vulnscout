@@ -1,7 +1,7 @@
 VulnScout Documentation
 =======================
 
-.. image:: _static/vulnscout_logo.jpeg
+.. image:: _static/vulnscout_logo.png
    :alt: VulnScout logo
    :width: 220
 
