@@ -18,13 +18,75 @@ SBOM generation, vulnerability scanning, and report collection.
 
 ### Getting Started
 
-Full documentation, installation instructions, and configuration options are
-available on the meta-vulnscout documentation site:
+The layer requires a working Yocto/OpenEmbedded build environment, the
+**Docker** command available to your build user, and the host
+**python3-packaging** package. Unlike the standalone VulnScout launcher, the
+layer invokes Docker directly.
 
-> **[meta-vulnscout documentation](https://meta-vulnscout.readthedocs.io/en/latest/)**
+1. Clone the layer alongside your other layers:
 
-The layer is maintained separately from this repository; consult its documentation
-for supported Yocto releases and its build-specific configuration.
+   ```bash
+   git clone https://github.com/savoirfairelinux/meta-vulnscout.git
+   ```
+
+2. Add its absolute path to `build/conf/bblayers.conf`:
+
+   ```bitbake
+   BBLAYERS += "/path/to/meta-vulnscout"
+   ```
+
+3. Keep your existing distro and add these fragments to `local.conf` or your
+   distro configuration to enable the integration for all images:
+
+   ```bitbake
+   require conf/distro/include/sbom-cve-check.inc
+   require conf/distro/include/vulnscout-core.inc
+   ```
+
+   These fragments enable sbom-cve-check with its recommended settings,
+   VulnScout image tasks, and SPDX generation. Alternatively, the layer's
+   `defaultsetup-vulnscout` distro enables these features; do not combine that
+   distro with the manual fragment configuration above.
+
+4. From your initialized build environment, build the image and launch
+   VulnScout, replacing `core-image-minimal` with your image recipe:
+
+   ```bash
+   bitbake core-image-minimal
+   bitbake core-image-minimal -c vulnscout
+   ```
+
+   Open <http://localhost:7275/> to inspect the imported build and findings.
+   To reopen the interface using existing data without rescanning:
+
+   ```bash
+   bitbake core-image-minimal -c vulnscout_no_scan
+   ```
+
+The default project is `default`; the variant name is
+`${DISTRO}_${MACHINE}_${IMAGE_BASENAME}`. Override them in `local.conf` when
+needed:
+
+```bitbake
+VULNSCOUT_PROJECT = "my-product"
+VULNSCOUT_VARIANT = "production"
+```
+
+Select the corresponding project and variant in the web interface. The layer
+stores its data and outputs under `${TOPDIR}/../.vulnscout` by default; change
+`VULNSCOUT_ROOT_DIR` to relocate that directory.
+
+For non-interactive analysis and report generation, use the CI task:
+
+```bash
+bitbake core-image-minimal -c vulnscout_ci
+```
+
+The layer is maintained separately from this repository. Consult its documentation
+for supported Yocto releases, per-image enablement, CI match conditions, and
+report configuration:
+
+**[meta-vulnscout documentation](https://meta-vulnscout.readthedocs.io/en/latest/)**
 
 ### Importing existing Yocto build outputs
 
