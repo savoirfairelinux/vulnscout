@@ -139,6 +139,8 @@ def evaluate_condition(
     vulnerabilitiesCtrl: VulnerabilitiesController,
     assessmentsCtrl: AssessmentsController,
     condition,
+    *,
+    quiet: bool = False,
 ):
     """Evaluate a condition and return the list of vulnerability IDs that trigger it."""
     parser = ConditionParser()
@@ -172,8 +174,9 @@ def evaluate_condition(
             data["new"] = False
         if parser.evaluate(condition, data):
             failed_vulns.append(vuln_id)
-            # Keep this message on stdout for CI consumers.
-            print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
+            if not quiet:
+                # Keep this message on stdout for CI consumers.
+                print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
     return failed_vulns
 
 
@@ -558,18 +561,27 @@ def _condition_scope(project_name: str | None, variant_name: str | None):
     return compute_export_scope(variant_id=variant_obj.id)
 
 
-def _evaluate_condition_in_scope(scope, condition: str) -> list[str]:
-    matched_vulns: list[str] = []
+def _condition_matches_by_variant(scope, condition: str, *, quiet: bool = False) -> dict[str, list]:
+    """Vulnerability ID -> the scope variant IDs on which *condition* matched, in evaluation order."""
+    matches: dict[str, list] = {}
     for variant_id in sorted(scope.variant_ids, key=str):
         variant_controllers = ControllersCache(
             scope=compute_export_scope(variant_id=variant_id)
         )
-        matched_vulns.extend(evaluate_condition(
+        for vuln_id in evaluate_condition(
             variant_controllers.vulnerabilities,
             variant_controllers.assessments,
             condition,
-        ))
-    return list(dict.fromkeys(matched_vulns))
+            quiet=quiet,
+        ):
+            variants = matches.setdefault(vuln_id, [])
+            if variant_id not in variants:
+                variants.append(variant_id)
+    return matches
+
+
+def _evaluate_condition_in_scope(scope, condition: str, *, quiet: bool = False) -> list[str]:
+    return list(_condition_matches_by_variant(scope, condition, quiet=quiet))
 
 
 def _run_main(
