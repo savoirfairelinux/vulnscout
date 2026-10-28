@@ -138,6 +138,8 @@ def evaluate_condition(
     vulnerabilitiesCtrl: VulnerabilitiesController,
     assessmentsCtrl: AssessmentsController,
     condition,
+    *,
+    quiet: bool = False,
 ):
     """Evaluate a condition and return the list of vulnerability IDs that trigger it."""
     parser = ConditionParser()
@@ -171,8 +173,9 @@ def evaluate_condition(
             data["new"] = False
         if parser.evaluate(condition, data):
             failed_vulns.append(vuln_id)
-            # Keep this message on stdout for CI consumers.
-            print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
+            if not quiet:
+                # Keep this message on stdout for CI consumers.
+                print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
     return failed_vulns
 
 
@@ -552,7 +555,7 @@ def _condition_scope(project_name: str | None, variant_name: str | None):
     return compute_export_scope(variant_id=variant_obj.id)
 
 
-def _evaluate_condition_in_scope(scope, condition: str) -> list[str]:
+def _evaluate_condition_in_scope(scope, condition: str, *, quiet: bool = False) -> list[str]:
     matched_vulns: list[str] = []
     for variant_id in sorted(scope.variant_ids, key=str):
         variant_controllers = ControllersCache(
@@ -562,6 +565,7 @@ def _evaluate_condition_in_scope(scope, condition: str) -> list[str]:
             variant_controllers.vulnerabilities,
             variant_controllers.assessments,
             condition,
+            quiet=quiet,
         ))
     return list(dict.fromkeys(matched_vulns))
 
