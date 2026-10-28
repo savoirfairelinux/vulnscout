@@ -660,7 +660,7 @@ describe('Packages Table', () => {
         expect(headers.slice(0, 5)).toEqual(['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities']);
 
         await waitFor(() => expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length));
-        const dependencyButton = screen.getByRole('button', { name: 'View dependency graph for aaabbbccc' });
+        const dependencyButton = screen.getByRole('button', { name: 'Explore dependencies for aaabbbccc' });
         expect(dependencyButton.getAttribute('title')).toBe(
             'Deps: direct dependencies of this package. Req by: packages that directly depend on this package.');
         expect(dependencyButton.className).toContain('w-full h-full p-4');
@@ -669,7 +669,7 @@ describe('Packages Table', () => {
 
         const user = userEvent.setup();
         await user.click(dependencyButton);
-        expect(await screen.findByRole('dialog', { name: 'Dependencies: aaabbbccc@1.0.0' })).toBeTruthy();
+        expect(await screen.findByRole('dialog', { name: 'Package dependencies' })).toBeTruthy();
         await user.click(screen.getByRole('button', { name: 'Close modal' }));
         expect(screen.queryByRole('dialog')).toBeNull();
     });
@@ -709,7 +709,7 @@ describe('Packages Table', () => {
             const view = render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages} />);
             expect(await screen.findByText('Deps: 1 / Req by: 0')).toBeTruthy();
             expect(screen.getByText('Not recorded')).toBeTruthy();
-            expect(screen.queryByRole('button', { name: 'View dependency graph for aaabbbccc' })).toBeNull();
+            expect(screen.queryByRole('button', { name: 'Explore dependencies for aaabbbccc' })).toBeNull();
             expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length - 2);
             view.unmount();
 
@@ -718,7 +718,7 @@ describe('Packages Table', () => {
             render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages}
                 onLoadOutdatedPackages={async () => [...packages, outdatedPackage]} />);
             expect(await screen.findByText('Not in active scan')).toBeTruthy();
-            expect(screen.queryByRole('button', { name: /View dependency graph/ })).toBeNull();
+            expect(screen.queryByRole('button', { name: /Explore dependencies for/ })).toBeNull();
         } finally {
             global.fetch = originalFetch;
         }
