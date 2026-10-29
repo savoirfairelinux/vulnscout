@@ -83,6 +83,7 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
     assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
     assert captured["enable_skills"] is False
+    assert captured["on_permission_request"].__name__ == "approve_all" and "custom_agents" not in captured
     assert "untrusted evidence" in captured["system_message"]["content"]
     dependency_tools = {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies"}
     assert dependency_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
@@ -1280,7 +1281,7 @@ def test_public_event_projection_excludes_tool_payloads():
 
 
 def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
-    """Install a fake SDK client; return (captured create_session options, deleted session ids)."""
+    """Install a fake SDK client; return (captured create/resume options + sent message, deleted session ids)."""
     import asyncio
     from src.routes import agent
 
@@ -1293,6 +1294,7 @@ def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
             pass
 
         async def send_and_wait(self, message):
+            captured["message"] = message
             await asyncio.sleep(delay)
             return SimpleNamespace(data=SimpleNamespace(content="Assessed"))
 
@@ -1314,8 +1316,9 @@ def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
             captured.update(options)
             return Session()
 
-        async def resume_session(self, *args, **options):
-            raise AssertionError("ephemeral turns must not resume a session")
+        async def resume_session(self, session_id, **options):
+            captured.update(options, resumed=session_id)
+            return Session()
 
         async def delete_session(self, session_id):
             deleted.append(session_id)
@@ -1324,26 +1327,72 @@ def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
     return captured, deleted
 
 
-def test_ephemeral_assess_turn_limits_tools_and_deletes_its_session(monkeypatch):
+def test_ephemeral_assess_profile_turn_limits_tools_and_deletes_its_session(monkeypatch):
     import asyncio
-    from src.routes import agent
+    from src.routes import agent, agent_skills
 
+    monkeypatch.delenv("VULNSCOUT_AGENT_WEB_ACCESS", raising=False)
     captured, deleted = _assess_sdk(monkeypatch)
     conversation = agent.Conversation(session_id="old", session_scope="{}")
     reply, _ = asyncio.run(agent._reply(
         conversation, "Assess", agent._mcp_path(), "model", "{}",
-        tools=agent.ASSESS_TOOLS, timeout=5, api_url="http://127.0.0.1:4321", ephemeral=True,
+        profile=agent_skills.ASSESS, timeout=5, api_url="http://127.0.0.1:4321", ephemeral=True,
     ))
 
-    assert reply == "Assessed"
+    assert reply == "Assessed" and "resumed" not in captured
+    tools = agent.READ_TOOLS + agent_skills.ASSESS.write_tools
     server = captured["mcp_servers"]["vulnscout"]
-    assert server["tools"] == list(agent.ASSESS_TOOLS)
-    assert captured["available_tools"] == [f"mcp:vulnscout-{tool}" for tool in agent.ASSESS_TOOLS]
+    assert server["tools"] == list(tools)
     assert server["env"]["VULNSCOUT_BASE_URL"] == "http://127.0.0.1:4321"
-    assert set(agent.ASSESS_TOOLS) & set(agent.WRITE_TOOLS) == {"write_assessment"}
-    assert set(agent.READ_TOOLS) <= set(agent.ASSESS_TOOLS)
+    assert captured["available_tools"] == ([f"mcp:vulnscout-{tool}" for tool in tools]
+                                           + ["builtin:skill", "builtin:view", "builtin:web_fetch"])
+    assert not {"update_project_context", "update_variant_context", "write_assessment_review"} & set(tools)
+    assert captured["enable_skills"] is True and captured["agent"] == "vulnscout-assess"
+    assert captured["custom_agents"][0]["skills"] == ["cve-assessment"]
+    assert captured["on_permission_request"](SimpleNamespace(kind="shell"), {}).kind == "reject"
+    assert captured["system_message"]["content"] == agent_skills.PROFILE_SYSTEM_MESSAGE
+    assert captured["message"] == "Use the cve-assessment skill.\n\nAssess"
     assert deleted == ["assess-session"]
     assert conversation.session_id == "old"
+
+
+def test_profile_options_are_resupplied_on_resume(monkeypatch):
+    import asyncio
+    from src.routes import agent, agent_skills
+
+    monkeypatch.setenv("VULNSCOUT_AGENT_WEB_ACCESS", "off")
+    captured, _ = _assess_sdk(monkeypatch)
+    conversation = agent.Conversation(session_id="thread-session", session_scope="{}")
+    asyncio.run(agent._reply(conversation, "Is it fixed?", agent._mcp_path(), "model", "{}",
+                             profile=agent_skills.REVIEW))
+    assert captured["resumed"] == "thread-session"
+    assert captured["agent"] == "vulnscout-review"
+    assert "builtin:web_fetch" not in captured["available_tools"]
+    assert "mcp:vulnscout-write_assessment" not in captured["available_tools"]
+    assert "Web research is unavailable" in captured["message"]
+
+
+@pytest.mark.parametrize("remove", ["root", "skill"])
+def test_profile_turn_fails_when_skills_are_missing(monkeypatch, tmp_path, remove):
+    import asyncio
+    import re
+    import shutil
+    from src.routes import agent, agent_skills
+
+    root = tmp_path / "skills"
+    shutil.copytree(Path(agent_skills.__file__).resolve().parents[2] / ".github" / "skills", root)
+    if remove == "root":
+        shutil.rmtree(root)
+    else:
+        (root / "cve-assessment" / "SKILL.md").unlink()
+    monkeypatch.setenv("VULNSCOUT_SKILLS_PATH", str(root))
+    captured, _ = _assess_sdk(monkeypatch)
+    expected = (agent_skills.SKILLS_MISSING_ERROR if remove == "root"
+                else "Agent skill cve-assessment could not be loaded.")
+    with pytest.raises(agent_skills.AgentSkillError, match=re.escape(expected)):
+        asyncio.run(agent._reply(agent.Conversation(), "Review", agent._mcp_path(), "model", "{}",
+                                 profile=agent_skills.REVIEW))
+    assert captured == {}
 
 
 def test_agent_turn_timeout_is_configurable(monkeypatch):

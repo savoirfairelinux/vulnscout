@@ -22,6 +22,7 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
+from . import agent_skills
 from .config import _config_file_path, _has_control_characters, persist_env_keys
 from ..models.project import Project
 from ..models.variant import Variant
@@ -79,6 +80,7 @@ class Conversation:
     credentials: AgentCredentials = field(default_factory=AgentCredentials)
     session_id: str | None = None
     session_scope: str | None = None
+    profile: agent_skills.AgentProfile | None = None
     model: str = "auto"
     usage: dict = field(default_factory=lambda: {"cost": None, "input_tokens": None, "output_tokens": None})
     messages: list[dict[str, str]] = field(default_factory=list)
@@ -641,10 +643,24 @@ def _publish_event(event, publish, write_calls=None):
 
 
 async def _reply(conversation, message, path, model, scope, publish=None, *,
-                 tools=READ_TOOLS + WRITE_TOOLS, timeout=120, api_url=None, ephemeral=False):
-    """Run one agent turn; ephemeral turns never resume a session and delete theirs afterwards."""
+                 tools=READ_TOOLS + WRITE_TOOLS, timeout=120, api_url=None, ephemeral=False, profile=None):
+    """Run one agent turn; ephemeral turns never resume a session and delete theirs afterwards.
+
+    A *profile* runs the turn with its bundled skills; its write tools replace *tools*.
+    """
     from copilot.session import PermissionHandler
 
+    profile_options: dict = {}
+    if profile:
+        skills_root = agent_skills.skills_path()
+        if skills_root is None:
+            raise agent_skills.AgentSkillError(agent_skills.SKILLS_MISSING_ERROR)
+        if missing := agent_skills.missing_skills(skills_root, profile):
+            raise agent_skills.AgentSkillError(f"Agent skill {missing[0]} could not be loaded.")
+        web_enabled = agent_skills.web_access_enabled()
+        tools = READ_TOOLS + profile.write_tools
+        message = agent_skills.profile_message(profile, web_enabled, message)
+        profile_options = agent_skills.session_options(profile, skills_root, web_enabled, tools)
     async with _sdk_client(conversation.credentials.token) as client:
         if conversation.credentials.provider:
             if model not in {choice["id"] for choice in conversation.credentials.provider.models}:
@@ -701,6 +717,7 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
             "enable_skills": False,
             "enable_file_hooks": False,
         }
+        options.update(profile_options)
         if provider_options:
             options["provider"] = provider_options
         if (
