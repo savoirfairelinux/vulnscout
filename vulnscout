@@ -269,7 +269,7 @@ Usage: vulnscout [global options] <command> [arguments] [options]
        vulnscout <command> --help
 
 Global options (before or after the command):
-    --dev                   Mount local src/ and vulnscout_mcp/; start, restart and serve
+    --dev                   Mount local src/, vulnscout_mcp/ and .github/skills/; start, restart and serve
                             also run the frontend dev server
     -h, --help              Show help for a command, or this overview
     --version               Show the VulnScout version
@@ -634,6 +634,9 @@ container_has_dev_mount() {
     if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
         grep -qx '/scan/vulnscout_mcp' <<< "$mounts" || return 1
     fi
+    if [[ -d "$SCRIPT_DIR/.github/skills" ]]; then
+        grep -qx '/scan/.github/skills' <<< "$mounts" || return 1
+    fi
 }
 
 ensure_running() {
@@ -958,6 +961,9 @@ EOF
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src:Z)
         if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
             vol_args+=(-v "$SCRIPT_DIR/vulnscout_mcp":/scan/vulnscout_mcp:Z)
+        fi
+        if [[ -d "$SCRIPT_DIR/.github/skills" ]]; then
+            vol_args+=(-v "$SCRIPT_DIR/.github/skills":/scan/.github/skills:Z)
         fi
         env_args+=(-e DEV_MODE=true)
         console_out info "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
