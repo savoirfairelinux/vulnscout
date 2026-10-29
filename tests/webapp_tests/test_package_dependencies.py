@@ -1552,6 +1552,26 @@ def test_dependency_declaration_migration_preserves_legacy_pairs(app, tmp_path):
         }]
 
 
+def test_dependency_declaration_migration_preserves_existing_declarations(app, tmp_path):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    variant_id, _ = _scan(app, tmp_path, 'existing', _spdx3())
+    client = app.test_client()
+    before = client.get(f'/api/package-dependencies?variant_id={variant_id}').json
+    assert any(edge['declarations'] for graph in before['documents'] for edge in graph['edges'])
+    migration = import_module('src.migrations.versions.f2b4d6e8a0c1_preserve_dependency_declarations')
+    db.session.remove()
+    with db.engine.begin() as connection:
+        stored = connection.execute(text('SELECT * FROM package_dependencies')).all()
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+            migration.upgrade()
+        assert connection.execute(text('SELECT * FROM package_dependencies')).all() == stored
+    assert client.get(f'/api/package-dependencies?variant_id={variant_id}').json == before
+
+
 def _yocto_archive():
     return {
         'runtime-app': _yocto_spdx2('runtime-app', refs=(
