@@ -23,6 +23,14 @@ def spdx2_dependency_edge(source, kind, target) -> tuple[str, str] | None:
     return None
 
 
+def spdx2_dependency_scope(kind: str) -> str:
+    """Only explicit lifecycle qualifiers imply a scope, not generic dependency types."""
+    return {
+        "BUILD_DEPENDENCY_OF": "build", "RUNTIME_DEPENDENCY_OF": "runtime",
+        "DEV_DEPENDENCY_OF": "development", "TEST_DEPENDENCY_OF": "test",
+    }.get(kind, "")
+
+
 def spdx2_provenance_only_sources(sbom: dict) -> set[str]:
     """Exclude only explicitly marked Git source nodes used exclusively as provenance."""
     packages = {
@@ -131,7 +139,8 @@ class FastSPDX ():
             edge = spdx2_dependency_edge(relation.get("spdxElementId"), relation.get("relationshipType"),
                                          relation.get("relatedSpdxElement"))
             if edge:
-                edges.add(edge)
+                kind = relation["relationshipType"]
+                edges.add((*edge, kind, spdx2_dependency_scope(kind)))
             source, target = relation.get("spdxElementId"), relation.get("relatedSpdxElement")
             if isinstance(source, str) and isinstance(target, str):
                 if relation.get("relationshipType") == "GENERATED_FROM":

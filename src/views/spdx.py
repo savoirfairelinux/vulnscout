@@ -4,7 +4,8 @@
 from ..models.package import Package
 from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
-from .fast_spdx import SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_provenance_only_sources
+from .fast_spdx import (SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_dependency_scope,
+                        spdx2_provenance_only_sources)
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
@@ -172,7 +173,8 @@ class SPDX:
             edge = spdx2_dependency_edge(relation.spdx_element_id, relation.relationship_type.name,
                                          relation.related_spdx_element_id)
             if edge:
-                edges.add(edge)
+                kind = relation.relationship_type.name
+                edges.add((*edge, kind, spdx2_dependency_scope(kind)))
             source, target = relation.spdx_element_id, relation.related_spdx_element_id
             if isinstance(target, str):
                 if relation.relationship_type == RelationshipType.GENERATED_FROM:
