@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import os
+import re
 import json
 import uuid
 import time
@@ -276,6 +277,9 @@ def _assessment_covers(
     return (variant_id, finding_id) in assessment.targets
 
 
+_ENTITY_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_@-]{0,63}")
+
+
 def init_app(app: Flask) -> None:
 
     def _validate_name_from_request(entity_label: str) -> tuple[str, None] | tuple[None, ErrorResponse]:
@@ -289,6 +293,11 @@ def init_app(app: Flask) -> None:
         name = data["name"].strip()
         if not name:
             return None, (jsonify({"error": f"{entity_label} name must not be empty."}), 400)
+        if not _ENTITY_NAME_PATTERN.fullmatch(name):
+            return None, (jsonify({"error": (
+                f"{entity_label} name must be at most 64 characters long and may only contain "
+                "letters, digits, '_', '-' and '@', starting with a letter or digit."
+            )}), 400)
         return name, None
 
     def _delete_entity(
@@ -323,8 +332,8 @@ def init_app(app: Flask) -> None:
         """Rename a project.
 
         OpenAPI:
-        body JsonObject optional JSON object containing the new name.
-        response 200 JsonObject Updated project payload.
+        body NameRequest required New project name.
+        response 200 Project Updated project payload.
         response 404 Error Project not found.
         response 409 Error Project name already exists.
         """
@@ -364,8 +373,8 @@ def init_app(app: Flask) -> None:
         """Rename a variant.
 
         OpenAPI:
-        body JsonObject optional JSON object containing the new name.
-        response 200 JsonObject Updated variant payload.
+        body NameRequest required New variant name.
+        response 200 Variant Updated variant payload.
         response 404 Error Variant not found.
         response 409 Error Variant name already exists in the project.
         """
@@ -405,8 +414,8 @@ def init_app(app: Flask) -> None:
         """Create a new project.
 
         OpenAPI:
-        body JsonObject optional JSON object containing the project name.
-        response 201 JsonObject Created project payload.
+        body NameRequest required Project name.
+        response 201 Project Created project payload.
         response 409 Error Project name already exists.
         """
         new_name, err = _validate_name_from_request("Project")
@@ -432,8 +441,8 @@ def init_app(app: Flask) -> None:
         """Create a new variant inside a project.
 
         OpenAPI:
-        body JsonObject optional JSON object containing the variant name.
-        response 201 JsonObject Created variant payload.
+        body NameRequest required Variant name.
+        response 201 Variant Created variant payload.
         response 404 Error Project not found.
         response 409 Error Variant name already exists in the project.
         """
@@ -781,8 +790,8 @@ def init_app(app: Flask) -> None:
         """Preview assessment copy operations between two variants.
 
         OpenAPI:
-        body JsonObject optional Preview payload describing source, target, and copy mode.
-        response 200 JsonObject Assessment copy preview.
+        body CopyAssessmentsRequest required Source, target, and copy mode.
+        response 200 CopyAssessmentsPreview Assessment copy preview.
         response 400 Error Invalid preview payload.
         response 404 Error Variant not found.
         """
@@ -900,8 +909,8 @@ def init_app(app: Flask) -> None:
         """Copy custom assessments from one variant to another.
 
         OpenAPI:
-        body JsonObject optional Copy payload describing source, target, mode, and selections.
-        response 200 JsonObject Assessment copy summary.
+        body CopyAssessmentsRequest required Source, target, mode, and selections.
+        response 200 CopyAssessmentsResult Assessment copy summary.
         response 400 Error Invalid copy payload.
         response 404 Error Variant not found.
         """
@@ -1111,7 +1120,7 @@ def init_app(app: Flask) -> None:
         """Delete a project and its related data.
 
         OpenAPI:
-        response 200 JsonObject Deletion summary.
+        response 200 DeletionSummary Deletion summary.
         response 404 Error Project not found.
         """
         return _delete_entity(project_id, ProjectController, "project ID", "Project")
@@ -1124,7 +1133,7 @@ def init_app(app: Flask) -> None:
         """Delete a variant and its related scans.
 
         OpenAPI:
-        response 200 JsonObject Deletion summary.
+        response 200 DeletionSummary Deletion summary.
         response 404 Error Variant not found.
         """
         return _delete_entity(variant_id, VariantController, "variant ID", "Variant")
@@ -1145,8 +1154,13 @@ def init_app(app: Flask) -> None:
         - variant_id: UUID of the target variant
 
         OpenAPI:
-        body multipart optional Multipart request containing files, project_id, variant_id, and optional format.
-        response 202 JsonObject Accepted upload summary.
+        body multipart required SBOM files and destination.
+        form files binary[] required One or more SBOM files or SPDX archives, repeating this field.
+        form project_id uuid required Target project.
+        form variant_id uuid required Target variant within the project.
+        form format string optional Explicit SBOM format; omitted for automatic detection.
+        form refresh_sources string[] optional Repeat for epss, nvd, or ghsa; use none to disable refreshes.
+        response 202 SbomUploadAccepted Accepted upload summary.
         response 400 Error Invalid upload request.
         response 404 Error Project or variant not found.
         """

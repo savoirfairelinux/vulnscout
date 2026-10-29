@@ -3,6 +3,9 @@ import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 
+import fetchMock from 'jest-fetch-mock';
+fetchMock.enableMocks();
+
 import ProjectVariantSelector from '../../src/components/ProjectVariantSelector';
 
 // ---------------------------------------------------------------------------
@@ -483,6 +486,55 @@ describe('ProjectVariantSelector', () => {
         expect(screen.getByRole('checkbox', { name: 'staging' })).not.toBeChecked();
     });
 
+    test('a rejected apply keeps the previous applied scope and the open panel', async () => {
+        let resolveApply: (applied: boolean) => void = () => undefined;
+        const onApply = jest.fn(() => new Promise<boolean>(resolve => { resolveApply = resolve; }));
+        render(<ProjectVariantSelector defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }} onApply={onApply} />);
+        await openPanel();
+        await waitFor(() => expect(screen.getByRole('checkbox', { name: 'default' })).toBeChecked());
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clear all' })); });
+        await act(async () => { fireEvent.click(screen.getByRole('checkbox', { name: 'release' })); });
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Apply' })); });
+        // While the caller decides, outside clicks and Escape leave the panel open.
+        fireEvent.mouseDown(document.body);
+        fireEvent.keyDown(document, { key: 'Escape' });
+        await act(async () => { resolveApply(false); });
+
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', '', '', [], '');
+        expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: 'release' })).toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'default' })).not.toBeChecked();
+        expect(screen.getByText('All variants')).toBeInTheDocument();
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Apply' })); });
+        await act(async () => { resolveApply(true); });
+        expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+        expect(screen.getAllByText('release').length).toBeGreaterThan(0);
+    });
+
+    test('a failed apply keeps the previous scope and says why in the open panel', async () => {
+        const onApply = jest.fn()
+            .mockImplementationOnce(() => Promise.reject(new Error('boom')))
+            .mockImplementationOnce(() => Promise.resolve(true));
+        render(<ProjectVariantSelector defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }} onApply={onApply} />);
+        await openPanel();
+        await waitFor(() => expect(screen.getByRole('checkbox', { name: 'default' })).toBeChecked());
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clear all' })); });
+        await act(async () => { fireEvent.click(screen.getByRole('checkbox', { name: 'release' })); });
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Apply' })); });
+
+        expect(screen.getByRole('alert')).toHaveTextContent('Could not apply the selection: boom');
+        expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+        expect(screen.getByText('All variants')).toBeInTheDocument();
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Apply' })); });
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+        expect(screen.getAllByText('release').length).toBeGreaterThan(0);
+    });
+
     test('reopening discards un-applied edits and shows the applied selection', async () => {
         render(<ProjectVariantSelector onApply={jest.fn()} />);
         await openPanel();
@@ -677,6 +729,30 @@ describe('ProjectVariantSelector', () => {
             expect(screen.queryByRole('checkbox', { name: 'default' })).not.toBeInTheDocument();
         });
         expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    });
+
+    test('a failed variant list for a newly selected project clears the previous selection', async () => {
+        const actualVariants = jest.requireActual('../../src/handlers/variant').default;
+        mockVariantsList.mockImplementation(projectId => projectId === 'proj-2'
+            ? actualVariants.list(projectId)
+            : Promise.resolve(VARIANTS_PROJ1));
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'unavailable' }), { status: 503 });
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        await openPanel();
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+        await selectProject('proj-1');
+        await waitFor(() => {
+            expect(screen.getByRole('checkbox', { name: 'default' })).toBeChecked();
+        });
+
+        await selectProject('proj-2');
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/projects/proj-2/variants'), expect.anything());
+            expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+        });
     });
 
     // -----------------------------------------------------------------------

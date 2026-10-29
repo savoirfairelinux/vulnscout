@@ -13,10 +13,10 @@ VulnScout uses [Jinja2](https://jinja.palletsprojects.com/) as its templating en
 
 ### Adding a Custom Template
 
-Pass the file path directly to `--report` — it stages and runs the template in one step:
+Pass the file path directly to `report` — it stages and runs the template in one step:
 
 ```bash
-./vulnscout --project demo --report /path/to/my-report.adoc
+./vulnscout report -p demo /path/to/my-report.adoc
 ```
 
 ### Automatic Generation
@@ -24,11 +24,12 @@ Pass the file path directly to `--report` — it stages and runs the template in
 Set the `GENERATE_DOCUMENTS` environment variable to automatically build templates at the end of every scan. Multiple templates are comma-separated (values are trimmed):
 
 ```bash
-./vulnscout config GENERATE_DOCUMENTS "summary.adoc, all_assessments.adoc"
+./vulnscout config set GENERATE_DOCUMENTS "summary.adoc,all_assessments.adoc"
 ```
 
 Generated files are written to the outputs directory (default: `.vulnscout/outputs/`).
-All templates can also be run on-demand from the web interface using the export button in the toolbar.
+Templates can also be run on demand from the **Export** page. Select a project,
+variants, **Reports**, and the templates and output formats to generate.
 
 ---
 
@@ -36,20 +37,35 @@ All templates can also be run on-demand from the web interface using the export 
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `vulnerabilities` | dict | All vulnerabilities found in the project, keyed by ID. Use `vulnerabilities \| as_list` to get a list. |
-| `packages` | dict | All packages found in the project, keyed by ID. Use `packages \| as_list` to get a list. |
-| `assessments` | dict | All assessments found in the project, keyed by ID. Use `assessments \| as_list` to get a list. |
+| `vulnerabilities` | dict | In-scope vulnerabilities with reportable assessments, after export filters, keyed by ID. Use `vulnerabilities \| as_list` to get a list. |
+| `packages` | dict | In-scope packages, keyed by package string ID. Use `packages \| as_list` to get a list. |
+| `assessments` | dict | In-scope reportable assessment entries, after the assessment-date filter. Use `assessments \| as_list` to get a list. |
 | `author` | string | Company name producing this document (from `AUTHOR_NAME` config). |
 | `export_date` | string | Date of export as `YYYY-MM-DD`. |
 | `scan_date` | string | Date and time of the last scan, or `unknown date` if unavailable. |
-| `client_name` | string | Customer company name. Set via `CLIENT_NAME` config or overridden per-export from the web UI. May be empty. |
-| `unfiltered_vulnerabilities` | dict | All vulnerabilities, bypassing any active export filter. Use `\| as_list` to get a list. Always the full dataset. |
-| `unfiltered_assessments` | dict | All assessments, bypassing any active export filter. Keyed by assessment ID. |
-| `failed_vulns` | list[string] | List of vulnerability IDs that triggered the `--match-condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
-| `projects` | dict | All projects, keyed by UUID. Use `projects \| as_list` to get a list. Each value has the fields described in the Project Object section below. |
+| `client_name` | string | Customer company name from `CLIENT_NAME` config. May be empty. |
+| `unfiltered_vulnerabilities` | dict | In-scope vulnerabilities before report filters, keyed by ID. Use `\| as_list` to get a list. Does not bypass project/variant scope. |
+| `unfiltered_assessments` | dict | In-scope reportable assessment entries before the assessment-date filter. Keys may be assessment UUIDs or composite target keys; see below. |
+| `failed_vulns` | list[string] | List of vulnerability IDs that matched the `report --condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
+| `projects` | dict | In-scope projects, keyed by UUID. Use `projects \| as_list` to get a list. Each value has the fields described in the Project Object section below. |
 | `variants` | dict | All in-scope variants, keyed by UUID. A variant-scoped report contains only its selected variant. Use `variants \| as_list` to get a list. Each value has the fields described in the Variant Object section below. |
-| `scans` | dict | All scans, keyed by UUID. Use `scans \| as_list` to get a list. Each value has the fields described in the Scan Object section below. |
-| `sbom_documents` | dict | All SBOM documents, keyed by UUID. Use `sbom_documents \| as_list` to get a list. Each value has the fields described in the SBOM Document Object section below. |
+| `scans` | dict | Scans belonging to in-scope variants, including historical scans, keyed by UUID. |
+| `sbom_documents` | dict | Documents belonging to those scans, keyed by UUID. |
+
+Scope is applied before rendering. A project or variant report does not gain
+access to other projects or variants through `unfiltered_*`. Packages come from
+the selected variants' active SBOMs; historical scans and documents remain
+available as context, but their embedded package maps include only those
+in-scope packages. Pending AI assessments (`origin = "ai"`) are excluded from
+report assessment entries until approved.
+
+A multi-target assessment is expanded into one entry per in-scope
+`(variant, finding)` target, each with one package and a scalar `variant_id`.
+When several targets remain, the dictionary key is
+`<assessment UUID>:<variant UUID>:<finding UUID>`; each entry's `id` is still
+the original assessment UUID. Iterate `.values()` or use `as_list` rather than
+assuming `assessments[entry.id]` always exists. Count unique `id` values if you
+need the number of assessment records rather than targets.
 
 ---
 
@@ -64,9 +80,17 @@ For example, to fetch the value of the `DISTRO` environment variable:
 {{ env("DISTRO", "unknown") }}
 ```
 
-VulnScout will automatically scan your templates for `env("...")` patterns and pass the corresponding environment variable values from the host system.
+The host `report` command scans the selected template for literal `env("...")`
+references and forwards their values as `VULNSCOUT_TPL_<name>`. The renderer reads
+only that prefixed variable, not arbitrary backend environment variables.
+Dynamic names and references found only in included templates are not
+automatically forwarded. For web exports, configure the prefixed variable in
+the backend environment; a host shell export alone does not update a running
+container.
 
-When exporting, users can add filters to export only some vulnerabilities. To bypass these filters and access all vulnerabilities, use `unfiltered_vulnerabilities` instead of `vulnerabilities` and `unfiltered_assessments` instead of `assessments`. This is useful when producing a summary or showing the number of filtered-out vulnerabilities.
+To bypass report filters within the selected export scope, use
+`unfiltered_vulnerabilities` and `unfiltered_assessments`. These do not include
+out-of-scope targets or pending AI assessment entries.
 
 ---
 
@@ -94,11 +118,11 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `packages` | list[string] | Packages affected by the vulnerability, in form `name@version`. |
 | `published` | string | CVE publish date as ISO 8601, or empty if unknown. |
 | `status` | string | Current status string (see Assessment object for possible values). |
-| `simplified_status` | string | Simplified status: `pending`, `affected`, `fixed`, or `ignored`. |
 | `last_assessment` | Assessment | Most recent assessment object (shorthand for `assessments[0]`). |
 | `assessments` | list[Assessment] | All assessments, sorted most recent first. |
 | `variant_ids` | list[string] | UUIDs of every variant in which this vulnerability has at least one assessment. |
 | `assessments_by_variant` | dict[string, list[Assessment]] | Assessments grouped by variant ID. Key is the variant UUID, value is the list of assessments for that variant. |
+| `euvd` | dict | EUVD `id`, `known_exploited`, `sources`, `date_added`, and `url`. |
 
 ---
 
@@ -108,8 +132,17 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 |-------|------|-------------|
 | `name` | string | Name of the package. |
 | `version` | string | Version of the package. |
+| `supplier` | string | Supplier reported for the package. |
+| `licences` | string | Reported licence information. |
 | `cpe` | list[string] | List of CPE identifiers. |
 | `purl` | list[string] | List of PURL identifiers. |
+| `source_urls` | list[string] | Source URLs from the selected active SBOM evidence. |
+| `source_revisions` | list[string] | Recorded source checkout revisions. |
+| `component_types` | list[string] | Scoped component types, such as `normal`, `built`, or `workspace`. |
+| `release_version` | string or null | Release derived from SBOM version and identifier evidence. |
+| `source_revision` | string or null | Derived full source revision, when unambiguous. |
+| `version_evidence` | list[dict] | Original version values with `source` and `identifier`. |
+| `version_conflict` / `revision_conflict` | boolean | Whether the selected evidence contains conflicting releases or revisions. |
 | `sbom_documents` | dict[string, SBOM Document] | SBOM documents that list this package, keyed by UUID. |
 | `variants` | list[string] | UUIDs of variants in which this package appears (derived from its SBOM documents). |
 | `vulnerabilities` | dict[string, Vulnerability] | Vulnerabilities affecting this package, keyed by vulnerability ID. |
@@ -122,18 +155,23 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 |-------|------|-------------|
 | `id` | string | Assessment ID (UUID). |
 | `vuln_id` | string | ID of the vulnerability this assessment affects. |
-| `packages` | list[string] | List of packages concerned. |
-| `timestamp` | string | Creation datetime in ISO 8601 format. |
-| `last_update` | string | Last update datetime in ISO 8601 format. |
+| `packages` | list[string] | One package string ID for this expanded target entry. |
+| `timestamp` | string | Assessment datetime in ISO 8601 format. |
+| `last_update` | string | Same serialized assessment timestamp. |
 | `status` | string | Status of the assessment (see possible values below). |
-| `simplified_status` | string | Simplified status: `pending`, `affected`, `fixed`, or `ignored`. |
 | `status_notes` | string | Free-text note about the status. |
 | `justification` | string | Justification for the status (see possible values below). |
 | `impact_statement` | string | Text explaining why the vulnerability does not apply. |
 | `responses` | list[string] | List of remediation responses (see possible values below). |
 | `workaround` | string | Workaround description. |
-| `workaround_timestamp` | string | Datetime of this workaround in ISO 8601 format. |
-| `variant_id` | string | UUID of the variant this assessment belongs to, or empty. |
+| `variant_id` | string | UUID of this expanded target's variant. |
+| `origin` / `source` | string | Assessment origin and source. |
+
+`simplified_status` and `workaround_timestamp` are not supplied by the template
+serializer. Use `status` and the status filters below. The underlying record
+also exposes `targets` and `variant_ids`, but these describe the original
+assessment; use the expanded entry's `variant_id` and `packages` when rendering
+the selected report targets.
 
 ---
 
@@ -185,7 +223,6 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `format` | string | Format of the document (e.g. `spdx`, `cdx`, `openvex`, `yocto_cve_check`). |
 | `scan_id` | string | UUID of the scan this document belongs to. |
 | `variant_id` | string | UUID of the variant this document belongs to (derived from its scan). |
-| `scan` | Scan | The scan object this document belongs to. |
 | `packages` | dict[string, Package] | All packages listed in this document, keyed by `name@version`. |
 | `vulnerabilities` | dict[string, Vulnerability] | All vulnerabilities affecting any package in this document, keyed by vulnerability ID. |
 
@@ -236,6 +273,7 @@ In addition to [Jinja built-in filters](https://jinja.palletsprojects.com/en/3.1
 | `as_list` | Convert a dict to a list using `.values()`. |
 | `limit(n)` | Limit the number of results to `n` (int). |
 | `print_iso8601` | Transform an ISO 8601 duration string into a human-readable format (e.g. `P2DT4H` → `2d 4h`) or format a datetime string. |
+| `escape_adoc` | Strip HTML and neutralize AsciiDoc/Markdown structural lines in free text, such as vulnerability descriptions. Apply after truncating text, before inserting it into an AsciiDoc report. |
 
 ### Status Filtering
 
@@ -362,7 +400,10 @@ Project: {{ project.name }}
 
 ## Traversing the data models
 
-Every entity exposes its related entities as embedded fields, so you can traverse the data model in any direction.
+Use the embedded fields listed above, or look up related objects by ID.
+Projects contain only `id` and `name`: select their variants with
+`filter_by_project(project.id)`. Documents expose `scan_id`, not an embedded
+`scan`; use `scans[doc.scan_id]` to find their scan.
 
 The relationships are:
 
@@ -370,7 +411,7 @@ The relationships are:
 Project
   └─ Variant  (.scans, .sbom_documents, .packages, .vulnerabilities, .assessments)
        └─ Scan  (.sbom_documents, .packages, .variant)
-            └─ SBOM Document  (.packages, .vulnerabilities, .scan)
+            └─ SBOM Document  (.packages, .vulnerabilities, .scan_id)
                  └─ Package  (.sbom_documents, .variants, .vulnerabilities)
                       └─ Vulnerability  (.variant_ids, .assessments_by_variant)
 ```
@@ -488,21 +529,23 @@ Only the extensions `png`, `jpg`, `jpeg`, `gif`, `svg`, and `webp` are accepted;
 
 ### Adding Assets
 
-**Via the web UI (Export tab):**
-Drag and drop an image onto the *"Drag & drop a logo or image"* area in the Export tab. It is saved to the first writable `assets` sub-directory.
+**Via the web UI (Settings → Custom reports & assets):**
+Drag an image onto the upload area, or click to browse. The UI accepts PNG,
+JPG/JPEG, GIF, and WebP images and also imports report templates. Uploaded images
+are saved to the first writable `assets` sub-directory. SVG assets can be
+installed manually for template lookup, but are not accepted by the upload UI.
 
 **Via the CLI:**
 ```bash
-./vulnscout --add-asset /path/to/logo.png --report my_report.adoc
+./vulnscout asset add /path/to/logo.png
+./vulnscout report my_report.adoc
 ```
 The image is staged to `/cache/vulnscout/templates/assets/logo.png` before the report runs.
 
 **Via the API:**
-```http
-POST /api/documents/assets
-Content-Type: multipart/form-data
-
-file=<image file>
+```bash
+curl -X POST http://localhost:7275/api/documents/assets \
+  -F file=@/path/to/logo.png
 ```
 Returns `{"name": "logo.png", "message": "Asset uploaded."}` on success (HTTP 201).
 
@@ -520,4 +563,3 @@ Template authors who prefer the standard AsciiDoc `image::filename[]` syntax are
 * `-a data-uri` (HTML output only) — inlines resolved images as base64 in the HTML file.
 
 `allow-uri-read` remains **disabled** — remote image fetching is never enabled.
-

@@ -146,11 +146,15 @@ Both assessment tools return `project_id` and include it on each target beside
 When the caller supplied a project name, `vulnscout-find_project_id` remains
 the authoritative resolver for that named scope.
 
-The merged context supplies `codebase_path` (an external agent's local source
+The merged context supplies `codebase_source` (`paths` exposes
+`codebase_path`, `references` exposes `files`; the other is empty by design),
+`codebase_path` (an external agent's local source
 hint), uploaded codebase references in `files` (`id`, `original_name`,
-`description`), `environment`, `threat_model`, `risks`, `other_info`, and the
+`description`), `environment`, the STRIDE-rendered `threat_model` and `risks`,
+`other_info`, and the
 project and variant descriptions. Apply them exactly as `cve-assessment`
-Phases 0, 2 and 3 describe, including **Uploaded Reference Inspection**:
+Phases 0, 2 and 3 describe, including **STRIDE Context** and
+**Uploaded Reference Inspection**:
 use `vulnscout-list_codebase_files`, `vulnscout-search_codebase` and
 `vulnscout-read_codebase_file` for each target variant's own references.
 Follow pagination, verify surrounding source, and cite reference IDs, paths
@@ -178,9 +182,13 @@ assessment's stored fields:
 - **Phase 1** — CVE intelligence from NVD plus one reference (once per assessment;
   `vuln_id` is fixed for the whole assessment, so this is not repeated per target)
 - **Phase 2** — component presence in the target variant's uploaded references
-  and any accessible external `codebase_path`, never another variant's files
-- **Phase 3** — security objectives impact, with that variant's `risks` and
-  `other_info` applied
+  and any accessible external `codebase_path`, never another variant's files;
+  map the component to that variant's STRIDE `C#`/`I#` rows
+- **Phase 3** — security objectives impact, using that variant's STRIDE entry
+  points, interactions, trust boundaries and threats, with its `risks` and
+  `other_info` applied. Declared STRIDE mitigations and residual decisions
+  count toward `not_affected` only when code/config/deployment evidence
+  corroborates them
 - **Phase 3.5** — confidence score: HIGH, MEDIUM or LOW
 
 **Derive each target's verdict before reading the assessment's stored `status`,
@@ -220,6 +228,12 @@ replacement. `rationale` names each differing field and the evidence:
 > "status: user says not_affected, derived affected. justification:
 > component_not_present is wrong — openssl 3.0.8 appears in
 > recipes-core/images/core-image-minimal.bb and ships in the rootfs."
+
+If the stored `inline_mitigations_already_exist` (or another `not_affected`
+justification) rests only on a mitigation declared in the STRIDE `risks`, and
+no evidence corroborates it, treat the justification as unsupported and say so
+in `rationale`, citing the `T#` line. Cite STRIDE IDs only from the target's
+own variant.
 
 ### Confidence gate
 
@@ -310,6 +324,7 @@ reviewed, failed to write.
 - ✅ Caller confirmed before a run exceeding 25 assessments
 - ✅ Every non-custom assessment skipped and counted
 - ✅ `get_merged_context` called once per variant, not per assessment
+- ✅ STRIDE context applied per target variant; declared mitigations accepted only when corroborated
 - ✅ Verdict derived before the stored fields were read
 - ✅ Confidence gate applied; `confidence level: <level>` in `status_notes`
 - ✅ `justification` / `impact_statement` present only for `not_affected`

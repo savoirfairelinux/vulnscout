@@ -19,12 +19,13 @@ from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
-from ..helpers.verbose import verbose, warn
 from ..helpers.env_vars import get_bool_env
 from ..extensions import batch_session, db as _db
 import click
+from ._console import Command, echo, print_message, verbose, warn
 import json
 import os
+from itertools import chain
 from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
@@ -32,6 +33,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from ._common import DEFAULT_VARIANT_NAME, resolve_project, resolve_project_variant
 from ..controllers.projects import ProjectController
 from ..helpers.export_scope import compute_export_scope
+from ..helpers.jsonld_groups import is_zephyr_jsonld, record_jsonld_groups
+from ..controllers.operation_registry import new_queue_id
 
 if TYPE_CHECKING:
     from ..controllers.packages import PackagesController
@@ -168,7 +171,8 @@ def evaluate_condition(
             data["new"] = False
         if parser.evaluate(condition, data):
             failed_vulns.append(vuln_id)
-            print(f"Vulnerability triggered fail condition: {vuln_id}")  # output in stdout to be catched by the CI
+            # Keep this message on stdout for CI consumers.
+            print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
     return failed_vulns
 
 
@@ -195,8 +199,11 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
 
     pkgCtrl: PackagesController = controllers.packages
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
+    jsonld_documents = []
+    detached_cdx_documents: list[SBOMDocument] = []
+    detached_cdx_refs: dict[SBOMDocument, dict[str, str]] = {}
 
-    for doc in docs:
+    for doc in chain(docs, detached_cdx_documents):
         document_path = doc.path
         pkgCtrl.current_sbom_document = doc
         try:
@@ -216,6 +223,13 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             ):
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
+                    if is_zephyr_jsonld(data):
+                        jsonld_documents.append(
+                            (doc, data, dict(fastspdx3._document_refs),
+                             fastspdx3._namespace_map(data.get('@graph', [])))
+                        )
+                    else:
+                        doc.jsonld_groups = None
                 elif use_fastspdx:
                     fastspdx.parse_from_dict(data)
                 else:
@@ -227,8 +241,37 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                     or doc.source_name.endswith(".cdx.json")
                 )
             ):
-                cdx.load_from_dict(data)
-                cdx.parse_and_merge()
+                document_cdx = cdx
+                if doc in detached_cdx_refs:
+                    document_cdx = CycloneDx(controllers)
+                    document_cdx.ref_dict = detached_cdx_refs.pop(doc)
+                    document_cdx._document_refs = {
+                        ref: package for ref, package in document_cdx.ref_dict.items() if ref.startswith("urn:cdx:")
+                    }
+                document_cdx.load_from_dict(data)
+                if document_cdx is cdx:
+                    cdx.merge_components_into_controller()
+                    pkgCtrl.add_dependencies(cdx._document_refs, cdx._dependency_edges)
+                    if (getattr(cdx, "sbom", None) is not None
+                            and any(affect.ref.startswith("urn:cdx:") and affect.ref not in cdx.bom_link_refs
+                                    for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects)):
+                        detached_cdx_documents.append(doc)
+                        # URN-shaped local fallbacks must belong to this document,
+                        # not another inventory in the accumulated local index.
+                        detached_cdx_refs[doc] = {
+                            affect.ref: cdx.ref_dict[affect.ref]
+                            for vulnerability in cdx.sbom.vulnerabilities for affect in vulnerability.affects
+                            if affect.ref in cdx.ref_dict
+                            and (not affect.ref.startswith("urn:cdx:") or affect.ref in cdx._document_refs)
+                        }
+                        continue
+                elif getattr(document_cdx, "sbom", None) is not None:
+                    document_cdx.bom_link_refs = {
+                        affect.ref: cdx.bom_link_refs[affect.ref]
+                        for vulnerability in document_cdx.sbom.vulnerabilities for affect in vulnerability.affects
+                        if affect.ref.startswith("urn:cdx:") and affect.ref in cdx.bom_link_refs
+                    }
+                document_cdx.merge_vulnerabilities_into_controller()
             elif fmt == "openvex" or (fmt is None and "statements" in data):
                 openvex.load_from_dict(data)
             elif fmt == "yocto_vex" or (
@@ -243,26 +286,65 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             elif fmt == "grype" or (fmt is None and "matches" in data):
                 grype.load_from_dict(data)
             else:
-                print(f"Warning: unknown format for {doc.path}, skipping")
+                print_message(f"Warning: unknown format for {doc.path}, skipping", role="warning")
                 continue
             doc.dependencies_recorded = True
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
         except SQLAlchemyError as e:
             _db.session.rollback()
-            print(f"Error importing {document_path}: {e}")
+            print_message(f"Error importing {document_path}: {e}", role="error")
             raise
         except Exception as e:
             if not use_fastspdx:
-                print(f"Error parsing {document_path}: {e}")
-                print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
+                print_message(f"Error parsing {document_path}: {e}", role="error")
+                print_message("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error", role="error")
                 raise
             else:
-                print(f"Ignored: Error parsing {document_path}: {e}")
+                print_message(f"Ignored: Error parsing {document_path}: {e}", role="warning")
         finally:
             pkgCtrl.current_sbom_document = None
     pkgCtrl.flush_spdx_dependencies()
     pkgCtrl.flush_spdx_sources()
+    # Companion documents resolve only inside their own scan.
+    for current_scan_id in {document.scan_id for document, *_ in jsonld_documents}:
+        record_jsonld_groups(
+            [entry for entry in jsonld_documents if entry[0].scan_id == current_scan_id], pkgCtrl,
+        )
+    from ..helpers.jsonld_storage import consolidate_jsonld_packages
+
+    with _db.session.begin_nested():
+        consolidated = consolidate_jsonld_packages(_db.session())
+    if consolidated:
+        pkgCtrl._cache.clear()
+        pkgCtrl._db_id_cache.clear()
+        pkgCtrl._finding_cache.clear()
+        original_ids = {
+            member["id"] for document, *_ in jsonld_documents
+            for group in document.jsonld_groups or [] if group.get("canonical_package_id")
+            for member in group["members"]
+        }
+        from ..models import Assessment, Vulnerability
+
+        vulnCtrl = controllers.vulnerabilities
+        assessCtrl = controllers.assessments
+        for vulnerability in vulnCtrl.vulnerabilities.values():
+            if original_ids.intersection(vulnerability.packages):
+                record = _db.session.get(Vulnerability, vulnerability.id)
+                if record is not None:
+                    vulnerability.packages = sorted({finding.package.string_id for finding in record.findings})
+                    vulnerability._persisted_packages = set(vulnerability.packages)
+                    record.packages = list(vulnerability.packages)
+        assessCtrl._by_vuln_pkg.clear()
+        assessCtrl._db_queried_vuln_pkg.clear()
+        assessCtrl._db_queried_pkgs.clear()
+        for key, assessment in assessCtrl.assessments.items():
+            if original_ids.intersection(assessment.packages):
+                stored = _db.session.get(Assessment, assessment.id)
+                if stored is not None:
+                    assessment.packages = stored.packages
+            for package_id in assessment.packages:
+                assessCtrl._by_vuln_pkg.setdefault((assessment.vuln_id, package_id), []).append(key)
     _db.session.commit()
 
     return {
@@ -271,7 +353,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     }
 
 
-@click.command("merge")
+@click.command("merge", cls=Command)
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
@@ -288,7 +370,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
 @click.option("--grype", "grype_inputs", multiple=True, type=click.Path(exists=True),
               help="Grype vulnerability JSON file (may be repeated).")
 @click.option("--run-id", default=None,
-              help="Operation queue id grouping this tool scan with the rest of its scan run.")
+              help="Group tool scans from the same invocation under this run ID (ignored for SBOM imports).")
 @with_appcontext
 def create_project_context(
     project: str,
@@ -321,8 +403,8 @@ def create_project_context(
 
     scan = ScanController.create(scan_description, variant_obj.id, scan_type=scan_type,
                                  scan_source=scan_source,
-                                 run_id=run_id if scan_type == "tool" else None)
-    click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}")
+                                 run_id=(run_id or new_queue_id()) if scan_type == "tool" else None)
+    echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}", role="info")
 
     format_groups: list[tuple[tuple, str]] = [
         (spdx_inputs, "spdx"),
@@ -336,10 +418,10 @@ def create_project_context(
         for sbom_file in files:
             abs_path = os.path.abspath(sbom_file)
             SBOMDocumentController.create(abs_path, os.path.basename(sbom_file), scan.id, format=fmt)
-            click.echo(f"  + [{fmt}] {sbom_file}")
+            echo(f"  + [{fmt}] {sbom_file}", role="info")
 
 
-@click.command("process")
+@click.command("process", cls=Command)
 @click.option(
     "--refresh-vulnerability-data",
     is_flag=True,
@@ -361,7 +443,7 @@ def process_command(
     )
 
 
-@click.command("refresh-vulnerability-data")
+@click.command("refresh-vulnerability-data", cls=Command)
 @click.option("--project", "project_name", default=None, help="Refresh vulnerabilities in this project only.")
 @click.option("--variant", "variant_name", default=None, help="Refresh vulnerabilities in this project variant only.")
 @with_appcontext
@@ -384,8 +466,8 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
     failed_sources = refresh_vulnerability_sources(
         controllers,
         controllers.vulnerabilities.vulnerabilities,
-        on_source_start=lambda label, step, total: click.echo(
-            f"Refreshing {label} data (step {step} of {total})..."
+        on_source_start=lambda label, step, total: echo(
+            f"Refreshing {label} data (step {step} of {total})...", role="info"
         ),
     )
     if failed_sources:
@@ -393,7 +475,7 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
         raise click.ClickException(
             f"{', '.join(unique_failed)} vulnerability-data refresh failed."
         )
-    click.echo("Vulnerability data refresh complete.")
+    echo("Vulnerability data refresh complete.", role="success")
 
 
 def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None:
@@ -409,7 +491,7 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
     verbose(f"{log_prefix}: Populating observations table")
     try:
         if not scan:
-            print("Warning: no scan provided — skipping observation creation.")
+            print_message("Warning: no scan provided — skipping observation creation.", role="warning")
             return
 
         # 1. Collect package_ids referenced by this scan's SBOM documents
@@ -457,7 +539,7 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
                 _db.session.bulk_save_objects(new_observations)
             verbose(f"{log_prefix}: Observations created for scan {scan.id} ({len(new_observations)} new)")
     except Exception as e:
-        print(f"Warning: could not populate observations table: {e}")
+        print_message(f"Warning: could not populate observations table: {e}", role="warning")
 
 
 def _condition_scope(project_name: str | None, variant_name: str | None):
@@ -531,8 +613,8 @@ def _run_main(
         failed_sources = refresh_vulnerability_sources(
             controllers,
             vulnCtrl._encountered_this_run,
-            on_source_start=lambda label, step, total: click.echo(
-                f"Refreshing {label} data (step {step} of {total})..."
+            on_source_start=lambda label, step, total: echo(
+                f"Refreshing {label} data (step {step} of {total})...", role="info"
             ),
         )
         if failed_sources:
@@ -540,7 +622,7 @@ def _run_main(
             raise click.ClickException(
                 f"{', '.join(unique_failed)} vulnerability-data refresh failed."
             )
-        click.echo("Vulnerability data refresh complete.")
+        echo("Vulnerability data refresh complete.", role="success")
 
     failed_vulns = []
     if match_condition:

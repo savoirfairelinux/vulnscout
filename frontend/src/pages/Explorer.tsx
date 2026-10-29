@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { useLocation, useNavigate, Routes, Route } from "react-router-dom";
-import { ROUTES, tabForPath } from "../routes";
+import { ROUTES, settingsProjectPath, tabForPath } from "../routes";
 import type { RouteKey, TabKey } from "../routes";
 import NavigationBar from "../components/NavigationBar";
 import NotFound from "./NotFound";
@@ -22,8 +22,12 @@ import ScanHistory from "./ScanHistory";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
+import type { SettingsNavState } from './Settings';
 import AIContext from './AIContext';
+import type { AiContextScope } from './AIContext';
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import AgentChat from '../components/AgentChat';
+import { getAgentChatRequest, subscribeAgentQueue } from '../handlers/agentQueue';
 import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
@@ -55,7 +59,6 @@ type ExplorerNavState = {
         value: string;
         vulnerabilityIds?: string[];
     };
-    settingsDestination?: { tab: 'projects'; projectId?: string };
 };
 
 function Explorer() {
@@ -89,6 +92,8 @@ function Explorer() {
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
+    // Bumped on every applied scope, so the AI context page can drop discarded edits.
+    const [scopeRevision, setScopeRevision] = useState(0);
     const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const [agentOpen, setAgentOpen] = useState(false);
     const [agentMounted, setAgentMounted] = useState(false);
@@ -115,6 +120,12 @@ function Explorer() {
     const loadGeneration = useRef(0);
     const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
+    const agentChatRequest = useSyncExternalStore(subscribeAgentQueue, getAgentChatRequest).nonce;
+
+    // AI actions anywhere in the app open the single agent chat through the queue store.
+    useEffect(() => {
+        if (agentChatRequest) setAgentOpen(true);
+    }, [agentChatRequest]);
     const queueItems = groupQueueItems(operationEntries);
     const trackedScanCount = queueItems.length;
     const activeScanCount = queueItems.filter(isQueueItemActive).length;
@@ -279,11 +290,12 @@ function Explorer() {
         return () => { cancelled = true; scopeReady.current = false; };
     }, [loadData]);
 
-    const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
+    const applyScope = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
         // A new scope invalidates any filter the previous page navigated with.
         navigate(location.pathname, { replace: true, state: null });
+        setScopeRevision(revision => revision + 1);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
         // Track origin variant and operation separately for MultiEditBar intersection logic
@@ -314,6 +326,33 @@ function Explorer() {
             multiActive ? (multiOperation || undefined) : undefined,
         );
     }, [loadData, navigate, location.pathname]);
+
+    // Changing the scope leaves the open AI context item, so unsaved edits are
+    // confirmed first; false tells the selector to keep its previous scope.
+    const { hasGuard, confirmLeave } = useUnsavedGuard();
+    const handleApply = useCallback((...args: Parameters<typeof applyScope>): boolean | Promise<boolean> => {
+        if (!hasGuard) {
+            applyScope(...args);
+            return true;
+        }
+        return confirmLeave().then(proceed => {
+            if (proceed) applyScope(...args);
+            return proceed;
+        });
+    }, [applyScope, hasGuard, confirmLeave]);
+
+    // Mirrors what the selector shows: without a saved or applied scope it reads
+    // "All variants", even though data loads for the server's default variant.
+    const aiContextScope = useMemo<AiContextScope>(() => {
+        const revision = scopeRevision;
+        if (!frontendScope && revision === 0) return { projectId: currentProjectId, revision };
+        const pairOrSingle = currentBaseVariantId && currentVariantId
+            ? [currentBaseVariantId, currentVariantId]
+            : currentVariantId ? [currentVariantId] : undefined;
+        // A whole-project selection has no variant ids; the default variant used to load data is not a scope.
+        const wholeProject = frontendScope?.mode === 'select' && frontendScope.variant_ids.length === 0;
+        return { projectId: currentProjectId, variantIds: wholeProject ? undefined : (currentVariantIds ?? pairOrSingle), revision };
+    }, [frontendScope, scopeRevision, currentProjectId, currentVariantId, currentBaseVariantId, currentVariantIds]);
 
     const handleScanComplete = useCallback(() => {
         loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
@@ -459,7 +498,8 @@ function Explorer() {
     const tab: RouteKey = tabForPath(location.pathname);
     const activeAgentView = tab === 'vulnerabilities' ? vulnerabilityAgentView : tab === 'review' ? reviewAgentView : tab === 'packages' ? packagesAgentView : tab === 'metrics' ? metricsAgentView : tab === 'scans' ? scansAgentView : tab === 'exports' ? exportsAgentView : tab === 'settings' ? settingsAgentView : tab === 'ai' ? aiAgentView : undefined;
     const openAgentVulnerabilityId = activeAgentView?.openVulnerabilityId;
-    const agentOverlay = compactAgent && !openAgentVulnerabilityId;
+    const agentOverlay = compactAgent;
+    const agentDocked = agentOpen && !compactAgent && Boolean(openAgentVulnerabilityId);
 
     useEffect(() => {
         const update = () => setCompactAgent(window.innerWidth < 1024);
@@ -475,6 +515,12 @@ function Explorer() {
         agentPanel.current?.focus();
         return () => { window.requestAnimationFrame(() => { if (previousFocus?.isConnected) previousFocus.focus(); }); };
     }, [agentOpen]);
+
+    // The chat floats beside an open vulnerability; modal overlays shrink to keep it visible.
+    useEffect(() => {
+        document.body.classList.toggle('agent-docked', agentDocked);
+        return () => document.body.classList.remove('agent-docked');
+    }, [agentDocked]);
 
     useEffect(() => {
         const background = [mainContent.current, navigation.current];
@@ -526,11 +572,10 @@ function Explorer() {
     // Navigation intent for the current location, set by the page that
     // navigated here. Reading it during render (instead of resetting state in
     // an effect) guarantees the destination's first render already has the
-    // right filter/destination, so a plain nav-bar click can never make it
+    // right filter, so a plain nav-bar click can never make it
     // mount with leftovers from an earlier visit.
     const navState = (location.state ?? null) as ExplorerNavState | null;
     const vulnFilter = navState?.vulnFilter;
-    const settingsDestination = navState?.settingsDestination ?? null;
 
     // Accepts a plain string to match Metrics' existing setTab prop contract;
     // every caller passes one of our known tab keys.
@@ -595,15 +640,11 @@ function Explorer() {
                                 void loadSetupRequirement();
                                 return;
                             }
-                            const state: ExplorerNavState = {
-                                settingsDestination: {
-                                    tab: 'projects',
-                                    projectId: setupRequirement?.kind === 'variant'
-                                        ? setupRequirement.projectId
-                                        : undefined,
-                                },
-                            };
-                            navigate(ROUTES.settings, { state });
+                            if (setupRequirement?.kind === 'variant') {
+                                navigate(settingsProjectPath(setupRequirement.projectId));
+                            } else {
+                                navigate(ROUTES.settings, { state: { openNewProject: true } satisfies SettingsNavState });
+                            }
                         }}
                         className="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-400"
                     >
@@ -645,7 +686,6 @@ function Explorer() {
                         appendCVSS={appendCVSS}
                         projectId={currentProjectId}
                         onAgentContextChange={setMetricsAgentView}
-                        onOpenAgent={() => setAgentOpen(true)}
                     />
                 } />
                 <Route path={ROUTES.packages} element={
@@ -689,7 +729,6 @@ function Explorer() {
                         missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
                         onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
                         onAgentContextChange={setVulnerabilityAgentView}
-                        onOpenAgent={() => setAgentOpen(true)}
                     />
                 } />
                 <Route path={ROUTES.scans} element={
@@ -702,19 +741,19 @@ function Explorer() {
                     />
                 } />
                 <Route path={ROUTES.review} element={
-                    <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} onOpenAgent={() => setAgentOpen(true)} />
+                    <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} />
                 } />
                 <Route path={ROUTES.exports} element={
                     <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} onAgentContextChange={setExportsAgentView} />
                 } />
-                <Route path={ROUTES.settings} element={
-                    <Settings onAgentContextChange={setSettingsAgentView} initialTab={settingsDestination?.tab} onDataChanged={(message) => {
+                <Route path={`${ROUTES.settings}/*`} element={
+                    <Settings onAgentContextChange={setSettingsAgentView} onDataChanged={(message) => {
                         if (message) setLoadingMessage(message);
                         Config.get().then(config => setDefaultConfig(config)).catch(() => {});
                         loadSetupRequirement();
                         setSelectorKey(k => k + 1);
                         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                    }} projectId={settingsDestination ? settingsDestination.projectId : currentProjectId} onLoadingMessage={(msg) => {
+                    }} projectId={currentProjectId} onLoadingMessage={(msg) => {
                         if (msg) {
                             setLoadingMessage(msg);
                             setIsLoadingData(true);
@@ -724,7 +763,7 @@ function Explorer() {
                         }
                     }} />
                 } />
-                <Route path={ROUTES.ai} element={<AIContext onAgentContextChange={setAiAgentView} />} />
+                <Route path={ROUTES.ai} element={<AIContext scope={aiContextScope} onAgentContextChange={setAiAgentView} />} />
                 <Route path="*" element={<NotFound />} />
                 </Routes>
             </div>
@@ -749,7 +788,7 @@ function Explorer() {
                         first?.focus();
                     }
                 }
-            }} className={`fixed inset-0 ${openAgentVulnerabilityId ? 'z-[90]' : 'z-[110]'} h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
+            }} className={`fixed inset-0 z-[110] h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
                 <AgentChat active={agentOpen} context={agentContext} onClose={() => setAgentOpen(false)} />
             </aside>}
             </div>

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import Context, { type ContextFile } from "../handlers/context";
 import Assessments from "../handlers/assessments";
 import ConfirmationModal from "./ConfirmationModal";
+import FileInputButton from "./FileInputButton";
+import HelpPopover from "./HelpPopover";
 
 type Action = { kind: "upload"; files: File[]; description: string } | { kind: "delete"; file: ContextFile };
 
@@ -37,7 +39,6 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
                 for (const file of action.files) {
                     if (!mounted.current) break;
                     try {
-                        if (file.size > 10 * 1024 * 1024) throw new Error("File exceeds maximum size of 10 MB.");
                         const reference = await Context.uploadFile(variantId, file, action.description);
                         uploaded++;
                         if (mounted.current) setFiles(current => [...current, reference]);
@@ -84,13 +85,15 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
     const unavailable = disabled || busy || !variantId;
     return (
         <section aria-label="Codebase references" className="space-y-2">
-            <h3 className="text-sm text-zinc-300">Codebase References</h3>
-            <p className="text-xs text-zinc-400">
-                Upload source files or ZIP, TAR, TAR.GZ/TGZ archives for the embedded Agent and external MCP clients.
-                References are saved immediately for this variant, separately from the context form.
-                Maximum 10 MB per upload, 100 MB expanded and 5,000 archive entries. Binary files cannot be read as source.
-                Upload only code you are permitted to share with your selected AI provider; exclude secrets.
-            </p>
+            <div className="flex items-center gap-2">
+                <h3 className="text-sm text-zinc-300">Codebase References</h3>
+                <HelpPopover ariaLabel="Codebase references help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[360px] p-3">
+                    Upload source files or ZIP, TAR, TAR.GZ/TGZ archives for the embedded Agent and external MCP clients.
+                    References are saved immediately for this variant, separately from the context form.
+                    Archives are limited to 5,000 entries. Binary files cannot be read as source.
+                    Upload only code you are permitted to share with your selected AI provider; exclude secrets.
+                </HelpPopover>
+            </div>
             <div
                 role="region"
                 aria-label="Drop codebase files"
@@ -108,13 +111,12 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
                 <label htmlFor="ai-codebase-files" className="block text-sm text-zinc-300 mb-2">
                     {busy ? "Updating references..." : "Drag and drop files here, or choose files"}
                 </label>
-                <input
+                <FileInputButton
                     id="ai-codebase-files"
-                    type="file"
+                    buttonLabel="Choose files"
                     multiple
                     aria-label="Upload codebase references"
                     disabled={unavailable}
-                    className="text-sm text-zinc-300 max-w-full"
                     onChange={event => {
                         const selected = Array.from(event.target.files ?? []);
                         event.target.value = "";
@@ -122,9 +124,15 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
                     }}
                 />
             </div>
-            <label className="block text-sm text-zinc-300">
-                Reference description (optional, for the next upload)
+            <div className="block text-sm text-zinc-300">
+                <div className="flex items-center gap-2">
+                    <label htmlFor="ai-codebase-description">Reference description</label>
+                    <HelpPopover ariaLabel="Reference description help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[320px] p-3">
+                        Optional. Applied to the next upload.
+                    </HelpPopover>
+                </div>
                 <input
+                    id="ai-codebase-description"
                     aria-label="Codebase reference description"
                     value={description}
                     onChange={event => setDescription(event.target.value)}
@@ -132,7 +140,7 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
                     className="block w-full rounded px-2 py-1.5 mt-1 text-sm bg-slate-900/60 border border-slate-600 text-white disabled:opacity-40"
                     placeholder="e.g. Complete source for this variant, or selected component only"
                 />
-            </label>
+            </div>
             {files.length === 0 ? <p className="text-xs text-zinc-400">No codebase references uploaded.</p> : (
                 <ul className="space-y-2">
                     {files.map(file => (

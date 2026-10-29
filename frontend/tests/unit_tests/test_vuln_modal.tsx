@@ -12,6 +12,8 @@ import Assessments from "../../src/handlers/assessments";
 import type { Assessment } from "../../src/handlers/assessments";
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import VulnModal from '../../src/components/VulnModal';
+import AgentChat from '../../src/components/AgentChat';
+import { resetAgentQueue } from '../../src/handlers/agentQueue';
 import AssessmentReviews from "../../src/handlers/assessmentReviews";
 import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
 
@@ -4252,6 +4254,53 @@ describe("VulnModal AI review block", () => {
         await renderModalWithAssessment({id: "assess-1", origin: "custom"});
 
         expect(await screen.findByText(/responses: update, will_not_fix/i)).toBeInTheDocument();
+    });
+
+    test("keeps a failed AI review deduplicated until its explicit retry saves the review", async () => {
+        resetAgentQueue();
+        mockReviews({});
+        await renderModalWithAssessment({
+            id: 'assess-1', origin: 'custom', targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
+        });
+        const serveModal = fetchMock.getMockImplementation()!;
+        const json = (data: unknown, ok = true) => ({
+            ok, headers: { get: () => 'application/json' }, json: async () => data,
+        }) as unknown as Response;
+        let attempts = 0;
+        fetchMock.mockImplementation((input, init) => {
+            const path = String(input);
+            if (path.endsWith('/api/agent/models')) return Promise.resolve(json({ models: [{ id: 'auto', name: 'Auto' }] }));
+            if (path.endsWith('/api/agent/messages')) {
+                attempts++;
+                return Promise.resolve(attempts === 1 ? json({ error: 'Review provider unavailable' }, false)
+                    : json({ reply: 'Review saved', model: 'auto', usage: {} }));
+            }
+            if (path.startsWith('/api/agent')) return Promise.resolve(json({
+                authenticated: true, configured: true, messages: [], model: 'auto', usage: {},
+            }));
+            if (path.endsWith('/api/assessments/assess-1/reviews')) return Promise.resolve(json({
+                reviews: attempts >= 2 ? [review] : [],
+            }));
+            if (path.endsWith('/api/assessments/assess-1')) return Promise.resolve(json({
+                id: 'assess-1', vuln_id: baseVulnerability.id, origin: 'custom', status: 'affected',
+                timestamp: '2026-08-06T09:00:00Z', targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
+            }));
+            return serveModal(input, init);
+        });
+        render(<AgentChat context={{ page: 'vulnerabilities' }} onClose={() => {}} />);
+        await userEvent.click(screen.getByRole('button', { name: /Review assessment assess-1 with AI/ }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Review provider unavailable');
+        // The failed review keeps its button linked to the paused request instead of queueing a duplicate.
+        const reviewButton = screen.getByRole('button', { name: 'Review assessment assess-1 with AI (failed)' });
+        expect(reviewButton).toHaveTextContent('Failed · view');
+        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveAttribute('placeholder', expect.stringContaining('paused'));
+        await userEvent.click(reviewButton);
+        expect(attempts).toBe(1);
+        await userEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Review assessment assess-1 with AI' })).toBeEnabled());
+        expect(attempts).toBe(2);
+        expect(screen.queryByRole('button', { name: 'Retry failed action' })).not.toBeInTheDocument();
+        expect(screen.queryByText('Review provider unavailable')).not.toBeInTheDocument();
     });
 
     test("labels the sole reviewed target of a multi-target assessment", async () => {

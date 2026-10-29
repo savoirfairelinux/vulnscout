@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import importlib
+import json
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
@@ -152,3 +153,124 @@ def test_repair_preserves_an_already_upgraded_database():
         migration.upgrade()
         repair.upgrade()
         assert 'created_at' in _column_names(connection, 'assessments')
+
+
+editor_fields = importlib.import_module(
+    "src.migrations.versions.a3d5e7f9b1c2_add_variant_context_editor_fields"
+)
+
+EDITOR_COLUMNS = {
+    "codebase_source", "system_scope", "system_actors",
+    "system_entry_points", "system_trust_boundaries", "stride_model",
+}
+
+
+def _create_editor_pre_upgrade_schema(connection):
+    connection.exec_driver_sql(
+        "CREATE TABLE variant_context ("
+        "id VARCHAR PRIMARY KEY, variant_id VARCHAR, codebase_path TEXT, "
+        "threat_model TEXT, risks TEXT, updated_at DATETIME)"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE context_files (id VARCHAR PRIMARY KEY, variant_context_id VARCHAR)"
+    )
+    rows = [("A", "src;lib"), ("B", None), ("C", "src"), ("D", None)]
+    for ctx_id, path in rows:
+        connection.exec_driver_sql(
+            "INSERT INTO variant_context (id, variant_id, codebase_path, updated_at) "
+            "VALUES (?, ?, ?, '2026-01-01T00:00:00Z')",
+            (ctx_id, f"v{ctx_id}", path),
+        )
+    for ctx_id in ("A", "B"):
+        connection.exec_driver_sql(
+            "INSERT INTO context_files (id, variant_context_id) VALUES (?, ?)",
+            (f"f{ctx_id}", ctx_id),
+        )
+
+
+def test_editor_fields_migration_defaults():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+
+        editor_fields.upgrade()
+
+        rows = connection.exec_driver_sql(
+            "SELECT id, codebase_source, updated_at, stride_model, "
+            "system_scope, system_actors, system_entry_points, system_trust_boundaries "
+            "FROM variant_context"
+        ).mappings().all()
+        columns = _column_names(connection, "variant_context")
+
+    assert not {"threat_model", "risks", "editor_mode"} & columns
+    by_id = {r["id"]: r for r in rows}
+    assert {k: v["codebase_source"] for k, v in by_id.items()} == {
+        "A": "references", "B": "references", "C": "paths", "D": "paths",
+    }
+    for row in rows:
+        assert row["updated_at"] == "2026-01-01T00:00:00Z"
+        assert row["stride_model"] is None
+        assert row["system_scope"] is None
+        assert row["system_actors"] is None
+        assert row["system_entry_points"] is None
+        assert row["system_trust_boundaries"] is None
+
+
+def test_editor_fields_downgrade_drops_columns():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+
+        editor_fields.upgrade()
+        assert EDITOR_COLUMNS <= _column_names(connection, "variant_context")
+        editor_fields.downgrade()
+
+        columns = _column_names(connection, "variant_context")
+
+    assert not (EDITOR_COLUMNS & columns)
+    assert {"threat_model", "risks"} <= columns
+
+
+def test_editor_fields_upgrade_outdates_only_contexts_that_lose_text():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        connection.exec_driver_sql("UPDATE variant_context SET threat_model = 'Old model' WHERE id = 'A'")
+        connection.exec_driver_sql("UPDATE variant_context SET risks = '  ' WHERE id = 'B'")
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+
+        editor_fields.upgrade()
+
+        stamps = dict(connection.exec_driver_sql("SELECT id, updated_at FROM variant_context").all())
+
+    assert stamps["A"] != "2026-01-01T00:00:00Z"
+    assert {stamps[k] for k in "BCD"} == {"2026-01-01T00:00:00Z"}
+
+
+def test_editor_fields_downgrade_restores_rendered_text():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_editor_pre_upgrade_schema(connection)
+        editor_fields.op = Operations(MigrationContext.configure(connection))
+        editor_fields.upgrade()
+        model = {
+            "components": [{"id": "C1", "name": "API", "description": "", "trust_zone": ""}],
+            "interactions": [],
+            "threats": [{"id": "T1", "category": "spoofing", "description": "Fake caller", "target_ids": ["C1"]}],
+            "risks": [{"threat_id": "T1", "likelihood": "high", "impact": "low", "mitigation": "", "residual": ""}],
+        }
+        connection.execute(
+            sa.text("UPDATE variant_context SET system_scope = 'Scope text', stride_model = :m WHERE id = 'A'"),
+            {"m": json.dumps(model)},
+        )
+
+        editor_fields.downgrade()
+
+        rows = {r["id"]: r for r in connection.exec_driver_sql(
+            "SELECT id, threat_model, risks FROM variant_context").mappings().all()}
+
+    assert "Scope text" in rows["A"]["threat_model"] and "T1 [C1 API]: Fake caller" in rows["A"]["threat_model"]
+    assert "T1 Spoofing, Fake caller" in rows["A"]["risks"]
+    assert rows["B"]["threat_model"] is None and rows["B"]["risks"] is None

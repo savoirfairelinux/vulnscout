@@ -72,6 +72,7 @@ export type OperationJob = {
     options?: {
         exclude_kernel?: boolean;
         exclude_native?: boolean;
+        native_package_exceptions?: string[];
         mode?: "local" | "api";
     };
 };

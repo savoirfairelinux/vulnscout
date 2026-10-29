@@ -29,8 +29,11 @@ type Props = {
     defaultProject?: { id: string; name: string } | null;
     defaultVariant?: { id: string; name: string } | null;
     defaultScope?: FrontendScope | null;
-    onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void;
+    // Returning (or resolving) false rejects the apply: the previous scope stays applied.
+    onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void | boolean | Promise<boolean | void>;
 };
+
+type ApplyArgs = Parameters<Props['onApply']>;
 
 function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
@@ -66,6 +69,10 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
     // Selection to apply once variants finish (re)loading for a project. Used
     // both for the initial config scope and when reopening restores a project.
     const pendingRestoreRef = useRef<string[] | null>(null);
+    // While the caller decides on an apply (e.g. an unsaved-changes prompt is
+    // open), the panel must not close, so a rejection keeps the user's edits.
+    const applyPendingRef = useRef(false);
+    const [applyError, setApplyError] = useState('');
     // Mirror project/variants in refs so the open-restore effect can read the
     // latest values without re-running on every change.
     const variantsRef = useRef<Variant[]>([]);
@@ -140,7 +147,9 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
                 }
             })
             .catch(() => {
-                if (!cancelled) setVariants([]);
+                if (cancelled) return;
+                setVariants([]);
+                setSelectedVariantIds([]);
             });
         return () => { cancelled = true; };
     }, [selectedProjectId]);
@@ -192,6 +201,7 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
     // Restore the panel controls from the applied scope each time it opens.
     useEffect(() => {
         if (!isOpen) return;
+        setApplyError('');
         const scope = appliedScopeRef.current;
         if (!scope) return;
         setMode(scope.mode);
@@ -213,6 +223,7 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
     useEffect(() => {
         function handleClickOutside(event: MouseEvent) {
             if (
+                !applyPendingRef.current &&
                 panelRef.current && !panelRef.current.contains(event.target as Node) &&
                 buttonRef.current && !buttonRef.current.contains(event.target as Node)
             ) {
@@ -228,7 +239,7 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
     // Close on Escape
     useEffect(() => {
         function handleEscape(event: KeyboardEvent) {
-            if (event.key === 'Escape') setIsOpen(false);
+            if (event.key === 'Escape' && !applyPendingRef.current) setIsOpen(false);
         }
         if (isOpen) {
             document.addEventListener('keydown', handleEscape);
@@ -244,54 +255,73 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
 
     const allSelected = variants.length > 0 && selectedVariantIds.length === variants.length;
 
-    const handleApply = () => {
-        const project = projects.find(p => p.id === selectedProjectId);
+    // Commit the label and snapshot only once the caller accepts the apply.
+    const requestApply = (args: ApplyArgs, label: string, scope: AppliedScope) => {
+        const commit = () => {
+            setAppliedProject(projects.find(p => p.id === scope.projectId)?.name ?? '');
+            setAppliedLabel(label);
+            applyScope(scope);
+            setIsOpen(false);
+        };
+        const result = onApply(...args);
+        if (!(result instanceof Promise)) {
+            if (result !== false) commit();
+            return;
+        }
+        applyPendingRef.current = true;
+        result
+            .then(applied => { if (applied !== false) commit(); })
+            // The previous scope stays applied; the open panel says why.
+            .catch((error: unknown) => setApplyError(
+                `Could not apply the selection: ${error instanceof Error && error.message ? error.message : 'unknown error'}`,
+            ))
+            .finally(() => { applyPendingRef.current = false; });
+    };
 
+    const handleApply = () => {
+        if (applyPendingRef.current) return;
+        setApplyError('');
         if (mode === 'compare' && compareBaseVariantId && selectedCompareVariantId) {
             const base = variants.find(v => v.id === compareBaseVariantId);
             const compareVariant = variants.find(v => v.id === selectedCompareVariantId);
             const opSymbol = { difference: '∖', intersection: '∩' }[compareOperation];
-            setAppliedProject(project?.name ?? '');
-            setAppliedLabel(`${base?.name ?? 'All'} ${opSymbol} ${compareVariant?.name ?? ''}`);
-            applyScope({
-                projectId: selectedProjectId,
-                mode: 'compare',
-                variantIds: [],
-                compareBaseId: compareBaseVariantId,
-                compareOp: compareOperation,
-                compareId: selectedCompareVariantId,
-            });
-            onApply(selectedProjectId, compareBaseVariantId, selectedCompareVariantId, compareOperation, [], '');
-            setIsOpen(false);
+            requestApply(
+                [selectedProjectId, compareBaseVariantId, selectedCompareVariantId, compareOperation, [], ''],
+                `${base?.name ?? 'All'} ${opSymbol} ${compareVariant?.name ?? ''}`,
+                {
+                    projectId: selectedProjectId,
+                    mode: 'compare',
+                    variantIds: [],
+                    compareBaseId: compareBaseVariantId,
+                    compareOp: compareOperation,
+                    compareId: selectedCompareVariantId,
+                },
+            );
             return;
         }
 
         // Select Variants mode — union of the selected variants
-        setAppliedProject(project?.name ?? '');
+        const wholeProject = allSelected || selectedVariantIds.length === 0;
         const selectScope: AppliedScope = {
             projectId: selectedProjectId,
             mode: 'select',
-            variantIds: (allSelected || selectedVariantIds.length === 0)
-                ? variants.map(v => v.id)
-                : [...selectedVariantIds],
+            variantIds: wholeProject ? variants.map(v => v.id) : [...selectedVariantIds],
             compareBaseId: compareBaseVariantId,
             compareOp: compareOperation,
             compareId: selectedCompareVariantId,
         };
-        applyScope(selectScope);
-        if (allSelected || selectedVariantIds.length === 0) {
-            // Whole project scope
-            setAppliedLabel('All variants');
-            onApply(selectedProjectId, '', '', '', [], '');
+        if (wholeProject) {
+            requestApply([selectedProjectId, '', '', '', [], ''], 'All variants', selectScope);
         } else if (selectedVariantIds.length === 1) {
             const variant = variants.find(v => v.id === selectedVariantIds[0]);
-            setAppliedLabel(variant?.name ?? '');
-            onApply(selectedProjectId, selectedVariantIds[0], '', '', [], '');
+            requestApply([selectedProjectId, selectedVariantIds[0], '', '', [], ''], variant?.name ?? '', selectScope);
         } else {
-            setAppliedLabel(`${selectedVariantIds.length} variants (∪)`);
-            onApply(selectedProjectId, '', '', '', selectedVariantIds, 'union');
+            requestApply(
+                [selectedProjectId, '', '', '', selectedVariantIds, 'union'],
+                `${selectedVariantIds.length} variants (∪)`,
+                selectScope,
+            );
         }
-        setIsOpen(false);
     };
 
     const applyDisabled = !selectedProjectId
@@ -480,6 +510,8 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
                             </button>
                         </div>
                     )}
+
+                    {applyError && <p role="alert" className="text-xs text-amber-300 mb-2">{applyError}</p>}
 
                     {/* Apply button */}
                     <button

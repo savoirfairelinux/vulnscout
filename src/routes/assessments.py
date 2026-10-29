@@ -356,7 +356,7 @@ def init_app(app: Flask) -> None:
         query variant_id uuid optional Filter by a single variant ID.
         query project_id uuid optional Filter by a single project ID.
         query format string optional Response format such as list or dict.
-        response 200 JsonObject Assessment collection.
+        response 200 AssessmentCollection Assessment collection.
         """
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
@@ -518,7 +518,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_id uuid optional Restrict to a single variant.
         query project_id uuid optional Restrict to every variant of a project.
-        response 200 JsonObject Custom assessment collection.
+        response 200 Assessment[] Custom assessment collection.
         """
         return _review_assessments_by_origin("custom")
 
@@ -529,7 +529,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_id uuid optional Restrict to a single variant.
         query project_id uuid optional Restrict to every variant of a project.
-        response 200 JsonObject AI assessment collection.
+        response 200 Assessment[] AI assessment collection.
         """
         return _review_assessments_by_origin("ai")
 
@@ -540,7 +540,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_id uuid required Variant to export.
         query author string optional Author name embedded in exported OpenVEX documents.
-        response 200 binary OpenVEX JSON download.
+        response 200 OpenVexDocument OpenVEX JSON download.
         response 400 Error Exactly one variant was not supplied.
         response 404 Error No review assessments available.
         """
@@ -578,7 +578,10 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         body multipart required Multipart request containing the JSON file and variant_id.
-        response 200 JsonObject Import summary.
+        form file binary required OpenVEX JSON file.
+        form variant_id uuid required Destination variant.
+        form timestamp_policy string optional original (default) or current.
+        response 200 ImportSummary Import summary.
         response 400 Error Invalid uploaded OpenVEX payload.
         response 404 Error Variant not found.
         """
@@ -636,7 +639,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_id uuid optional Restrict to a single variant.
         query project_id uuid optional Restrict to every variant of a project.
-        response 200 JsonObject Vulnerabilities with time estimates.
+        response 200 ReviewTimeEstimate[] Vulnerabilities with time estimates.
         """
         from ..models.time_estimate import TimeEstimate
         from ..models.iso8601_duration import Iso8601Duration
@@ -740,7 +743,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_id uuid optional Restrict to a single variant.
         query project_id uuid optional Restrict to every variant of a project.
-        response 200 JsonObject Vulnerabilities with custom CVSS scores.
+        response 200 ReviewCustomCVSS[] Vulnerabilities with custom CVSS scores.
         """
         from ..models.metrics import Metrics
 
@@ -795,7 +798,14 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/review/time-estimates', methods=['DELETE'])
     def delete_review_time_estimates() -> ResponseReturnValue:
-        """Delete the explicitly selected time estimates as one operation."""
+        """Delete the explicitly selected time estimates as one operation.
+
+        OpenAPI:
+        body ids uuid[] required Selected time-estimate record IDs.
+        response 200 DeletionSummary Deletion confirmation with deleted record IDs.
+        response 400 Error Missing or invalid record IDs.
+        response 404 Error Time estimate not found.
+        """
         from ..models.time_estimate import TimeEstimate
 
         ids, error = _parse_batch_record_ids()
@@ -811,7 +821,14 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/review/custom-cvss', methods=['DELETE'])
     def delete_review_custom_cvss() -> ResponseReturnValue:
-        """Delete selected custom CVSS records without affecting scanner data."""
+        """Delete selected custom CVSS records without affecting scanner data.
+
+        OpenAPI:
+        body ids uuid[] required Selected custom CVSS record IDs.
+        response 200 DeletionSummary Deletion confirmation with deleted record IDs.
+        response 400 Error Missing or invalid record IDs.
+        response 404 Error Custom CVSS score not found.
+        """
         from ..models.metrics import Metrics
 
         ids, error = _parse_batch_record_ids()
@@ -836,9 +853,9 @@ def init_app(app: Flask) -> None:
         * ``project_id`` - restrict to all variants in a project.
 
         OpenAPI:
-        query variant_id uuid optional Restrict export to selected variants; may be repeated.
+        query variant_id uuid[] optional Restrict export to selected variants; repeat this parameter.
         query project_id uuid optional Restrict export to a single project.
-        response 200 binary Custom review data download.
+        response 200 CustomDataDocument Custom review data JSON download.
         response 404 Error No custom data available.
         """
         raw_variant_ids = request.args.getlist('variant_id')
@@ -901,7 +918,10 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         body multipart required Existing JSON export, project_id and repeated variant_id fields.
-        response 200 binary Updated JSON download.
+        form file binary required Existing OpenVEX or VulnScout custom-data JSON export.
+        form project_id uuid required Project containing the selected variants.
+        form variant_id uuid[] required Selected variants; repeat this field.
+        response 200 ReviewExport Updated JSON download in the uploaded format.
         response 400 Error Unsupported input or invalid variant selection.
         response 404 Error No review data available.
         """
@@ -982,8 +1002,11 @@ def init_app(app: Flask) -> None:
         * ``application/json`` body with the custom-data payload directly.
 
         OpenAPI:
-        body JsonObject optional JSON payload or uploaded custom-data file.
-        response 200 JsonObject Import summary.
+        body CustomDataImport required Custom-data JSON payload with project_id and optional timestamp_policy.
+        body multipart required Alternatively upload a custom-data JSON file.
+        form file binary required Custom-data JSON file.
+        form project_id uuid required Destination project; variants are resolved by names in the file.
+        response 200 ImportSummary Import summary.
         response 400 Error Invalid import payload.
         """
         import json as _json
@@ -1048,7 +1071,7 @@ def init_app(app: Flask) -> None:
         """Return a single assessment by identifier.
 
         OpenAPI:
-        response 200 JsonObject Assessment payload.
+        response 200 Assessment Assessment payload, targets, fingerprint, and reviews.
         response 404 Error Assessment not found.
         """
         item = DBAssessment.get_by_id(assessment_id)
@@ -1082,7 +1105,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query format string optional Response format such as list or dict.
         query project_id uuid optional Restrict results to one project.
-        response 200 JsonObject Assessment collection for the vulnerability.
+        response 200 AssessmentCollection Assessment collection for the vulnerability.
         """
         project_uuid: UUID | None = None
         project_id = request.args.get('project_id')
@@ -1120,8 +1143,8 @@ def init_app(app: Flask) -> None:
         """Bring an assessment to the requested state in one transaction.
 
         OpenAPI:
-        body JsonObject optional Desired assessment content and targets.
-        response 200 JsonObject The reconciled assessment.
+        body AssessmentReconcile required Desired assessment content and targets.
+        response 200 Assessment The reconciled assessment.
         response 400 Error Invalid reconcile payload.
         response 404 Error No such assessment.
         """
@@ -1179,7 +1202,7 @@ def init_app(app: Flask) -> None:
         query variant_id uuid optional Restrict results to one variant.
         query project_id uuid optional Restrict results to one project.
         query origin string optional Restrict results to one origin.
-        response 200 JsonArray Assessments for review.
+        response 200 Assessment[] Assessments for review.
         """
         query = select(DBAssessment)
         # The variant/project filters below match against the joined target
@@ -1246,7 +1269,7 @@ def init_app(app: Flask) -> None:
         (via the Observation → Scan → Variant chain).
 
         OpenAPI:
-        response 200 JsonObject Variants impacted by the vulnerability.
+        response 200 Variant[] Variants impacted by the vulnerability.
         """
         from ..models.observation import Observation
         from ..models.scan import Scan
@@ -1281,7 +1304,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query project_id uuid optional Restrict the result to one project.
-        response 200 JsonObject Active packages by variant.
+        response 200 VariantActivePackages Active packages by variant.
         """
         from ..models.observation import Observation
         from ..models.scan import Scan
@@ -1362,8 +1385,8 @@ def init_app(app: Flask) -> None:
         selected (package, variant) combo.
 
         OpenAPI:
-        body JsonObject optional Assessment creation payload.
-        response 200 JsonObject Created assessment payload.
+        body AssessmentCreate required Assessment content and targets.
+        response 200 Assessment Created assessment payload.
         response 400 Error Invalid assessment payload.
         response 500 Error Database error while creating the assessment.
         """
@@ -1516,8 +1539,8 @@ def init_app(app: Flask) -> None:
         """Create multiple custom assessments in a single request.
 
         OpenAPI:
-        body JsonObject optional Batch assessment creation payload.
-        response 200 JsonObject Batch creation summary.
+        body AssessmentBatch required Batch assessment creation payload.
+        response 200 AssessmentBatchResult Batch creation summary.
         response 400 Error Invalid batch payload.
         """
         payload_data = request.get_json()
@@ -1665,9 +1688,9 @@ def init_app(app: Flask) -> None:
         """Update a custom assessment or override an automated one.
 
         OpenAPI:
-        body JsonObject optional Assessment update payload.
+        body AssessmentUpdate required Assessment update payload.
         body allowed_variant_ids uuid[] optional Reject if any current target is outside these variants.
-        response 200 JsonObject Updated assessment payload.
+        response 200 Assessment Updated assessment payload.
         response 400 Error Invalid assessment update.
         response 404 Error Assessment not found.
         """
@@ -1783,7 +1806,7 @@ def init_app(app: Flask) -> None:
         """Delete an assessment.
 
         OpenAPI:
-        response 200 JsonObject Deletion summary.
+        response 200 DeletionSummary Deletion summary.
         response 404 Error Assessment not found.
         """
         existing = DBAssessment.get_by_id(assessment_id)
@@ -1804,7 +1827,7 @@ def init_app(app: Flask) -> None:
         """Approve a pending AI assessment, converting it to custom.
 
         OpenAPI:
-        response 200 JsonObject Approved assessment.
+        response 200 Assessment Approved assessment.
         response 400 Error Not a pending AI assessment.
         response 404 Error Assessment not found.
         """
@@ -1820,7 +1843,7 @@ def init_app(app: Flask) -> None:
         """Reject a pending AI assessment, deleting it.
 
         OpenAPI:
-        response 200 JsonObject Deleted assessment id.
+        response 200 DeletionSummary Deleted assessment id.
         response 400 Error Not a pending AI assessment.
         response 404 Error Assessment not found.
         """

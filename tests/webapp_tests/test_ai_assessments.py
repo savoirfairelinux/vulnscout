@@ -125,36 +125,36 @@ def test_ai_context_outdated_false_without_context(client):
 def test_ai_context_outdated_true_when_first_context_is_added(client, app):
     _post_ai(client)
     assert [a["context_outdated"] for a in _review_ai(client)] == [False]
-    _set_context(app, threat_model="new")
+    _set_context(app, environment="new")
     assert [a["context_outdated"] for a in _review_ai(client)] == [True]
 
 
 def test_ai_context_outdated_false_when_context_older(client, app):
-    _set_context(app, threat_model="old")
+    _set_context(app, environment="old")
     _post_ai(client)
     assert [a["context_outdated"] for a in _review_ai(client)] == [False]
 
 
 def test_ai_context_outdated_true_after_context_edit(client, app):
-    _set_context(app, threat_model="old")
+    _set_context(app, environment="old")
     _post_ai(client)
-    _set_context(app, threat_model="new")
+    _set_context(app, environment="new")
     assert [a["context_outdated"] for a in _review_ai(client)] == [True]
 
 
 def test_ai_context_outdated_stays_true_when_context_is_restored(client, app):
-    _set_context(app, threat_model="old")
+    _set_context(app, environment="old")
     _post_ai(client)
-    _set_context(app, threat_model="new")
+    _set_context(app, environment="new")
     assert [a["context_outdated"] for a in _review_ai(client)] == [True]
-    _set_context(app, threat_model="old")
+    _set_context(app, environment="old")
     assert [a["context_outdated"] for a in _review_ai(client)] == [True]
 
 
 def test_ai_context_outdated_uses_creation_time_after_assessment_edit(client, app):
-    _set_context(app, threat_model="old")
+    _set_context(app, environment="old")
     _post_ai(client)
-    _set_context(app, threat_model="new")
+    _set_context(app, environment="new")
 
     with app.app_context():
         assessment = DBAssessment.get_by_origin(
@@ -169,9 +169,9 @@ def test_ai_context_outdated_uses_creation_time_after_assessment_edit(client, ap
 
 
 def test_ai_context_outdated_ignores_noop_save(client, app):
-    _set_context(app, threat_model="same")
+    _set_context(app, environment="same")
     _post_ai(client)
-    _set_context(app, threat_model="same")
+    _set_context(app, environment="same")
     assert [a["context_outdated"] for a in _review_ai(client)] == [False]
 
 
@@ -180,7 +180,7 @@ def test_ai_context_outdated_only_for_edited_variant(client, app):
     _add_variant(app, other_variant)
     _post_ai(client)
     _post_ai(client, variant_id=other_variant)
-    _set_context(app, threat_model="new")
+    _set_context(app, environment="new")
     resp = client.get("/api/assessments/review/ai")
     by_variant = {a["targets"][0]["variant_id"]: a["context_outdated"] for a in json.loads(resp.data)}
     assert by_variant == {str(VARIANT_UUID): True, other_variant: False}
@@ -198,7 +198,7 @@ def test_ai_context_outdated_when_any_target_context_is_newer(client, app):
     )
     assert response.status_code == 200
 
-    _set_context(app, threat_model="changed")
+    _set_context(app, environment="changed")
 
     rows = json.loads(client.get("/api/assessments/review/ai").data)
     assert len(rows) == 1
@@ -206,11 +206,11 @@ def test_ai_context_outdated_when_any_target_context_is_newer(client, app):
 
 
 def test_reviews_endpoint_flags_ai_context_outdated(client, app):
-    _set_context(app, threat_model="old")
+    _set_context(app, environment="old")
     _post_ai(client)
     url = f"/api/reviews/assessments?variant_id={VARIANT_UUID}&origin=ai"
     assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [False]
-    _set_context(app, threat_model="new")
+    _set_context(app, environment="new")
     assert [a["context_outdated"] for a in json.loads(client.get(url).data)] == [True]
 
 
@@ -270,12 +270,12 @@ def test_future_payload_timestamp_does_not_suppress_outdating(client, app):
     """created_at must come from the server clock, not the payload."""
     future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     assert _post_ai(client, timestamp=future).status_code == 200
-    _set_context(app, threat_model="changed after the assessment was written")
+    _set_context(app, environment="changed after the assessment was written")
     assert [a["context_outdated"] for a in _review_ai(client)] == [True]
 
 
 def test_past_payload_timestamp_does_not_outdate_a_fresh_assessment(client, app):
-    _set_context(app, threat_model="current")
+    _set_context(app, environment="current")
     past = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     assert _post_ai(client, timestamp=past).status_code == 200
     assert [a["context_outdated"] for a in _review_ai(client)] == [False]

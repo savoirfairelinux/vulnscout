@@ -1,3 +1,5 @@
+import type { NativeScanPreferences } from "./project";
+
 type FrontendScope = {
     project_id: string;
     mode: 'select' | 'compare';
@@ -20,6 +22,26 @@ type AppConfig = {
 export type { AppConfig, FrontendScope };
 
 class Config {
+    static async nativePackages(configuration?: NativeScanPreferences, signal?: AbortSignal): Promise<NativeScanPreferences> {
+        const response = await fetch(import.meta.env.VITE_API_URL + "/api/config/native-packages", {
+            mode: "cors",
+            signal,
+            method: configuration ? "PUT" : "GET",
+            ...(configuration ? {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(configuration),
+            } : {}),
+        });
+        if (!response.ok) throw new Error(`Failed to ${configuration ? "save" : "load"} global native-package settings (${response.status})`);
+        const data = await response.json();
+        if (typeof data?.exclude_native !== "boolean"
+            || !Array.isArray(data.native_package_exceptions)
+            || !data.native_package_exceptions.every((name: unknown) => typeof name === "string")) {
+            throw new Error("Invalid global native-package settings");
+        }
+        return data;
+    }
+
     private static readonly _frontendScopeStorageKey = 'vulnscout.frontendScope';
 
     private static _normalizeFrontendScope(scope: unknown): FrontendScope | null {

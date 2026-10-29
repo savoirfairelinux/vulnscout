@@ -4,14 +4,17 @@
 import os
 import re
 import fcntl
+import shlex
 from flask import jsonify, request
 
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
+from ..helpers.scan_configuration import (
+    read_scan_configuration, validate_scan_configuration, write_scan_configuration,
+)
 
-_CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 # Accepts: off | disabled | plain-bytes | <digits><unit>
 # Units: B, KiB/MiB/GiB/TiB/PiB/EiB  and their SI equivalents KB/MB/…
@@ -22,7 +25,12 @@ _GRYPE_MEMLIMIT_RE = re.compile(
 
 
 def _config_file_path() -> str:
-    return os.environ.get('VULNSCOUT_CONFIG', _CONFIG_FILE_DEFAULT)
+    config_home = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+    return os.environ.get('VULNSCOUT_CONFIG', os.path.join(config_home, 'vulnscout', 'config.env'))
+
+
+def _has_control_characters(value: str) -> bool:
+    return any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
 
 
 def _mask_nvd_api_key(key: str) -> str:
@@ -37,23 +45,28 @@ def _write_config_key(key: str, value: str | None) -> bool:
     """Write or remove *key* in the persistent config.env file.
 
     If *value* is ``None`` or an empty string the key is removed; otherwise
-    it is written as ``KEY=value``.
+    it is written as a shell-quoted assignment.
     """
     config_file = _config_file_path()
     try:
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or (
+            value is not None and _has_control_characters(value)
+        ):
+            return False
         dirname = os.path.dirname(config_file)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
-        with open(config_file, 'a+') as fh:
+        with open(config_file, 'a+', opener=lambda path, flags: os.open(path, flags, 0o600)) as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
+                os.fchmod(fh.fileno(), 0o600)
                 fh.seek(0)
                 existing_lines = [ln for ln in fh.readlines() if not ln.startswith(f'{key}=')]
                 fh.seek(0)
                 fh.truncate(0)
                 fh.writelines(existing_lines)
                 if value:
-                    fh.write(f'{key}={value}\n')
+                    fh.write(f'{key}={shlex.quote(value)}\n')
                 fh.flush()
                 os.fsync(fh.fileno())
             finally:
@@ -64,14 +77,63 @@ def _write_config_key(key: str, value: str | None) -> bool:
         return False
 
 
+def persist_env_keys(updates: dict[str, str | None]) -> tuple[bool, str | None]:
+    """Persist environment updates to config.env and os.environ atomically."""
+    snapshot: dict[str, str | None] = {
+        env_key: os.environ.get(env_key)
+        for env_key in updates
+    }
+    written_env_keys: list[str] = []
+    for env_key, persisted_value in updates.items():
+        if not _write_config_key(env_key, persisted_value):
+            for prev_env_key in written_env_keys:
+                prev_val = snapshot[prev_env_key]
+                _write_config_key(prev_env_key, prev_val if prev_val else None)
+                if prev_val is None:
+                    os.environ.pop(prev_env_key, None)
+                else:
+                    os.environ[prev_env_key] = prev_val
+            return False, env_key
+        if persisted_value is None:
+            os.environ.pop(env_key, None)
+        else:
+            os.environ[env_key] = persisted_value
+        written_env_keys.append(env_key)
+    return True, None
+
+
 def init_app(app):
+
+    @app.route('/api/config/native-packages', methods=['GET', 'PUT'])
+    def native_package_configuration():
+        """Read or replace global native-package scan defaults.
+
+        OpenAPI:
+        PUT body ScanConfiguration required Global exclude_native and native_package_exceptions.
+        response 200 ScanConfiguration Global native-package scan defaults.
+        response 400 Error Invalid scan configuration.
+        response 500 Error Configuration could not be accessed.
+        """
+        configuration = None
+        if request.method == 'PUT':
+            try:
+                configuration = validate_scan_configuration(request.get_json(silent=True))
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+        try:
+            if request.method == 'PUT':
+                return jsonify(write_scan_configuration(None, configuration))
+            return jsonify(read_scan_configuration())
+        except (OSError, ValueError):
+            app.logger.exception("Unable to access global native-package configuration")
+            return jsonify({"error": "Unable to access global native-package configuration"}), 500
 
     @app.route('/api/config', methods=['GET'])
     def get_config():
         """Return active UI and scanning configuration values.
 
         OpenAPI:
-        response 200 JsonObject Active configuration payload.
+        response 200 Config Active configuration payload.
         """
         project_name = os.environ.get('PROJECT_NAME', '')
         variant_name = os.environ.get('VARIANT_NAME', 'default')
@@ -95,7 +157,6 @@ def init_app(app):
             project = all_projects[0] if all_projects else None
 
         grype_memlimit = os.environ.get('GRYPE_MEMLIMIT', '')
-
         return jsonify({
             "project": ProjectController.serialize(project) if project else None,
             "variant": VariantController.serialize(variant) if variant else None,
@@ -111,8 +172,8 @@ def init_app(app):
         """Update mutable configuration keys and persist them to config.env.
 
         OpenAPI:
-        body JsonObject optional JSON object containing mutable config keys.
-        response 200 JsonObject Updated configuration payload.
+        body ConfigUpdate required Mutable configuration keys.
+        response 200 Config Updated configuration payload.
         response 400 Error Invalid request payload.
         """
         data = request.get_json(silent=True)
@@ -155,33 +216,16 @@ def init_app(app):
                                  "Use a Go memory string (e.g. 4GiB, 512MiB, 1073741824) "
                                  "or 'off' / 'disabled' to remove the cap."
                     }), 400
-
             validated[key] = (env_key, normalized_value if normalized_value else None)
 
-        # Snapshot current env values so we can roll back on partial write failure.
-        snapshot: dict[str, str | None] = {
-            env_key: os.environ.get(env_key)
-            for _, (env_key, _) in validated.items()
+        updates = {
+            env_key: persisted_value
+            for _, (env_key, persisted_value) in validated.items()
         }
-
-        # Second pass: write all validated keys; roll back already-written keys on failure.
-        written_env_keys: list[str] = []
-        for key, (env_key, persisted_value) in validated.items():
-            if not _write_config_key(env_key, persisted_value):
-                for prev_env_key in written_env_keys:
-                    prev_val = snapshot[prev_env_key]
-                    _write_config_key(prev_env_key, prev_val if prev_val else None)
-                    if prev_val is None:
-                        os.environ.pop(prev_env_key, None)
-                    else:
-                        os.environ[prev_env_key] = prev_val
-                return jsonify({"error": f"Failed to persist '{key}' to config.env."}), 500
-
-            if persisted_value is None:
-                os.environ.pop(env_key, None)
-            else:
-                os.environ[env_key] = persisted_value
-            written_env_keys.append(env_key)
+        ok, failed_key = persist_env_keys(updates)
+        if not ok:
+            key = next((cfg_key for cfg_key, env_key in allowed_keys.items() if env_key == failed_key), failed_key)
+            return jsonify({"error": f"Failed to persist '{key}' to config.env."}), 500
 
         return get_config()
 
@@ -190,7 +234,7 @@ def init_app(app):
         """Return NVD API key presence and masked representation.
 
         OpenAPI:
-        response 200 JsonObject Masked NVD API key status.
+        response 200 NvdKeyStatus Masked NVD API key status.
         """
         key = os.environ.get('NVD_API_KEY', '')
         if not key:
@@ -202,8 +246,8 @@ def init_app(app):
         """Validate and store a new NVD API key.
 
         OpenAPI:
-        body JsonObject optional JSON body containing api_key.
-        response 200 JsonObject Stored NVD API key status.
+        body NvdKeyUpdate required API key to validate and store.
+        response 200 NvdKeyStatus Stored NVD API key status.
         response 400 Error Invalid NVD API key payload.
         response 503 Error NVD API unavailable for validation.
         """

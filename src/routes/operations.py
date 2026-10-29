@@ -116,6 +116,13 @@ def _plan_scan_job(job: dict) -> List[dict]:
     mode = _mode_option(options)
     exclude_kernel = _bool_option(options, "exclude_kernel", True)
     exclude_native = _bool_option(options, "exclude_native", False)
+    native_exceptions = options.get("native_package_exceptions", [])
+    if not isinstance(native_exceptions, list) or any(
+        not isinstance(name, str) or not name.strip().lower().endswith("-native")
+        or len(name) > 255 for name in native_exceptions
+    ):
+        raise _PlanError("native_package_exceptions must be a list of native package names")
+    native_exceptions = sorted({name.strip().lower() for name in native_exceptions})
     planned: List[dict] = []
     for raw_id in variant_ids:
         try:
@@ -141,6 +148,7 @@ def _plan_scan_job(job: dict) -> List[dict]:
                 "variant_id": str(variant_uuid),
                 "exclude_kernel": exclude_kernel,
                 "exclude_native": exclude_native,
+                "native_package_exceptions": native_exceptions,
                 "mode": mode,
             },
             "runner": SCAN_JOBS[source],
@@ -380,8 +388,8 @@ def init_app(app: Flask) -> None:
         ``/api/events/stream``; there is no status endpoint to poll.
 
         OpenAPI:
-        body JsonObject optional Batch of jobs to queue.
-        response 202 JsonObject Queue accepted with the created operations.
+        body OperationBatch required Batch of jobs to queue.
+        response 202 QueueAccepted Queue accepted with the created operations.
         response 400 Error Invalid job specification.
         response 404 Error Referenced variant not found.
         response 409 Error One of the requested operations is already active.
@@ -431,7 +439,7 @@ def init_app(app: Flask) -> None:
         exists for clients that cannot hold a stream open and for diagnostics.
 
         OpenAPI:
-        response 200 JsonObject Current operation snapshot.
+        response 200 OperationSnapshot Current operation snapshot.
         """
         return jsonify({"operations": registry.snapshot()})
 
@@ -443,7 +451,7 @@ def init_app(app: Flask) -> None:
         cooperative stop signal that its job body honours at the next checkpoint.
 
         OpenAPI:
-        response 200 JsonObject Cancellation accepted.
+        response 200 OperationCancellation Cancellation accepted.
         response 404 Error No such active operation.
         """
         return _cancel_operation_response(op_id)
@@ -453,7 +461,7 @@ def init_app(app: Flask) -> None:
         """Cancel every still-active operation in a batch.
 
         OpenAPI:
-        response 200 JsonObject Number of operations cancelled.
+        response 200 QueueCancellation Number of operations cancelled.
         """
         return jsonify({"cancelled": queue.cancel_queue(queue_id)}), 200
 
@@ -462,7 +470,7 @@ def init_app(app: Flask) -> None:
         """Forget a finished operation so it disappears from every client.
 
         OpenAPI:
-        response 200 JsonObject Operation dismissed.
+        response 200 OperationDismissal Operation dismissed.
         response 409 Error Operation is still active.
         """
         if registry.remove(op_id):

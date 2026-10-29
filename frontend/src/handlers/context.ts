@@ -15,6 +15,67 @@ type VariantContextData = {
 type VariantContext = VariantContextData & {
     variant_id: string;
     files?: ContextFile[];
+    editor: VariantEditorData;
+};
+
+type CodebaseSource = 'paths' | 'references';
+type Rating = 'low' | 'medium' | 'high' | null;
+
+type StrideComponent = { id: string; name: string; description: string; trust_zone: string };
+
+type StrideInteraction = {
+    id: string;
+    name: string;
+    source_id: string;
+    destination_id: string;
+    interface: string;
+    data: string;
+    trust_boundary: string;
+};
+
+type StrideThreat = { id: string; category: string; description: string; target_ids: string[] };
+
+type StrideRisk = {
+    threat_id: string;
+    likelihood: Rating;
+    impact: Rating;
+    mitigation: string;
+    residual: string;
+};
+
+type StrideModel = {
+    components: StrideComponent[];
+    interactions: StrideInteraction[];
+    threats: StrideThreat[];
+    risks: StrideRisk[];
+};
+
+type SystemFields = {
+    scope: string | null;
+    actors: string | null;
+    entry_points: string | null;
+    trust_boundaries: string | null;
+};
+
+/** Editor-shaped view of a variant's context, as returned by the backend. */
+type VariantEditorData = {
+    codebase_source: CodebaseSource;
+    codebase_path: string | null;
+    system: SystemFields;
+    stride: StrideModel;
+    files: ContextFile[];
+    updated_at: string | null;
+};
+
+/** Editable form state for a variant; null text is held as ''. */
+type VariantDraft = {
+    variant_description: string;
+    environment: string;
+    other_info: string;
+    codebase_source: CodebaseSource;
+    codebase_paths: string[];
+    system: Record<keyof SystemFields, string>;
+    stride: StrideModel;
 };
 
 type ContextFile = {
@@ -31,9 +92,12 @@ type VariantEntry = {
     variant_description: string | null;
     codebase_path: string | null;
     environment: string | null;
-    threat_model: string | null;
-    risks: string | null;
     other_info: string | null;
+    codebase_source: CodebaseSource;
+    system: SystemFields;
+    stride_model: StrideModel;
+    /** Uploaded references by name only; ignored on import. */
+    files?: { original_name: string; description: string | null }[];
 };
 
 /** One project with its variants nested underneath. */
@@ -63,17 +127,68 @@ type ContextExport = {
 };
 
 export type {
-    ProjectContext,
-    VariantContext,
     VariantContextData,
     MergedContext,
-    VariantEntry,
-    ProjectEntry,
-    ImportResultItem,
     ImportResult,
     ContextExport,
     ContextFile,
+    CodebaseSource,
+    Rating,
+    StrideComponent,
+    StrideInteraction,
+    StrideThreat,
+    StrideRisk,
+    StrideModel,
+    SystemFields,
+    VariantEditorData,
+    VariantDraft,
 };
+
+/** Rejected variant save; `fields` maps field paths to validation messages. */
+class ContextSaveError extends Error {
+    fields: Record<string, string>;
+    status: number;
+
+    constructor(message: string, status: number, fields: Record<string, string> = {}) {
+        super(message);
+        this.name = 'ContextSaveError';
+        this.status = status;
+        this.fields = fields;
+    }
+}
+
+export { ContextSaveError };
+
+const blankToNull = (value: string): string | null => (value.trim() === '' ? null : value);
+
+/** Several codebase paths travel as one ";"-separated string. */
+const CODEBASE_PATH_SEPARATOR = ';';
+
+export function splitCodebasePaths(value: string | null): string[] {
+    return (value ?? '').split(CODEBASE_PATH_SEPARATOR).map(p => p.trim()).filter(p => p !== '');
+}
+
+export function joinCodebasePaths(paths: string[]): string | null {
+    return blankToNull(paths.map(p => p.trim()).filter(p => p !== '').join(CODEBASE_PATH_SEPARATOR));
+}
+
+type ErrorReply = { error?: string; fields?: Record<string, string> };
+
+/** The JSON body of a failed reply; empty when it is not JSON (e.g. a proxy's HTML error page). */
+async function errorReply(res: Response): Promise<ErrorReply> {
+    try {
+        const data = await res.json();
+        return data && typeof data === 'object' ? data : {};
+    } catch {
+        return {};
+    }
+}
+
+/** The JSON body of a successful reply; otherwise throws the server's error or `<failure> (<status>)`. */
+async function jsonOrThrow<T>(res: Response, failure: string): Promise<T> {
+    if (!res.ok) throw new Error((await errorReply(res)).error || `${failure} (${res.status})`);
+    return await res.json() as T;
+}
 
 class Context {
     static async uploadFile(variantId: string, file: File, description: string): Promise<ContextFile> {
@@ -86,12 +201,10 @@ class Context {
         );
         if (res.status === 413) {
             throw new Error(
-                "Upload rejected as too large (HTTP 413). Maximum file size is 10 MB; server or proxy request limits may also apply."
+                "Upload rejected as too large (HTTP 413). A server or proxy request-size limit may apply."
             );
         }
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to upload reference (${res.status})`);
-        return data as ContextFile;
+        return jsonOrThrow<ContextFile>(res, 'Failed to upload reference');
     }
 
     static async deleteFile(variantId: string, fileId: string): Promise<void> {
@@ -99,18 +212,13 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files/${encodeURIComponent(fileId)}`,
             { mode: 'cors', method: 'DELETE' }
         );
-        if (!res.ok) {
-            const data = await res.json();
-            throw new Error(data.error || `Failed to delete reference (${res.status})`);
-        }
+        if (!res.ok) throw new Error((await errorReply(res)).error || `Failed to delete reference (${res.status})`);
     }
 
     static async get(projectId: string, variantId: string): Promise<MergedContext> {
         const url = `${import.meta.env.VITE_API_URL}/api/context?project_id=${encodeURIComponent(projectId)}&variant_id=${encodeURIComponent(variantId)}`;
         const res = await fetch(url, { mode: 'cors' });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to load context (${res.status})`);
-        return data as MergedContext;
+        return jsonOrThrow<MergedContext>(res, 'Failed to load context');
     }
 
     static async getProject(projectId: string): Promise<ProjectContext> {
@@ -118,9 +226,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context`,
             { mode: 'cors' }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to load project context (${res.status})`);
-        return data as ProjectContext;
+        return jsonOrThrow<ProjectContext>(res, 'Failed to load project context');
     }
 
     static async saveProject(projectId: string, description: string | null): Promise<ProjectContext> {
@@ -133,24 +239,42 @@ class Context {
                 body: JSON.stringify({ description }),
             }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to save project context (${res.status})`);
-        return data as ProjectContext;
+        return jsonOrThrow<ProjectContext>(res, 'Failed to save project context');
     }
 
-    static async saveVariant(variantId: string, fields: VariantContextData): Promise<VariantContext> {
+    static async saveVariantEditor(variantId: string, draft: VariantDraft): Promise<VariantContext> {
+        const payload = {
+            variant_description: blankToNull(draft.variant_description),
+            environment: blankToNull(draft.environment),
+            other_info: blankToNull(draft.other_info),
+            codebase_source: draft.codebase_source,
+            codebase_path: joinCodebasePaths(draft.codebase_paths),
+            system: {
+                scope: blankToNull(draft.system.scope),
+                actors: blankToNull(draft.system.actors),
+                entry_points: blankToNull(draft.system.entry_points),
+                trust_boundaries: blankToNull(draft.system.trust_boundaries),
+            },
+            stride: draft.stride,
+        };
         const res = await fetch(
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context`,
             {
                 mode: 'cors',
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(fields),
+                body: JSON.stringify(payload),
             }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to save variant context (${res.status})`);
-        return data as VariantContext;
+        if (!res.ok) {
+            const data = await errorReply(res);
+            throw new ContextSaveError(
+                data.error || `Failed to save variant context (${res.status})`,
+                res.status,
+                data.fields ?? {},
+            );
+        }
+        return await res.json() as VariantContext;
     }
 
     static async exportAll(): Promise<ContextExport> {
@@ -158,9 +282,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/context/export`,
             { mode: 'cors' }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextExport;
+        return jsonOrThrow<ContextExport>(res, 'Failed to export context');
     }
 
     static async exportSelected(variantIds: string[]): Promise<ContextExport> {
@@ -169,9 +291,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/context/export?variant_ids=${query}`,
             { mode: 'cors' }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextExport;
+        return jsonOrThrow<ContextExport>(res, 'Failed to export context');
     }
 
     static async importContext(entries: unknown): Promise<ImportResult> {
@@ -184,9 +304,7 @@ class Context {
                 body: JSON.stringify(entries),
             }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to import context (${res.status})`);
-        return data as ImportResult;
+        return jsonOrThrow<ImportResult>(res, 'Failed to import context');
     }
 }
 

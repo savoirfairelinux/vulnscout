@@ -939,9 +939,9 @@ def test_export_documents_archive_multiple_sboms(client):
     assert response.mimetype == "application/zip"
     with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
         assert archive.namelist() == [
-            "default/spdx_v2_3.json",
-            "default/spdx_v2_3.xml",
-            "default/spdx_v3_0.json",
+            "default/spdx_v2_3.spdx.json",
+            "default/spdx_v2_3.spdx.xml",
+            "default/spdx_v3_0.spdx.json",
             "default/cyclonedx_v1_4.json",
             "default/cyclonedx_v1_5.json",
             "default/cyclonedx_v1_6.json",
@@ -1045,6 +1045,16 @@ def test_render_document_html(client):
         assert response.status_code == 200
 
 
+def test_sbom_export_return_annotation_is_resolvable():
+    """Documentation tools can resolve the export helper's response types."""
+    from typing import get_type_hints
+    from src.routes.documents import handle_sbom_exports
+
+    assert get_type_hints(handle_sbom_exports)["return"] == (
+        tuple[str, int, dict[str, str]] | tuple[dict[str, str], int]
+    )
+
+
 def test_render_cdx_v1_6(client):
     response = client.get("/api/documents/CycloneDX 1.6?ext=json")
     assert response.status_code == 200
@@ -1074,7 +1084,7 @@ def test_render_spdx_json(client):
     assert response.headers.get("Content-Type") == "application/json"
     cd = response.headers.get("Content-Disposition", "")
     assert "attachment" in cd
-    assert "filename=spdx_v2_3.json" in cd
+    assert "filename=spdx_v2_3.spdx.json" in cd
 
     data = json.loads(response.data)
     assert data["SPDXID"] == "SPDXRef-DOCUMENT"
@@ -1099,7 +1109,7 @@ def test_render_spdx_xml(monkeypatch, client):
     assert response.status_code == 200
     assert response.headers.get("Content-Type") == "text/xml"
     cd = response.headers.get("Content-Disposition", "")
-    assert "attachment" in cd and "filename=spdx_v2_3.xml" in cd
+    assert "attachment" in cd and "filename=spdx_v2_3.spdx.xml" in cd
     assert response.data.decode("utf-8").lstrip().startswith("<")
 
 
@@ -1169,7 +1179,7 @@ def test_render_spdx3_json(client):
     assert response.headers.get("Content-Type") == "application/json"
     cd = response.headers.get("Content-Disposition", "")
     assert "attachment" in cd
-    assert "spdx_v3_0.json" in cd
+    assert "spdx_v3_0.spdx.json" in cd
     data = json.loads(response.data)
     assert "@context" in data or "@graph" in data
 
@@ -1282,6 +1292,36 @@ def test_upload_template_missing_file(client):
     assert json.loads(response.data)["error"]
 
 
+def test_upload_template_rejects_files_over_limit(tmp_path, monkeypatch, client):
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/templates",
+        data={"file": (BytesIO(b"x" * (10 * 1024 * 1024 + 1)), "large.adoc")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 413
+    assert "maximum allowed size" in json.loads(response.data)["error"]
+    assert not (tmp_path / "large.adoc").exists()
+
+
+def test_upload_template_rejects_oversized_multipart_request(tmp_path, monkeypatch, client):
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    client.application.config["MAX_TEMPLATE_UPLOAD_CONTENT_LENGTH"] = 1024
+
+    response = client.post(
+        "/api/documents/templates",
+        data={"file": (BytesIO(b"x" * 2048), "large.adoc")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert "request-size limit" in json.loads(response.data)["error"]
+    assert not (tmp_path / "large.adoc").exists()
+
+
 # ---------------------------------------------------------------------------
 # POST /api/documents/assets
 # ---------------------------------------------------------------------------
@@ -1382,32 +1422,54 @@ def test_upload_asset_rejects_non_image_content(tmp_path, monkeypatch, client):
     assert not (tmp_path / "assets" / "fake.png").exists()
 
 
-def test_upload_asset_rejects_oversized_upload(tmp_path, monkeypatch, client):
-    """POST /api/documents/assets rejects a file bigger than the configured size cap."""
+def test_upload_asset_rejects_large_uploads(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects files larger than the endpoint cap."""
     from io import BytesIO
-    import src.routes.documents as documents_module
+    from PIL import Image
     monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
-    monkeypatch.setattr(documents_module, "MAX_ASSET_UPLOAD_BYTES", 16)
+    # Keep the request-level limit above the payload so this test exercises
+    # the endpoint's asset-size validation path.
+    client.application.config["MAX_ASSET_UPLOAD_CONTENT_LENGTH"] = 20 * 1024 * 1024
+    side = 1600
+    large_png_buffer = BytesIO()
+    Image.frombytes("RGB", (side, side), os.urandom(side * side * 3)).save(large_png_buffer, format="PNG")
+    large_png = large_png_buffer.getvalue()
+    assert len(large_png) > 5 * 1024 * 1024
 
     response = client.post(
         "/api/documents/assets",
-        data={"file": (BytesIO(_make_png_bytes()), "logo.png")},
+        data={"file": (BytesIO(large_png), "logo.png")},
         content_type="multipart/form-data",
     )
     assert response.status_code == 413
-    assert json.loads(response.data)["error"]
+    assert "maximum allowed size" in json.loads(response.data)["error"]
     assert not (tmp_path / "assets" / "logo.png").exists()
 
 
-def test_upload_asset_rejects_request_larger_than_content_limit(app, client):
-    """Werkzeug rejects oversized multipart bodies before the route parses files."""
-    request_limit = app.config["MAX_CONTENT_LENGTH"]
+def test_upload_asset_rejects_oversized_multipart_request(tmp_path, monkeypatch, client):
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    client.application.config["MAX_ASSET_UPLOAD_CONTENT_LENGTH"] = 1024
+
     response = client.post(
         "/api/documents/assets",
-        data=b"x" * (request_limit + 1),
+        data={"file": (BytesIO(b"x" * 2048), "large.png")},
         content_type="multipart/form-data",
     )
+
     assert response.status_code == 413
+    assert "request-size limit" in json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "large.png").exists()
+
+
+def test_upload_asset_without_file_still_returns_400_even_for_large_body(client):
+    """Invalid multipart payloads are rejected by the endpoint validation."""
+    response = client.post(
+        "/api/documents/assets",
+        data=b"x" * (2 * 1024 * 1024),
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
 
 
 def test_upload_asset_rejects_path_traversal(tmp_path, monkeypatch, client):

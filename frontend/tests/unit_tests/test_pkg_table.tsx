@@ -5,7 +5,7 @@ import { describe, test, expect, jest } from '@jest/globals';
 import matchers from '@testing-library/jest-dom/matchers';
 expect.extend(matchers);
 
-import type { Package } from "../../src/handlers/packages";
+import Packages, { type Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
 import Vulnerabilities from '../../src/handlers/vulnerabilities';
 
@@ -121,6 +121,49 @@ describe('Packages Table', () => {
     Element.prototype.getBoundingClientRect = function () {
         return getDOMRect(500, 500)
     }
+
+    test('shows scoped built and workspace badges while ordinary packages remain unlabelled', async () => {
+        render(<TablePackages packages={[
+            { ...packages[0], component_types: ['built'] },
+            { ...packages[1], component_types: ['workspace'] },
+            { ...packages[2], component_types: ['normal'] },
+        ]} />);
+        const built = await screen.findByRole('cell', { name: 'aaabbbccc Built component' });
+        const workspace = screen.getByRole('cell', { name: 'xxxyyyzzz Workspace component' });
+        expect(within(built).getByText('Built component').getAttribute('title')).toContain(
+            'does not prove inclusion in the final firmware'
+        );
+        expect(within(workspace).getByText('Workspace component').getAttribute('title')).toContain(
+            'without a proven compiled target'
+        );
+        expect(screen.getByRole('cell', { name: 'dddeeefff' })).toBeTruthy();
+        expect(screen.queryByText('Normal component')).toBeNull();
+    });
+
+    test('mixed scopes show both badges on one canonical package row', async () => {
+        render(<TablePackages packages={[{
+            ...packages[0], component_types: ['built', 'normal', 'workspace'],
+        }]} />);
+        const cell = await screen.findByRole('cell', { name: 'aaabbbccc Built component Workspace component' });
+        expect(within(cell).getByText('Built component')).toBeTruthy();
+        expect(within(cell).getByText('Workspace component')).toBeTruthy();
+        expect(screen.getByText('Total: 1')).toBeTruthy();
+        expect(screen.queryByText('Original JSON-LD entries')).toBeNull();
+    });
+
+    test('package API parsing preserves the scoped component types', async () => {
+        const fetch = jest.spyOn(global, 'fetch').mockResolvedValue({
+            json: async () => [{ ...packages[0], component_types: ['built', 'workspace'] }],
+        } as Response);
+        try {
+            const result = await Packages.list();
+            expect(result).toHaveLength(1);
+            expect(result[0].id).toBe(packages[0].id);
+            expect(result[0].component_types).toEqual(['built', 'workspace']);
+        } finally {
+            fetch.mockRestore();
+        }
+    });
 
     test('render headers with empty array', async () => {
         // ARRANGE
@@ -616,8 +659,10 @@ describe('Packages Table', () => {
         const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
         expect(headers.slice(0, 5)).toEqual(['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities']);
 
-        await waitFor(() => expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length));
+        await waitFor(() => expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length));
         const dependencyButton = screen.getByRole('button', { name: 'View dependency graph for aaabbbccc' });
+        expect(dependencyButton.getAttribute('title')).toBe(
+            'Deps: direct dependencies of this package. Req by: packages that directly depend on this package.');
         expect(dependencyButton.className).toContain('w-full h-full p-4');
         expect(dependencyButton.parentElement?.tagName).toBe('TD');
         expect(dependencyButton.parentElement?.className).not.toContain('p-4');
@@ -629,7 +674,7 @@ describe('Packages Table', () => {
         expect(screen.queryByRole('dialog')).toBeNull();
     });
 
-    test('sorting by dependency puts the largest In + Out total first', async () => {
+    test('sorting by dependency puts the largest Deps + Req by total first', async () => {
         const originalFetch = global.fetch;
         global.fetch = (async () => ({
             ok: true,
@@ -641,7 +686,7 @@ describe('Packages Table', () => {
         })) as unknown as typeof fetch;
         try {
             render(<TablePackages preferenceScopeKey="dependency-sort" variantId="v1" packages={packages} />);
-            expect(await screen.findByText('In 2 / Out 3')).toBeTruthy();
+            expect(await screen.findByText('Deps: 2 / Req by: 3')).toBeTruthy();
 
             await userEvent.setup().click(screen.getByRole('columnheader', { name: 'Dependency' }));
             await waitFor(() => {
@@ -662,10 +707,10 @@ describe('Packages Table', () => {
         })) as unknown as typeof fetch;
         try {
             const view = render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages} />);
-            expect(await screen.findByText('In 1 / Out 0')).toBeTruthy();
+            expect(await screen.findByText('Deps: 1 / Req by: 0')).toBeTruthy();
             expect(screen.getByText('Not recorded')).toBeTruthy();
             expect(screen.queryByRole('button', { name: 'View dependency graph for aaabbbccc' })).toBeNull();
-            expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length - 2);
+            expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length - 2);
             view.unmount();
 
             const outdatedPackage: Package = { ...packages[1], id: 'xxxyyyzzz@1.0.0', version: '1.0.0', outdated: true };
@@ -835,7 +880,7 @@ describe('Packages Table', () => {
 
     test('ArrowDown and ArrowUp navigate focused table row', async () => {
         const { container } = render(<TablePackages packages={packages} />);
-        await waitFor(() => expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length));
+        await waitFor(() => expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length));
 
         const user = userEvent.setup();
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
@@ -861,7 +906,7 @@ describe('Packages Table', () => {
 
     test('Home and End navigate to first and last focused table row', async () => {
         const { container } = render(<TablePackages packages={packages} />);
-        await waitFor(() => expect(screen.getAllByText('In 0 / Out 0')).toHaveLength(packages.length));
+        await waitFor(() => expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length));
 
         const user = userEvent.setup();
         const rows = container.querySelectorAll('tr.row-with-hover-effect');

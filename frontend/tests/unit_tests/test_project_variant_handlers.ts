@@ -87,6 +87,27 @@ describe('Projects', () => {
         fetchMock.resetMocks();
     });
 
+    test('saves selected project preferences in one atomic request without SBOM names', async () => {
+        fetchMock.mockResponseOnce('{}');
+        const configuration = {
+            exclude_native: true, native_package_exceptions: ['gcc-native'], native_packages: ['make-native'],
+        };
+        await Projects.saveScanConfigurations({ first: configuration, second: configuration });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/projects/scan-configurations'), expect.objectContaining({
+            method: 'PUT',
+            body: JSON.stringify({
+                first: { exclude_native: true, native_package_exceptions: ['gcc-native'] },
+                second: { exclude_native: true, native_package_exceptions: ['gcc-native'] },
+            }),
+        }));
+    });
+
+    test('reports an atomic save failure for retry', async () => {
+        fetchMock.mockResponseOnce('{}', { status: 500 });
+        await expect(Projects.saveScanConfigurations({})).rejects.toThrow('Please retry');
+    });
+
     test('returns list of valid projects', async () => {
         const mockData = [
             { id: 'p1', name: 'ProjectA' },
@@ -192,17 +213,10 @@ describe('Variants', () => {
         );
     });
 
-    test('returns empty array when response is not ok', async () => {
-        fetchMock.mockImplementationOnce(() =>
-            Promise.resolve({
-                ok: false,
-                json: () => Promise.resolve([]),
-            } as Response)
-        );
+    test('rejects when the variant list request fails', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'unavailable' }), { status: 503 });
 
-        const variants = await Variants.list('p1');
-
-        expect(variants).toEqual([]);
+        await expect(Variants.list('p1')).rejects.toThrow('Failed to load variants (503)');
     });
 
     test('returns empty array when server returns non-array', async () => {

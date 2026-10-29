@@ -48,7 +48,8 @@ jest.mock('../../src/components/TableGeneric', () => ({
     default: ({ data }: any) => (
         <table data-testid="mock-table">
             {data.map((row: any, i: number) => (
-                <tr key={i} data-testid="mock-table-row">
+                <tr key={i} data-testid="mock-table-row" data-count={row.count}
+                    data-version={row.version} data-package={row.package}>
                     <td>{row.cve || row.name || row.id}</td>
                 </tr>
             ))}
@@ -91,6 +92,7 @@ jest.mock('../../src/handlers/iso8601duration', () => ({
 import Metrics from '../../src/pages/Metrics';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 import type { Assessment } from '../../src/handlers/assessments';
+import type { Package } from '../../src/handlers/packages';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -157,6 +159,23 @@ const waitForRender = () =>
 describe('Metrics — sections and UI', () => {
     afterEach(() => {
         jest.clearAllMocks();
+    });
+
+    test('package rankings count a vulnerability once per persisted package and display its release', async () => {
+        const revision = 'a'.repeat(40);
+        const packages: Package[] = [{
+            id: 'mbedtls@4.1.1', name: 'mbedtls', version: '4.1.1', release_version: '4.1.1',
+            source_revision: revision, cpe: [], purl: [], vulnerabilities: {}, maxSeverity: {},
+            source: ['spdx'], variants: ['demo'], sbom_documents: [], supplier: '',
+        }];
+        render(<Metrics {...DEFAULT_PROPS} packages={packages}
+            vulnerabilities={[makeVuln('CVE-grouped', [makeAssessment('demo', 'Exploitable')], ['mbedtls@4.1.1'])]} />);
+        await waitForRender();
+        const row = screen.getByText('mbedtls').closest('tr');
+        expect(row).toHaveAttribute('data-count', '1');
+        expect(row).toHaveAttribute('data-version', '4.1.1');
+        expect(screen.getByText('CVE-grouped').closest('tr')).toHaveAttribute('data-package', 'mbedtls@4.1.1');
+        expect(screen.queryByText('mbedtls-deps')).not.toBeInTheDocument();
     });
 
     // -----------------------------------------------------------------------

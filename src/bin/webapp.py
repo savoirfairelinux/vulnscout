@@ -11,7 +11,7 @@ from ..extensions import db, migrate, setup_write_serialization
 from ..controllers.operation_queue import queue as operation_queue
 from ..controllers.event_bus import operation_events
 from ..routes import init_app
-from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
+from ..routes.documents import MAX_ASSET_UPLOAD_BYTES, MAX_TEMPLATE_UPLOAD_BYTES
 from ..routes.events import STREAM_PATH
 from .. import models  # noqa: F401
 from .merger_ci import init_app as init_merger_cli
@@ -26,7 +26,8 @@ from flask.json.provider import DefaultJSONProvider
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
-MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
+MAX_ASSET_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
+MAX_TEMPLATE_UPLOAD_REQUEST_BYTES = MAX_TEMPLATE_UPLOAD_BYTES + 64 * 1024
 MAX_SCAN_IMPORT_REQUEST_BYTES = 100 * 1024 * 1024
 DEFAULT_BACKGROUND_TASK_DELAY = 120.0
 
@@ -110,10 +111,11 @@ def _schedule_background_tasks(app):
 def create_app():
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
-    # Allow multipart headers while ensuring Werkzeug rejects oversized bodies
-    # before parsing and spooling uploaded files.
-    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_BYTES
+    # Local deployments intentionally run without app-level request-size caps.
+    app.config["MAX_CONTENT_LENGTH"] = None
     app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"] = MAX_SCAN_IMPORT_REQUEST_BYTES
+    app.config["MAX_TEMPLATE_UPLOAD_CONTENT_LENGTH"] = MAX_TEMPLATE_UPLOAD_REQUEST_BYTES
+    app.config["MAX_ASSET_UPLOAD_CONTENT_LENGTH"] = MAX_ASSET_UPLOAD_REQUEST_BYTES
     app._INT_SCAN_FINISHED = False
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE
@@ -217,7 +219,7 @@ def create_app():
         """Return the running VulnScout backend version.
 
         OpenAPI:
-        response 200 JsonObject Backend version payload.
+        response 200 ServerVersion Backend version payload.
         """
         return {"version": os.getenv("VULNSCOUT_VERSION", "unknown")}
 
@@ -230,7 +232,7 @@ def create_app():
         scan-completion middleware.
 
         OpenAPI:
-        response 200 JsonObject Scan bootstrap progress payload.
+        response 200 ScanStatus Scan bootstrap progress payload.
         """
         with open(app.config["SCAN_FILE"], "r") as f:
             text = f.read()

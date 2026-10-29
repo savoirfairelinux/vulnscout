@@ -10,6 +10,7 @@ from mcp.server.mcpserver import MCPServer
 from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient
 from vulnscout_mcp.tools.assessments import register_tools as register_assessment_tools
 from vulnscout_mcp.tools.context import register_tools as register_context_tools
+from vulnscout_mcp.tools.dependencies import register_tools as register_dependency_tools
 from vulnscout_mcp.tools.reviews import register_tools as register_review_tools
 from vulnscout_mcp.tools.vulnerabilities import register_tools as register_vulnerability_tools
 
@@ -21,6 +22,7 @@ def create_server(base_url: str) -> MCPServer:
     mcp_server = MCPServer("vulnscout")
     register_assessment_tools(mcp_server, client)
     register_context_tools(mcp_server, client)
+    register_dependency_tools(mcp_server, client)
     register_vulnerability_tools(mcp_server, client)
     register_review_tools(mcp_server, client)
     return mcp_server

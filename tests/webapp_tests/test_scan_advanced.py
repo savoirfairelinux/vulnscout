@@ -26,8 +26,10 @@ from src.controllers.scan_jobs import (
 from src.extensions import db as _db
 
 
-def test_grype_excludes_native_components_and_matches(tmp_path):
-    ctx = JobContext("scan:grype:test")
+@pytest.mark.parametrize("exceptions", [[], ["CMAKE-native"]])
+def test_grype_excludes_native_components_and_matches(tmp_path, exceptions):
+    ctx = JobContext("scan:grype:test", {"native_package_exceptions": exceptions})
+    expected = ["cmake-native", "openssl"] if exceptions else ["openssl"]
     export_path = tmp_path / "sbom.json"
     export_path.write_text(json.dumps({
         "components": [
@@ -39,8 +41,10 @@ def test_grype_excludes_native_components_and_matches(tmp_path):
 
     _deduplicate_cyclonedx(ctx, str(export_path), False, exclude_native=True)
     exported = json.loads(export_path.read_text())
-    assert [component["name"] for component in exported["components"]] == ["openssl"]
-    assert exported["dependencies"] == [{"ref": "target"}]
+    assert [component["name"] for component in exported["components"]] == expected
+    assert exported["dependencies"] == (
+        [{"ref": "native"}, {"ref": "target"}] if exceptions else [{"ref": "target"}]
+    )
 
     results_path = tmp_path / "grype.json"
     results_path.write_text(json.dumps({"matches": [
@@ -52,16 +56,14 @@ def test_grype_excludes_native_components_and_matches(tmp_path):
         exclude_native=True,
     )
     matches = json.loads(results_path.read_text())["matches"]
-    assert [match["artifact"]["name"] for match in matches] == ["openssl"]
+    assert [match["artifact"]["name"] for match in matches] == expected
 
     results_path.write_text(json.dumps({"matches": [
         {"artifact": {"name": "cmake-native", "version": "1"}},
         {"artifact": {"name": "openssl", "version": "3"}},
     ]}))
     _filter_grype_matches(ctx, str(results_path), set(), exclude_native=True)
-    assert [match["artifact"]["name"] for match in json.loads(results_path.read_text())["matches"]] == [
-        "openssl"
-    ]
+    assert [match["artifact"]["name"] for match in json.loads(results_path.read_text())["matches"]] == expected
 
 
 def test_grype_missing_binary_is_reported_before_export(app, ids, monkeypatch):
@@ -130,7 +132,9 @@ def _build_tool_scan_db(app):
         sbom_doc = SBOMDocument.create(
             "/sbom/doc.json", "doc.json", sbom_scan.id, format="spdx"
         )
-        SBOMPackage.create(sbom_doc.id, pkg.id)
+        link = SBOMPackage.create(sbom_doc.id, pkg.id)
+        link.cpe = pkg.cpe
+        link.purl = pkg.purl
         Observation.create(
             finding_id=finding_sbom.id, scan_id=sbom_scan.id
         )

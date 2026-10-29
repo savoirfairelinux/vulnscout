@@ -2,9 +2,11 @@ import json
 import os
 import queue
 import socket
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -15,6 +17,11 @@ import pytest
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
     monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", str(tmp_path / "missing_server.py"))
+    monkeypatch.setenv("VULNSCOUT_CONFIG", str(tmp_path / "config.env"))
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.delenv("AI_AUTH_CREDENTIALS", raising=False)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.delenv("AI_BASE_URL", raising=False)
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
     from src.bin.webapp import create_app
@@ -32,7 +39,7 @@ def test_agent_enabled_by_default(client):
     assert response.status_code == 200
 
 
-def test_sdk_exposes_only_scoped_reference_tools(monkeypatch):
+def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     import asyncio
     from src.routes import agent
 
@@ -77,6 +84,15 @@ def test_sdk_exposes_only_scoped_reference_tools(monkeypatch):
     assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
     assert captured["enable_skills"] is False
     assert "untrusted evidence" in captured["system_message"]["content"]
+    dependency_tools = {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies"}
+    assert dependency_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
+    assert {f"mcp:vulnscout-{name}" for name in dependency_tools} <= set(captured["available_tools"])
+    assert dependency_tools <= set(agent.READ_TOOLS)
+    assert not dependency_tools & set(agent.WRITE_TOOLS)
+    instructions = captured["system_message"]["content"]
+    assert all(term in instructions for term in ("next_offset", "max_depth=0", "runtime usage",
+                                                 "backports", "unknown", "no web research", "read-only"))
+    assert all(term in instructions for term in ("STRIDE", "T# threats", "corroborates"))
 
 
 def test_agent_rejects_remote_requests(client):
@@ -285,6 +301,57 @@ def test_selected_model_persists_without_sending(client):
     assert client.get("/api/agent").get_json()["model"] == "auto"
 
 
+@pytest.mark.parametrize("token_connected", [True, False])
+def test_github_chatbox_model_survives_restart(client, monkeypatch, token_connected):
+    from src.routes import agent
+
+    async def auth_status(token):
+        assert token == ("github-key" if token_connected else None)
+        return {"authenticated": True, "login": "test-user"}
+
+    async def models(token):
+        return [{"id": "auto", "name": "Auto"}, {"id": "gpt-4o", "name": "GPT-4o"}]
+
+    monkeypatch.setattr(agent, "_auth_status", auth_status)
+    monkeypatch.setattr(agent, "_models", models)
+    if token_connected:
+        agent._persist_agent_credentials(token="github-key")
+    assert client.get("/api/agent").get_json()["model"] == "auto"
+    assert client.post("/api/agent/model", json={"model": "gpt-4o"}).status_code == 200
+    assert "AI_MODEL=gpt-4o" in Path(os.environ["VULNSCOUT_CONFIG"]).read_text()
+    agent._conversations.clear()
+    status = client.get("/api/agent").get_json()
+    assert status["model"] == "gpt-4o"
+    assert status["token_connected"] is token_connected
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+
+    async def reply(conversation, prompt, path, model, scope, publish=None):
+        assert model == "gpt-4o"
+        return "Restarted successfully", conversation.usage
+
+    monkeypatch.setattr(agent, "_reply", reply)
+    response = client.post("/api/agent/messages", json={"message": "Hello"})
+    assert response.status_code == 200
+    assert response.get_json()["reply"] == "Restarted successfully"
+
+
+def test_github_model_write_failure_keeps_previous_selection(client, monkeypatch):
+    from src.routes import agent
+
+    async def models(token):
+        return [{"id": "gpt-4o", "name": "GPT-4o"}]
+
+    agent._persist_agent_credentials(token="github-key")
+    monkeypatch.setattr(agent, "_models", models)
+    monkeypatch.setattr(agent, "persist_env_keys", lambda updates: (False, "AI_MODEL"))
+    response = client.post("/api/agent/model", json={"model": "gpt-4o"})
+    assert response.status_code == 500
+    assert response.get_json()["error"] == "Failed to persist model to config.env."
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    assert root.model == "auto"
+    assert "AI_MODEL" not in Path(os.environ["VULNSCOUT_CONFIG"]).read_text()
+
+
 @pytest.mark.parametrize("provider,model,base_url", [
     ("openai", "gpt-4o", ""),
     ("azure", "my-deployment", "https://resource.openai.azure.com/openai/v1"),
@@ -331,6 +398,268 @@ def test_provider_credentials_do_not_require_a_model():
     assert connection.model == ""
 
 
+def test_provider_config_is_shell_safe_on_restart(client):
+    config_file = Path(os.environ["VULNSCOUT_CONFIG"])
+    model = "literal 'quoted' $(printf unsafe) `printf unsafe` $HOME"
+    response = client.post("/api/agent/provider", json={
+        "provider": "openai", "model": model, "api_key": "private'key$HOME",
+    })
+    assert response.status_code == 200
+    restarted = subprocess.run(
+        ["bash", "-ec", '. "$1"; printf "%s\\n%s" "$AI_MODEL" "$AI_AUTH_CREDENTIALS"',
+         "restart", str(config_file)],
+        env={key: value for key, value in os.environ.items() if not key.startswith("AI_")},
+        check=True, capture_output=True, text=True,
+    )
+    assert restarted.stdout == model + "\nprivate'key$HOME"
+    assert config_file.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("field", ["model", "api_key", "base_url"])
+@pytest.mark.parametrize("control", ["\n", "\r", "\x00", "\x1b", "\x7f"])
+def test_provider_rejects_control_characters(client, field, control):
+    payload = {"provider": "openai", "model": "model", "api_key": "key"}
+    payload[field] = ("https://example.org/" if field == "base_url" else "value") + control
+    assert client.post("/api/agent/provider", json=payload).status_code == 400
+
+
+def test_local_runtime_uses_writable_user_config(client, monkeypatch, tmp_path):
+    monkeypatch.delenv("VULNSCOUT_CONFIG")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user-config"))
+    response = client.post("/api/agent/provider", json={
+        "provider": "openai", "model": "gpt-4o", "api_key": "local-key",
+    })
+    assert response.status_code == 200
+    config_file = tmp_path / "user-config" / "vulnscout" / "config.env"
+    assert "AI_PROVIDER=openai" in config_file.read_text()
+    assert client.delete("/api/agent/provider").status_code == 200
+    assert "AI_AUTH_CREDENTIALS" not in config_file.read_text()
+
+
+def test_local_github_sign_in_uses_writable_user_config(client, monkeypatch, tmp_path):
+    from src.routes import agent
+
+    monkeypatch.delenv("VULNSCOUT_CONFIG")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user-config"))
+    monkeypatch.setattr(agent, "_github_form", lambda *args: {
+        "device_code": "device", "user_code": "user", "access_token": "github-key",
+    })
+
+    async def token_status(token):
+        return {"authenticated": True, "login": "test-user"}
+
+    monkeypatch.setattr(agent, "_token_status", token_status)
+    assert client.post("/api/agent/auth").status_code == 200
+    assert client.post("/api/agent/auth/poll").status_code == 200
+    config = tmp_path / "user-config" / "vulnscout" / "config.env"
+    assert "AI_PROVIDER=github" in config.read_text()
+    assert client.delete("/api/agent/auth").status_code == 200
+    assert "AI_AUTH_CREDENTIALS" not in config.read_text()
+
+
+def test_sign_out_survives_fresh_process_with_stale_environment(client, monkeypatch):
+    from src.routes import agent
+
+    assert client.post("/api/agent/provider", json={
+        "provider": "openai", "model": "gpt-4o", "api_key": "old-key",
+    }).status_code == 200
+    assert client.delete("/api/agent/auth").status_code == 200
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "old-key")
+    monkeypatch.setenv("AI_MODEL", "gpt-4o")
+    fresh = agent.Conversation()
+    assert agent._load_env_credentials(fresh) is None
+    assert fresh.credentials.provider is None
+    assert fresh.credentials.token is None
+
+
+def test_connect_select_restart_send(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "gpt-4o"}]}))
+    assert client.post("/api/agent/provider", json={
+        "provider": "openai", "api_key": "key",
+    }).get_json()["model"] == ""
+    assert client.post("/api/agent/model", json={"model": "gpt-4o"}).status_code == 200
+    for key in ("AI_PROVIDER", "AI_AUTH_CREDENTIALS", "AI_MODEL", "AI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    agent._conversations.clear()
+    assert client.get("/api/agent").get_json()["model"] == "gpt-4o"
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+
+    async def reply(conversation, prompt, path, model, scope, publish=None):
+        assert model in {entry["id"] for entry in conversation.credentials.provider.models}
+        return "Restarted successfully", conversation.usage
+
+    monkeypatch.setattr(agent, "_reply", reply)
+    response = client.post("/api/agent/messages", json={"message": "Hello"})
+    assert response.status_code == 200
+    assert response.get_json()["reply"] == "Restarted successfully"
+
+
+@pytest.mark.parametrize("provider", ["github", "openai", "local"])
+def test_environment_only_model_selection_preserves_connection(client, monkeypatch, provider):
+    from src.routes import agent
+
+    environment = {
+        "AI_PROVIDER": provider,
+        "AI_AUTH_CREDENTIALS": "environment-key",
+        "AI_BASE_URL": "http://127.0.0.1:11434/v1" if provider == "local" else "",
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+
+    async def models(token):
+        return [{"id": "selected-model", "name": "Selected model"}]
+
+    monkeypatch.setattr(agent, "_models", models)
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "selected-model"}]}))
+    response = client.post("/api/agent/model", json={"model": "selected-model"})
+    assert response.status_code == 200
+    for key in agent.AGENT_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    expected = {key: value for key, value in environment.items() if value}
+    assert agent._agent_environment() == {**expected, "AI_MODEL": "selected-model"}
+    fresh = agent.Conversation()
+    assert agent._load_env_credentials(fresh) is None
+    assert fresh.model == "selected-model"
+    if provider == "github":
+        assert fresh.credentials.token == "environment-key"
+    else:
+        assert fresh.credentials.provider.kind == provider
+        assert fresh.credentials.provider.api_key == "environment-key"
+        assert fresh.credentials.provider.base_url == environment["AI_BASE_URL"]
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("openai", "gpt-4o"), ("openai", ""), ("github", "gpt-4o"),
+])
+def test_first_thread_request_restores_saved_model(client, monkeypatch, provider, model):
+    from src.routes import agent
+
+    Path(os.environ["VULNSCOUT_CONFIG"]).write_text(
+        f"AI_PROVIDER={provider}\nAI_AUTH_CREDENTIALS=saved-key\nAI_MODEL={model}\n"
+    )
+    agent._conversations.clear()
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "gpt-4o"}]}))
+
+    async def auth_status(token):
+        return {"authenticated": True, "login": "test-user"}
+
+    monkeypatch.setattr(agent, "_auth_status", auth_status)
+    response = client.get("/api/agent", headers={"X-Agent-Thread": str(uuid4())})
+    assert response.status_code == 200
+    assert response.get_json()["model"] == model
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("abc#def", "abc#def"),
+    ("#initial", "#initial"),
+    ("org/model#revision # trailing comment", "org/model#revision"),
+    ("'literal $HOME `command` # value'", "literal $HOME `command` # value"),
+    (r"escaped\ value#suffix", "escaped value#suffix"),
+    (r"escaped\ #suffix", "escaped #suffix"),
+    (r"escaped\$literal", "escaped$literal"),
+    ('"quoted#value" # trailing comment', "quoted#value"),
+])
+def test_direct_config_literals_match_shell_assignments(client, value, expected):
+    from src.routes import agent
+
+    config_file = Path(os.environ["VULNSCOUT_CONFIG"])
+    config_file.write_text(
+        f"AI_AUTH_CREDENTIALS={value}\nAI_MODEL={value}\n"
+    )
+    shell_value = subprocess.run(
+        ["bash", "-ec", '. "$1"; printf "%s" "$AI_MODEL"', "config", str(config_file)],
+        check=True, capture_output=True, text=True,
+    )
+    assert shell_value.stdout == expected
+    assert agent._agent_environment() == {"AI_AUTH_CREDENTIALS": expected, "AI_MODEL": expected}
+
+
+@pytest.mark.parametrize("value", [
+    "$HOME", '"${MODEL}"', "`command`", "$(command)", "~", "model; command",
+    r'"\$HOME"', r'"\`command\`"',
+])
+def test_direct_config_rejects_unsupported_shell_syntax(client, value):
+    from src.routes import agent
+
+    Path(os.environ["VULNSCOUT_CONFIG"]).write_text(f"AI_MODEL={value}\n")
+    with pytest.raises(ValueError):
+        agent._agent_environment()
+
+
+def test_provider_restart_without_model_requires_selection(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_fetch_provider_models",
+                        lambda *args: json.dumps({"data": [{"id": "gpt-4o"}]}))
+    assert client.post("/api/agent/provider", json={
+        "provider": "openai", "api_key": "key",
+    }).status_code == 200
+    fresh = agent.Conversation()
+    assert agent._load_env_credentials(fresh) is None
+    assert fresh.model == ""
+    assert fresh.credentials.provider.models == [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+
+@pytest.mark.parametrize("configured_provider", ["invalid-provider", "openai"])
+@pytest.mark.parametrize("method,path", [
+    ("post", "/api/agent/provider"), ("delete", "/api/agent/provider"),
+    ("post", "/api/agent/auth"), ("delete", "/api/agent/auth"),
+])
+def test_broken_provider_can_be_replaced_or_removed(client, monkeypatch, method, path, configured_provider):
+    from src.routes import agent
+
+    monkeypatch.setenv("AI_PROVIDER", configured_provider)
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "broken-key")
+
+    def unavailable(*args):
+        raise ValueError("Could not reach the provider endpoint.")
+
+    monkeypatch.setattr(agent, "_fetch_provider_models", unavailable)
+    monkeypatch.setattr(agent, "_github_form", lambda *args: {
+        "device_code": "device", "user_code": "user", "expires_in": 900,
+    })
+    response = getattr(client, method)(path, json={
+        "provider": "openai", "model": "gpt-4o", "api_key": "replacement",
+    })
+    assert response.status_code == 200
+
+
+def test_agent_loads_github_credentials_from_env(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setenv("AI_PROVIDER", "github")
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "ghu_env_test_token")
+
+    async def _fake_auth_status(token):
+        assert token == "ghu_env_test_token"
+        return {"authenticated": True, "login": "env-user"}
+
+    monkeypatch.setattr(agent, "_auth_status", _fake_auth_status)
+    status = client.get("/api/agent").get_json()
+    assert status["authenticated"] is True
+    assert status["token_connected"] is True
+    assert status["provider"] is None
+    assert status["config_error"] is None
+
+
+def test_agent_rejects_invalid_env_provider_configuration(client, monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "invalid-provider")
+    monkeypatch.setenv("AI_AUTH_CREDENTIALS", "unused")
+
+    status = client.get("/api/agent").get_json()
+    assert "Unsupported AI_PROVIDER value" in status["config_error"]
+
+    models = client.get("/api/agent/models")
+    assert models.status_code == 400
+    assert "Invalid AI provider configuration" in models.get_json()["error"]
+
+
 def test_provider_enrollment_requires_a_reachable_model_endpoint(client):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -371,6 +700,44 @@ def test_streaming_validation_still_returns_json(client):
                            headers={"Accept": "application/x-ndjson"})
     assert response.status_code == 400
     assert response.is_json
+
+
+@pytest.mark.parametrize("outcome", ["done", "unavailable", "error"])
+def test_stream_releases_shared_lock_before_publishing_terminal_event(client, monkeypatch, tmp_path, outcome):
+    from src.routes import agent
+
+    server = tmp_path / "server.py"
+    server.touch()
+    monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", str(server))
+    client.get("/api/agent")
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    terminal_locks = []
+    original_queue = queue.Queue
+
+    class ObservedQueue(original_queue):
+        def put(self, event, *args, **kwargs):
+            if event["type"] in ("done", "error"):
+                terminal_locks.append(root.lock.locked())
+            return super().put(event, *args, **kwargs)
+
+    async def reply(*args):
+        if outcome == "unavailable":
+            raise agent.UnavailableModelError("Unavailable model")
+        if outcome == "error":
+            raise RuntimeError("Provider failed")
+        return "Assessed", {"cost": None, "input_tokens": None, "output_tokens": None}
+
+    monkeypatch.setattr(agent.queue, "Queue", ObservedQueue)
+    monkeypatch.setattr(agent, "_reply", reply)
+    # Action conversations and the main conversation share the same backend lock.
+    for thread_id in [str(uuid4()), str(uuid4())]:
+        response = client.post("/api/agent/messages", json={"message": "Assess this CVE"},
+                               headers={"Accept": "application/x-ndjson", "X-Agent-Thread": thread_id})
+        assert response.status_code == 200
+        events = [json.loads(chunk) for chunk in response.response]
+        assert events[-1]["type"] == ("done" if outcome == "done" else "error")
+        response.close()
+    assert terminal_locks == [False, False]
 
 
 def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
@@ -508,6 +875,71 @@ def test_ai_context_scope_uses_its_own_selection(client):
             _scope_for_context(context)
         context["view"] = {"selectedProjectId": "", "selectedVariantId": ""}
         assert json.loads(_scope_for_context(context)) == {"project_ids": [], "variant_ids": []}
+
+
+@pytest.mark.parametrize("target_count", [1, 2])
+def test_bulk_review_message_preserves_full_assessment_scope(client, monkeypatch, target_count):
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+    from src.routes import agent
+    from vulnscout_mcp.client import ScopedVulnScoutClient
+
+    with client.application.app_context():
+        project = Project.create("Selected project")
+        other = Project.create("Other project")
+        first = Variant.create("Visible variant", project.id)
+        second = Variant.create("Hidden target", project.id)
+        excluded = Variant.create("Not a target", other.id)
+        Vulnerability.create_record(id="CVE-2024-1234", description="Description")
+        package = Package.find_or_create("example", "1.0", [], [], "")
+        db.session.commit()
+        finding = Finding.get_or_create(package.id, "CVE-2024-1234")
+        assessment = Assessment.create(status="affected", origin="custom", targets=[
+            (first.id, finding.id), (second.id, finding.id),
+        ][:target_count])
+        assessment_id = str(assessment.id)
+        first_id = str(first.id)
+        variant_ids = sorted([str(first.id), str(second.id)][:target_count])
+        project_id = str(project.id)
+        excluded_id = str(excluded.id)
+
+    # The detail endpoint, unlike the visible table, returns the complete target set.
+    full = client.get(f"/api/assessments/{assessment_id}").get_json()
+    assert sorted(target["variant_id"] for target in full["targets"]) == variant_ids
+    captured = []
+
+    async def reply(conversation, message, path, model, scope, publish=None):
+        scoped = json.loads(scope)
+        assert scoped["variant_ids"] == variant_ids
+        assert scoped["project_ids"] == [project_id]
+        assert excluded_id not in scoped["variant_ids"]
+        result = ScopedVulnScoutClient("http://localhost", scoped)._assessment(full)
+        assert result["targets"] == full["targets"]
+        captured.append(scoped)
+        return "Reviewed every target", {"cost": None, "input_tokens": None, "output_tokens": None}
+
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+    monkeypatch.setattr(agent, "_reply", reply)
+    headers = {"X-Agent-Thread": str(uuid4())}
+    client.delete("/api/agent/conversation", headers=headers)
+    invalid = client.post("/api/agent/messages", json={
+        "message": "Review", "context": {"page": "review", "variantId": first_id},
+    }, headers=headers)
+    assert invalid.status_code == 400
+    assert "do not belong" in invalid.get_json()["error"]
+    context = {"page": "review", "projectId": project_id,
+               "variantIds": variant_ids, "view": {"section": "assessments"}}
+    response = client.post("/api/agent/messages", json={
+        "message": f"Review the user assessment {assessment_id}", "context": context,
+    }, headers=headers)
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json()["reply"] == "Reviewed every target"
+    assert len(captured) == 1
 
 
 def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypatch, tmp_path):

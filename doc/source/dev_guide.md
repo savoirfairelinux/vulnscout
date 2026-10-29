@@ -1,5 +1,14 @@
 # Developer's Guide
 
+For component-specific implementation details and development setup, see:
+
+```{toctree}
+:maxdepth: 1
+
+agent-chat
+sbom-scan-reference
+```
+
 ## Developing VulnScout
 
 ### Requirements
@@ -34,18 +43,56 @@ Start the container in dev mode:
 ./vulnscout --dev start
 ```
 
-Or start with inputs and the web UI in one step:
+Or load inputs, then start the web UI:
 
 ```bash
-./vulnscout --dev --serve \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json
+./vulnscout --dev add \
+  --spdx /path/to/sbom.spdx.json \
+  --cve-check /path/to/cve-check.json
+./vulnscout --dev serve
 ```
 
 Flask will run with `--debug` when `DEV_MODE=true` is set in the container, enabling auto-reload on Python file changes.
 The container only adjusts ownership of runtime directories, not the mounted
 `src/` or `vulnscout_mcp/` trees. If an earlier run changed their host
 ownership, restore it once before editing.
+
+#### Maintaining the OpenAPI contract
+
+`src/helpers/openapi.py` discovers API operations from the Flask route map.
+Keep route docstrings and the reusable schemas in
+`src/helpers/openapi_schemas.py` aligned with request validation and serializers.
+Annotations after `OpenAPI:` use the following forms:
+
+```text
+query variant_id uuid optional Restrict results to one variant.
+body NameRequest required JSON object containing a name.
+body allowed_variant_ids uuid[] optional Optional guard on the assessment scope.
+form file binary required Uploaded file.
+response 200 Project[] Project collection.
+response 202 QueueAccepted Accepted batch.
+response 204 empty Deleted successfully.
+```
+
+Use either a named whole-body schema or field-level `body` annotations; fields
+accumulate instead of replacing each other. `form` fields build a multipart
+schema, including binary upload controls. Use `Type[]` for arrays and `TypeMap`
+for maps keyed by identifiers. Multiple response annotations for one status
+combine media types; tokens such as `sse`, `ndjson`, `zip`, `pdf`, and `html`
+describe non-JSON content. Prefix an annotation with a method (for example,
+`PUT body ScanConfiguration required Scan settings.`) when one view handles
+methods with different contracts. Do not document a body for a bodyless action.
+Unknown schema names fail generation rather than silently becoming free-form
+objects.
+
+The Swagger UI asset dependency is pinned in both backend requirements files.
+Rebuild the container after changing it, including when developing with mounted
+backend sources. Keep the OpenAPI and local-asset regression tests passing:
+
+```bash
+python -m pytest tests/webapp_tests/test_openapi_spec.py \
+  tests/webapp_tests/test_swagger_ui.py
+```
 
 #### Database changes
 
@@ -66,12 +113,13 @@ By default, the `frontend/` directory is not mounted into the container. To get 
 ./vulnscout --dev start
 ```
 
-Or combined with a serve command that also loads input files:
+Or load inputs and start the web UI:
 
 ```bash
-./vulnscout --dev --serve \
-  --add-spdx /path/to/sbom.spdx.json \
-  --add-cve-check /path/to/cve-check.json
+./vulnscout --dev add \
+  --spdx /path/to/sbom.spdx.json \
+  --cve-check /path/to/cve-check.json
+./vulnscout --dev serve
 ```
 
 Open the frontend dev server at `http://localhost:5173/`. By default, it sends `/api` requests through Vite's proxy to the backend container on IPv4 (`127.0.0.1:7275`), so the browser does not need direct access to the container port. The script generates `frontend/.env` with an empty `VITE_API_URL` for this same-origin setup; set a custom URL there or in the launcher config if the backend is elsewhere.
@@ -147,6 +195,11 @@ cqfd -b test_ci
 
 Activate the virtual environment and install dev dependencies first:
 
+The backend suite also needs Git and PostgreSQL server binaries. On Debian or
+Ubuntu, install them with `sudo apt-get install git postgresql libpq-dev`.
+The CQFD image includes these dependencies; rebuild it with `cqfd init` after
+updating the container definition.
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -169,8 +222,19 @@ pytest --cov=src tests/
 pytest --cov-report html --cov=src tests/
 
 # Type checking
-mypy --config-file tests/tox.ini
+mypy --config-file tox.ini
 ```
+
+The PostgreSQL migration test starts a temporary server as the current
+non-root user, listens only on a private Unix socket, and stops it at teardown.
+No existing PostgreSQL service or database is required. To use an external test
+database instead, set `VULNSCOUT_TEST_POSTGRES_URI` to its SQLAlchemy connection
+URI; the test creates and drops its own isolated schema.
+
+Scanner-selection tests create small local NVD/CVEList Git repositories and use
+a local OSV HTTP fixture and a Grype executable stub. They exercise the real
+entrypoint, Flask commands, advisory matching, and database persistence without
+downloading advisory feeds or requiring a Grype installation.
 
 #### Frontend
 
@@ -204,13 +268,8 @@ The version is then available at runtime:
 ### Testing the Docker Image
 
 You can test the Docker image using the provided `tests` Makefile.
-To build and test the Docker image, run:
-
-```bash
-make -C tests docker_build docker_test docker_clean
-```
-
-Optionally set a custom tag:
+`BUILD_TAG` is required by all three image targets. From the repository root,
+choose a local tag, then build, test, and remove the test image:
 
 ```bash
 export BUILD_TAG="my-local-test"
@@ -248,11 +307,16 @@ make -C tests docker_build docker_test docker_clean
 | Linter | `shellcheck vulnscout src/entrypoint.sh` |
 
 
-> **Note:** Running `make -C tests test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit. With CQFD, use `cqfd -b test` to run the full suite.
+> **Note:** Run `cqfd -b test` for the combined backend, frontend, and shell/CI
+> targets; schema and container tests have separate CQFD flavors or Make targets.
+> The underlying command is `make -C tests test` in the CQFD environment.
+> Installed pre-commit hooks run their configured checks on matching staged files.
 
 ### Pre-commit Hook
 
-We use `pre-commit` to automatically run `flake8` before every commit.
+The repository's `pre-commit` configuration includes YAML checks, backend
+`flake8` and `mypy`, frontend ESLint, and ShellCheck, scoped to their matching
+files. Installing the hook enables these checks on commits.
 
 To enable it:
 
@@ -274,7 +338,7 @@ Full documentation is available in the `doc/` directory as a Sphinx project.
 Install the required Python packages:
 
 ```bash
-pip install sphinx myst-parser sphinx-rtd-theme
+pip install -r doc/requirements.txt
 ```
 
 Then build the HTML documentation:
@@ -284,6 +348,8 @@ make -C doc html
 ```
 
 The generated pages are in `doc/build/html/`. Open `doc/build/html/index.html` in your browser.
+To catch unresolved references and formatting warnings before submitting a
+documentation change, use `make -C doc html SPHINXOPTS="-n -W --keep-going"`.
 
 ### Building with CQFD
 
@@ -299,14 +365,27 @@ The generated documentation will be available in `doc/build/html/` on the host.
 
 ## Release Process
 
-VulnScout follows a semantic versioning strategy with development versions between releases.
+Release versions use a `v` prefix, with an optional `-dev` suffix for development.
+Use the version in the current repository and the intended next release rather
+than treating any example below as the latest published version.
 
 ### Version Numbering Strategy
 
-The versioning workflow follows these steps:
+Keep `Dockerfile`'s `VULNSCOUT_VERSION`, `frontend/package.json`, the README
+version, and `doc/source/conf.py`'s `release` synchronized.
 
-1. **Current stable version**: `v0.9.1` (example - keep for now)
-2. **Before creating a release tag**: Bump version to `v0.10`
-3. **First PR after release**: Bump version to `v0.10-dev`
-4. **Feature PRs**: Continue development with `-dev` suffix
-5. Repeat the cycle
+For example, to prepare a `v0.24` release, a maintainer can run:
+
+```bash
+./ci/release_tag.sh v0.24
+```
+
+This script updates those version references, prompts to commit or amend the
+changes, creates an annotated tag, and pushes the tag to the configured
+repository. Run it only when ready to publish, not merely to test a local
+version change. Tag pushes trigger the release-image pipeline.
+For local image builds, use the build argument described above instead.
+
+On resuming development, update the same references to the chosen next
+development version (for example, `v0.25-dev`); keep them aligned until the next
+release.

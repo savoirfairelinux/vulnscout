@@ -3,9 +3,68 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 set -euo pipefail # Enable error checking
+
+# Keep stream decisions separate: container exec does not allocate a TTY.
+console_color_enabled() {
+    local stream="$1" hint=""
+    [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]] || return 1
+    if [[ "$stream" == stderr ]]; then
+        hint="${_VULNSCOUT_COLOR_STDERR:-}"
+    else
+        hint="${_VULNSCOUT_COLOR_STDOUT:-}"
+    fi
+    case "$hint" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    if [[ "$stream" == stderr ]]; then [[ -t 2 ]]; else [[ -t 1 ]]; fi
+}
+
+console_message() {
+    local stream="$1" role="$2" code=36
+    shift 2
+    case "$role" in
+        success) code=32 ;;
+        warning) code=33 ;;
+        error) code=31 ;;
+        heading) code='1;36' ;;
+    esac
+    if console_color_enabled "$stream"; then
+        printf '\033[%sm%s\033[0m\n' "$code" "$*"
+    else
+        printf '%s\n' "$*"
+    fi
+}
+
+console_out() { console_message stdout "$@"; }
+console_err() { console_message stderr "$@" >&2; }
+
+console_help() {
+    local line prefix label rest
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if ! console_color_enabled stdout || [[ -z "$line" ]]; then
+            printf '%s\n' "$line"
+        elif [[ "$line" != " "* || "$line" == *: ]]; then
+            console_out heading "$line"
+        elif [[ "$line" =~ ^([[:space:]]+)([^[:space:]].*)$ ]]; then
+            prefix="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+            if [[ "$rest" == *"  "* ]]; then
+                label="${rest%%  *}"
+                printf '%s\033[1;36m%s\033[0m%s\n' "$prefix" "$label" "${rest#"$label"}"
+            else
+                printf '%s\n' "$line"
+            fi
+        else
+            printf '%s\n' "$line"
+        fi
+    done
+}
+
 set -m # enable job control to allow `fg` command
 
 CONFIG_FILE="${VULNSCOUT_CONFIG:-/etc/vulnscout/config.env}"
+export VULNSCOUT_CONFIG="$CONFIG_FILE"
 readonly BASE_DIR="${VULNSCOUT_BASE_DIR:-/scan}"
 INPUTS_DIR="${VULNSCOUT_INPUTS_DIR:-$BASE_DIR/inputs}"
 PROJECT_NAME="default"
@@ -18,9 +77,17 @@ DEV_MODE="${DEV_MODE:-false}"
 
 # Load config file if present
 if [ -f "$CONFIG_FILE" ]; then
+    unset AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
+    export AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
 fi
+
+# Preserve console eligibility through internal pipes, but never style data outputs.
+if console_color_enabled stdout; then _VULNSCOUT_COLOR_STDOUT=1; else _VULNSCOUT_COLOR_STDOUT=0; fi
+if console_color_enabled stderr; then _VULNSCOUT_COLOR_STDERR=1; else _VULNSCOUT_COLOR_STDERR=0; fi
+export _VULNSCOUT_COLOR_STDOUT _VULNSCOUT_COLOR_STDERR
+export NO_COLOR TERM
 
 # The sbom-cve-check advisory databases live inside the VulnScout cache directory
 # (mounted at /cache/vulnscout), in a local_databases sub-folder next to
@@ -93,7 +160,9 @@ mkdir -p "$SBOM_CVE_CHECK_DATABASES_DIR" 2>/dev/null || true
 # run in offline mode against an already-cloned database.
 export SBOM_CVE_CHECK_AUTO_UPDATE="${SBOM_CVE_CHECK_AUTO_UPDATE:-1}"
 
-show_help() {
+show_help() { _show_help | console_help; }
+
+_show_help() {
     cat <<EOF
 VulnScout - Vulnerability Scanner
 Usage: /scan/src/entrypoint.sh [--project <name>] [--variant <name>] <command> [options]
@@ -136,6 +205,13 @@ Commands without --project or --variant:
         Import or export AI assessment context for a project:
         --export-context                Export AI assessment context
         --import-context <path>         Import AI assessment context
+
+Options used by the host wrapper's subcommands:
+        --dry-run                       Preview the --delete-* flag that follows without deleting anything
+        --all-variants                  Custom OpenVEX export/import: do not default --variant to "default"
+        --retarget-context              --import-context: import into --project (and --variant) instead of
+                                        the names in the file
+        --report-format <pdf|html>      Override the report output format
 
 Report generation by project (uses "default" if --project is omitted):
         --report <template|path>        Generate a report from a template
@@ -202,15 +278,21 @@ EOF
 }
 
 setup_user() {
-    if [ -n "${USER_UID:-}" ] && [ -n "${USER_GID:-}" ]; then
-        groupadd -og "$USER_GID" -f builders 2>/dev/null || true
+    local uid="${USER_UID:-}" gid="${USER_GID:-}"
+    if [[ "${VULNSCOUT_ROOTLESS_PODMAN:-false}" = true ]]; then
+        # The wrapper maps container root to the host owner, not a subordinate UID.
+        uid=0
+        gid=0
+    fi
+    if [ -n "$uid" ] && [ -n "$gid" ]; then
+        groupadd -og "$gid" -f builders 2>/dev/null || true
         if ! id -u builder &>/dev/null; then
-            useradd -s /bin/sh -oN -u "$USER_UID" -g "$USER_GID" -d /builder builder
+            useradd -s /bin/sh -oN -u "$uid" -g "$gid" -d /builder builder
         fi
         mkdir -p /builder
         # Source trees under /scan may be bind-mounted from the host in dev mode.
-        chown -f "$USER_UID:$USER_GID" /scan
-        chown -Rf "$USER_UID:$USER_GID" /builder /scan/inputs /scan/tmp /scan/outputs /cache
+        chown -f "$uid:$gid" /scan
+        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs /cache
     fi
 }
 
@@ -228,7 +310,7 @@ extract_tar_file() {
             tar -xf "${file%.zst}" -C "$folder"
             rm -f "${file%.zst}"
             ;;
-        *) echo "Unsupported archive format: $file"; return 1 ;;
+        *) console_out error "Unsupported archive format: $file"; return 1 ;;
     esac
 }
 
@@ -241,23 +323,23 @@ cmd_add_file() {
     if [[ "$type" == "spdx" ]] && [[ "$src" == *.tar || "$src" == *.tar.gz || "$src" == *.tar.zst ]]; then
         local tmp_extract
         tmp_extract=$(mktemp -d)
-        echo "Extracting SPDX archive: $src"
+        console_out info "Extracting SPDX archive: $src"
         extract_tar_file "$src" "$tmp_extract"
         local count=0
         while IFS= read -r -d '' f; do
             cp "$f" "$INPUTS_DIR/$type/$(basename "$f")"
-            echo "Added spdx input (from archive): $INPUTS_DIR/$type/$(basename "$f")"
+            console_out success "Added spdx input (from archive): $INPUTS_DIR/$type/$(basename "$f")"
             count=$(( count + 1 ))
         done < <(find "$tmp_extract" \( -name "*.spdx.json" -o -name "*.jsonld" \) -print0)
         rm -rf "$tmp_extract"
         if [[ $count -eq 0 ]]; then
-            echo "Warning: no .spdx.json or .jsonld files found inside archive $src"
+            console_out warning "Warning: no .spdx.json or .jsonld files found inside archive $src"
         fi
     else
         local dest
         dest="$INPUTS_DIR/$type/$(basename "$src")"
         cp "$src" "$dest"
-        echo "Added $type input: $dest"
+        console_out success "Added $type input: $dest"
     fi
 }
 
@@ -269,11 +351,11 @@ cmd_add_asset() {
     local ext="${dest_name##*.}"
     case "$ext" in
         png|jpg|jpeg|gif|svg|webp) ;;
-        *) echo "Warning: '$dest_name' has an unsupported image extension, skipping." >&2; return 0 ;;
+        *) console_err warning "Warning: '$dest_name' has an unsupported image extension, skipping."; return 0 ;;
     esac
     mkdir -p "/cache/vulnscout/templates/assets"
     cp "$src" "/cache/vulnscout/templates/assets/$dest_name"
-    echo "Added report asset: /cache/vulnscout/templates/assets/$dest_name" >&2
+    console_err success "Added report asset: /cache/vulnscout/templates/assets/$dest_name"
 }
 
 cmd_add_report_template() {
@@ -283,7 +365,7 @@ cmd_add_report_template() {
     dest_name="${dest_name#vulnscout_stage_}"  # strip staging prefix added by the wrapper
     mkdir -p "/cache/vulnscout/templates"
     cp "$src" "/cache/vulnscout/templates/$dest_name"
-    echo "Added report template: /cache/vulnscout/templates/$dest_name" >&2
+    console_err success "Added report template: /cache/vulnscout/templates/$dest_name"
 }
 
 cmd_stage_report_template() {
@@ -301,7 +383,7 @@ cmd_stage_report_template() {
     fi
 
     if [[ ! -f "$template" ]]; then
-        echo "Warning: '$template' not found inside the container, falling back to '$dest_name'." >&2
+        console_err warning "Warning: '$template' not found inside the container, falling back to '$dest_name'."
         echo "$dest_name"
         return 0
     fi
@@ -316,22 +398,22 @@ cmd_stage_report_template() {
         local dst_md5
         dst_md5=$(md5sum "$in_scan_templates" | awk '{print $1}')
         if [[ "$src_md5" == "$dst_md5" ]]; then
-            echo "Template '$dest_name' already up-to-date in /cache/vulnscout/templates/, skipping copy." >&2
+            console_err info "Template '$dest_name' already up-to-date in /cache/vulnscout/templates/, skipping copy."
         else
-            echo "Template '$dest_name' differs from /cache/vulnscout/templates/ copy, updating..." >&2
+            console_err info "Template '$dest_name' differs from /cache/vulnscout/templates/ copy, updating..."
             cmd_add_report_template "$template"
         fi
     elif [[ -f "$in_views_templates" ]]; then
         local dst_md5
         dst_md5=$(md5sum "$in_views_templates" | awk '{print $1}')
         if [[ "$src_md5" == "$dst_md5" ]]; then
-            echo "Template '$dest_name' matches built-in template, skipping copy." >&2
+            console_err info "Template '$dest_name' matches built-in template, skipping copy."
         else
-            echo "Template '$dest_name' differs from built-in template, copying to /cache/vulnscout/templates/..." >&2
+            console_err info "Template '$dest_name' differs from built-in template, copying to /cache/vulnscout/templates/..."
             cmd_add_report_template "$template"
         fi
     else
-        echo "Template '$dest_name' not found in templates directories, copying..." >&2
+        console_err info "Template '$dest_name' not found in templates directories, copying..."
         cmd_add_report_template "$template"
     fi
 
@@ -397,7 +479,7 @@ cmd_scan() {
             case "$f" in
                 *.spdx.json|*.jsonld) ;;  # SPDX JSON / JSON-LD
                 *.spdx)               ;;  # SPDX tag-value
-                *) echo "Warning: '$f' was added with --add-spdx but does not match a supported SPDX filename (*.spdx.json, *.jsonld, or *.spdx). File will be ignored." >&2 ;;
+                *) console_err warning "Warning: '$f' was added with --add-spdx but does not match a supported SPDX filename (*.spdx.json, *.jsonld, or *.spdx). File will be ignored." ;;
             esac
         done
     fi
@@ -415,7 +497,7 @@ cmd_scan() {
             [[ -f "$f" ]] || continue
             case "$f" in
                 *openvex*.json) ;;
-                *) echo "Warning: '$f' was added with --add-openvex but does not contain 'openvex' in its filename. File will be ignored." >&2 ;;
+                *) console_err warning "Warning: '$f' was added with --add-openvex but does not contain 'openvex' in its filename. File will be ignored." ;;
             esac
         done
     fi
@@ -438,7 +520,7 @@ cmd_scan() {
             [[ -f "$f" ]] || continue
             case "$f" in
                 *.grype.json) ;;
-                *) echo "Warning: '$f' was added with --add-grype but does not match the expected naming convention (*.grype.json). File will be ignored." >&2 ;;
+                *) console_err warning "Warning: '$f' was added with --add-grype but does not match the expected naming convention (*.grype.json). File will be ignored." ;;
             esac
         done
     fi
@@ -446,34 +528,56 @@ cmd_scan() {
 
     local has_condition=false
     local _cmd_scan_exit=0
+    local scanners_requested=false
     [[ -n "${MATCH_CONDITION:-}" ]]       && has_condition=true
 
-    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
+    if [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ||
+          "${NVD_SCAN_REQUESTED:-false}" == "true" ||
+          "${OSV_SCAN_REQUESTED:-false}" == "true" ||
+          "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
+        scanners_requested=true
+    fi
+
+    # One ID per invocation, passed explicitly across Flask subprocesses.
+    # Never persist it in config: later invocations must form separate runs.
+    local scan_run_id=""
+    if [[ "$scanners_requested" == "true" ]]; then
+        scan_run_id=$(flask --app src.bin.webapp new-scan-run-id) || return $?
+        INIT_APP_ARGS+=(--run-id "$scan_run_id")
+    fi
+
+    if [[ "$has_inputs" == "true" || "$has_condition" == "true" || "$scanners_requested" == "true" ]]; then
         if [[ "$has_inputs" == "true" ]]; then
             if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
                 set_status "1" "Merging inputs and processing vulnerabilities"
             fi
             (cd "$BASE_DIR" && flask --app src.bin.webapp merge "${INIT_APP_ARGS[@]}") || return $?
+            if [[ "$scanners_requested" == "true" ]]; then
+                # Merge registers files; process must persist packages before scanning.
+                (cd "$BASE_DIR" && MATCH_CONDITION="" flask --app src.bin.webapp process) || return $?
+            fi
         fi
 
-        # If a Grype scan was requested, export the current DB as SPDX (which
+        # If a Grype scan was requested, export the current DB as CycloneDX (which
         # already contains any just-merged inputs), run grype on it, then merge
         # the Grype results back in before running process.
         if [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]]; then
             local grype_tmp
             grype_tmp=$(mktemp -d)
-            echo "Exporting current project as CycloneDX for Grype scan..."
-            (cd "$BASE_DIR" && flask --app src.bin.webapp export --format cdx16 --output-dir "$grype_tmp") || {
+            console_out info "Exporting current project as CycloneDX for Grype scan..."
+            (cd "$BASE_DIR" && flask --app src.bin.webapp export --format cdx16 \
+                --project "$PROJECT_NAME" --variant "${VARIANT_NAME:-default}" \
+                --output-dir "$grype_tmp") || {
                 rm -rf "$grype_tmp"; return 1
             }
             local exported_cdx="$grype_tmp/sbom_cyclonedx_v1_6.cdx.json"
             if [[ -f "$exported_cdx" ]]; then
                 local grype_out="$grype_tmp/grype_from_db.grype.json"
-                echo "Grype scan: $exported_cdx -> $grype_out"
+                console_out info "Grype scan: $exported_cdx -> $grype_out"
                 local _grype_gomemlimit
                 _grype_gomemlimit=$(resolve_grype_memlimit)
                 if [[ -n "$_grype_gomemlimit" ]]; then
-                    echo "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
+                    console_out info "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
                     GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
                         rm -rf "$grype_tmp"; return 1
                     }
@@ -482,37 +586,45 @@ cmd_scan() {
                         rm -rf "$grype_tmp"; return 1
                     }
                 fi
-                echo "Merging Grype results..."
+                console_out info "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
-                    --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --grype "$grype_out") || {
+                    --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                    --run-id "$scan_run_id" --grype "$grype_out") || {
+                    rm -rf "$grype_tmp"; return 1
+                }
+                # A later scanner creates a newer scan; ingest Grype while it is latest.
+                (cd "$BASE_DIR" && MATCH_CONDITION="" flask --app src.bin.webapp process) || {
                     rm -rf "$grype_tmp"; return 1
                 }
                 has_inputs=true
             else
-                echo "Warning: CycloneDX export produced no file, skipping Grype scan."
+                console_out warning "Warning: CycloneDX export produced no file, skipping Grype scan."
             fi
             rm -rf "$grype_tmp"
         fi
 
         # If an NVD scan was requested, run it synchronously via the flask CLI.
         if [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]]; then
-            echo "Running NVD scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
+            console_out info "Running NVD scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp nvd-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                --run-id "$scan_run_id") || _cmd_scan_exit=$?
         fi
 
         # If an OSV scan was requested, run it synchronously via the flask CLI.
         if [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
-            echo "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
+            console_out info "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp osv-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                --run-id "$scan_run_id") || _cmd_scan_exit=$?
         fi
 
         # If an sbom-cve-check scan was requested, run it synchronously via the flask CLI.
         if [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
-            echo "Running sbom-cve-check scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
+            console_out info "Running sbom-cve-check scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp sbom-cve-check-scan \
-                --project "$PROJECT_NAME" --variant "$VARIANT_NAME") || _cmd_scan_exit=$?
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
+                --run-id "$scan_run_id") || _cmd_scan_exit=$?
         fi
 
         # merger_ci.py emits lines of the form  ::STATUS::<step>::<message>
@@ -563,11 +675,11 @@ cmd_scan() {
         [[ "$_host" == "0.0.0.0" ]] && _host="localhost"
         local _url="http://${_host}:${_port}"
         set_status "2" "<!-- __END_OF_SCAN_SCRIPT__ -->"
-        echo "------------------------------------------------------------------------------"
-        echo "Initialization Done - Loading is over and WebUI is ready !!!"
-        echo "Open  $_url in your browser to access VulnScout"
+        console_out info "------------------------------------------------------------------------------"
+        console_out success "Initialization Done - Loading is over and WebUI is ready !!!"
+        console_out info "Open  $_url in your browser to access VulnScout"
         print_nvd_status
-        echo "------------------------------------------------------------------------------"
+        console_out info "------------------------------------------------------------------------------"
         fg %?flask 2>/dev/null || true # Bring back process named 'flask' (flask run) to foreground.
     fi
     return $_cmd_scan_exit
@@ -586,7 +698,9 @@ cmd_report() {
         scope_args+=(--variant "$VARIANT_NAME")
     fi
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp report "$template" --output-dir "$output_dir" "${scope_args[@]}"
+    local -a format_args=()
+    if [[ -n "$REPORT_FORMAT" ]]; then format_args+=(--format "$REPORT_FORMAT"); fi
+    flask --app src.bin.webapp report "$template" --output-dir "$output_dir" "${scope_args[@]}" "${format_args[@]}"
     setup_user
 }
 
@@ -644,23 +758,31 @@ cmd_import_custom_vulnscout_data() {
     setup_user
 }
 
-cmd_export_custom_openvex_assessments() {
-    local variant_name="${VARIANT_NAME:-default}"
+# Scope for custom OpenVEX export/import. Without --variant, the legacy default
+# is the "default" variant; --all-variants lets the Flask command choose.
+custom_openvex_scope_args() {
+    CUSTOM_OPENVEX_SCOPE=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        CUSTOM_OPENVEX_SCOPE+=(--variant "$VARIANT_NAME")
+    elif [[ "$ALL_VARIANTS" != "true" ]]; then
+        CUSTOM_OPENVEX_SCOPE+=(--variant default)
+    fi
+}
 
+cmd_export_custom_openvex_assessments() {
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
     local -a amend_args=()
-    [[ "${AMEND_REVIEW_EXPORT:-false}" == "true" ]] && amend_args+=(--amend)
+    if [[ "${AMEND_REVIEW_EXPORT:-false}" == "true" ]]; then amend_args+=(--amend); fi
+    custom_openvex_scope_args
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp export-custom-openvex-assessments \
-        --project "$PROJECT_NAME" --variant "$variant_name" --output-dir "$output_dir" \
-        "${amend_args[@]}"
+        "${CUSTOM_OPENVEX_SCOPE[@]}" --output-dir "$output_dir" "${amend_args[@]}"
     setup_user
 }
 
 cmd_import_custom_openvex_assessments() {
     local file="$1"
-    local variant_name="${VARIANT_NAME:-default}"
 
     cd "$BASE_DIR"
     local raw_basename dest_name dest_file
@@ -674,7 +796,8 @@ cmd_import_custom_openvex_assessments() {
     fi
 
     flask --app src.bin.webapp db upgrade
-    local -a import_args=(--project "$PROJECT_NAME" --variant "$variant_name")
+    custom_openvex_scope_args
+    local -a import_args=("${CUSTOM_OPENVEX_SCOPE[@]}")
     if [[ "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-original}" == "current" ]]; then
         import_args+=(--use-current-timestamps)
     fi
@@ -713,16 +836,21 @@ cmd_import_context() {
     fi
 
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp import-context "$file"
+    local -a import_args=()
+    if [[ "$RETARGET_CONTEXT" == "true" ]]; then
+        import_args+=(--project "$PROJECT_NAME")
+        if [[ -n "$VARIANT_NAME" ]]; then import_args+=(--variant "$VARIANT_NAME"); fi
+    fi
+    flask --app src.bin.webapp import-context "${import_args[@]}" "$file"
     setup_user
 }
 
 cmd_config_list() {
     if [ -f "$CONFIG_FILE" ]; then
-        echo "Config ($CONFIG_FILE):"
-        sed 's/\(API_KEY\|PASSWORD\|SECRET\)=.*/\1=****/' "$CONFIG_FILE"
+        console_out info "Config ($CONFIG_FILE):"
+        sed 's/\(API_KEY\|PASSWORD\|SECRET\|AI_AUTH_CREDENTIALS\)=.*/\1=****/' "$CONFIG_FILE"
     else
-        echo "No config file found at $CONFIG_FILE"
+        console_out info "No config file found at $CONFIG_FILE"
     fi
 }
 
@@ -733,16 +861,16 @@ cmd_config_set() {
     touch "$CONFIG_FILE"
     grep -v "^${key}=" "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE" || true
     echo "${key}=${value}" >> "$CONFIG_FILE"
-    echo "Config: set ${key}"
+    console_out success "Config: set ${key}"
 }
 
 cmd_config_clear() {
     local key="$1"
     if [ -f "$CONFIG_FILE" ]; then
         grep -v "^${key}=" "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-        echo "Config: removed ${key}"
+        console_out success "Config: removed ${key}"
     else
-        echo "No config file found at $CONFIG_FILE"
+        console_out info "No config file found at $CONFIG_FILE"
     fi
 }
 
@@ -755,7 +883,7 @@ cmd_get_data() {
     flag="$1"
     if [[ "$DATA_REQUESTED" != "" ]]; then
         # Only 1 --list-xxx or --get-xxx command is allowed at the same time
-        echo "Cannot use $flag and $DATA_REQUESTED together"
+        console_out error "Cannot use $flag and $DATA_REQUESTED together"
         exit 1
     fi
     DATA_REQUESTED="$flag"
@@ -769,20 +897,27 @@ cmd_do_get_data() {
 }
 
 cmd_delete_scan() {
-    scan_id="$1"
-    flask --app src.bin.webapp delete-scan "$scan_id"
+    local -a args=(delete-scan "$1")
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 cmd_delete_outdated() {
-    flask --app src.bin.webapp delete-outdated
+    local -a args=(delete-outdated)
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 cmd_delete_empty_scans() {
-    flask --app src.bin.webapp delete-empty-scans
+    local -a args=(delete-empty-scans)
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 cmd_delete_orphaned_vulnerabilities() {
-    flask --app src.bin.webapp delete-orphaned-vulns
+    local -a args=(delete-orphaned-vulns)
+    if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    flask --app src.bin.webapp "${args[@]}"
 }
 
 #######################################
@@ -801,18 +936,18 @@ print_nvd_status() {
     local update_label
     [[ "$auto_update" == "1" ]] && update_label="auto-update on" || update_label="auto-update off"
 
-    echo "  NVD local    : $nvd_db_dir  [$db_status, $update_label]"
+    console_out info "  NVD local    : $nvd_db_dir  [$db_status, $update_label]"
 
     if [[ -n "${NVD_API_KEY:-}" ]]; then
-        echo "  NVD API key  : configured (API mode available)"
+        console_out info "  NVD API key  : configured (API mode available)"
     else
-        echo "  NVD API key  : not set  (local mode is the default)"
+        console_out info "  NVD API key  : not set  (local mode is the default)"
     fi
 }
 
 cmd_daemon() {
     setup_user
-    echo "VulnScout ready. Use '/scan/src/entrypoint.sh --help' for available commands."
+    console_out success "VulnScout ready. Use '/scan/src/entrypoint.sh --help' for available commands."
     print_nvd_status
     tail -f /dev/null
 }
@@ -822,7 +957,7 @@ request_scans() {
     local -a scan_types
     IFS=',' read -r -a scan_types <<< "$selection"
     if [[ -z "$selection" || "$selection" == ,* || "$selection" == *, || "$selection" == *,,* ]]; then
-        echo "Error: --perform-scans requires scan types: grype, nvd, osv, sbom-cve-check, or all." >&2
+        console_err error "Error: --perform-scans requires scan types: grype, nvd, osv, sbom-cve-check, or all."
         return 1
     fi
     for scan_type in "${scan_types[@]}"; do
@@ -836,7 +971,7 @@ request_scans() {
                 NVD_SCAN_REQUESTED=true
                 OSV_SCAN_REQUESTED=true
                 SBOM_CVE_CHECK_SCAN_REQUESTED=true ;;
-            *) echo "Error: unknown scan type '$scan_type'. Expected grype, nvd, osv, sbom-cve-check, or all." >&2; return 1 ;;
+            *) console_err error "Error: unknown scan type '$scan_type'. Expected grype, nvd, osv, sbom-cve-check, or all."; return 1 ;;
         esac
     done
     SCAN_REQUIRED=true
@@ -857,7 +992,7 @@ function set_status() {
     local message=$2
 
     echo "$step $message" >> "$BASE_DIR/status.txt"
-    echo "Step ($step/2): $message"
+    console_out info "Step ($step/2): $message"
 }
 
 MATCH_CONDITION=""
@@ -873,6 +1008,10 @@ SCAN_REQUIRED=false
 JSON_OUTPUT=false
 DATA_REQUESTED=""
 IMPORT_CUSTOM_TIMESTAMP_POLICY=""
+DRY_RUN=false
+ALL_VARIANTS=false
+RETARGET_CONTEXT=false
+REPORT_FORMAT=""
 
 if [[ $# -eq 0 ]]; then
     cmd_daemon
@@ -893,7 +1032,7 @@ while [[ $# -gt 0 ]]; do
             JSON_OUTPUT=true; shift ;;
         --match-condition)
             if [[ "$SERVE_REQUESTED" == "true" ]]; then
-                echo "Error: --serve and --match-condition are incompatible."; exit 1
+                console_out error "Error: --serve and --match-condition are incompatible."; exit 1
             fi
             MATCH_CONDITION="$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-spdx)
@@ -912,7 +1051,7 @@ while [[ $# -gt 0 ]]; do
             cmd_add_asset "$2"; shift 2 ;;
         --perform-scans)
             if [[ $# -lt 2 || "$2" == --* ]]; then
-                echo "Error: --perform-scans requires a scan type." >&2; exit 1
+                console_err error "Error: --perform-scans requires a scan type."; exit 1
             fi
             request_scans "$2"; shift 2 ;;
         --perform-grype-scan)
@@ -925,6 +1064,17 @@ while [[ $# -gt 0 ]]; do
             request_scans sbom-cve-check; shift ;;
         --refresh-vulnerability-data)
             REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
+        --dry-run)
+            DRY_RUN=true; shift ;;
+        --all-variants)
+            ALL_VARIANTS=true; shift ;;
+        --retarget-context)
+            RETARGET_CONTEXT=true; shift ;;
+        --report-format)
+            if [[ "${2:-}" != "pdf" && "${2:-}" != "html" ]]; then
+                console_err error "Error: --report-format must be pdf or html."; exit 1
+            fi
+            REPORT_FORMAT="$2"; shift 2 ;;
         --delete-scan)
             cmd_delete_scan "$2"; shift 2 ;;
         --delete-outdated)
@@ -935,7 +1085,7 @@ while [[ $# -gt 0 ]]; do
             cmd_delete_orphaned_vulnerabilities; shift ;;
         --serve)
             if [[ -n "$MATCH_CONDITION" ]]; then
-                echo "Error: --serve and --match-condition are incompatible."; exit 1
+                console_out error "Error: --serve and --match-condition are incompatible."; exit 1
             fi
             SERVE_REQUESTED=true; SCAN_REQUIRED=true
             shift; cmd_serve "$@" ;;
@@ -977,12 +1127,12 @@ while [[ $# -gt 0 ]]; do
         --config-clear)
             cmd_config_clear "$2"; shift 2 ;;
         *)
-            echo "Unknown command: $1"; echo "Run --help for usage."; exit 1 ;;
+            console_out error "Unknown command: $1"; console_out info "Run --help for usage."; exit 1 ;;
     esac
 done
 
 if [[ -n "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-}" && -z "${IMPORT_CUSTOM_VULNSCOUT_DATA_FILE:-}" && -z "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
-    echo "Error: timestamp options require a custom VulnScout or OpenVEX import." >&2
+    console_err error "Error: timestamp options require a custom VulnScout or OpenVEX import."
     exit 1
 fi
 

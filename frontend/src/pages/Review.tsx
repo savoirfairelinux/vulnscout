@@ -10,7 +10,7 @@ import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation, faRobot } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
@@ -28,7 +28,11 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
-import { AGENT_WRITE_EVENT, type AgentViewContext } from '../types/agent';
+import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentViewContext } from '../types/agent';
+import { agentActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
+import AgentActionButton from '../components/AgentActionButton';
+import useAgentQueue from '../hooks/useAgentQueue';
+import { assessmentReviewKey, resolveAssessmentReviewAction } from '../helpers/aiAssessmentReview';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -49,7 +53,6 @@ type Props = {
     projectId?: string;
     onAssessmentChanged?: (mutation: AssessmentMutation) => void;
     onAgentContextChange?: (context: AgentViewContext) => void;
-    onOpenAgent?: () => void;
 };
 
 export type { AssessmentMutation };
@@ -229,7 +232,7 @@ function hasOutdatedAssessment(row: ReviewRow): boolean {
     return row.targets.some(t => t.outdated) || row.context_outdated;
 }
 
-function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
+function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<ReviewRow[]>([]);
@@ -268,6 +271,17 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [selectedAiAssessments, setSelectedAiAssessments] = useState<RowSelectionState>({});
     const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<RowSelectionState>({});
     const [selectedCustomCvss, setSelectedCustomCvss] = useState<RowSelectionState>({});
+    const reviewScopeVersion = useRef(0);
+    const reviewPreparingRef = useRef(false);
+    const [reviewPreparing, setReviewPreparing] = useState(false);
+    const agentQueue = useAgentQueue();
+
+    // Abandon an in-flight preparation when the scope changes; queued reviews keep their own scope.
+    useEffect(() => {
+        reviewPreparingRef.current = false;
+        setReviewPreparing(false);
+        return () => { reviewScopeVersion.current += 1; };
+    }, [variantId, projectId]);
     const [bulkDeleteTab, setBulkDeleteTab] = useState<ReviewTab | null>(null);
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("success");
@@ -908,6 +922,38 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 ? selectedTimeEstimates
                 : selectedCustomCvss;
     const selectedRowCount = Object.keys(selectedRows).length;
+    const selectedReviewRows = assessments.filter(row => selectedAssessments[row.id] && row.origin === 'custom');
+    const pendingReviewKeys = new Set(agentQueue.filter(action => action.kind === 'review').map(action => action.key));
+    const reviewableRows = selectedReviewRows.filter(row => !pendingReviewKeys.has(assessmentReviewKey(row.id)));
+    const selectedReviewKeys = new Set(selectedReviewRows.map(row => assessmentReviewKey(row.id)));
+    const selectedReviewState = reviewableRows.length ? undefined
+        : agentActionState(agentQueue, action => selectedReviewKeys.has(action.key));
+
+    const reviewSelectedWithAi = async () => {
+        if (reviewPreparingRef.current || !reviewableRows.length) return;
+        const version = reviewScopeVersion.current;
+        reviewPreparingRef.current = true;
+        setReviewPreparing(true);
+        try {
+            const variants = await Variants.listAll();
+            const actions = await Promise.all(reviewableRows.map(row => resolveAssessmentReviewAction(row.id, variants)));
+            if (version !== reviewScopeVersion.current) return;
+            if (actions.some(action => action.text.length > AGENT_MESSAGE_MAX_LENGTH)) {
+                showMessage('An assessment review request exceeds the AI message limit. Check the selected assessment identifiers.', 'error');
+                return;
+            }
+            const queued = actions.map(action => ({ ...action, id: crypto.randomUUID() }));
+            enqueueAgentMessages(queued, actions[0].context ?? { page: 'review' }, 'Review', 'per-action');
+            openAgentChat(queued[0]?.id);
+        } catch (error) {
+            if (version === reviewScopeVersion.current) showMessage(`Unable to queue AI reviews: ${String(error)}`, 'error');
+        } finally {
+            if (version === reviewScopeVersion.current) {
+                reviewPreparingRef.current = false;
+                setReviewPreparing(false);
+            }
+        }
+    };
 
     const clearSelectedRows = useCallback((tab: ReviewTab) => {
         if (tab === 'assessments') setSelectedAssessments({});
@@ -1716,6 +1762,17 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         Reset Filters
                     </button>
 
+                    {activeTab === 'assessments' && selectedReviewRows.length > 0 && (
+                        <AgentActionButton
+                            state={selectedReviewState}
+                            label={reviewableRows.length ? `Review selected with AI (${reviewableRows.length})` : 'Review selected with AI'}
+                            onRun={() => void reviewSelectedWithAi()}
+                            title="Review each selected custom assessment with AI in its own conversation"
+                            preparing={reviewPreparing ? 'Preparing AI reviews…' : undefined}
+                            icon={faRobot}
+                            className="bg-cyan-700 hover:bg-cyan-600 px-3 py-1 rounded text-white border border-cyan-500 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                    )}
                     {selectedRowCount > 0 && (
                         <button
                             onClick={() => setBulkDeleteTab(activeTab)}
@@ -1918,7 +1975,6 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             {modalVuln && (
                 <VulnModal
                     vuln={modalVuln}
-                    onOpenAgent={onOpenAgent}
                     readOnly={true}
                     appendAssessment={() => {}}
                     appendCVSS={() => null}

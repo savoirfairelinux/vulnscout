@@ -46,11 +46,23 @@ describe('NavigationBar', () => {
         expect(settingsLink).toHaveAttribute('href', ROUTES.settings);
     });
 
+    test('does not show an API documentation link', () => {
+        renderAt('/');
+
+        expect(screen.queryByRole('link', { name: 'API documentation' })).not.toBeInTheDocument();
+    });
+
     test('marks the current page link with aria-current', () => {
         renderAt(ROUTES.vulnerabilities);
 
         expect(screen.getByRole('link', { name: 'Vulnerabilities' })).toHaveAttribute('aria-current', 'page');
         expect(screen.getByRole('link', { name: /VulnScout/ })).not.toHaveAttribute('aria-current');
+    });
+
+    test.each(['/settings/projects/Apollo', '/settings/projects/Apollo/Release'])('keeps the settings link current on %s', (path) => {
+        renderAt(path);
+
+        expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
     });
 
     test('marks the dashboard link current only on the exact root path, not on other routes', () => {

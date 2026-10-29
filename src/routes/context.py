@@ -7,24 +7,38 @@ import logging
 
 from flask import jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
-from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
-from ..helpers.codebase_reference import CodebaseReference, MAX_FILE_BYTES, validate_reference
+from ..helpers.codebase_reference import CodebaseReference, validate_reference
 from ..helpers.context_io import (
     build_export_document,
     collect_entries,
     extract_entries,
     import_entries,
 )
+from ..helpers.stride_model import StrideValidationError
 from ..models.project import Project
 from ..models.variant import Variant
-from ..models.variant_context import VariantContext, ContextFile
+from ..models.variant_context import (
+    ContextFile,
+    VariantContext,
+    default_editor_block,
+)
 from ..routes._scan_helpers import parse_uuid_or_400
 
 logger = logging.getLogger(__name__)
-MAX_REFERENCE_REQUEST_BYTES = MAX_FILE_BYTES + 64 * 1024
+
+
+# Agent-facing variant keys of GET /api/context (besides ``files``).
+_AGENT_VARIANT_KEYS = (
+    "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+)
+
+
+# Agent-facing text rendered from the STRIDE model; text writes are rejected.
+_STRIDE_TEXT_KEYS = ("threat_model", "risks")
+STRIDE_TEXT_READ_ONLY = "is generated from the STRIDE model; edit it in the AI Context page"
 
 
 def _get_cache_dir() -> str:
@@ -40,7 +54,7 @@ def init_app(app):
         OpenAPI:
         query project_id uuid required Project UUID.
         query variant_id uuid required Variant UUID belonging to the project.
-        response 200 JsonObject Merged project and variant context.
+        response 200 MergedContext Merged project and variant context.
         response 400 Error Invalid identifiers or mismatched project and variant.
         response 404 Error Project or variant not found.
         """
@@ -69,17 +83,14 @@ def init_app(app):
         pc = ProjectContext.get_by_project(project_uuid)
         vc = VariantContext.get_by_variant(variant_uuid)
 
+        variant_part = vc.to_dict() if vc else {"files": [], "editor": default_editor_block()}
         return jsonify({
             "project_id": str(project_uuid),
             "description": pc.description if pc else None,
             "variant_id": str(variant_uuid),
-            "variant_description": vc.variant_description if vc else None,
-            "codebase_path": vc.codebase_path if vc else None,
-            "environment": vc.environment if vc else None,
-            "threat_model": vc.threat_model if vc else None,
-            "risks": vc.risks if vc else None,
-            "other_info": vc.other_info if vc else None,
-            "files": [f.to_dict() for f in vc.files] if vc else [],
+            **{key: variant_part.get(key) for key in _AGENT_VARIANT_KEYS},
+            "files": variant_part["files"],
+            "editor": variant_part["editor"],
         })
 
     @app.route('/api/projects/<project_id>/context', methods=['GET'])
@@ -87,7 +98,7 @@ def init_app(app):
         """Return context for a project.
 
         OpenAPI:
-        response 200 JsonObject Project context.
+        response 200 ProjectContext Project context.
         response 400 Error Invalid project identifier.
         response 404 Error Project not found.
         """
@@ -110,8 +121,8 @@ def init_app(app):
         """Create or update context for a project.
 
         OpenAPI:
-        body JsonObject required Project context fields.
-        response 200 JsonObject Updated project context.
+        body ProjectContextUpdate required Project context fields.
+        response 200 ProjectContext Updated project context.
         response 400 Error Invalid project identifier.
         response 404 Error Project not found.
         """
@@ -132,10 +143,14 @@ def init_app(app):
     def put_variant_context(variant_id):
         """Create or update context for a variant.
 
+        A body with ``stride`` is an editor-shape save; otherwise it is a
+        full-replacement write of the text fields. The threat model and risks
+        are rendered from the STRIDE model and cannot be written as text.
+
         OpenAPI:
-        body JsonObject required Variant context fields.
-        response 200 JsonObject Updated variant context.
-        response 400 Error Invalid variant identifier.
+        body VariantContextUpdate required Variant context fields.
+        response 200 VariantContext Updated variant context.
+        response 400 Error Invalid variant identifier or context fields.
         response 404 Error Variant not found.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
@@ -144,15 +159,21 @@ def init_app(app):
         assert variant_uuid is not None
         body = request.get_json(silent=True) or {}
         try:
-            vc = VariantContextController.upsert(
-                variant_uuid,
-                variant_description=body.get('variant_description'),
-                codebase_path=body.get('codebase_path'),
-                environment=body.get('environment'),
-                threat_model=body.get('threat_model'),
-                risks=body.get('risks'),
-                other_info=body.get('other_info'),
-            )
+            if 'stride' in body:
+                vc = VariantContextController.save_editor(variant_uuid, body)
+            else:
+                text_fields = {key: body.get(key) for key in _STRIDE_TEXT_KEYS if body.get(key) is not None}
+                if text_fields:
+                    raise StrideValidationError({key: STRIDE_TEXT_READ_ONLY for key in text_fields})
+                vc = VariantContextController.upsert(
+                    variant_uuid,
+                    variant_description=body.get('variant_description'),
+                    codebase_path=body.get('codebase_path'),
+                    environment=body.get('environment'),
+                    other_info=body.get('other_info'),
+                )
+        except StrideValidationError as exc:
+            return jsonify({"error": str(exc), "fields": exc.fields}), 400
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))
@@ -169,7 +190,7 @@ def init_app(app):
         query project_id uuid optional Project UUID for a single-variant export.
         query variant_id uuid optional Variant UUID for a single-variant export.
         query variant_ids string optional Comma-separated variant UUIDs.
-        response 200 JsonObject Exported context document.
+        response 200 ContextExport Exported context document.
         response 400 Error Invalid or inconsistent filters.
         response 404 Error Requested project or variant not found.
         """
@@ -215,8 +236,8 @@ def init_app(app):
         """Import project and variant context atomically.
 
         OpenAPI:
-        body JsonObject required Context export document to import.
-        response 200 JsonObject Import result.
+        body ContextExport required Context export document to import.
+        response 200 ContextImportResult Import result.
         response 400 Error Invalid context document.
         response 500 Error Context could not be persisted.
         """
@@ -243,15 +264,16 @@ def init_app(app):
     def post_context_file(variant_id):
         """Upload a codebase reference file or ZIP/TAR archive for a variant.
 
-        Files are limited to 10 MB. The multipart payload accepts a required
-        ``file`` field and an optional ``description`` field.
+        The multipart payload accepts a required ``file`` field and an optional
+        ``description`` field.
 
         OpenAPI:
         body multipart required Supplemental file and optional description.
-        response 201 JsonObject Uploaded context-file metadata.
-        response 400 Error Invalid identifier, missing file, or oversized file.
+        form file binary required Codebase reference file or ZIP/TAR archive.
+        form description string optional Description of this reference.
+        response 201 ContextFile Uploaded context-file metadata.
+        response 400 Error Invalid identifier or missing file.
         response 404 Error Variant not found.
-        response 413 Error Multipart upload request exceeds its size limit.
         response 500 Error File could not be stored.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
@@ -263,24 +285,13 @@ def init_app(app):
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
 
-        request.max_content_length = MAX_REFERENCE_REQUEST_BYTES
-        try:
-            file = request.files.get('file')
-        except RequestEntityTooLarge:
-            return jsonify(error="Codebase reference upload exceeds the 10 MB limit plus multipart overhead."), 413
+        file = request.files.get('file')
         if file is None:
             return jsonify({"error": "No file provided"}), 400
 
         filename = file.filename
         if not filename:
             return jsonify({"error": "No file provided"}), 400
-
-        file.seek(0, 2)
-        size = file.tell()
-        file.seek(0)
-        if size > MAX_FILE_BYTES:
-            max_mb = MAX_FILE_BYTES // (1024 * 1024)
-            return jsonify({"error": f"File exceeds maximum size of {max_mb} MB"}), 400
 
         description = request.form.get('description')
         if description is not None:
@@ -295,6 +306,7 @@ def init_app(app):
 
         vc = VariantContext.get_by_variant(variant_uuid)
         if vc is None:
+            # Created without paths, so the variant uses its references.
             vc = VariantContext.upsert(variant_uuid)
 
         dest_dir = os.path.join(_get_cache_dir(), "context-files", str(vc.id))
@@ -335,7 +347,7 @@ def init_app(app):
         query max_lines integer optional Read line count, 1-200 (default 200).
         query query string optional Literal case-sensitive search text, required for search.
         query max_results integer optional Search limit, 1-100 (default 100).
-        response 200 JsonObject Source files, line-numbered content, or search matches.
+        response 200 SourceReferenceResult Source files, line-numbered content, or search matches.
         response 400 Error Invalid parameters or unreadable reference.
         response 404 Error Variant, reference, or source member not found.
         response 500 Error Stored reference is unavailable.
@@ -401,7 +413,7 @@ def init_app(app):
         """Delete an uploaded codebase reference.
 
         OpenAPI:
-        response 204 string Context file deleted.
+        response 204 empty Context file deleted.
         response 400 Error Invalid variant or file identifier.
         response 404 Error Variant or context file not found.
         """

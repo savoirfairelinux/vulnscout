@@ -154,6 +154,7 @@ class TestGetMergedContextImpl:
                         "risks": "none",
                         "other_info": "n/a",
                         "files": [{"id": "f1", "original_name": "report.pdf"}],
+                        "editor": {"codebase_source": "references"},
                     },
                 )
             )
@@ -163,6 +164,7 @@ class TestGetMergedContextImpl:
         assert "/src/app" in result
         assert "CVSS >= 7" in result
         assert "report.pdf" in result
+        assert "codebase_source=references" in result
 
     def test_returns_no_files_placeholder_when_empty(self, client):
         with respx.mock:
@@ -257,6 +259,7 @@ class TestUpdateVariantContextImpl:
                         "risks": None,
                         "other_info": None,
                         "files": [],
+                        "editor": {"codebase_source": "paths"},
                     },
                 )
             )
@@ -264,7 +267,6 @@ class TestUpdateVariantContextImpl:
                 client,
                 "v1",
                 codebase_path="/repo/src",
-                threat_model="CVSS >= 7",
             )
         body = json.loads(route.calls[0].request.content)
         # All fields are always sent, even when None, per full-replacement semantics.
@@ -272,17 +274,16 @@ class TestUpdateVariantContextImpl:
             "variant_description": None,
             "codebase_path": "/repo/src",
             "environment": None,
-            "threat_model": "CVSS >= 7",
-            "risks": None,
             "other_info": None,
         }
         assert "threat_model=CVSS >= 7" in result
         assert "codebase_path=/repo/src" in result
+        assert "codebase_source=paths" in result
 
     def test_api_error_returns_error_string(self, client):
         with respx.mock:
             respx.put(f"{BASE_URL}/api/variants/v1/context").mock(
                 return_value=httpx.Response(404, json={"error": "Variant not found"})
             )
-            result = _update_variant_context_impl(client, "v1", threat_model="x")
+            result = _update_variant_context_impl(client, "v1", environment="x")
         assert result == "Error: Variant not found"

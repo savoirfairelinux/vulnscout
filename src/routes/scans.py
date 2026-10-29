@@ -29,7 +29,7 @@ from ..models.package import Package, _normalize_supplier
 from ..models.project import Project
 from ..models.scan import Scan
 from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
+from ..models.sbom_package import PackageType, SBOMPackage
 from ..models.variant import Variant
 from ..models.vulnerability import Vulnerability
 from ..extensions import db
@@ -156,6 +156,35 @@ def _strip_package(entry: dict) -> dict:
     return result
 
 
+def _export_package_evidence(scan: Scan, entries: list[dict]) -> list[dict]:
+    """Attach portable SBOM association evidence, never shared Package identifiers."""
+    if not entries:
+        return entries
+    sbom_scan, _ = _contributing_scans_at(scan, ScanController.get_by_variant(scan.variant_id))
+    if sbom_scan is None:
+        return [_strip_package(entry) for entry in entries]
+    evidence: dict[str, list[dict]] = {}
+    rows = db.session.execute(
+        db.select(SBOMPackage)
+        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+        .where(SBOMDocument.scan_id == sbom_scan.id)
+        .order_by(SBOMPackage.sbom_document_id, SBOMPackage.package_id)
+    ).scalars()
+    for row in rows:
+        evidence.setdefault(str(row.package_id), []).append({
+            "cpe": row.cpe,
+            "purl": row.purl,
+            "source_urls": row.source_urls,
+            "source_revisions": row.source_revisions,
+            "type": row.type,
+        })
+    return [
+        {**_strip_package(entry),
+         **({"sbom_evidence": evidence[entry["package_id"]]} if entry.get("package_id") in evidence else {})}
+        for entry in entries
+    ]
+
+
 def _strip_package_upgrade(entry: dict) -> dict:
     supplier = _extract_supplier_name(entry.get("package_supplier", "") or "")
     result = {
@@ -258,10 +287,13 @@ def _build_diff_export(
                 or (diff.get("findings_added", []) + diff.get("findings_unchanged", []))
             )
         ],
-        "packages": [
-            _strip_package(p)
-            for p in (diff.get("packages_added", []) + diff.get("packages_unchanged", []))
-        ],
+        "packages": _export_package_evidence(
+            scan, [
+                _pkg_to_dict(package) for package in _package_rows(
+                    _packages_by_scan_ids([scan.id]).get(scan.id, set()),
+                ).values()
+            ],
+        ),
         "assessments": [
             _strip_assessment(a)
             for a in (
@@ -304,13 +336,11 @@ def _build_global_result_export(
     return {
         **meta,
         "packages": [
-            {
-                "package_name": p.get("package_name", ""),
-                "package_version": p.get("package_version", ""),
-                **({"supplier": s} if (s := _extract_supplier_name(p.get("package_supplier", "") or "")) else {}),
-                "sources": p.get("sources", []),
-            }
-            for p in result.get("packages", [])
+            {**package, "sources": entry.get("sources", [])}
+            for package, entry in zip(
+                _export_package_evidence(scan, result.get("packages", [])),
+                result.get("packages", []),
+            )
         ],
         "findings": [
             {
@@ -372,6 +402,9 @@ _IMPORT_SOURCE_LABEL = "Imported VulnScout scan"
 _SUPPORTED_EXPORT_VERSION = 1
 #: Upper bound on exports accepted in one request, mirroring MAX_EXPORT_SCANS.
 _MAX_IMPORT_EXPORTS = 200
+#: Raw association limits, before deduplication, per package/export and request.
+_MAX_IMPORT_EVIDENCE_PER_PACKAGE = 1000
+_MAX_IMPORT_EVIDENCE = 10000
 #: Batch size for ``IN`` lookups, kept well under SQLite's parameter limit.
 _IMPORT_QUERY_CHUNK = 400
 
@@ -410,8 +443,58 @@ class _ScanImport(NamedTuple):
     scan_source: str | None
     timestamp: datetime
     package_keys: list[PackageKey]
+    package_evidence: dict[PackageKey, list["_ImportPackageEvidence"]]
     findings: list[FindingKey]
     assessments: list["_ImportAssessment"]
+
+
+class _ImportPackageEvidence(TypedDict):
+    cpe: list[str] | None
+    purl: list[str] | None
+    source_urls: list[str] | None
+    source_revisions: list[str] | None
+    type: PackageType
+
+
+def _import_evidence_key(evidence: _ImportPackageEvidence) -> tuple[object, ...]:
+    """Hash association values without conflating unknown and empty identifiers."""
+    return (
+        evidence["type"],
+        None if evidence["cpe"] is None else tuple(evidence["cpe"]),
+        None if evidence["purl"] is None else tuple(evidence["purl"]),
+        None if evidence["source_urls"] is None else tuple(evidence["source_urls"]),
+        None if evidence["source_revisions"] is None else tuple(evidence["source_revisions"]),
+    )
+
+
+def _import_package_evidence(entry: dict) -> list[_ImportPackageEvidence]:
+    """Keep unknown identifiers distinct from explicitly recorded empty lists."""
+    if "sbom_evidence" not in entry:
+        return []
+    values = entry["sbom_evidence"]
+    if not isinstance(values, list) or not values:
+        raise ValueError("'sbom_evidence' must be a non-empty array")
+    evidence = []
+    for value in values:
+        if not isinstance(value, dict):
+            raise ValueError("'sbom_evidence' entries must be objects")
+        fields = {}
+        for field in ("cpe", "purl", "source_urls", "source_revisions"):
+            identifiers = value.get(field)
+            if identifiers is not None and (
+                not isinstance(identifiers, list)
+                or any(not isinstance(identifier, str) or not identifier.strip() for identifier in identifiers)
+            ):
+                raise ValueError(f"'sbom_evidence.{field}' must be an array of non-empty strings or null")
+            fields[field] = identifiers
+        package_type = value.get("type", "normal")
+        if package_type not in ("normal", "workspace", "built"):
+            raise ValueError("'sbom_evidence.type' must be 'normal', 'workspace', or 'built'")
+        evidence.append(_ImportPackageEvidence(
+            cpe=fields["cpe"], purl=fields["purl"], source_urls=fields["source_urls"],
+            source_revisions=fields["source_revisions"], type=package_type,
+        ))
+    return evidence
 
 
 def _chunked(items: Sequence[_T], size: int) -> Iterator[Sequence[_T]]:
@@ -598,9 +681,26 @@ def _parse_scan_export(payload: object) -> _ScanImport:
     packages_raw = _import_array(payload, "packages", required=(scan_type == "sbom"))
 
     package_keys: list[PackageKey] = []
+    package_evidence: dict[PackageKey, list[_ImportPackageEvidence]] = {}
+    seen_evidence: dict[PackageKey, set[tuple[object, ...]]] = {}
+    evidence_counts: dict[PackageKey, int] = {}
     seen_packages: set[PackageKey] = set()
     for entry in packages_raw:
         key = _import_package_key(entry)
+        raw_evidence = entry.get("sbom_evidence", [])
+        if isinstance(raw_evidence, list):
+            evidence_counts[key] = evidence_counts.get(key, 0) + len(raw_evidence)
+            if evidence_counts[key] > _MAX_IMPORT_EVIDENCE_PER_PACKAGE:
+                raise ValueError(
+                    f"'sbom_evidence' exceeds {_MAX_IMPORT_EVIDENCE_PER_PACKAGE} records per package per export"
+                )
+        for evidence in _import_package_evidence(entry):
+            entries = package_evidence.setdefault(key, [])
+            seen = seen_evidence.setdefault(key, set())
+            evidence_key = _import_evidence_key(evidence)
+            if evidence_key not in seen:
+                seen.add(evidence_key)
+                entries.append(evidence)
         if key not in seen_packages:
             seen_packages.add(key)
             package_keys.append(key)
@@ -643,6 +743,7 @@ def _parse_scan_export(payload: object) -> _ScanImport:
         scan_source=scan_source,
         timestamp=timestamp,
         package_keys=package_keys,
+        package_evidence=package_evidence,
         findings=findings,
         assessments=assessments,
     )
@@ -794,21 +895,39 @@ def _persist_scan_import(item: _ScanImport) -> _ImportSummary:
     if item.scan_type == "sbom":
         # SBOM scans expose their package set through an SBOM document; tool
         # scans reach theirs through their findings and need none.
-        document = SBOMDocument(
-            path=f"imported-scan://{scan.id}",
-            source_name=_IMPORT_SOURCE_LABEL,
-            format="vulnscout_json",
-            scan_id=scan.id,
-        )
-        db.session.add(document)
-        db.session.flush()
         # Two export entries can resolve to one row (e.g. suppliers that
-        # normalise to the same value), so link each package only once.
-        for package_id in {package.id for package in packages.values()}:
-            db.session.add(SBOMPackage(
-                sbom_document_id=document.id,
-                package_id=package_id,
-            ))
+        # normalise to the same value), so deduplicate their evidence.
+        evidence_by_id: dict[uuid_module.UUID, list[_ImportPackageEvidence]] = {}
+        seen_evidence: dict[uuid_module.UUID, set[tuple[object, ...]]] = {}
+        for key, package in packages.items():
+            entries = evidence_by_id.setdefault(package.id, [])
+            seen = seen_evidence.setdefault(package.id, set())
+            for evidence in item.package_evidence.get(key, []):
+                evidence_key = _import_evidence_key(evidence)
+                if evidence_key not in seen:
+                    seen.add(evidence_key)
+                    entries.append(evidence)
+        documents = [
+            SBOMDocument(
+                path=f"imported-scan://{scan.id}" + (f"/{index}" if index else ""),
+                source_name=_IMPORT_SOURCE_LABEL,
+                format="vulnscout_json",
+                scan_id=scan.id,
+            )
+            for index in range(max(1, max(map(len, evidence_by_id.values()), default=0)))
+        ]
+        db.session.add_all(documents)
+        db.session.flush()
+        # Preserve separate association types and unknown identifier evidence.
+        # Several pieces of evidence for one package need separate junction rows.
+        for package_id, entries in evidence_by_id.items():
+            associations: list[_ImportPackageEvidence | None] = list(entries) if entries else [None]
+            for index, association_evidence in enumerate(associations):
+                db.session.add(SBOMPackage(
+                    sbom_document_id=documents[index].id,
+                    package_id=package_id,
+                    **dict(association_evidence or {}),
+                ))
 
     vulnerability_ids = {vulnerability_id for _key, vulnerability_id in item.findings}
     _ensure_import_vulnerabilities(vulnerability_ids)
@@ -914,11 +1033,34 @@ def _persist_import_assessments(
     return created
 
 
+def _validate_archive_evidence_budget(exports: Sequence[object]) -> None:
+    """Apply the same evidence budget to downloaded and uploaded archives."""
+    evidence_count = 0
+    for export in exports:
+        packages = export.get("packages") if isinstance(export, dict) else None
+        if not isinstance(packages, list):
+            continue
+        for package in packages:
+            evidence = package.get("sbom_evidence") if isinstance(package, dict) else None
+            if isinstance(evidence, list):
+                if len(evidence) > _MAX_IMPORT_EVIDENCE_PER_PACKAGE:
+                    raise ValueError(
+                        f"'sbom_evidence' exceeds {_MAX_IMPORT_EVIDENCE_PER_PACKAGE} records per package per export"
+                    )
+                evidence_count += len(evidence)
+                if evidence_count > _MAX_IMPORT_EVIDENCE:
+                    raise ValueError(
+                        f"'sbom_evidence' exceeds {_MAX_IMPORT_EVIDENCE} records per request"
+                    )
+
+
 def _import_scan_exports(exports: Sequence[object]) -> tuple[list[_ImportSummary], int]:
     """Validate exports and persist only scans absent from their destination."""
     parsed: list[_ScanImport] = []
     batch_keys: set[tuple[uuid_module.UUID, str, str | None, str]] = set()
     skipped_count = 0
+
+    _validate_archive_evidence_budget(exports)
 
     for index, export in enumerate(exports):
         try:
@@ -1008,10 +1150,13 @@ def init_app(app: Flask) -> None:
         import leaves the database untouched.
 
         OpenAPI:
-        response 201 JsonObject Import summary, with one entry per newly imported scan.
+        body ScanImport required Scan diff or full-result export, or a non-empty array of exports.
+        response 201 ScanImportResult Import summary, with one entry per newly imported scan.
         response 400 Error Malformed or unsupported export payload.
         response 404 Error Destination project or variant not found.
-        response 413 Error Request body exceeds the scan import size limit.
+        response 413 Error Request body exceeds an upstream/server size limit.
+        response 409 Error An export conflicts with an existing scan.
+        response 500 Error Scan import could not be persisted.
         """
         try:
             payload = flask_request.get_json(force=True, silent=True)
@@ -1032,10 +1177,12 @@ def init_app(app: Flask) -> None:
             db.session.commit()
         except RequestEntityTooLarge:
             db.session.rollback()
-            limit = _format_byte_size(app.config["MAX_SCAN_IMPORT_CONTENT_LENGTH"])
-            return jsonify({
-                "error": f"Scan import exceeds the {limit} size limit",
-            }), 413
+            limit = app.config.get("MAX_SCAN_IMPORT_CONTENT_LENGTH")
+            if isinstance(limit, (int, float)) and limit > 0:
+                return jsonify({
+                    "error": f"Scan import exceeds the {_format_byte_size(limit)} size limit",
+                }), 413
+            return jsonify({"error": "Scan import exceeds the server request-size limit"}), 413
         except FileExistsError as exc:
             db.session.rollback()
             return jsonify({"error": str(exc)}), 409
@@ -1077,7 +1224,7 @@ def init_app(app: Flask) -> None:
         OpenAPI:
         query variant_ids string optional Comma-separated selected variant IDs.
         query project_id uuid optional Require selected variants to belong to this project.
-        response 200 JsonObject Scan collection.
+        response 200 ScanCollection Scan collection.
         """
         raw_variant_ids = flask_request.args.get('variant_ids', '')
         if raw_variant_ids:
@@ -1119,7 +1266,7 @@ def init_app(app: Flask) -> None:
         """List scans belonging to a specific project.
 
         OpenAPI:
-        response 200 JsonObject Scan collection for the selected project.
+        response 200 ScanCollection Scan collection for the selected project.
         response 404 Error Project not found.
         """
         project = ProjectController.get(project_id)
@@ -1134,7 +1281,7 @@ def init_app(app: Flask) -> None:
         """List scans belonging to a specific variant.
 
         OpenAPI:
-        response 200 JsonObject Scan collection for the selected variant.
+        response 200 ScanCollection Scan collection for the selected variant.
         response 404 Error Variant not found.
         """
         variant = VariantController.get(variant_id)
@@ -1149,8 +1296,8 @@ def init_app(app: Flask) -> None:
         """Update the editable description of a scan.
 
         OpenAPI:
-        body JsonObject optional JSON object containing a description field.
-        response 200 JsonObject Updated scan payload.
+        body description string required New scan description.
+        response 200 Scan Updated scan payload.
         response 400 Error Invalid scan identifier or payload.
         response 404 Error Scan not found.
         """
@@ -1182,7 +1329,7 @@ def init_app(app: Flask) -> None:
         deleted.
 
         OpenAPI:
-        response 200 JsonObject Deletion summary.
+        response 200 DeletionSummary Deletion summary.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1244,7 +1391,11 @@ def init_app(app: Flask) -> None:
         after their final reference disappears.
 
         OpenAPI:
-        response 200 JsonObject Cleanup summary or deletion preview.
+        GET response 200 CleanupPreview Cleanup preview with candidate IDs.
+        DELETE body CleanupSelection required Candidate IDs from the latest preview.
+        DELETE response 200 CleanupResult Cleanup summary.
+        response 400 Error Invalid candidate IDs.
+        response 409 Error Preview is stale; retrieve it again before deleting.
         response 500 Error Cleanup failed.
         """
         from ..helpers.outdated_cleanup import (
@@ -1270,7 +1421,16 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/empty-scans', methods=['GET', 'DELETE'])
     def empty_scans() -> ResponseReturnValue:
-        """Preview or delete non-initial scans with no recorded changes."""
+        """Preview or delete non-initial scans with no recorded changes.
+
+        OpenAPI:
+        GET response 200 CleanupPreview Empty scans available for deletion.
+        DELETE body scan_ids uuid[] required Selected scan IDs from the preview.
+        DELETE response 200 CleanupResult Cleanup summary.
+        response 400 Error Invalid scan IDs.
+        response 409 Error Preview is stale.
+        response 500 Error Cleanup failed.
+        """
         from ..helpers.outdated_cleanup import delete_empty_scans, empty_scans_preview
 
         if flask_request.method == 'GET':
@@ -1289,7 +1449,16 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/orphaned-vulnerabilities', methods=['GET', 'DELETE'])
     def orphaned_vulnerabilities() -> ResponseReturnValue:
-        """Preview or delete CVEs absent from every project and variant."""
+        """Preview or delete CVEs absent from every project and variant.
+
+        OpenAPI:
+        GET response 200 CleanupPreview Orphaned vulnerabilities available for deletion.
+        DELETE body vulnerability_ids string[] required Selected vulnerability IDs from the preview.
+        DELETE response 200 CleanupResult Cleanup summary.
+        response 400 Error Invalid vulnerability IDs.
+        response 409 Error Preview is stale.
+        response 500 Error Cleanup failed.
+        """
         from ..helpers.outdated_cleanup import (
             delete_orphaned_vulnerabilities,
             orphaned_vulnerabilities_preview,
@@ -1316,7 +1485,7 @@ def init_app(app: Flask) -> None:
         """Return the computed diff between a scan and its predecessor.
 
         OpenAPI:
-        response 200 JsonObject Scan diff payload.
+        response 200 ScanDiff Scan diff payload.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1391,7 +1560,7 @@ def init_app(app: Flask) -> None:
         are consistent with the list view's *Scan Result* badges.
 
         OpenAPI:
-        response 200 JsonObject Aggregated scan result.
+        response 200 ScanResult Aggregated scan result.
         response 400 Error Invalid scan identifier.
         response 404 Error Scan not found.
         """
@@ -1718,8 +1887,8 @@ def init_app(app: Flask) -> None:
         """Export a single scan's diff as a cleaned JSON download.
 
         OpenAPI:
-        response 200 JsonObject JSON download containing the scan diff.
-        response 400 Error Invalid scan identifier.
+        response 200 ScanExport JSON download containing the scan diff.
+        response 400 Error Invalid scan identifier or archive evidence budget exceeded.
         response 404 Error Scan not found.
         """
         try:
@@ -1736,6 +1905,10 @@ def init_app(app: Flask) -> None:
 
         diff = _compute_diff_dict(scan)
         export_data = _build_diff_export(scan, diff, vname, pname)
+        try:
+            _validate_archive_evidence_budget([export_data])
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         proj = _sanitize_filename(pname or "project")
         variant = _sanitize_filename(vname or str(scan.variant_id))
@@ -1751,8 +1924,8 @@ def init_app(app: Flask) -> None:
         """Export a single scan's global result as a cleaned JSON download.
 
         OpenAPI:
-        response 200 JsonObject JSON download containing the global scan result.
-        response 400 Error Invalid scan identifier.
+        response 200 ScanExport JSON download containing the global scan result.
+        response 400 Error Invalid scan identifier or archive evidence budget exceeded.
         response 404 Error Scan not found.
         """
         try:
@@ -1770,6 +1943,10 @@ def init_app(app: Flask) -> None:
         all_variant_scans = ScanController.get_by_variant(scan.variant_id)
         result = _global_result_full(scan, all_variant_scans)
         export_data = _build_global_result_export(scan, result, vname, pname)
+        try:
+            _validate_archive_evidence_budget([export_data])
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         proj = _sanitize_filename(pname or "project")
         variant = _sanitize_filename(vname or str(scan.variant_id))
@@ -1795,8 +1972,8 @@ def init_app(app: Flask) -> None:
                 query variant_id uuid optional Restrict export to a single variant.
                 query project_id uuid optional Restrict export to a single project.
                 query type string optional Export type: diff or total.
-                response 200 JsonObject JSON export payload.
-                response 400 Error Invalid filter or export type.
+                response 200 ScanExport[] JSON export payload.
+                response 400 Error Invalid filter, export type, or archive budget exceeded.
                 response 404 Error Project not found.
         """
         export_type = flask_request.args.get("type", "diff")
@@ -1827,11 +2004,10 @@ def init_app(app: Flask) -> None:
         if not scans:
             return jsonify([])
 
-        MAX_EXPORT_SCANS = 200
-        if len(scans) > MAX_EXPORT_SCANS:
+        if len(scans) > _MAX_IMPORT_EXPORTS:
             return jsonify({
                 "error": f"Too many scans ({len(scans)}). "
-                         f"Maximum is {MAX_EXPORT_SCANS}. "
+                         f"Maximum is {_MAX_IMPORT_EXPORTS}. "
                          "Filter by variant_id or project_id to reduce the set."
             }), 400
 
@@ -1860,6 +2036,14 @@ def init_app(app: Flask) -> None:
                     result = _global_result_full(loaded, all_variant_scans)
                     group_data.append(_build_global_result_export(loaded, result, vname, pname))
             all_exports.extend(group_data)
+
+        try:
+            _validate_archive_evidence_budget(all_exports)
+        except ValueError as exc:
+            return jsonify({
+                "error": f"{exc}. Filter by variant_id or project_id, "
+                         "or download individual scans to reduce the archive."
+            }), 400
 
         ts = _format_timestamp_for_filename()
         filename = f"scans_{export_type}_{ts}.json"

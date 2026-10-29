@@ -1,10 +1,12 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import type { MouseEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faCommentDots } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import { ROUTES } from '../routes';
 import VersionDisplay from './VersionDisplay';
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-cyan-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
@@ -15,7 +17,7 @@ type Props = {
   defaultProject?: { id: string; name: string } | null;
   defaultVariant?: { id: string; name: string } | null;
   defaultScope?: FrontendScope | null;
-  onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void;
+  onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void | boolean | Promise<boolean | void>;
   trackedScanCount?: number;
   finishedScanCount?: number;
   activeScanCount?: number;
@@ -28,7 +30,22 @@ function navLiClass({ isActive }: { isActive: boolean }) {
   return [bgHoverColor, isActive && bgActiveColor].join(' ');
 }
 
+// Browser Back is not intercepted: BrowserRouter offers no blocker (no data router).
+function useGuardedNavigation() {
+  const { hasGuard, confirmLeave } = useUnsavedGuard();
+  const navigate = useNavigate();
+  const location = useLocation();
+  return (to: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!hasGuard || to === location.pathname) return;
+    // Modified and non-primary clicks open a new tab or window; this page stays.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    void confirmLeave().then(proceed => { if (proceed) navigate(to); });
+  };
+}
+
 function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue, isAgentOpen, onToggleAgent }: Readonly<Props>) {
+  const guardedClick = useGuardedNavigation();
   return (
   <nav aria-label="Main navigation" className={`flex ${bgColor}`}>
     <ul className="flex min-w-0 flex-1 flex-row items-stretch overflow-x-auto font-bold [&>li]:shrink-0">
@@ -36,6 +53,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
       <li>
         <NavLink
           to={ROUTES.metrics}
+          onClick={guardedClick(ROUTES.metrics)}
           end
           className={navLiClass}
           style={{ display: 'flex' }}
@@ -63,7 +81,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
 
       {/* === SBOM === */}
       <li>
-        <NavLink to={ROUTES.packages} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+        <NavLink to={ROUTES.packages} onClick={guardedClick(ROUTES.packages)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
           {({ isActive }) => (
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faBox} className="mr-1" />
@@ -75,7 +93,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
 
       {/* === Vulnerabilities === */}
       <li>
-        <NavLink to={ROUTES.vulnerabilities} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+        <NavLink to={ROUTES.vulnerabilities} onClick={guardedClick(ROUTES.vulnerabilities)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
           {({ isActive }) => (
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faShieldHalved} className="mr-1" />
@@ -87,7 +105,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
 
       {/* === Scans === */}
       <li>
-        <NavLink to={ROUTES.scans} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+        <NavLink to={ROUTES.scans} onClick={guardedClick(ROUTES.scans)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
           {({ isActive }) => (
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faClockRotateLeft} className="mr-1" />
@@ -99,7 +117,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
 
       {/* === Review === */}
       <li>
-        <NavLink to={ROUTES.review} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+        <NavLink to={ROUTES.review} onClick={guardedClick(ROUTES.review)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
           {({ isActive }) => (
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faClipboardCheck} className="mr-1" />
@@ -111,7 +129,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
 
       {/* === AI Context === */}
       <li>
-        <NavLink to={ROUTES.ai} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+        <NavLink to={ROUTES.ai} onClick={guardedClick(ROUTES.ai)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
           {({ isActive }) => (
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faRobot} className="mr-1" />
@@ -123,7 +141,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
 
       {/* === Export === */}
       <li>
-        <NavLink to={ROUTES.exports} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+        <NavLink to={ROUTES.exports} onClick={guardedClick(ROUTES.exports)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
           {({ isActive }) => (
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faFileExport} className="mr-1" />
@@ -172,7 +190,7 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
 
       {/* === Settings === */}
       <li>
-        <NavLink to={ROUTES.settings} className={navLiClass} style={{ display: 'flex', height: '100%' }} aria-label="Settings">
+        <NavLink to={ROUTES.settings} onClick={guardedClick(ROUTES.settings)} className={navLiClass} style={{ display: 'flex', height: '100%' }} aria-label="Settings">
           {({ isActive }) => (
             <span className="flex items-center h-full px-4 py-2" aria-current={isActive ? 'page' : undefined}>
               <FontAwesomeIcon icon={faGear} />

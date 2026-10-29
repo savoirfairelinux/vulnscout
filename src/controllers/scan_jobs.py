@@ -17,16 +17,16 @@ import shutil
 import subprocess
 import tempfile
 import uuid as uuid_module
-from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, List, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Sequence, Set, Tuple
 
 from ..extensions import db
 from ..helpers.scan_filters import is_kernel_package_name, is_native_package_name
+from ..helpers.scan_runs import tool_scan as _tool_scan
 from ..models.finding import Finding
 from ..models.package import Package
 from ..models.project import Project
 from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
+from ..models.sbom_package import SBOMPackage, SBOM_REIMPORT_REQUIRED
 from ..models.scan import Scan
 from ..models.variant import Variant
 from ..routes._scan_helpers import (
@@ -42,7 +42,6 @@ GRYPE_MERGE_TIMEOUT = 120
 GRYPE_PROCESS_TIMEOUT = 300
 
 FLASK_APP = "src.bin.webapp"
-EMPTY_DESCRIPTION = "empty description"
 RESOLVING_PACKAGES = "Resolving active packages…"
 
 
@@ -76,38 +75,18 @@ def _active_packages(ctx: JobContext) -> Sequence[Package]:
         _variant_uuid(ctx),
         exclude_kernel=_exclude_kernel(ctx),
         exclude_native=_exclude_native(ctx),
+        native_package_exceptions=ctx.options.get("native_package_exceptions", []),
     )
     if error:
         safe_errors = {
             "No SBOM scan found for variant",
             "No packages found for variant",
+            SBOM_REIMPORT_REQUIRED,
         }
         raise OperationError(
             error if error in safe_errors else "Unable to resolve active packages"
         )
     return packages
-
-
-@contextmanager
-def _tool_scan(
-    variant_uuid: uuid_module.UUID, source: str, run_id: str | None = None
-) -> Iterator[Scan]:
-    scan = Scan.create(
-        description=EMPTY_DESCRIPTION,
-        variant_id=variant_uuid,
-        scan_type="tool",
-        scan_source=source,
-        run_id=run_id,
-    )
-    try:
-        yield scan
-    except Exception:
-        db.session.rollback()
-        persisted_scan = db.session.get(Scan, scan.id)
-        if persisted_scan is not None:
-            db.session.delete(persisted_scan)
-            db.session.commit()
-        raise
 
 
 def _detect_memory_ceiling() -> int:
@@ -202,6 +181,9 @@ def _deduplicate_cyclonedx(
     kept_refs: Set[str] = set()
     seen: Set[Tuple[str, str]] = set()
     kernel_dropped = 0
+    native_exceptions = {
+        name.strip().lower() for name in ctx.options.get("native_package_exceptions", [])
+    }
 
     for component in components:
         name = component.get("name", "")
@@ -209,7 +191,10 @@ def _deduplicate_cyclonedx(
         if exclude_kernel and is_kernel_package_name(name):
             kernel_dropped += 1
             continue
-        if exclude_native and is_native_package_name(name):
+        if (
+            exclude_native and is_native_package_name(name)
+            and name.strip().lower() not in native_exceptions
+        ):
             continue
         if (name, version) in seen:
             continue
@@ -243,12 +228,18 @@ def _filter_grype_matches(
 
     matches = data.get("matches", [])
     kept = []
+    native_exceptions = {
+        name.strip().lower() for name in ctx.options.get("native_package_exceptions", [])
+    }
     for match in matches:
         artifact = match.get("artifact", {})
         name = GrypeVulns._normalize_artifact_name(
             artifact.get("name", ""), artifact.get("purl")
         )
-        if exclude_native and is_native_package_name(name):
+        if (
+            exclude_native and is_native_package_name(name)
+            and name.strip().lower() not in native_exceptions
+        ):
             continue
         if not sbom_packages or (name, artifact.get("version", "")) in sbom_packages:
             kept.append(match)

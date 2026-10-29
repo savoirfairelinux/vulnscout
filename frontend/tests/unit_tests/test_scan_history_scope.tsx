@@ -8,6 +8,7 @@ import Variants from '../../src/handlers/variant';
 import type { GlobalResult, Scan, ScanDiff } from '../../src/handlers/scans';
 import { downloadJson } from '../../src/helpers/exportJson';
 import Operations from '../../src/handlers/operations';
+import Projects from '../../src/handlers/project';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
 
@@ -51,9 +52,13 @@ jest.mock('../../src/components/RunScansWizard', () => ({
     __esModule: true,
     default: ({ isOpen, variants, onClose, onToggleVariant, onToggleScanType,
         onToggleRefreshType, onRefreshModeChange, onSelectAllVariants,
-        onSelectNoVariants, onExcludeKernelChange, onExcludeNativeChange, onLaunch }: any) => (
+        onSelectNoVariants, onExcludeKernelChange, nativeConfigurations, configurationLoading,
+        onNativeConfigurationChange, configurationError, launchError, onLaunch }: any) => (
         isOpen ? <div>
             <div data-testid="wizard-variants">{variants.map((variant: any) => variant.name).join(',')}</div>
+            {configurationError && <p role="alert">{configurationError}</p>}
+            {launchError && <p role="alert">{launchError}</p>}
+            {variants.map((variant: any) => <button key={variant.id} onClick={() => onToggleVariant(variant.id)}>wizard-toggle-{variant.id}</button>)}
             <button onClick={onClose}>wizard-close</button>
             <button onClick={() => onToggleVariant(variants[0]?.id)}>wizard-toggle-variant</button>
             <button onClick={() => onToggleScanType('grype')}>wizard-toggle-scan</button>
@@ -63,7 +68,12 @@ jest.mock('../../src/components/RunScansWizard', () => ({
             <button onClick={onSelectAllVariants}>wizard-select-all</button>
             <button onClick={onSelectNoVariants}>wizard-select-none</button>
             <button onClick={() => onExcludeKernelChange(false)}>wizard-include-kernel</button>
-            <button onClick={() => onExcludeNativeChange(false)}>wizard-include-native</button>
+            <button disabled={configurationLoading} onClick={() => onNativeConfigurationChange(variants[0].project_id, {
+                ...nativeConfigurations[variants[0].project_id], exclude_native: false,
+            })}>wizard-include-native</button>
+            <button disabled={configurationLoading} onClick={() => onNativeConfigurationChange(variants[0].project_id, {
+                ...nativeConfigurations[variants[0].project_id], exclude_native: true, native_package_exceptions: [],
+            })}>wizard-unselect-native</button>
             <button onClick={onLaunch}>wizard-launch</button>
         </div> : null
     ),
@@ -147,6 +157,7 @@ describe('ScanHistory selected variant scope', () => {
     beforeEach(() => {
         restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
         jest.clearAllMocks();
+        jest.spyOn(Projects, 'saveScanConfigurations').mockResolvedValue(undefined);
         (global.fetch as jest.Mock | undefined)?.mockRestore?.();
         mockVariantsList.mockResolvedValue([
             {id: 'v1', name: 'V1', project_id: 'project'},
@@ -181,6 +192,11 @@ describe('ScanHistory selected variant scope', () => {
     });
 
     test('submits selected scans and deferred refreshes together and waits for the full batch', async () => {
+        const configuration = jest.spyOn(Projects, 'scanConfiguration').mockResolvedValue({
+            exclude_native: true,
+            native_package_exceptions: ['gcc-native', 'g++-native', 'cmake-native'],
+            native_packages: [],
+        });
         mockList.mockResolvedValue([]);
         const listVulnerabilities = jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
         const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
@@ -192,11 +208,14 @@ describe('ScanHistory selected variant scope', () => {
         render(<ScanHistory projectId="project" variantIds={['v1']} onScanComplete={onScanComplete} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
         await screen.findByTestId('wizard-variants');
+        await waitFor(() => expect(configuration).toHaveBeenCalled());
         fireEvent.click(screen.getByText('wizard-launch'));
 
         await waitFor(() => expect(enqueue).toHaveBeenCalled());
         expect(enqueue.mock.calls[0][0]).toEqual(expect.arrayContaining([
-            expect.objectContaining({ kind: 'scan', source: 'grype', variant_ids: ['v1'], options: expect.objectContaining({ exclude_native: true }) }),
+            expect.objectContaining({ kind: 'scan', source: 'grype', variant_ids: ['v1'], options: expect.objectContaining({
+                exclude_native: true, native_package_exceptions: ['gcc-native', 'g++-native', 'cmake-native'],
+            }) }),
             expect.objectContaining({ kind: 'refresh', source: 'epss', variant_ids: ['v1'] }),
         ]));
         expect(listVulnerabilities).toHaveBeenCalled();
@@ -210,6 +229,100 @@ describe('ScanHistory selected variant scope', () => {
         expect(onScanComplete).not.toHaveBeenCalled();
         TestEventSource.current.send('operation', completed('refresh:epss', 'refresh'));
         await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
+    });
+
+    test.each([
+        ['wizard-include-native', false, ['gcc-native', 'g++-native', 'cmake-native']],
+        ['wizard-unselect-native', true, []],
+    ] as const)('persists %s and applies it to scan jobs', async (button, excludeNative, exceptions) => {
+        const initial = {
+            exclude_native: true,
+            native_package_exceptions: ['gcc-native', 'g++-native', 'cmake-native'],
+            native_packages: ['make-native'],
+        };
+        const configuration = jest.spyOn(Projects, 'scanConfiguration').mockResolvedValue(initial);
+        mockList.mockResolvedValue([]);
+        jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
+            ok: true, queueId: 'native-q', operations: [{ op_id: 'native-scan' }] as Operation[],
+        });
+        const onScanComplete = jest.fn();
+        render(<ScanHistory projectId="project" variantIds={['v1']} onScanComplete={onScanComplete} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
+        await waitFor(() => expect(configuration).toHaveBeenCalled());
+        await waitFor(() => expect(screen.getByText(button)).toBeEnabled());
+        fireEvent.click(screen.getByText(button));
+        fireEvent.click(screen.getByText('wizard-launch'));
+        await waitFor(() => expect(enqueue).toHaveBeenCalled());
+        expect(Projects.saveScanConfigurations).toHaveBeenLastCalledWith({
+            project: { ...initial, exclude_native: excludeNative, native_package_exceptions: exceptions },
+        });
+        const jobs = enqueue.mock.calls[0][0].filter(job => job.kind === 'scan');
+        expect(jobs.length).toBeGreaterThan(0);
+        for (const job of jobs) expect(job.options).toEqual(expect.objectContaining({
+            exclude_native: excludeNative, native_package_exceptions: exceptions,
+        }));
+        TestEventSource.current.send('operation', {
+            op_id: 'native-scan', kind: 'scan', queue_id: 'native-q', status: 'done',
+        });
+        await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
+    });
+
+    test('an unselected project load failure does not prevent healthy scans or discard edits', async () => {
+        const initial = { exclude_native: true, native_package_exceptions: [], native_packages: [] };
+        const configuration = jest.spyOn(Projects, 'scanConfiguration').mockImplementation(async id => {
+            if (id === 'broken') throw new Error('Unreadable project preferences');
+            return initial;
+        });
+        (Variants.listAll as jest.Mock).mockResolvedValue([
+            { id: 'v1', name: 'Healthy', project_id: 'healthy' },
+            { id: 'v2', name: 'Broken', project_id: 'broken' },
+        ]);
+        mockList.mockResolvedValue([scan('s1', 'v1')]);
+        jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
+            ok: true, queueId: 'healthy-q', operations: [{ op_id: 'healthy-scan' }] as Operation[],
+        });
+        render(<ScanHistory />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
+        await screen.findByText('Unreadable project preferences');
+        fireEvent.click(screen.getByText('wizard-include-native'));
+        fireEvent.click(screen.getByText('wizard-toggle-v2'));
+        await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('wizard-include-native')).toBeEnabled());
+        fireEvent.click(screen.getByText('wizard-launch'));
+        await waitFor(() => expect(enqueue).toHaveBeenCalled());
+        expect(Projects.saveScanConfigurations).toHaveBeenLastCalledWith({
+            healthy: { ...initial, exclude_native: false },
+        });
+        expect(configuration.mock.calls.filter(([id]) => id === 'healthy')).toHaveLength(1);
+        expect(enqueue.mock.calls[0][0].filter(job => job.kind === 'scan').every(job => job.variant_ids?.join() === 'v1')).toBe(true);
+    });
+
+    test('a failed atomic save stays in the wizard and can be retried without queuing scans', async () => {
+        const initial = { exclude_native: true, native_package_exceptions: [], native_packages: [] };
+        jest.spyOn(Projects, 'scanConfiguration').mockResolvedValue(initial);
+        (Projects.saveScanConfigurations as jest.Mock).mockRejectedValueOnce(new Error('Save failed; retry'));
+        mockList.mockResolvedValue([]);
+        jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
+            ok: true, queueId: 'retry-q', operations: [{ op_id: 'retry-scan' }] as Operation[],
+        });
+        (Variants.listAll as jest.Mock).mockResolvedValue([{ id: 'v1', name: 'V1', project_id: 'project' }]);
+        render(<ScanHistory projectId="project" variantId="v1" />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
+        await waitFor(() => expect(screen.getByText('wizard-include-native')).toBeEnabled());
+        fireEvent.click(screen.getByText('wizard-include-native'));
+        fireEvent.click(screen.getByText('wizard-launch'));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Save failed; retry');
+        expect(screen.getByTestId('wizard-variants')).toBeVisible();
+        expect(enqueue).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByText('wizard-launch'));
+        await waitFor(() => expect(enqueue).toHaveBeenCalled());
+        expect(Projects.saveScanConfigurations).toHaveBeenCalledTimes(2);
+        expect(Projects.saveScanConfigurations).toHaveBeenLastCalledWith({
+            project: { ...initial, exclude_native: false },
+        });
     });
 
     test('switching from three variants to two drops stale history and wizard choices', async () => {

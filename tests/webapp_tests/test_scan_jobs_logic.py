@@ -56,9 +56,10 @@ def _build_nvd_osv_db(app):
         _db.session.commit()
 
         sbom = SBOMDocument.create("/test/base.json", "spdx", scan.id)
-        SBOMPackage.create(sbom.id, pkg_cpe.id)
-        SBOMPackage.create(sbom.id, pkg_purl.id)
-        SBOMPackage.create(sbom.id, pkg_neither.id)
+        for package in (pkg_cpe, pkg_purl, pkg_neither):
+            link = SBOMPackage.create(sbom.id, package.id)
+            link.cpe = package.cpe
+            link.purl = package.purl
         _db.session.commit()
 
         # Also create an empty variant (no scans) for error-path tests
@@ -361,7 +362,9 @@ class TestNvdScanNoCpes:
                 )
                 _db.session.commit()
                 sbom = SBOMDocument.create("/t/sbom.json", "spdx", scan.id)
-                SBOMPackage.create(sbom.id, pkg.id)
+                link = SBOMPackage.create(sbom.id, pkg.id)
+                link.cpe = pkg.cpe
+                link.purl = pkg.purl
                 _db.session.commit()
                 application._test_ids = {"variant_id": str(variant.id)}
             yield application
@@ -408,7 +411,9 @@ class TestOsvScanNoPurls:
                 pkg = Package.find_or_create("bare-pkg", "0.0.1", purl=[])
                 _db.session.commit()
                 sbom = SBOMDocument.create("/t/sbom.json", "spdx", scan.id)
-                SBOMPackage.create(sbom.id, pkg.id)
+                link = SBOMPackage.create(sbom.id, pkg.id)
+                link.cpe = []
+                link.purl = []
                 _db.session.commit()
                 application._test_ids = {"variant_id": str(variant.id)}
             yield application

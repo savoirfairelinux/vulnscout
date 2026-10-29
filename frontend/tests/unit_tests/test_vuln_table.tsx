@@ -833,6 +833,7 @@ describe('Vulnerability Table', () => {
     test('select using ctrl+click and reset selection', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
 
         const user = userEvent.setup();
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
@@ -847,6 +848,7 @@ describe('Vulnerability Table', () => {
 
         const bulkeditbar = await screen.getByText(/selected vulnerabilities/i);
         expect(bulkeditbar).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeEnabled();
 
         const reset_btn = await screen.getByRole('button', {name: /reset selection/i});
         expect(reset_btn).toBeInTheDocument();
@@ -854,6 +856,7 @@ describe('Vulnerability Table', () => {
 
         const selecteds = await screen.queryAllByTitle(/unselect/i);
         expect(selecteds.length).toBe(0);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
     })
 
     test('select and change status', async () => {
@@ -1158,6 +1161,20 @@ describe('Vulnerability Table', () => {
             expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
         });
     })
+
+    test('affected packages display and filter the persisted parent release', async () => {
+        const packageIds = ['mbedtls@4.1.1'];
+        render(<TableVulnerabilities
+            vulnerabilities={[{ ...vulnerabilities[0], packages: packageIds, packages_current: packageIds }]}
+            appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}}
+            filterLabel="Package" filterValue="mbedtls@4.1.1" />);
+        const cell = await screen.findByRole('cell', { name: 'mbedtls@4.1.1' });
+        expect(cell).toHaveTextContent(/^mbedtls@4.1.1$/);
+        const input = screen.getByRole('searchbox');
+        fireEvent.change(input, { target: { value: 'mbedtls@4.1.1' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
+        expect(await screen.findByRole('cell', { name: 'mbedtls@4.1.1' })).toBeInTheDocument();
+    });
 
     test('package filter jump clears a stale severity filter', async () => {
         // ARRANGE - seed a leftover severity filter from a previous visit

@@ -192,6 +192,40 @@ def test_operations_start_queued_so_the_ui_can_show_the_whole_batch(client, ids)
     assert {op["status"] for op in response.get_json()["operations"]} == {"queued"}
 
 
+def test_native_exceptions_are_normalized(app, ids):
+    from src.routes.operations import _plan_scan_job
+
+    with app.app_context():
+        planned = _plan_scan_job({
+            "source": "grype", "variant_ids": [ids["variant_a"]],
+            "options": {"native_package_exceptions": [" CMAKE-native ", "cmake-native"]},
+        })
+    assert planned[0]["options"]["native_package_exceptions"] == ["cmake-native"]
+
+
+def test_large_native_selection_is_accepted(app, ids):
+    from src.routes.operations import _plan_scan_job
+
+    names = [f"tool-{index}-native" for index in range(1002)]
+    with app.app_context():
+        planned = _plan_scan_job({
+            "source": "grype", "variant_ids": [ids["variant_a"]],
+            "options": {"exclude_native": True, "native_package_exceptions": names},
+        })
+    assert set(planned[0]["options"]["native_package_exceptions"]) == set(names)
+
+
+@pytest.mark.parametrize("value", [None, "gcc-native", [1], ["openssl"], ["x" * 256 + "-native"]])
+def test_invalid_native_exceptions_are_rejected(app, ids, value):
+    from src.routes.operations import _PlanError, _plan_scan_job
+
+    with app.app_context(), pytest.raises(_PlanError, match="native_package_exceptions"):
+        _plan_scan_job({
+            "source": "grype", "variant_ids": [ids["variant_a"]],
+            "options": {"native_package_exceptions": value},
+        })
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------

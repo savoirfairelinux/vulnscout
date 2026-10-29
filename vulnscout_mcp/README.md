@@ -8,8 +8,9 @@ An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that e
 - **Read assessments**, either a single assessment by ID or the full history for a given CVE.
 - **Look up vulnerabilities** with variant-scoped details.
 - **Review user-authored assessments** with a separate AI second opinion per (variant, package) target, without changing the original assessment.
-- **Read and update variant context** (deployment environment, platform, objectives profile, notes) by variant UUID or by project/variant name.
+- **Read and update variant context** (description, environment, codebase source/paths, notes, and the read-only STRIDE-rendered threat model and risks) by variant UUID or by project/variant name.
 - **Inspect uploaded codebase references**: list, read and search source files and ZIP/TAR/TAR.GZ/TGZ members through HTTP, without filesystem access or archive extraction.
+- **Explore SBOM dependencies**: discover active sources/packages and trace direct or transitive dependencies and reverse dependents within a board variant, retaining per-source version evidence.
 - Thin, dependency-light implementation: a single `httpx`-based API client plus tool modules registered on the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)'s `MCPServer`.
 
 ## Requirements
@@ -116,13 +117,16 @@ python vulnscout_mcp/server.py
 | `find_project_id`              | Resolve a project name to its UUID                                   |
 | `find_variant_id`              | Resolve a project/variant name pair to a variant UUID                |
 | `list_variants`                | List all variants across every project (id, name, project_id)        |
-| `get_merged_context`           | Get the merged project + variant context for a variant               |
+| `get_merged_context`           | Get the merged project + variant context for a variant: `codebase_source` (`paths` exposes `codebase_path`, `references` exposes `files`), environment, other info, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats) |
+| `list_dependency_documents`    | Paginate active SBOM sources and relationship-recording coverage for a variant |
+| `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
+| `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
 | `list_codebase_files`          | List paths/sizes in a variant upload; follow `next_offset` for pagination |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
 | `get_project_context`          | Get context fields for a project by UUID                             |
 | `update_project_context`       | Update the description of a project                                  |
-| `update_variant_context`       | Replace all context fields for a variant by UUID (full replacement; omitted fields are cleared) |
+| `update_variant_context`       | Replace the text context fields (`variant_description`, `codebase_path`, `environment`, `other_info`) of a variant by UUID (full replacement; omitted fields are cleared). The threat model, risks and codebase source are edited in the AI Context page; a variant with no context yet is created with codebase source `paths` when `codebase_path` is given, else `references` |
 | `get_custom_assessment`        | Fetch a single user/custom assessment, with any existing per-target AI reviews |
 | `list_custom_assessments`      | List user/custom assessments, optionally scoped to a project variant |
 | `write_assessment_review`      | Save an AI review of one (variant, package) target of a user/custom assessment |
@@ -132,7 +136,50 @@ python vulnscout_mcp/server.py
 
 See [AI Assessments](../doc/source/ai-assessments.md) for the agent assessment and custom-assessment review workflows.
 
-Upload references in the **AI** tab's **Codebase References** drop zone. Fetch
+### SBOM discovery and lifecycle analysis
+
+Use the [sbom-dependencies skill](../.github/skills/sbom-dependencies/SKILL.md)
+for “Which libraries does demo use on this board?” or an evidence-based LTS/EOL
+review. Resolve project/variant names with the existing context tools, then:
+
+1. `list_dependency_documents(variant_id)` identifies active SBOM sources and
+   `dependencies_recorded` coverage.
+2. `list_dependency_packages(variant_id, query="demo")` discovers exact opaque
+   package IDs. Omit the query for a board-wide inventory. Occurrences preserve
+   original version, release/revision evidence and conflict flags per source.
+3. `get_package_dependencies(variant_id, package_id, max_depth=0)` traverses all
+   reachable dependencies; the default depth of 1 returns only direct neighbours.
+   Use `direction="dependents"` for reverse impact. Cycles exclude the root from
+   results, and shortest distances distinguish direct from transitive packages.
+
+All three return JSON within the string result and follow `offset`/`limit`
+(1–500, default 100), `items`, `total`, and `next_offset` conventions.
+Follow `next_offset` until null. Pagination bounds the MCP response, not the
+existing HTTP API: each call fetches the full active variant graph, as the
+frontend does. There is no graph cache or snapshot across calls; restart if a
+scan changes. Restricted embedded-agent scopes are checked before graph access.
+
+Optional `document_id` restricts inventory occurrences or traversal edges to an
+active source. Traversal can resolve endpoint metadata in companion documents.
+Without it, edges are unioned within the variant, like the SBOM dependency view;
+paths can combine sources. Each hop includes source document IDs. These are
+**SBOM declarations, not runtime usage evidence**. Empty/unrecorded relationships
+cannot prove absence. Lifecycle facts are not supplied or guessed by the MCP
+tools: the skill researches authoritative dated upstream/vendor support policies,
+including distribution backports, and explicitly reports unknown evidence.
+No SBOMs, contexts or assessments are modified.
+
+The embedded Agent exposes the same scoped read-only dependency tools. It keeps
+host skill/config discovery disabled and has no web research tools: its built-in
+guidance requires unknown lifecycle status when current authoritative evidence
+is unavailable. Supply dated upstream/vendor evidence through context or
+uploaded references, or use the external skill with a web-capable client for live
+research. Do not interpret an embedded-agent response as a completed lifecycle
+audit without that evidence.
+
+Upload references on the **AI Context** page (top nav **AI**): open a variant and, in its
+**Context** tab, set **Codebase source** to **Codebase references** to show the
+**Codebase References** drop zone. Fetch
 `get_merged_context` and use each `files` entry's `id` as `file_id` together with
 that entry's variant UUID for the source tools. Source paths are archive-relative,
 not paths on the MCP host. The same tools work for external clients and the
@@ -158,6 +205,7 @@ vulnscout_mcp/
   tools/
     assessments.py  Tools for reading/writing VEX assessments
     context.py      Tools for reading/updating project and variant context
+    dependencies.py Read-only SBOM inventory, provenance and graph traversal
     reviews.py      Tools for reading custom assessments and writing reviews
     vulnerabilities.py  Tool for reading a vulnerability, variant-scoped
 tests/mcp/          pytest + respx test suite

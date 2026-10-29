@@ -36,6 +36,81 @@ def test_find_or_create_different_supplier_creates_new_row(app):
     assert pkg_b.id != pkg_none.id
 
 
+def test_document_evidence_sorts_once_per_package_field(app, monkeypatch):
+    from unittest.mock import Mock
+    from src.models import SBOMDocument, SBOMPackage
+    from src.models import sbom_package as sbom_package_module
+
+    project = Project.create("evidence-aggregation")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    package = Package.create("lib", "1.0")
+    ordinary = Package.create("ordinary", "1.0")
+    document_ids = set()
+    for index in range(24):
+        document = SBOMDocument.create(f"{index}.json", str(index), scan.id)
+        document_ids.add(document.id)
+        _db.session.add_all([
+            SBOMPackage(
+                sbom_document_id=document.id, package_id=package.id,
+                cpe=[f"cpe:{index % 3}", "cpe:shared", f"cpe:{index % 3}"],
+                purl=[f"pkg:generic/lib@{index % 4}", "pkg:generic/lib@shared"],
+                source_urls=[f"https://example.org/{index % 5}"],
+                source_revisions=[str(index % 2) * 40],
+                type=("normal", "workspace", "built")[index % 3],
+            ),
+            SBOMPackage(sbom_document_id=document.id, package_id=ordinary.id),
+        ])
+    excluded = SBOMDocument.create("excluded.json", "excluded", scan.id)
+    _db.session.add(SBOMPackage(
+        sbom_document_id=excluded.id, package_id=package.id,
+        cpe=["unselected"], purl=["unselected"], source_urls=["unselected"],
+        source_revisions=["unselected"],
+    ))
+    _db.session.commit()
+    sort = Mock(wraps=sorted)
+    monkeypatch.setattr(sbom_package_module, "sorted", sort, raising=False)
+    evidence = SBOMPackage.evidence_for_documents(document_ids)
+    assert sort.call_count == 8
+    assert evidence == {
+        package.id: {
+            "cpe": ["cpe:0", "cpe:1", "cpe:2", "cpe:shared"],
+            "purl": ["pkg:generic/lib@0", "pkg:generic/lib@1", "pkg:generic/lib@2",
+                     "pkg:generic/lib@3", "pkg:generic/lib@shared"],
+            "source_urls": [f"https://example.org/{index}" for index in range(5)],
+            "source_revisions": ["0" * 40, "1" * 40],
+            "component_types": ["built", "normal", "workspace"],
+        },
+        ordinary.id: {"cpe": [], "purl": [], "source_urls": []},
+    }
+
+
+@pytest.mark.parametrize("cpe,purl", [(None, None), (None, []), ([], None), ([], [])])
+def test_scanner_snapshots_require_recorded_identifiers_not_global_fallback(app, cpe, purl):
+    from src.helpers.active_scans import package_snapshots_for_sbom_scans
+    from src.models import SBOMDocument, SBOMPackage
+    from src.models.sbom_package import SBOMReimportRequiredError
+
+    project = Project.create("recorded-evidence")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    document = SBOMDocument.create("lib.json", "lib", scan.id)
+    package = Package.create("lib", "1.0", purl=["pkg:generic/lib@1.0"])
+    _db.session.add(SBOMPackage(
+        sbom_document_id=document.id, package_id=package.id, cpe=cpe, purl=purl,
+    ))
+    _db.session.commit()
+    if cpe is None or purl is None:
+        with pytest.raises(SBOMReimportRequiredError, match="Reimport"):
+            package_snapshots_for_sbom_scans([scan.id])
+    else:
+        snapshots = package_snapshots_for_sbom_scans([scan.id])
+        assert len(snapshots) == 1
+        assert snapshots[0].id == package.id
+        assert snapshots[0].cpe == snapshots[0].purl == []
+    assert package.purl == ["pkg:generic/lib@1.0"]
+
+
 def test_find_or_create_same_supplier_returns_same_row(app):
     pkg_a = Package.find_or_create("foo", "1.0", supplier="Organization: Acme Corp")
     _db.session.flush()

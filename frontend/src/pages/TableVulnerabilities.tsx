@@ -101,7 +101,6 @@ type Props = {
     missingPublishedDateDataBannerDismissed?: boolean;
     onMissingPublishedDateDataBannerDismissedChange?: (dismissed: boolean) => void;
     onAgentContextChange?: (context: AgentViewContext) => void;
-    onOpenAgent?: () => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -384,7 +383,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
     'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed',
 ];
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange, onAgentContextChange, onOpenAgent }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange, onAgentContextChange }: Readonly<Props>) {
     const preferenceKey = `vulnscout.tables.vulnerabilities.${encodeURIComponent(preferenceScopeKey)}`;
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
@@ -673,8 +672,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
     const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
-    const visibleBannerCount = activeBanners.length +
-        Number(shouldShowMissingDataBanner);
 
     const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', _refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
@@ -1624,7 +1621,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
 
 
-    return (<>
+    return (<div className="flex h-full min-h-0 flex-col">
         {bannerVisible && (
             <MessageBanner
                 type={bannerType}
@@ -1973,8 +1970,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
+            variantIds={variantIds}
+            multiOperation={multiOperation}
         />
 
+        <div className="min-h-[300px] flex-1">
         <TableGeneric
             persistenceKey={preferenceKey}
             fuseKeys={fuseKeys}
@@ -1982,11 +1982,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             hoverField="texts"
             search={search}
             columns={columns}
-            tableHeight={
-                visibleBannerCount > 0 ?
-                    `calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px - ${visibleBannerCount * 64}px)` :
-                    'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)'
-            }
+            tableHeight="100%"
             data={searchableData}
             estimateRowHeight={66}
             selected={selectedRows}
@@ -1995,10 +1991,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             onFocusedRowChange={setFocusedRowIndex}
             onHoverData={loadHoverDetails}
         />
+        </div>
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
-            onOpenAgent={onOpenAgent}
             detailsLoading={modalDetailsLoading}
             detailsError={modalDetailsError}
             isEditing={isEditing}
@@ -2017,7 +2013,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             variantId={variantId}
             projectId={projectId}
         ></VulnModal>}
-    </>)
+    </div>)
 }
 
 export default TableVulnerabilities;

@@ -77,6 +77,66 @@ def test_conflicts_with_the_reported_release_are_not_hidden():
     assert info["release_version"] is None
 
 
+@pytest.mark.parametrize("reported,purl_version,cpe_version", [
+    ("2.43", "2.43+git", "2.43"),
+    ("2.43+git", "2.43", "2.43"),
+    ("2.43", "2.43", "2.43+git"),
+    ("v2.43+git", "v2.43+git", "2.43"),
+    (REVISION, "2.43+git", "2.43"),
+])
+def test_git_suffix_matches_release_identifiers_without_changing_evidence(reported, purl_version, cpe_version):
+    purl = f"pkg:generic/glibc@{purl_version}"
+    cpe = f"cpe:2.3:a:gnu:glibc:{cpe_version}:*:*:*:*:*:*:*"
+    info = package_version_info(reported, [purl], [cpe])
+    assert info["release_version"] == "2.43"
+    assert not info["version_conflict"]
+    assert info["version_evidence"] == [
+        {"version": reported, "source": "sbom", "identifier": reported},
+        {"version": purl_version, "source": "purl", "identifier": purl},
+        {"version": cpe_version, "source": "cpe", "identifier": cpe},
+    ]
+
+
+@pytest.mark.parametrize("reported", ["2.43+git", "v2.43+git", "V2.43+git"])
+def test_git_suffix_alone_identifies_the_base_release(reported):
+    info = package_version_info(reported, [], [])
+    assert info["release_version"] == "2.43"
+    assert not info["version_conflict"]
+    assert info["version_evidence"][0]["version"] == reported
+
+
+@pytest.mark.parametrize("other", [
+    "2.44+git", "2.43-rc1+git", "2.43+github", "2.43+git1", "2.43+vendor", "2.43+git-custom",
+])
+def test_git_suffix_normalization_preserves_real_release_conflicts(other):
+    info = package_version_info("2.43", [f"pkg:generic/glibc@{other}"], [])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+@pytest.mark.parametrize("cpe", [
+    "cpe:2.3:a:gnu:glibc:2.43:rc1:*:*:*:*:*:*",
+    "cpe:/a:gnu:glibc:2.43:rc1",
+])
+def test_git_suffix_does_not_hide_concrete_cpe_updates(cpe):
+    info = package_version_info("2.43+git", ["pkg:generic/glibc@2.43+git"], [cpe])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+def test_git_suffix_metadata_does_not_change_package_identity_or_identifiers():
+    purl = "pkg:generic/glibc@2.43%2Bgit"
+    package = Package("glibc", "2.43+git", purl=[purl])
+    assert package.string_id == "glibc@2.43"
+    assert package.purl == [purl]
+    assert package.version_info["release_version"] == "2.43"
+    assert not package.version_info["version_conflict"]
+    data = package.to_dict()
+    assert data["version"] == "2.43"
+    assert {"version": "2.43+git", "source": "purl", "identifier": purl} in data["version_evidence"]
+    assert Package.from_dict(data).version_info == package.version_info
+
+
 def test_conflicting_revisions_are_explicit():
     info = package_version_info(REVISION, [f"pkg:generic/lib@{'b' * 40}"], [])
     assert info["revision_conflict"]
@@ -107,6 +167,98 @@ def test_non_numeric_tag_aliases_are_not_guessed():
     assert info["version_conflict"]
 
 
+@pytest.mark.parametrize("reported", [REVISION, "hostap_2_11", "2.11"])
+def test_hostap_upstream_tags_match_release_identifiers_without_changing_evidence(reported):
+    purl = "pkg:generic/hostap@hostap_2_11?vcs_url=git://w1.fi/hostap.git"
+    cpe = "cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*"
+    info = package_version_info(reported, [purl], [cpe])
+    assert info["release_version"] == "2.11"
+    assert not info["version_conflict"]
+    assert {"version": "hostap_2_11", "source": "purl", "identifier": purl} in info["version_evidence"]
+    assert info["version_evidence"][0]["version"] == reported
+
+
+@pytest.mark.parametrize("purl", [
+    "pkg:generic/hostap@hostap_2_11?vcs_url=git://example.org/hostap.git",
+    "pkg:generic/other@hostap_2_11?vcs_url=git://w1.fi/hostap.git",
+    "pkg:generic/other/hostap@hostap_2_11?vcs_url=git://w1.fi/hostap.git",
+    "pkg:generic/hostap@release_2_11?vcs_url=git://w1.fi/hostap.git",
+])
+def test_hostap_aliases_are_not_applied_to_other_repositories_packages_or_tags(purl):
+    info = package_version_info(REVISION, [purl], ["cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*"])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+def test_hostap_tag_normalization_does_not_hide_mismatched_releases():
+    purl = "pkg:generic/hostap@hostap_2_10?vcs_url=git://w1.fi/hostap.git"
+    info = package_version_info(REVISION, [purl], ["cpe:2.3:a:w1.fi:hostapd:2.11:*:*:*:*:*:*:*"])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+@pytest.mark.parametrize("reported", [REVISION, "TF-Mv2.3.1", "2.3.1"])
+def test_trusted_firmware_m_tags_match_release_identifiers_without_changing_evidence(reported):
+    purl = ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1"
+            "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m")
+    cpe = "cpe:2.3:o:arm:trusted_firmware-m:2.3.1:-:*:*:*:*:*:*"
+    info = package_version_info(reported, [purl], [cpe])
+    assert info["release_version"] == "2.3.1"
+    assert not info["version_conflict"]
+    assert {"version": "TF-Mv2.3.1", "source": "purl", "identifier": purl} in info["version_evidence"]
+    assert info["version_evidence"][0]["version"] == reported
+
+
+@pytest.mark.parametrize("purl", [
+    "pkg:generic/trusted-firmware-m@TF-Mv2.3.1",
+    ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1"
+     "?vcs_url=git%2Bhttps://example.org/TF-M/trusted-firmware-m"),
+    ("pkg:generic/other@TF-Mv2.3.1"
+     "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m"),
+    ("pkg:generic/other/trusted-firmware-m@TF-Mv2.3.1"
+     "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m"),
+    ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1-custom"
+     "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m"),
+])
+def test_trusted_firmware_m_aliases_require_the_exact_upstream_package_repository_and_tag(purl):
+    info = package_version_info(REVISION, [purl], [
+        "cpe:2.3:o:arm:trusted_firmware-m:2.3.1:-:*:*:*:*:*:*",
+    ])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+@pytest.mark.parametrize("cpe", [
+    "cpe:2.3:o:arm:trusted_firmware-m:2.3.2:-:*:*:*:*:*:*",
+    "cpe:2.3:o:arm:trusted_firmware-m:2.3.1:rc1:*:*:*:*:*:*",
+])
+def test_trusted_firmware_m_normalization_preserves_real_release_conflicts(cpe):
+    purl = ("pkg:generic/trusted-firmware-m@TF-Mv2.3.1"
+            "?vcs_url=git%2Bhttps://review.trustedfirmware.org/TF-M/trusted-firmware-m")
+    info = package_version_info(REVISION, [purl], [cpe])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
+@pytest.mark.parametrize("cpe", [
+    "cpe:2.3:o:zephyrproject:zephyr:4.5.0:rc2:*:*:*:*:*:*",
+    "cpe:/o:zephyrproject:zephyr:4.5.0:rc2",
+])
+def test_cpe_update_is_part_of_the_release_version(cpe):
+    info = package_version_info("4.5.0-rc2", [], [cpe])
+    assert info["release_version"] == "4.5.0-rc2"
+    assert not info["version_conflict"]
+    assert {"version": "4.5.0-rc2", "source": "cpe", "identifier": cpe} in info["version_evidence"]
+    assert package_version_info(REVISION, [], [cpe])["release_version"] == "4.5.0-rc2"
+
+
+@pytest.mark.parametrize("reported", ["4.5.0", "4.5.0-rc1", "4.5.0-rc3"])
+def test_cpe_update_normalization_preserves_real_release_conflicts(reported):
+    info = package_version_info(reported, [], ["cpe:2.3:o:zephyrproject:zephyr:4.5.0:rc2:*:*:*:*:*:*"])
+    assert info["release_version"] is None
+    assert info["version_conflict"]
+
+
 @pytest.mark.parametrize("cpe,version", [
     ("cpe:2.3:a:vendor:lib:1.2:*:*:*:*:*:*:*", "1.2"),
     (r"cpe:2.3:a:ven\:dor:lib:1.2\:beta:*:*:*:*:*:*:*", "1.2:beta"),
@@ -116,6 +268,15 @@ def test_non_numeric_tag_aliases_are_not_guessed():
     ("cpe:2.3:a:vendor:lib:1.*:*:*:*:*:*:*:*", None),
     ("cpe:2.3:a:vendor:lib:1.?0:*:*:*:*:*:*:*", None),
     ("cpe:/a:vendor:lib:1.*", None),
+    ("cpe:2.3:a:vendor:lib:1.2:sp1:*:*:*:*:*:*", "1.2-sp1"),
+    (r"cpe:2.3:a:vendor:lib:1.2:rc\:2:*:*:*:*:*:*", "1.2-rc:2"),
+    ("cpe:/a:vendor:lib:1.2:sp1", "1.2-sp1"),
+    ("cpe:/a:vendor:lib:1.2:rc%3A2", "1.2-rc:2"),
+    ("cpe:2.3:a:vendor:lib:1.2:rc*:*:*:*:*:*:*", None),
+    ("cpe:2.3:a:vendor:lib:1.2:rc?:*:*:*:*:*:*", None),
+    ("cpe:/a:vendor:lib:1.2:rc*", None),
+    ("cpe:/a:vendor:lib:-:rc2", None),
+    ("cpe:/a:vendor:lib::rc2", None),
 ])
 def test_cpe_only_versions_and_wildcards(cpe, version):
     info = package_version_info(REVISION, [], [cpe])

@@ -1,8 +1,21 @@
 # Getting Started
 
+VulnScout helps you identify, review, and track vulnerabilities in software
+components using an **SBOM (Software Bill of Materials)**. Import your SBOM and
+existing vulnerability findings, then run scanners to discover additional
+vulnerabilities and refresh their metadata to support prioritisation.
+
+Organise your software into **projects and variants**, use the web interface to
+assess findings and record triage decisions, and export enriched SBOMs or reports.
+The command-line interface also supports automated workflows and CI pipelines.
+
+This guide walks you through importing example data and opening the web interface.
+
 ## Requirements
 
-VulnScout runs locally inside a container. It requires **Docker** or **Podman** installed on the host.
+VulnScout runs locally inside a container. You need **Docker** or **Podman**,
+installed and configured so your user can run containers. If your setup uses a
+container service, ensure it is running.
 
 ---
 
@@ -19,33 +32,44 @@ cd vulnscout
 
 ## First Run
 
-Start VulnScout and import the provided example data:
+### Import the Example Data
+
+Use `./vulnscout add` to parse and import the provided SBOM and vulnerability findings:
 
 ```bash
-./vulnscout start \
-  --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-  --add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout add \
+  --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
+  --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ```
 
-Then open the web interface:
+The script automatically manages the container lifecycle (Docker or Podman):
+it pulls the image if needed, starts the container, and imports the input files.
+This command does not start the web interface.
 
-```
-http://localhost:7275
-```
+A **project** groups a software product's data; a **variant** represents a
+specific build or target within that project.
+The import uses project `default` and variant `default`. It loads the supplied
+findings but does not run additional scanners or refresh provider metadata.
+See [Vulnerability Scanning](vulnerability-scanning.md) for `scan` and
+[Refresh Vulnerability Data](vulnerability-data.md) for `refresh`.
 
-The script automatically manages the container lifecycle (Docker or Podman) — it pulls the image (if needed), starts the container, imports the input files, and runs a scan.
+For other sample inputs and their import commands, see [Bundled Examples](examples.md).
 
-Once the initial import finishes, background scans, vulnerability-data refreshes, SBOM uploads, and document exports appear in the web interface's **Operation queue**. See {ref}`Operation Queue <operation-queue>` for progress, cancellation, and recovery after a reload.
+### Starting the Web Interface
 
----
-
-## Starting the Web Interface
-
-If you have already loaded your data and just want to start the web interface:
+After the import finishes, start the web interface:
 
 ```bash
-./vulnscout --serve
+./vulnscout serve
 ```
+
+Then open <http://localhost:7275> in your browser. On subsequent runs, use
+`./vulnscout serve` again; you do not need to re-import the same data.
+
+In the navigation bar, select project **default** and variant **default**.
+Open **Vulnerabilities** to inspect the imported findings and select a
+vulnerability to view its details. See [Interactive Mode](interactive-mode.md)
+for filtering findings, recording assessments, and exporting results.
 
 Press `Ctrl+C` to stop the web server and return to your shell. The container keeps running in the background.
 
@@ -57,4 +81,15 @@ To stop and remove the container entirely:
 
 ```bash
 ./vulnscout stop
+```
+
+The database, configuration, and exports remain in `.vulnscout/cache/` and
+`.vulnscout/outputs/` beside the launcher unless you configured other paths.
+Stopping the container does not reset your data.
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+examples
 ```

@@ -36,7 +36,7 @@ type ReviewSummary = {
     stale: number;
 };
 
-export type { AssessmentReview, ReviewVerdict, ReviewSummary };
+export type { AssessmentReview, ReviewVerdict };
 
 /**
  * Collapse a review into the single state the UI renders. A stale review shows
@@ -47,45 +47,6 @@ const verdictOf = (review: AssessmentReview | undefined): ReviewVerdict => {
     if (!review) return "none";
     if (review.is_stale) return "stale";
     return review.verdict;
-};
-
-/**
- * Collapse every review on one assessment into the single worst-case state
- * the summary counts it under. An assessment may carry several reviews (one
- * per target), so "reviewed" only means at least one exists, and the overall
- * verdict favors the least reassuring outcome: any stale review outweighs an
- * agreement, and any disagreement outweighs the rest agreeing.
- */
-const worstVerdictOf = (reviews: AssessmentReview[] | undefined): ReviewVerdict => {
-    if (!reviews || reviews.length === 0) return "none";
-    const verdicts = reviews.map(verdictOf);
-    if (verdicts.includes("stale")) return "stale";
-    if (verdicts.includes("differs")) return "differs";
-    return "agrees";
-};
-
-/**
- * Count the verdicts across a group's assessments.
- *
- * Group members share the same assessment text but target different variants
- * and packages, so each is reviewed independently against its own context.
- * That means one group can legitimately hold several different verdicts, or be
- * reviewed only in part, and the summary has to report both rather than let a
- * single member speak for the rest.
- */
-const summarizeReviews = (
-    assessmentIds: string[],
-    reviews: Record<string, AssessmentReview[]>,
-): ReviewSummary => {
-    const verdicts = assessmentIds.map(id => worstVerdictOf(reviews[id]));
-    const count = (v: ReviewVerdict) => verdicts.filter(x => x === v).length;
-    return {
-        total: verdicts.length,
-        reviewed: verdicts.filter(v => v !== "none").length,
-        agrees: count("agrees"),
-        differs: count("differs"),
-        stale: count("stale"),
-    };
 };
 
 /** Human-readable breakdown of a summary, for tooltips. */
@@ -101,6 +62,19 @@ const describeReviewSummary = (summary: ReviewSummary): string => {
 };
 
 class AssessmentReviews {
+    /** Fetch all targets strictly: verification must not hide a failed read. */
+    static async fetchForAssessment(assessmentId: string): Promise<AssessmentReview[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reviews`,
+            window.location.href,
+        );
+        const response = await fetch(url.toString(), { mode: "cors", cache: "no-store" });
+        if (!response.ok) throw new Error("Unable to verify saved assessment reviews. Retry the request.");
+        const data = await response.json();
+        if (!Array.isArray(data.reviews)) throw new Error("Invalid assessment reviews response.");
+        return data.reviews;
+    }
+
     /**
      * Fetch every review in a variant or project scope, grouped by assessment
      * ID (an assessment may hold several, one per target). Returns an empty
@@ -147,4 +121,4 @@ class AssessmentReviews {
 }
 
 export default AssessmentReviews;
-export { verdictOf, worstVerdictOf, summarizeReviews, describeReviewSummary };
+export { verdictOf, describeReviewSummary };

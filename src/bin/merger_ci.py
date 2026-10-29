@@ -47,7 +47,7 @@ from .cmd_scans import (
     list_scans_command,
     delete_scan_command,
 )
-from .cmd_vuln_scan import nvd_scan_command, osv_scan_command, sbom_cve_check_scan_command
+from .cmd_vuln_scan import nvd_scan_command, osv_scan_command, sbom_cve_check_scan_command, new_scan_run_id_command
 
 
 def init_app(app) -> None:
@@ -72,6 +72,7 @@ def init_app(app) -> None:
     app.cli.add_command(nvd_scan_command)
     app.cli.add_command(osv_scan_command)
     app.cli.add_command(sbom_cve_check_scan_command)
+    app.cli.add_command(new_scan_run_id_command)
 
 
 def main() -> ControllersCache:

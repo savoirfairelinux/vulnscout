@@ -78,13 +78,16 @@ test("failed pending checks surface an error and require confirmation", async ()
     await screen.findByRole("button", { name: "Delete reference source.zip" });
 });
 
-test("oversized files are rejected explicitly before uploading", async () => {
+test("large files are sent to the backend instead of being blocked client-side", async () => {
+    fetchMock.mockResponseOnce(JSON.stringify(reference), { status: 201 });
     show();
-    const oversized = new File(["x"], "large.c");
-    Object.defineProperty(oversized, "size", { value: 10 * 1024 * 1024 + 1 });
-    fireEvent.change(screen.getByLabelText("Upload codebase references"), { target: { files: [oversized] } });
-    await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("maximum size of 10 MB"), "error"));
-    expect(fetchMock).not.toHaveBeenCalled();
+    const large = new File(["x"], "large.c");
+    Object.defineProperty(large, "size", { value: 10 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText("Upload codebase references"), { target: { files: [large] } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(expect.stringContaining("1 reference(s) uploaded"), "success")
+    );
 });
 
 test.each([
@@ -97,7 +100,7 @@ test.each([
         target: { files: [new File(["source"], "main.c")] },
     });
     await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("HTTP 413"), "error"));
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("10 MB"), "error");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("request-size limit"), "error");
     expect(screen.getByText("No codebase references uploaded.")).toBeInTheDocument();
     expect(screen.getByLabelText("Upload codebase references")).not.toBeDisabled();
 });
@@ -142,4 +145,13 @@ test("selection changes do not leak late uploads into the new variant", async ()
     await act(async () => { finish?.(JSON.stringify(reference)); });
     expect(screen.queryByRole("button", { name: "Delete reference source.zip" })).not.toBeInTheDocument();
     expect(notify).not.toHaveBeenCalled();
+});
+
+test("help tooltips toggle and close when clicking elsewhere", () => {
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Codebase references help" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reference description help" }));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(2);
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 });

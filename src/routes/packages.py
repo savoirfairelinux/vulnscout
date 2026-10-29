@@ -38,7 +38,10 @@ def init_app(app: Flask) -> None:
         query variant_ids string optional Comma-separated list of variant IDs.
         query operation string optional Comparison mode such as difference, intersection, or union.
         query format string optional Response format such as list or dict.
-        response 200 JsonObject Filtered package collection.
+        query include_outdated boolean optional Include superseded package evidence within the selected scope.
+        query outdated_only boolean optional Return only superseded package evidence.
+        response 200 PackageCollection Filtered package collection; an array by default, or a map with format=dict.
+        response 400 Error Invalid identifiers or missing scope for outdated packages.
         """
         from flask import request
         variant_id = request.args.get('variant_id')

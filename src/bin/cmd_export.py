@@ -17,13 +17,14 @@ from ._common import get_default_author
 from ..helpers.export_scope import compute_export_scope
 from datetime import date as _date
 import click
+from ._console import Command, echo
 import json
 import os
 import uuid
 from flask.cli import with_appcontext
 
 
-@click.command("export")
+@click.command("export", cls=Command)
 @click.option("--format", "export_format", default="spdx3",
               type=click.Choice(["spdx2", "spdx3", "cdx14", "cdx15", "cdx16", "openvex"], case_sensitive=False),
               show_default=True, help="Output format.")
@@ -59,22 +60,22 @@ def export_command(
         try:
             vid = uuid.UUID(str(variant_id))
         except (ValueError, TypeError):
-            click.echo(f"Warning: invalid variant id '{variant_id}'; exporting all data.", err=True)
+            echo(f"Warning: invalid variant id '{variant_id}'; exporting all data.", err=True, role="warning")
         else:
             if DBVariant.get_by_id(vid) is None:
-                click.echo(f"Warning: variant id '{variant_id}' not found; exporting all data.", err=True)
+                echo(f"Warning: variant id '{variant_id}' not found; exporting all data.", err=True, role="warning")
             else:
                 scope = compute_export_scope(variant_id=vid)
     elif project:
         project_obj = ProjectController.get_by_name(project)
         if project_obj is None:
-            click.echo(f"Warning: project '{project}' not found; exporting all data.", err=True)
+            echo(f"Warning: project '{project}' not found; exporting all data.", err=True, role="warning")
         elif variant:
             variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
             if variant_obj is None:
-                click.echo(
+                echo(
                     f"Warning: variant '{variant}' not found in project '{project}'; "
-                    f"exporting the whole project.", err=True)
+                    f"exporting the whole project.", err=True, role="warning")
                 scope = compute_export_scope(project_id=project_obj.id)
             else:
                 scope = compute_export_scope(variant_id=variant_obj.id)
@@ -115,13 +116,13 @@ def export_command(
             out_path = os.path.join(output_dir, "openvex.json")
             with open(out_path, "w") as fh:
                 fh.write(content)
-        click.echo(f"Export written: {out_path}")
+        echo(f"Export written: {out_path}", role="success")
     except Exception as e:
-        click.echo(f"Error: could not export '{export_format}': {e}", err=True)
+        echo(f"Error: could not export '{export_format}': {e}", err=True, role="error")
         raise SystemExit(1)
 
 
-@click.command("report")
+@click.command("report", cls=Command)
 @click.argument("template_name")
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where generated reports are written.")
@@ -223,6 +224,6 @@ def report_command(
                 with open(out_path, "w") as fh:
                     fh.write(content)
 
-            click.echo(f"Report written: {out_path}")
+            echo(f"Report written: {out_path}", role="success")
         except Exception as e:
-            click.echo(f"Warning: could not generate '{tmpl}': {e}", err=True)
+            echo(f"Warning: could not generate '{tmpl}': {e}", err=True, role="warning")

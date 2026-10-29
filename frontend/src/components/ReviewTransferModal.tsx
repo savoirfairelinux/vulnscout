@@ -1,4 +1,5 @@
 import type { Variant } from '../handlers/variant';
+import FileInputButton from './FileInputButton';
 import ModalShell, { ModalActions, ModalButton } from './ModalShell';
 
 type Props = {
@@ -90,13 +91,15 @@ function ReviewTransferModal({
             {isUpdateExport && (
                 <label className="block text-sm font-semibold text-gray-200">
                     Existing export file
-                    <input
-                        type="file"
-                        aria-label="Existing export file"
-                        accept=".json,application/json"
-                        onChange={event => onExistingFileChange(event.target.files?.[0])}
-                        className="mt-2 block w-full rounded border border-slate-600 bg-slate-900 p-2 text-sm font-normal text-zinc-300 file:mr-3 file:rounded file:border-0 file:bg-slate-700 file:px-3 file:py-1 file:text-white"
-                    />
+                    <span className="mt-2 block rounded border border-slate-600 bg-slate-900 p-2 font-normal">
+                        <FileInputButton
+                            aria-label="Existing export file"
+                            accept=".json,application/json"
+                            buttonLabel="Choose file"
+                            status={existingFileName ?? "No file chosen"}
+                            onChange={event => onExistingFileChange(event.target.files?.[0])}
+                        />
+                    </span>
                     {existingFileName && !existingFileError && <span className="mt-1 block font-normal text-cyan-300">Detected {isOpenVex ? 'OpenVEX' : 'VulnScout JSON'}: {existingFileName}</span>}
                     {existingFileError && <span role="alert" className="mt-1 block font-normal text-red-300">{existingFileError}</span>}
                 </label>

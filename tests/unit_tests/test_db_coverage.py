@@ -1176,7 +1176,7 @@ class TestVulnerabilitiesController:
         rec = Vulnerability.create_record("CVE-2099-EPSS-SKIP")
         rec.update_record(
             epss_score=0.10,
-            epss_fetched_at=datetime.datetime.utcnow(),
+            epss_fetched_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
             commit=True,
         )
         pkgctrl = PackagesController()

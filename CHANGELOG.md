@@ -10,6 +10,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.24.0] - 2026-10-29
+
+### Added
+- CLI: add `./vulnscout` subcommands (`add`, `scan`, `refresh`, `match-condition`, `report`, `export`, `import`, `delete`, `list`, `config`, `serve`, `start`, `stop`, `restart`, `update`, `version`, `asset add`) with per-command `--help` and scope validation.
+- CLI: add `-p`/`-v` short forms for `--project`/`--variant`, `config get`, masked `config list`, `report --format` and `report --condition`, and `import context` retargeting with `-p`/`-v`.
+- CLI: add `delete --dry-run`, and a confirmation prompt when `delete` runs on a terminal (`--yes` skips it).
+- CLI: add bash completion for commands, options, imports, assets and file names, select several scanners with repeatable scan flags, and color launcher, entrypoint and command output on terminals while keeping data output plain.
+- Container: add the `--dry-run`, `--all-variants`, `--retarget-context` and `--report-format` entrypoint flags.
+- AI context: replace the free-text variant context with a structured STRIDE threat model editor (system tables, threats and rated risks tabs, required fields, scope locking and copying a whole variant context into the draft), render STRIDE models as agent text, export context format 2.0 with STRIDE data and uploaded references, and expose the codebase source and STRIDE context through MCP. Assessment skills now use the STRIDE model.
+- AI agent: add AI assessment for selected vulnerabilities and bulk AI review for selected custom assessments, unify AI chat requests in a shared persistent in-page queue, and persist agent authentication and GitHub model selections across restarts.
+- SBOM: import and export package dependencies in CycloneDX (nested components and dependency root), SPDX2 (`DEPENDS_ON`) and SPDX3 (`dependsOn`), and canonicalize Zephyr JSON-LD packages and Trusted Firmware-M tags.
+- Dependencies: add scoped SBOM dependency MCP tools and a package lifecycle analysis skill, and use dependency evidence in CVE assessments.
+- Scans: scan selected native packages when native packages are excluded, with global defaults, per-project exceptions, and a package checklist in the project wizard.
+- Settings: give settings sections, projects and variants their own URLs, create projects and variants inline, and restrict project and variant names to safe characters.
+- API: complete the OpenAPI specification and serve an offline Swagger UI.
+- Examples: add a Zephyr example and group the Yocto examples.
+
+### Changed
+- CLI: `export custom-openvex` without `--variant` exports every project variant, and `import custom-openvex` without `--variant` targets the project's only variant. The legacy flags keep defaulting to the `default` variant.
+- AI context: remove the context editor mode and the STRIDE additional notes, open the project description by default, and move codebase reference guidance into help tooltips.
+- AI agent: consolidate AI actions into the single agent chat, simplify chat connection controls, and move model selection into the composer.
+- Uploads: remove app-wide file size limits.
+- UI: apply a minimal scrollbar app-wide, size the vulnerabilities table to the remaining space, and adapt the favicon to the browser color scheme.
+- Documentation: reorganize the documentation around the full pipeline with a streamlined getting started guide, CLI workflow guides, focused web interface guides, Yocto and Zephyr integration, NVD and OSV scanning, a legacy CLI migration guide, a license page, and a refreshed README and architecture diagram.
+- Tests: clear backend deprecation warnings, dispose database engines after each test module, and isolate scanner and PostgreSQL tests.
+
+### Deprecated
+- CLI: the flag syntax of `./vulnscout` (`--add-*`, `--perform-scans`, `--perform-*-scan`, `--refresh-vulnerability-data`, `--match-condition`, `--report`, `--export-*`, `--import-*`, `--use-*-timestamps`, `--delete-*`, `--list-*`, `config KEY VALUE`, `config-list`, `config-clear`, `--serve`, `--start`, `--stop`, `--restart`, `--update`, `--add-asset`) prints a warning and will be removed in v0.25. Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence it.
+
+### Removed
+- CLI: drop the undocumented `perform-grype-scan`, `perform-nvd-scan`, `perform-osv-scan`, `perform-sbom-cve-check-scan`, `sbom-cve-check-scan` and `--sbom-cve-check-scan` spellings, and the wrapper's `--perform-scans` capability probe.
+
+### Fixed
+- CLI: reject `-p`/`-v` before the command and `refresh --variant` without `--project`, keep legacy flags out of new-grammar arguments, keep per-variant OpenVEX exports unambiguous and current, and preserve host config ownership with rootless Podman.
+- Scans: group CLI scanner batches into scan-history transactions, stage local scan results, bound write transactions and clean failed chunks, refresh history counts, and keep pending and established assessments across concurrent scans.
+- Scan archives: preserve scoped SBOM evidence across export and import, retain upgrades, bound imported evidence, collapse imported sources, require scoped evidence after upgrade, and use variant-scoped package snapshots and OSV queries.
+- CycloneDX: import inventories before detached VEX, resolve detached VEX BOM-Link references, and preserve local and URN-shaped component references.
+- SBOM: treat a trailing `+git` marker as the base release when comparing version evidence, preserve canonical group evidence, clarify dependency count labels, and correct SPDX export filenames and SPDX3 provenance.
+- AI agent: preserve queued AI actions through authentication, verify queued reviews are saved before advancing, retry failed requests, preserve failed AI assessments, require active base-variant findings for AI assessment targets, and keep agent configuration and credentials across model selection and restarts.
+- AI context: infer the codebase source for new contexts, keep agent context across the STRIDE migration, bound STRIDE target ids and rendered size, and handle large plain codebase references.
+- Settings: close the Delete Project dialog on route change, reject failed variant list requests, guard stale project lists, and make native scan preferences reliable across projects.
+- API and UI: correct the scan import and refresh API schemas, remove the API documentation navbar link, and render file pickers in English.
+
+---
+
 ## [0.23.0] - 2026-10-13
 
 ### Added

@@ -3,6 +3,40 @@ fetchMock.enableMocks();
 
 import Config from '../../src/handlers/config';
 
+describe('Config.nativePackages', () => {
+    beforeEach(() => fetchMock.resetMocks());
+    const preferences = { exclude_native: true, native_package_exceptions: ['gcc-native'] };
+
+    test('loads global preferences from the native-package endpoint', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify(preferences));
+        await expect(Config.nativePackages()).resolves.toEqual(preferences);
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/config/native-packages'),
+            expect.objectContaining({ method: 'GET' }),
+        );
+    });
+
+    test('saves global preferences with PUT', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify(preferences));
+        await expect(Config.nativePackages(preferences)).resolves.toEqual(preferences);
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/config/native-packages'),
+            expect.objectContaining({ method: 'PUT', body: JSON.stringify(preferences) }),
+        );
+    });
+
+    test('reports HTTP failures', async () => {
+        fetchMock.mockResponseOnce('', { status: 500 });
+        await expect(Config.nativePackages()).rejects.toThrow('Failed to load global native-package settings (500)');
+    });
+
+    test.each([{}, { exclude_native: 'true', native_package_exceptions: [] },
+        { exclude_native: true, native_package_exceptions: [42] }])('rejects malformed responses', async data => {
+        fetchMock.mockResponseOnce(JSON.stringify(data));
+        await expect(Config.nativePackages()).rejects.toThrow('Invalid global native-package settings');
+    });
+});
+
 
 describe('Config.get', () => {
     beforeEach(() => {

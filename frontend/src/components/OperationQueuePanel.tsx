@@ -135,7 +135,7 @@ export default function OperationQueuePanel({
 
                     <div
                         ref={logBoxRef}
-                        className="max-h-52 overflow-y-auto px-4 py-2 font-mono text-xs text-neutral-300 space-y-0.5 scrollbar-thin scrollbar-thumb-neutral-700"
+                        className="max-h-52 overflow-y-auto px-4 py-2 font-mono text-xs text-neutral-300 space-y-0.5"
                     >
                         {logs.map((line, i) => {
                             let tone = "";

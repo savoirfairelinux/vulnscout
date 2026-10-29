@@ -10,6 +10,7 @@ import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
 import Iso8601Duration from '../handlers/iso8601duration';
 import Variants from '../handlers/variant';
+import BulkAssessmentAction from './BulkAssessmentAction';
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -25,9 +26,11 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    variantIds?: string[];
+    multiOperation?: string;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, projectId, variantId, baseVariantId, compareOperation} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -370,6 +373,16 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 </button>
 
                 <div className="w-px h-6 bg-white/15 mx-1"></div>
+
+                <BulkAssessmentAction
+                    key={JSON.stringify([projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation])}
+                    vulnerabilities={vulnerabilities}
+                    selectedVulns={selectedVulns}
+                    context={{ page: 'vulnerabilities', projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation }}
+                    disabled={isLoading}
+                    onPrepare={() => { hideBanner(); setPanelOpened(0); }}
+                    onError={message => triggerBanner(message, 'error')}
+                />
 
                 {/* Change status */}
                 <button

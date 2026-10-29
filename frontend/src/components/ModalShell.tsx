@@ -232,6 +232,7 @@ export default function ModalShell({
     return (
         <div
             data-testid={testId}
+            data-modal-overlay={embedded ? undefined : true}
             tabIndex={-1}
             className={`${embedded ? "w-full" : "fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4"} ${backdropClassName}`.trim()}
             onMouseDown={handleBackdropMouseDown}

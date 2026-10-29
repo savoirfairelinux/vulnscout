@@ -886,8 +886,8 @@ def test_import_custom_openvex_assessments_unsupported_type(app, tmp_path):
     assert "unsupported file type" in result.output.lower()
 
 
-def test_import_custom_openvex_assessments_defaults_variant(app, tmp_path):
-    """OpenVEX import uses the default variant when --variant is omitted."""
+def test_import_custom_openvex_assessments_without_variant_requires_single_variant(app, tmp_path):
+    """Omitting --variant errors when the project has several variants."""
     from src.controllers.projects import ProjectController
     from src.models.variant import Variant
 
@@ -905,6 +905,14 @@ def test_import_custom_openvex_assessments_defaults_variant(app, tmp_path):
         result = runner.invoke(args=[
             "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            str(json_file),
+        ])
+        assert result.exit_code == 1
+        assert "choose one with --variant" in result.output
+        result = runner.invoke(args=[
+            "import-custom-openvex-assessments",
+            "--project", _PROJECT_NAME,
+            "--variant", "default",
             str(json_file),
         ])
     assert result.exit_code == 0, result.output

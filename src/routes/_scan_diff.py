@@ -588,7 +588,7 @@ def _global_result_full(
                 if doc.format else doc.source_name
             )
             sbom_doc_names.append(label)
-    sbom_source_label = ", ".join(sbom_doc_names) if sbom_doc_names else "SBOM Scan"
+    sbom_source_label = ", ".join(dict.fromkeys(sbom_doc_names)) if sbom_doc_names else "SBOM Scan"
 
     scan_source_labels: dict = {sbom_scan.id: sbom_source_label}
     for tool_scan in latest_tool.values():
@@ -741,10 +741,13 @@ _LIST_CACHE_LOCK = threading.Lock()
 _LIST_CACHE: Dict[str, Tuple[frozenset, List[dict]]] = {}
 
 
-def _scan_list_fingerprint(scans: list[Scan]) -> frozenset:
-    """Order-independent fingerprint capturing scan add / delete / rename."""
+def _scan_list_fingerprint(
+    scans: list[Scan], observation_counts: Optional[Dict[uuid.UUID, int]] = None,
+) -> frozenset:
+    """Capture metadata and observations committed by other scan processes."""
+    observation_counts = observation_counts or {}
     return frozenset(
-        (s.id, s.description, s.timestamp) for s in scans
+        (s.id, s.description, s.timestamp, observation_counts.get(s.id, 0)) for s in scans
     )
 
 
@@ -752,10 +755,15 @@ def serialize_list_with_diff_cached(scope_key: str, scans: list[Scan]) -> List[d
     """Return the serialised scan-history list for *scans*, cached per *scope_key*.
 
     The heavy diff computation runs once and its result is reused for later
-    requests until the underlying set of scans changes (import / delete /
-    rename), matching an application reload.
+    requests until scan metadata or observation counts change, including when
+    a separate CLI process commits results to an already-persisted scan.
     """
-    fingerprint = _scan_list_fingerprint(scans)
+    observation_counts: Dict[uuid.UUID, int] = {scan_id: count for scan_id, count in db.session.execute(
+        db.select(Observation.scan_id, db.func.count(Observation.id))
+        .where(Observation.scan_id.in_([s.id for s in scans]))
+        .group_by(Observation.scan_id)
+    ).all()} if scans else {}
+    fingerprint = _scan_list_fingerprint(scans, observation_counts)
     with _LIST_CACHE_LOCK:
         entry = _LIST_CACHE.get(scope_key)
         if entry is not None and entry[0] == fingerprint:
@@ -769,7 +777,7 @@ def serialize_list_with_diff_cached(scope_key: str, scans: list[Scan]) -> List[d
 def invalidate_scan_list_cache() -> None:
     """Drop every cached scan-history list.
 
-    The cache fingerprint only tracks the set of scans (add / delete / rename),
+    The cache fingerprint tracks scan metadata and observation counts,
     so it does NOT notice changes to the per-scan assessment counts shown in the
     list view.  Those counts include automated (non-custom) assessments, so when
     a non-custom assessment is edited or deleted its scan's counts change while

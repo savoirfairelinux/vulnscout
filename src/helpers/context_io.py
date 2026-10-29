@@ -17,11 +17,18 @@ from ..controllers.context import ProjectContextController, VariantContextContro
 from ..models.project import Project
 from ..models.project_context import ProjectContext
 from ..models.variant import Variant
-from ..models.variant_context import VariantContext
+from ..models.variant_context import VariantContext, default_editor_block
+from ..helpers.stride_model import SYSTEM_KEYS, StrideValidationError, empty_stride_model
 
 # Version of the export file format. Bump the major component only on a
 # breaking change to the entry shape.
-EXPORT_VERSION = "1.0"
+EXPORT_VERSION = "2.0"
+
+
+class ExportedFile(TypedDict):
+    """Uploaded codebase reference listed by name; the content is not exported."""
+    original_name: str
+    description: Optional[str]
 
 
 class VariantEntry(TypedDict):
@@ -30,9 +37,11 @@ class VariantEntry(TypedDict):
     variant_description: Optional[str]
     codebase_path: Optional[str]
     environment: Optional[str]
-    threat_model: Optional[str]
-    risks: Optional[str]
     other_info: Optional[str]
+    codebase_source: str
+    system: dict
+    stride_model: dict
+    files: list[ExportedFile]
 
 
 class ProjectEntry(TypedDict):
@@ -50,15 +59,31 @@ class ExportDocument(TypedDict):
 
 
 def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntry:
-    """Build one export entry for a variant."""
+    """Build one export entry for a variant (stored values, not the agent rendering)."""
+    if vc is None:
+        block = default_editor_block()
+        editor: dict = {
+            "codebase_source": block["codebase_source"],
+            "system": block["system"],
+            "stride_model": block["stride"],
+        }
+    else:
+        editor = {
+            "codebase_source": vc.codebase_source,
+            "system": {key: getattr(vc, f"system_{key}") for key in SYSTEM_KEYS},
+            "stride_model": vc.stride_model if vc.stride_model is not None else empty_stride_model(),
+        }
     return {
         "variant_name": variant.name,
         "variant_description": vc.variant_description if vc else None,
         "codebase_path": vc.codebase_path if vc else None,
         "environment": vc.environment if vc else None,
-        "threat_model": vc.threat_model if vc else None,
-        "risks": vc.risks if vc else None,
         "other_info": vc.other_info if vc else None,
+        **editor,  # type: ignore[typeddict-item]
+        "files": [
+            {"original_name": f.original_name, "description": f.description}
+            for f in sorted(vc.files, key=lambda f: f.original_name)
+        ] if vc else [],
     }
 
 
@@ -185,6 +210,43 @@ def extract_entries(body) -> list:
     return records
 
 
+def retarget_entries(entries: list, project_name: str, variant_name: str | None = None) -> list:
+    """Point flattened import records at *project_name* (and *variant_name*).
+
+    Without *variant_name*, every record keeps its variant name and the file
+    must name at most one project. With *variant_name*, the file must hold
+    exactly one record.
+
+    Raises
+    ------
+    ValueError
+        If the file does not fit the requested target.
+    """
+    if variant_name is not None:
+        if len(entries) != 1:
+            raise ValueError(f"--variant needs a file with exactly one entry; found {len(entries)}")
+    else:
+        names = sorted({
+            entry["project_name"] for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("project_name"), str)
+        })
+        if len(names) > 1:
+            raise ValueError(
+                "--project needs a file that names one project; "
+                f"it names more than one project ({', '.join(names)})"
+            )
+    retargeted: list = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            retargeted.append(entry)
+            continue
+        updated = {**entry, "project_name": project_name}
+        if variant_name is not None:
+            updated["variant_name"] = variant_name
+        retargeted.append(updated)
+    return retargeted
+
+
 def import_entries(entries: list) -> dict:
     """Apply import *entries* and return a classification summary.
 
@@ -198,9 +260,6 @@ def import_entries(entries: list) -> dict:
         item carries ``project_name`` / ``variant_name`` and, for ignored /
         failed items, a ``reason``.
     """
-    def _txt(value):
-        return value if isinstance(value, str) else None
-
     imported: list = []
     ignored: list = []
     failed: list = []
@@ -231,31 +290,48 @@ def import_entries(entries: list) -> dict:
             ignored.append({**ident, "reason": "Variant not found"})
             continue
 
-        description = _txt(entry.get('description'))
-        threat_model = _txt(entry.get('threat_model'))
-        missing = []
-        if not (description and description.strip()):
-            missing.append('description')
-        if not (threat_model and threat_model.strip()):
-            missing.append('threat_model')
-        if missing:
-            failed.append({
-                **ident,
-                "reason": f"Missing mandatory field(s): {', '.join(missing)}",
-            })
+        failure = _apply_entry(project, variant, entry)
+        if failure is not None:
+            failed.append({**ident, "reason": failure})
             continue
-
-        ProjectContextController.upsert(project.id, description=description, commit=False)
-        VariantContextController.upsert(
-            variant.id,
-            variant_description=_txt(entry.get('variant_description')),
-            codebase_path=_txt(entry.get('codebase_path')),
-            environment=_txt(entry.get('environment')),
-            threat_model=threat_model,
-            risks=_txt(entry.get('risks')),
-            other_info=_txt(entry.get('other_info')),
-            commit=False,
-        )
         imported.append(ident)
 
     return {"imported": imported, "ignored": ignored, "failed": failed}
+
+
+def _txt(value):
+    return value if isinstance(value, str) else None
+
+
+def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[str]:
+    """Write one entry; return a failure reason, or None on success.
+
+    Variant writes raise before touching the session, so a failing entry
+    leaves nothing staged (the project description is written afterwards).
+    """
+    description = _txt(entry.get('description'))
+    if not (description and description.strip()):
+        return "Missing mandatory field(s): description"
+
+    try:
+        VariantContextController.save_editor(variant.id, _editor_payload(entry), commit=False)
+    except StrideValidationError as exc:
+        return str(exc)
+    ProjectContextController.upsert(project.id, description=description, commit=False)
+    return None
+
+
+def _editor_payload(entry: dict) -> dict:
+    """Map a 2.0 export entry onto the ``save_editor`` payload.
+
+    ``files`` only lists upload names, so it is not imported.
+    """
+    return {
+        "variant_description": entry.get('variant_description'),
+        "environment": entry.get('environment'),
+        "other_info": entry.get('other_info'),
+        "codebase_source": entry.get('codebase_source'),
+        "codebase_path": entry.get('codebase_path'),
+        "system": entry.get('system'),
+        "stride": entry.get('stride_model'),
+    }

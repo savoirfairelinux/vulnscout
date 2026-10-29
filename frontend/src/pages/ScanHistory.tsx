@@ -22,6 +22,8 @@ import { groupScanRuns } from "../helpers/scanRuns";
 import type { ScanTimelineEntry } from "../helpers/scanRuns";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
+import Projects from "../handlers/project";
+import type { ScanConfiguration } from "../handlers/project";
 import Vulnerabilities from "../handlers/vulnerabilities";
 import ModalShell, { ModalActions, ModalButton } from "../components/ModalShell";
 import type { AgentViewContext } from "../types/agent";
@@ -1254,7 +1256,12 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<RefreshType>>(new Set());
     const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
     const [excludeKernel, setExcludeKernel] = useState(true);
-    const [excludeNative, setExcludeNative] = useState(true);
+    const [nativeConfigurations, setNativeConfigurations] = useState<Record<string, ScanConfiguration>>({});
+    const excludeNative = Object.values(nativeConfigurations).every(configuration => configuration.exclude_native);
+    const [configurationLoading, setConfigurationLoading] = useState(false);
+    const [configurationError, setConfigurationError] = useState<string | null>(null);
+    const [launchError, setLaunchError] = useState<string | null>(null);
+    const loadedConfigurationProjects = useRef(new Set<string>());
     const scanRequestRef = useRef<{ generation: number; controller?: AbortController }>({
         generation: 0,
     });
@@ -1464,6 +1471,38 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
         )
     );
     const variantsReady = loadedVariantScopeKey === variantScopeKey;
+    const configurationProjectIdsKey = JSON.stringify([...new Set(
+        wizardVariants.filter(variant => wizardSelectedVariantIds.has(variant.id)).map(variant => variant.project_id)
+    )].sort());
+
+    useEffect(() => {
+        if (!scanWizardOpen) {
+            loadedConfigurationProjects.current.clear();
+            setNativeConfigurations({});
+            setConfigurationError(null);
+            setLaunchError(null);
+            return;
+        }
+        if (!variantsReady) return;
+        const controller = new AbortController();
+        setConfigurationLoading(true);
+        setConfigurationError(null);
+        const projectIds: string[] = JSON.parse(configurationProjectIdsKey);
+        Promise.all(projectIds.filter(id => !loadedConfigurationProjects.current.has(id)).map(async id => {
+            const configuration = await Projects.scanConfiguration(id, undefined, controller.signal);
+            if (!controller.signal.aborted) {
+                loadedConfigurationProjects.current.add(id);
+                setNativeConfigurations(previous => ({ ...previous, [id]: configuration }));
+            }
+        }))
+            .catch(error => {
+                if (!controller.signal.aborted) setConfigurationError(error instanceof Error ? error.message : 'Failed to load scan configuration.');
+            })
+            .finally(() => {
+                if (!controller.signal.aborted) setConfigurationLoading(false);
+            });
+        return () => controller.abort();
+    }, [scanWizardOpen, variantsReady, configurationProjectIdsKey]);
 
     useEffect(() => {
         const previous = observedScanStatuses.current;
@@ -1552,11 +1591,26 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
     }
 
     async function runSelectedScans() {
-        if (!variantsReady) return;
+        if (!variantsReady || configurationLoading || configurationError) return;
         const variants = wizardVariants
-            .filter(v => wizardSelectedVariantIds.has(v.id))
-            .map(v => ({ id: v.id, name: v.name }));
+            .filter(v => wizardSelectedVariantIds.has(v.id));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
+        const projectIds = [...new Set(variants.map(variant => variant.project_id))];
+        setConfigurationLoading(true);
+        setLaunchError(null);
+        try {
+            const configurations = Object.fromEntries(projectIds.map(id => {
+                const configuration = nativeConfigurations[id];
+                if (!configuration) throw new Error('Project scan configuration is not loaded.');
+                return [id, configuration];
+            }));
+            await Projects.saveScanConfigurations(configurations);
+        } catch (error) {
+            setLaunchError(error instanceof Error ? error.message : 'Failed to save scan preferences. Please retry.');
+            return;
+        } finally {
+            setConfigurationLoading(false);
+        }
         setScanWizardOpen(false);
         const applicableRefreshTypes = refreshSourcesForScans(selectedScanTypes);
         const refreshTypes = (refreshMode === 'complete' ? [...applicableRefreshTypes] : [...selectedRefreshTypes])
@@ -1570,8 +1624,14 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
         ).map(vulnerability => vulnerability.id));
         const scanSources: ScanSource[] = ['grype', 'nvd', 'osv', 'scc'];
         const jobs = [
-            ...scanSources.filter(source => selectedScanTypes.has(source))
-                .map(source => Operations.scanJob(source, targetVariantIds, { excludeKernel, excludeNative })),
+            ...scanSources.filter(source => selectedScanTypes.has(source)).flatMap(source => projectIds.map(id => {
+                const configuration = nativeConfigurations[id];
+                return Operations.scanJob(source, variants.filter(variant => variant.project_id === id).map(variant => variant.id), {
+                    excludeKernel,
+                    excludeNative: configuration.exclude_native,
+                    nativePackageExceptions: configuration.native_package_exceptions,
+                });
+            })),
             ...refreshTypes.map(source => Operations.deferredRefreshJob(
                 source, targetVariantIds, [...existingVulnerabilityIds],
             )),
@@ -2064,7 +2124,11 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
                             selectedRefreshTypes={selectedRefreshTypes}
                             refreshMode={refreshMode}
                             excludeKernel={excludeKernel}
-                            excludeNative={excludeNative}
+                            nativeConfigurations={nativeConfigurations}
+                            configurationLoading={configurationLoading}
+                            configurationError={configurationError}
+                            launchError={launchError}
+                            onNativeConfigurationChange={(id, configuration) => setNativeConfigurations(previous => ({ ...previous, [id]: configuration }))}
                             onClose={() => setScanWizardOpen(false)}
                             onToggleVariant={toggleVariant}
                             onToggleScanType={toggleScanType}
@@ -2073,7 +2137,6 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
                             onSelectAllVariants={() => setSelectedVariantIds(new Set(wizardVariants.map(v => v.id)))}
                             onSelectNoVariants={() => setSelectedVariantIds(new Set())}
                             onExcludeKernelChange={setExcludeKernel}
-                            onExcludeNativeChange={setExcludeNative}
                             onLaunch={handleRunSelectedScans}
                         />
                     </>

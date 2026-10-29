@@ -70,7 +70,9 @@ def _build_tool_scan_db(app):
         sbom_doc = SBOMDocument.create(
             "/sbom/doc.json", "doc.json", sbom_scan.id, format="spdx"
         )
-        SBOMPackage.create(sbom_doc.id, pkg.id)
+        link = SBOMPackage.create(sbom_doc.id, pkg.id)
+        link.cpe = pkg.cpe
+        link.purl = pkg.purl
         Observation.create(
             finding_id=finding_sbom.id, scan_id=sbom_scan.id
         )
@@ -633,6 +635,7 @@ class TestScanJobPackageFilters:
         assert resolved.call_args.kwargs == {
             "exclude_kernel": False,
             "exclude_native": True,
+            "native_package_exceptions": [],
         }
 
     def test_grype_filters_native_components_and_matches(self, tmp_path):

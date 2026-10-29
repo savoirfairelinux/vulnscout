@@ -115,16 +115,16 @@ class TestVariantContextModel:
 
     def test_create_variant_context(self, app, variant):
         from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, threat_model="High CVE severity")
+        vc = VariantContext.upsert(variant.id, environment="Linux")
         assert vc.variant_id == variant.id
-        assert vc.threat_model == "High CVE severity"
-        assert vc.environment is None
+        assert vc.environment == "Linux"
+        assert vc.other_info is None
 
     def test_upsert_replaces_all_fields(self, app, variant):
         from src.models.variant_context import VariantContext
-        VariantContext.upsert(variant.id, threat_model="Old", environment="Linux")
-        vc = VariantContext.upsert(variant.id, threat_model="New", environment=None)
-        assert vc.threat_model == "New"
+        VariantContext.upsert(variant.id, other_info="Old", environment="Linux")
+        vc = VariantContext.upsert(variant.id, other_info="New", environment=None)
+        assert vc.other_info == "New"
         assert vc.environment is None
 
     def test_upsert_codebase_path(self, app, variant):
@@ -142,23 +142,23 @@ class TestVariantContextModel:
 
     def test_updated_at_set_on_creation_with_content(self, app, variant):
         from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, threat_model="x")
+        vc = VariantContext.upsert(variant.id, environment="x")
         assert vc.updated_at is not None
         assert vc.to_dict()["updated_at"] is not None
 
     def test_updated_at_bumped_only_on_real_change(self, app, variant):
         from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, threat_model="x")
+        vc = VariantContext.upsert(variant.id, environment="x")
         first = vc.updated_at
-        vc = VariantContext.upsert(variant.id, threat_model="x")
+        vc = VariantContext.upsert(variant.id, environment="x")
         assert vc.updated_at == first
-        vc = VariantContext.upsert(variant.id, threat_model="y")
+        vc = VariantContext.upsert(variant.id, environment="y")
         assert vc.updated_at > first
 
     def test_updated_at_set_when_first_filled(self, app, variant):
         from src.models.variant_context import VariantContext
         VariantContext.upsert(variant.id)
-        vc = VariantContext.upsert(variant.id, risks="r")
+        vc = VariantContext.upsert(variant.id, other_info="o")
         assert vc.updated_at is not None
 
     def test_get_by_variant(self, app, variant):
@@ -176,11 +176,12 @@ class TestVariantContextModel:
 
     def test_to_dict(self, app, variant):
         from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, threat_model="T", risks="R", codebase_path="/src")
+        vc = VariantContext.upsert(variant.id, environment="E", codebase_path="/src")
         d = vc.to_dict()
         assert d["variant_id"] == str(variant.id)
-        assert d["threat_model"] == "T"
-        assert d["risks"] == "R"
+        assert d["environment"] == "E"
+        assert d["threat_model"] is None
+        assert d["risks"] is None
         assert d["codebase_path"] == "/src"
         assert d["files"] == []
 
@@ -274,9 +275,9 @@ class TestVariantContextController:
         from src.controllers.context import VariantContextController
         vc = VariantContextController.upsert(
             str(variant.id),
-            threat_model="Any CVSS >= 7.0",
+            environment="Linux 6.1",
         )
-        assert vc.threat_model == "Any CVSS >= 7.0"
+        assert vc.environment == "Linux 6.1"
 
     def test_upsert_full_replacement(self, app, variant):
         from src.controllers.context import VariantContextController
@@ -296,9 +297,9 @@ class TestVariantContextController:
 
     def test_serialize(self, app, variant):
         from src.controllers.context import VariantContextController
-        vc = VariantContextController.upsert(str(variant.id), risks="Risk A")
+        vc = VariantContextController.upsert(str(variant.id), other_info="Info A")
         d = VariantContextController.serialize(vc)
-        assert d["risks"] == "Risk A"
+        assert d["other_info"] == "Info A"
         assert d["files"] == []
 
 
@@ -329,14 +330,14 @@ class TestGetMergedContext:
         from src.models.project_context import ProjectContext
         from src.models.variant_context import VariantContext
         ProjectContext.upsert(project.id, description="proj desc")
-        VariantContext.upsert(variant.id, threat_model="CVSS >= 7", codebase_path="/src/repo")
+        VariantContext.upsert(variant.id, environment="Linux", codebase_path="/src/repo")
         resp = client.get(
             f"/api/context?project_id={project.id}&variant_id={variant.id}"
         )
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["description"] == "proj desc"
-        assert data["threat_model"] == "CVSS >= 7"
+        assert data["environment"] == "Linux"
         assert data["codebase_path"] == "/src/repo"
 
     def test_400_when_project_id_missing(self, client, variant):
@@ -429,19 +430,19 @@ class TestPutVariantContext:
     def test_upsert_creates_row(self, client, variant):
         resp = client.put(
             f"/api/variants/{variant.id}/context",
-            json={"threat_model": "CVSS >= 7"},
+            json={"environment": "Linux"},
         )
         assert resp.status_code == 200
-        assert resp.get_json()["threat_model"] == "CVSS >= 7"
+        assert resp.get_json()["environment"] == "Linux"
 
     def test_full_replacement_nulls_omitted_fields(self, client, variant):
         client.put(
             f"/api/variants/{variant.id}/context",
-            json={"threat_model": "T", "environment": "Linux"},
+            json={"other_info": "O", "environment": "Linux"},
         )
         resp = client.put(
             f"/api/variants/{variant.id}/context",
-            json={"threat_model": "T2"},
+            json={"other_info": "O2"},
         )
         assert resp.get_json()["environment"] is None
 
@@ -460,7 +461,7 @@ class TestPutVariantContext:
     def test_404_when_variant_not_found(self, client):
         resp = client.put(
             f"/api/variants/{uuid.uuid4()}/context",
-            json={"threat_model": "x"},
+            json={"environment": "x"},
         )
         assert resp.status_code == 404
 
@@ -468,44 +469,25 @@ class TestPutVariantContext:
 class TestPostContextFile:
 
     @pytest.mark.parametrize("size", [5 * 1024 * 1024 + 64 * 1024 + 1, 10 * 1024 * 1024])
-    def test_upload_accepts_files_up_to_advertised_limit(self, app, client, variant, tmp_path, size):
+    def test_upload_accepts_large_files(self, client, variant, tmp_path, size):
         from io import BytesIO
-        original_limit = app.config["MAX_CONTENT_LENGTH"]
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             response = client.post(
                 f"/api/variants/{variant.id}/context/files",
                 data={"file": (BytesIO(b"x" * size), "main.c")},
             )
         assert response.status_code == 201
-        assert app.config["MAX_CONTENT_LENGTH"] == original_limit
         assert next(tmp_path.rglob(response.get_json()["id"])).stat().st_size == size
 
-    def test_upload_rejects_file_above_advertised_limit(self, client, variant, tmp_path):
+    def test_upload_accepts_files_above_previous_10mb_limit(self, client, variant, tmp_path):
         from io import BytesIO
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             response = client.post(
                 f"/api/variants/{variant.id}/context/files",
                 data={"file": (BytesIO(b"x" * (10 * 1024 * 1024 + 1)), "main.c")},
             )
-        assert response.status_code == 400
-        assert "maximum size of 10 MB" in response.get_json()["error"]
-        assert not list(tmp_path.iterdir())
-
-    def test_upload_request_cap_does_not_raise_report_asset_cap(self, app, client, variant):
-        from src.models.variant_context import VariantContext
-        response = client.post(
-            f"/api/variants/{variant.id}/context/files",
-            data=b"x" * (10 * 1024 * 1024 + 64 * 1024 + 1),
-            content_type="multipart/form-data; boundary=test",
-        )
-        assert response.status_code == 413
-        assert "Codebase reference" in response.get_json()["error"]
-        assert VariantContext.get_by_variant(variant.id) is None
-        response = client.post(
-            "/api/documents/assets", data=b"x" * (app.config["MAX_CONTENT_LENGTH"] + 1),
-            content_type="multipart/form-data; boundary=test",
-        )
-        assert response.status_code == 413
+        assert response.status_code == 201
+        assert next(tmp_path.rglob(response.get_json()["id"])).stat().st_size == 10 * 1024 * 1024 + 1
 
     @pytest.mark.parametrize("archive_type", ["zip", "tar"])
     def test_malformed_archive_names_return_400(self, client, variant, tmp_path, archive_type):
@@ -604,7 +586,7 @@ class TestPostContextFile:
 
     def test_upload_file_to_existing_variant_context_bumps_updated_at(self, client, variant, tmp_path):
         from src.models.variant_context import VariantContext
-        VariantContext.upsert(variant.id, threat_model="CVSS >= 7")
+        VariantContext.upsert(variant.id, environment="Linux")
         old_updated_at = VariantContext.get_by_variant(variant.id).updated_at
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             from io import BytesIO
@@ -736,7 +718,7 @@ class TestCodebaseSource:
         from io import BytesIO
         from sqlalchemy.exc import SQLAlchemyError
         from src.models.variant_context import VariantContext
-        context = VariantContext.upsert(variant.id, threat_model="existing")
+        context = VariantContext.upsert(variant.id, environment="existing")
         updated_at = context.updated_at
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
                 patch.object(_db.session, "commit", side_effect=SQLAlchemyError("failed")):
@@ -744,7 +726,281 @@ class TestCodebaseSource:
                 f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"source"), "main.c")},
             )
         assert response.status_code == 500
-        assert context.threat_model == "existing"
+        assert context.environment == "existing"
         assert context.updated_at == updated_at
         assert context.files == []
         assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+# ---------------------------------------------------------------------------
+# Editor-shape saves, legacy writes on STRIDE variants, agent view
+# ---------------------------------------------------------------------------
+
+def _risk(mitigation):
+    return [{"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": mitigation, "residual": ""}]
+
+
+def _stride_model(**overrides):
+    model = {
+        "components": [
+            {"id": "C1", "name": "OTA updater", "description": "fetches images", "trust_zone": "device"},
+            {"id": "C2", "name": "Update server", "description": "", "trust_zone": "internet"},
+        ],
+        "interactions": [
+            {"id": "I1", "name": "Download", "source_id": "C1", "destination_id": "C2",
+             "interface": "HTTPS", "data": "firmware", "trust_boundary": "device/internet"},
+        ],
+        "threats": [
+            {"id": "T1", "category": "tampering", "description": "Image swapped", "target_ids": ["C1", "I1"]},
+        ],
+        "risks": [
+            {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
+        ],
+    }
+    model.update(overrides)
+    return model
+
+
+def _editor_payload(**overrides):
+    payload = {
+        "variant_description": "Gateway",
+        "environment": "Linux",
+        "other_info": None,
+        "codebase_source": "paths",
+        "codebase_path": "/src/a;/src/b",
+        "system": {"scope": "Firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
+        "stride": _stride_model(),
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestVariantEditorSave:
+
+    def test_editor_save_round_trip(self, app, variant):
+        from src.models.variant_context import VariantContext
+        payload = _editor_payload()
+        vc = VariantContext.save_editor(variant.id, payload)
+        editor = VariantContext.get_by_variant(variant.id).to_dict()["editor"]
+        assert vc.updated_at is not None
+        assert not {"editor_mode", "free"} & set(editor)
+        assert editor["codebase_source"] == "paths"
+        assert editor["codebase_path"] == "/src/a;/src/b"
+        assert editor["system"] == payload["system"]
+        assert editor["stride"] == payload["stride"]
+        assert editor["files"] == []
+        assert editor["updated_at"] == vc.to_dict()["updated_at"]
+
+    def test_editor_save_blank_text_stored_as_none(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.save_editor(variant.id, _editor_payload(
+            variant_description="", environment="  ", codebase_path="",
+            system={"scope": "Firmware", "actors": "", "entry_points": None, "trust_boundaries": None},
+        ))
+        assert vc.variant_description is None
+        assert vc.environment is None
+        assert vc.codebase_path is None
+        assert vc.system_actors is None
+
+    def test_editor_save_requires_threat_model(self, app, variant):
+        from src.helpers.stride_model import StrideValidationError, empty_stride_model
+        from src.models.variant_context import VariantContext
+        with pytest.raises(StrideValidationError) as exc:
+            VariantContext.save_editor(variant.id, _editor_payload(system={}, stride=empty_stride_model()))
+        assert exc.value.fields["threat_model"] == "A threat model is required."
+        assert VariantContext.get_by_variant(variant.id) is None
+
+    def test_editor_save_rejects_unknown_codebase_source(self, app, variant):
+        from src.helpers.stride_model import StrideValidationError
+        from src.models.variant_context import VariantContext
+        with pytest.raises(StrideValidationError) as exc:
+            VariantContext.save_editor(variant.id, _editor_payload(codebase_source="git"))
+        assert "codebase_source" in exc.value.fields
+
+    def test_editor_save_rejects_bad_model(self, app, variant):
+        from src.helpers.stride_model import StrideValidationError
+        from src.models.variant_context import VariantContext
+        bad = _stride_model(threats=[{"id": "T1", "category": "tampering", "target_ids": ["C9"]}], risks=[])
+        with pytest.raises(StrideValidationError) as exc:
+            VariantContext.save_editor(variant.id, _editor_payload(stride=bad))
+        assert "threats[0].target_ids" in exc.value.fields
+
+    def test_identical_editor_save_keeps_updated_at(self, app, variant):
+        from src.models.variant_context import VariantContext
+        first = VariantContext.save_editor(variant.id, _editor_payload()).updated_at
+        vc = VariantContext.save_editor(variant.id, _editor_payload())
+        assert vc.updated_at == first
+
+    def test_editor_save_bumps_on_model_change(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.save_editor(variant.id, _editor_payload(stride=_stride_model(risks=_risk("a"))))
+        first = vc.updated_at
+        vc = VariantContext.save_editor(variant.id, _editor_payload(stride=_stride_model(risks=_risk("b"))))
+        assert vc.updated_at > first
+        assert vc.stride_model["risks"][0]["mitigation"] == "b"
+
+    def test_controller_save_editor_missing_variant(self, app):
+        from src.controllers.context import VariantContextController
+        with pytest.raises(ValueError):
+            VariantContextController.save_editor(uuid.uuid4(), _editor_payload())
+
+
+class TestLegacyWrite:
+
+    def test_legacy_write_with_threat_model_text_is_rejected(self, client, variant):
+        from src.models.variant_context import VariantContext
+        client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
+        before = VariantContext.get_by_variant(variant.id).to_dict()
+        resp = client.put(f"/api/variants/{variant.id}/context",
+                          json={"environment": "changed", "threat_model": "text", "risks": "r"})
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["fields"] == {
+            "threat_model": "is generated from the STRIDE model; edit it in the AI Context page",
+            "risks": "is generated from the STRIDE model; edit it in the AI Context page",
+        }
+        assert VariantContext.get_by_variant(variant.id).to_dict() == before
+
+    def test_legacy_write_with_null_text_applies_other_fields(self, client, variant):
+        from src.models.variant_context import VariantContext
+        client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
+        resp = client.put(f"/api/variants/{variant.id}/context",
+                          json={"environment": "Yocto", "codebase_path": "/new", "threat_model": None, "risks": None})
+        assert resp.status_code == 200
+        vc = VariantContext.get_by_variant(variant.id)
+        assert vc.environment == "Yocto"
+        assert vc.codebase_path == "/new"
+        assert vc.variant_description is None
+        assert vc.stride_model == _stride_model()
+        assert "Tampering" in resp.get_json()["threat_model"]
+
+    def test_legacy_write_keeps_hidden_codebase_path_on_references(self, app, variant):
+        from src.models.variant_context import VariantContext
+        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="references", codebase_path="src;lib"))
+        vc = VariantContext.upsert(variant.id, codebase_path=None, environment="x")
+        assert vc.to_dict()["editor"]["codebase_path"] == "src;lib"
+        assert vc.environment == "x"
+        vc = VariantContext.upsert(variant.id, codebase_path="new")
+        assert vc.to_dict()["editor"]["codebase_path"] == "new"
+
+    def test_legacy_create_has_no_stride_model(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, environment="x")
+        assert vc.codebase_source == "references"
+        assert vc.stride_model is None
+        assert vc.agent_threat_model() is None
+
+    def test_legacy_create_with_codebase_path_uses_paths(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, codebase_path="/src")
+        assert vc.codebase_source == "paths"
+        assert vc.to_dict()["codebase_path"] == "/src"
+
+
+class TestAgentView:
+
+    def _with_file(self, variant):
+        from src.models.variant_context import ContextFile, VariantContext
+        vc = VariantContext.get_by_variant(variant.id)
+        ContextFile.create(vc.id, "src.zip", "/tmp/none/src.zip")
+        _db.session.refresh(vc)
+        return vc
+
+    def test_agent_view_paths_vs_references(self, app, variant):
+        from src.models.variant_context import VariantContext
+        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="references"))
+        vc = self._with_file(variant)
+        d = vc.to_dict()
+        assert d["codebase_path"] is None
+        assert [f["original_name"] for f in d["files"]] == ["src.zip"]
+        assert d["editor"]["codebase_path"] == "/src/a;/src/b"
+        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="paths"))
+        d = VariantContext.get_by_variant(variant.id).to_dict()
+        assert d["codebase_path"] == "/src/a;/src/b"
+        assert d["files"] == []
+        assert [f["original_name"] for f in d["editor"]["files"]] == ["src.zip"]
+
+    def test_agent_view_stride_renders(self, app, variant):
+        from src.helpers.stride_model import render_risks, render_threat_model
+        from src.models.variant_context import VariantContext
+        payload = _editor_payload()
+        vc = VariantContext.save_editor(variant.id, payload)
+        d = vc.to_dict()
+        assert d["threat_model"] == render_threat_model(payload["system"], payload["stride"])
+        assert "Threats:\nTampering\n- T1" in d["threat_model"]
+        assert d["risks"] == render_risks(payload["stride"])
+
+    def test_put_route_400_carries_fields(self, client, variant):
+        bad = _stride_model(threats=[{"id": "T1", "category": "tampering", "target_ids": ["C9"]}], risks=[])
+        resp = client.put(f"/api/variants/{variant.id}/context", json=_editor_payload(stride=bad))
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["error"]
+        assert "threats[0].target_ids" in body["fields"]
+
+    def test_put_route_editor_save(self, client, variant):
+        resp = client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["editor"]["stride"] == _stride_model()
+        assert "Tampering" in body["threat_model"]
+
+    def test_put_route_editor_save_404(self, client):
+        resp = client.put(f"/api/variants/{uuid.uuid4()}/context", json=_editor_payload())
+        assert resp.status_code == 404
+
+    def test_first_upload_creates_references_row(self, client, project, variant, tmp_path):
+        from io import BytesIO
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"code"), "main.c")},
+            )
+        assert resp.status_code == 201
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert [f["id"] for f in data["files"]] == [resp.get_json()["id"]]
+        assert data["codebase_path"] is None
+        assert data["editor"]["codebase_source"] == "references"
+
+    def test_upload_keeps_existing_row_source(self, client, project, variant, tmp_path):
+        from io import BytesIO
+        client.put(f"/api/variants/{variant.id}/context", json={"codebase_path": "/src"})
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"code"), "main.c")},
+            )
+        assert resp.status_code == 201
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert data["editor"]["codebase_source"] == "paths"
+        assert data["codebase_path"] == "/src"
+        assert data["files"] == []
+
+    def test_upload_after_text_only_create_is_visible_to_agents(self, client, project, variant, tmp_path):
+        from io import BytesIO
+        client.put(f"/api/variants/{variant.id}/context", json={"environment": "Yocto"})
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = client.post(
+                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"code"), "main.c")},
+            )
+        assert resp.status_code == 201
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert data["editor"]["codebase_source"] == "references"
+        assert [f["id"] for f in data["files"]] == [resp.get_json()["id"]]
+
+    def test_get_context_default_editor_block(self, client, project, variant):
+        from src.models.variant_context import default_editor_block
+        resp = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}")
+        data = resp.get_json()
+        assert data["editor"] == default_editor_block()
+        assert data["editor"]["codebase_source"] == "references"
+        assert data["threat_model"] is None
+        assert data["codebase_path"] is None
+
+    def test_get_context_returns_agent_view_and_editor(self, client, project, variant):
+        client.put(f"/api/variants/{variant.id}/context", json=_editor_payload(variant_description="Desc"))
+        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
+        assert data["variant_description"] == "Desc"
+        assert "Tampering" in data["threat_model"]
+        assert "Likelihood: High" in data["risks"]
+        assert data["editor"]["stride"] == _stride_model()
+        assert {"project_id", "description", "variant_id", "variant_description", "codebase_path",
+                "environment", "threat_model", "risks", "other_info", "files"} <= set(data)
