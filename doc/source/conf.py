@@ -12,7 +12,7 @@ from sphinx import addnodes
 project = 'VulnScout'
 copyright = '2026, Savoir-Faire Linux Inc.'
 author = 'Savoir-Faire Linux Inc.'
-release = 'v0.23'
+release = 'v0.24'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
