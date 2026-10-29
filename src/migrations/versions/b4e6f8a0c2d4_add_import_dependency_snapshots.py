@@ -14,8 +14,10 @@ depends_on = None
 
 
 def upgrade():
-    with op.batch_alter_table('sbom_documents', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('dependency_snapshot', sa.JSON(), nullable=True))
+    existing = {column['name'] for column in sa.inspect(op.get_bind()).get_columns('sbom_documents')}
+    if 'dependency_snapshot' not in existing:
+        with op.batch_alter_table('sbom_documents', schema=None) as batch_op:
+            batch_op.add_column(sa.Column('dependency_snapshot', sa.JSON(), nullable=True))
 
 
 def downgrade():

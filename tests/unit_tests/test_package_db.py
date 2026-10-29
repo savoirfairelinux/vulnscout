@@ -321,6 +321,9 @@ def test_already_upgraded_pr_database_remains_compatible_with_consolidated_migra
     document = SBOMDocument.create("lib.json", "lib", scan.id)
     url = f"git+https://example.org/lib@{'a' * 40}"
     package = Package.create("lib", "1.0")
+    dependency = Package.create("dependency", "1.0")
+    snapshot = [[str(package.id), str(dependency.id)]]
+    document.dependency_snapshot = snapshot
     package._legacy_source_urls = [url]
     link = SBOMPackage.create(document.id, package.id)
     link.source_urls = [url]
@@ -337,6 +340,7 @@ def test_already_upgraded_pr_database_remains_compatible_with_consolidated_migra
     assert link.source_urls == [url]
     assert link.purl == ["pkg:generic/lib@1.0"]
     assert package._legacy_source_urls == [url]
+    assert document.dependency_snapshot == snapshot
 
 
 def test_controller_current_sbom_document_defaults_to_none(app):

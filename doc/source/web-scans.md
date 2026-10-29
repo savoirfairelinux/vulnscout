@@ -118,7 +118,8 @@ show **No comparable dependency baseline**, with a reason, instead of treating
 unknown relationships as empty and reporting mass additions or removals. The
 migration deliberately does not infer snapshots for older imports from live
 edges; reimport the same document scope twice to establish a comparable baseline.
-Packages and other existing history details remain available.
+Upgrading a database that already has snapshot storage preserves its recorded
+snapshots. Packages and other existing history details remain available.
 
 ## Scan Result Modal
 
