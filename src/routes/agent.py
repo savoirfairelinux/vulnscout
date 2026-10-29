@@ -1078,10 +1078,9 @@ def agent_message():
     action = data.get("action")
     if action is not None and (not isinstance(action, str) or action not in agent_skills.PROFILES):
         return _response({"error": "Invalid agent action."}, key, 400)
-    profile = agent_skills.PROFILES[action] if action else conversation.profile
     if action and conversation.root is None:
         return _response({"error": "Agent actions run only in their own conversation."}, key, 400)
-    if action and conversation.profile not in (None, profile):
+    if action and conversation.profile not in (None, agent_skills.PROFILES[action]):
         return _response({"error": "This conversation already runs a different action."}, key, 400)
     user_message = message.strip()
     agent_prompt = user_message
@@ -1093,7 +1092,7 @@ def agent_message():
         return _response({"error": (
             "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override."
         )}, key, 503)
-    if profile and agent_skills.skills_path() is None:
+    if (action or conversation.profile) and agent_skills.skills_path() is None:
         return _response({"error": agent_skills.SKILLS_MISSING_ERROR}, key, 503)
     try:
         scope = _scope_for_context(context)
@@ -1101,6 +1100,11 @@ def agent_message():
         return _response({"error": str(exc)}, key, 400)
     if not conversation.lock.acquire(blocking=False):
         return _response({"error": BUSY_AGENT_ERROR}, key, 409)
+    # Resolve the profile under the lock so a concurrent action turn's binding is neither lost nor switched.
+    profile = agent_skills.PROFILES[action] if action else conversation.profile
+    if conversation.profile not in (None, profile):
+        conversation.lock.release()
+        return _response({"error": "This conversation already runs a different action."}, key, 400)
     conversation.profile = profile
     options = {"profile": profile, "timeout": agent_skills.ACTION_TIMEOUT} if profile else {}
     if request.headers.get("Accept") == "application/x-ndjson":

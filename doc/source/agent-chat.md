@@ -29,12 +29,19 @@ bundled skills from `.github/skills`: `cve-assessment` for assessments,
 only the skill files and fetch public `http(s)` pages; loopback, private,
 link-local and other non-public addresses are refused, and redirect targets rely
 on the Copilot runtime's own private-address guard. Set
-`VULNSCOUT_AGENT_WEB_ACCESS=off` to disable web fetch; the skills then report
-missing NVD/advisory evidence. Shell tools and host filesystem access stay
-disabled. Uploaded source is inspected through scoped codebase-reference tools,
-without extraction or execution. **Codebase Path** is an external-client hint,
-not a container mount. Dependency discovery does not establish runtime use or
-exploitability.
+`VULNSCOUT_AGENT_WEB_ACCESS` to `off` (or `0`, `false`, `no`) to disable web
+fetch; the skills then report missing NVD/advisory evidence. Shell tools and
+host filesystem access stay disabled. Uploaded source is inspected through
+scoped codebase-reference tools, without extraction or execution. **Codebase
+Path** is an external-client hint, not a container mount. Dependency discovery
+does not establish runtime use or exploitability.
+
+```{warning}
+With web fetch enabled, the model that reads your project data can also request
+public URLs. Fetched pages and uploaded source are treated as untrusted, but a
+prompt injection in them could still try to encode data into a URL. Disable web
+access for confidential projects or untrusted uploads.
+```
 
 `flask ai-assess` (`./vulnscout assess`) runs the same SDK turn without the web
 session. Each turn is ephemeral (its SDK session is deleted) and runs the

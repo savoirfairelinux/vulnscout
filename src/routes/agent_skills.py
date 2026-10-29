@@ -69,10 +69,17 @@ def _inside(path: str, root: Path) -> bool:
         return False
 
 
+_NAT64 = (ipaddress.IPv6Network("64:ff9b::/96"), ipaddress.IPv6Network("64:ff9b:1::/48"))
+
+
 def _public_address(value: str) -> bool:
     address: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(value.split("%", 1)[0])
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-        address = address.ipv4_mapped
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped:
+            address = address.ipv4_mapped
+        # IPv4-compatible, NAT64 and site-local forms can wrap private targets yet report is_global.
+        elif int(address) >> 32 == 0 or any(address in net for net in _NAT64) or address.is_site_local:
+            return False
     return address.is_global and not address.is_multicast
 
 

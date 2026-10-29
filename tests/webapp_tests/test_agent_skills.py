@@ -88,7 +88,8 @@ def test_public_urls_only(monkeypatch, tmp_path):
     assert _decide(handler, "url", url="ftp://nvd.nist.gov/x") == "reject"
     assert _decide(handler, "url", url="https:///nohost") == "reject"
     for address in ("127.0.0.1", "::1", "10.0.0.1", "169.254.169.254", "100.64.0.1", "0.0.0.0",
-                    "224.0.0.1", "::ffff:127.0.0.1", "fe80::1"):
+                    "224.0.0.1", "ff02::1", "::ffff:127.0.0.1", "::127.0.0.1", "64:ff9b::7f00:1",
+                    "64:ff9b:1::a00:1", "fec0::1"):
         _resolve_to(monkeypatch, address)
         assert _decide(handler, "url", url="https://example.org/") == "reject", address
     _resolve_to(monkeypatch, "93.184.215.14", "192.168.1.10")

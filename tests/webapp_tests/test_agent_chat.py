@@ -1491,6 +1491,40 @@ def test_busy_thread_does_not_bind_a_profile(client, monkeypatch):
     assert response.status_code == 409 and thread.profile is None
 
 
+@pytest.mark.parametrize("action, status, bound", [(None, 200, "review"), ("assess", 400, "review")])
+def test_profile_is_resolved_after_taking_the_thread_lock(client, monkeypatch, action, status, bound):
+    """A thread bound by a concurrent action turn keeps that binding."""
+    from src.routes import agent, agent_skills
+
+    calls = _capture_reply(monkeypatch)
+    thread_id = str(uuid4())
+    headers = {"X-Agent-Thread": thread_id}
+    client.delete("/api/agent/conversation", headers=headers)
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    client.post("/api/agent/messages", json={"message": "Hi"}, headers=headers)
+    thread = root.threads[thread_id]
+    real_lock = thread.lock
+
+    class BoundWhileWaiting:
+        def acquire(self, blocking=True):
+            thread.profile = agent_skills.REVIEW
+            return real_lock.acquire(blocking)
+
+        def release(self):
+            real_lock.release()
+
+        def locked(self):
+            return real_lock.locked()
+
+    thread.lock = BoundWhileWaiting()
+    body = {"message": "Next", **({"action": action} if action else {})}
+    response = client.post("/api/agent/messages", json=body, headers=headers)
+    assert response.status_code == status
+    assert thread.profile.action == bound and not real_lock.locked()
+    if status == 200:
+        assert calls[-1] == {"profile": agent_skills.REVIEW, "timeout": agent_skills.ACTION_TIMEOUT}
+
+
 @pytest.mark.parametrize("stream", [False, True])
 def test_skill_errors_are_reported(client, monkeypatch, stream):
     from src.routes import agent_skills
