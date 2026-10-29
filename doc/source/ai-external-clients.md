@@ -181,9 +181,10 @@ variants "production" and "staging".
 | LOW | `under_investigation` | `under_investigation` |
 
 This is a prompt-controlled policy of the external skill, not an MCP parameter
-or a persistent UI setting. The embedded Agent uses its own system instructions,
-not external skill discovery. Skill submissions remain pending human approval
-regardless of confidence or strictness.
+or a persistent UI setting. The embedded Agent's assess actions and
+`vulnscout assess` load this same bundled skill, so the same gate applies.
+Skill submissions remain pending human approval regardless of confidence or
+strictness.
 
 ```{note}
 The skill's **security objectives profiles** and **report templates** are

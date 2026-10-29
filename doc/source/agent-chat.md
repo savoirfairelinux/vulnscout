@@ -38,9 +38,10 @@ exploitability.
 
 `flask ai-assess` (`./vulnscout assess`) runs the same SDK turn without the web
 session. Each turn is ephemeral (its SDK session is deleted) and runs the
-`cve-assessment` skill with the read tools plus `write_assessment` and `update_ai_assessment`. The command serves the app's API on an
-ephemeral `127.0.0.1` port for the MCP server, because the CLI process does not
-run the web server. It reads provider settings from the same `config.env`.
+`cve-assessment` skill with the read tools plus `write_assessment` and
+`update_ai_assessment`. The command serves the app's API on an ephemeral
+`127.0.0.1` port for the MCP server, because the CLI process does not run the
+web server. It reads provider settings from the same `config.env`.
 
 ## Configuration and Credentials
 
