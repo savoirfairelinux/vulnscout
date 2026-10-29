@@ -47,7 +47,7 @@ def test_fresh_database_reaches_the_evidence_schema_and_can_use_its_links(app):
     _upgrade(app)
     assert db.session.execute(text("SELECT version_num FROM alembic_version")).scalar() == HEAD_REVISION
     inspector = inspect(db.engine)
-    for table in ("packages", "sbom_packages"):
+    for table in ("packages", "sbom_packages", "sbom_documents"):
         assert {column["name"] for column in inspector.get_columns(table)} == set(
             db.metadata.tables[table].columns.keys()
         )
@@ -124,6 +124,7 @@ def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(
     assert link.type == "normal"
     assert link.source_revisions is None
     assert db.session.get(SBOMDocument, document_id).jsonld_groups is None
+    assert db.session.get(SBOMDocument, document_id).dependency_snapshot is None
     assert SBOMPackage.evidence_for_documents({document_id})[package_id] == {
         "cpe": [], "purl": [], "source_urls": [],
     }

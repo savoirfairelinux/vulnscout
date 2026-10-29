@@ -12,7 +12,7 @@ import uuid
 
 from packageurl import PackageURL
 from sqlalchemy import delete, insert, inspect, select, update
-from sqlalchemy.orm import Session, defer
+from sqlalchemy.orm import Session, load_only
 
 from ..models import Package, SBOMDocument, SBOMPackage, Scan
 from ..models.assessment import Assessment
@@ -206,13 +206,14 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
 
 def consolidate_jsonld_packages(session: Session) -> bool:
     """Consolidate recorded, unprocessed groups in the caller's transaction."""
-    # Historical migrations also call this helper before compiler metadata exists.
+    # This helper also runs in migrations before later document columns exist.
     has_build_targets = 'build_targets' in {
         column['name'] for column in inspect(session.connection()).get_columns('sbom_documents')
     }
-    query = select(SBOMDocument)
-    if not has_build_targets:
-        query = query.options(defer(SBOMDocument.build_targets))
+    document_fields = [SBOMDocument.id, SBOMDocument.scan_id, SBOMDocument.jsonld_groups]
+    if has_build_targets:
+        document_fields.append(SBOMDocument.build_targets)
+    query = select(SBOMDocument).options(load_only(*document_fields))
     documents = {document.id: document for document in session.scalars(query)}
     groups_by_scan: dict[uuid.UUID, list[dict]] = defaultdict(list)
     documents_by_scan: dict[uuid.UUID, list[SBOMDocument]] = defaultdict(list)
