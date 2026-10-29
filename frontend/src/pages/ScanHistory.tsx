@@ -15,6 +15,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faFileImport, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck, faLayerGroup } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
+import DependencyChanges from "../components/DependencyChanges";
 import MessageBanner from "../components/MessageBanner";
 import RunScansWizard from "../components/RunScansWizard";
 import { refreshSourcesForScans } from "../helpers/refreshSources";
@@ -924,6 +925,7 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                 colorClass="text-gray-400"
                             />
                         )}
+                        <DependencyChanges changes={diff.dependency_changes} />
                     </>
                 )}
                 {diff && section === 'findings' && (

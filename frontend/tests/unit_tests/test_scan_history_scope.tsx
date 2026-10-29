@@ -133,6 +133,11 @@ const richDiff: ScanDiff = {
         old_package_id: 'old', new_package_id: 'new', package_supplier: pkg.package_supplier,
     }],
     packages_unchanged: [{...pkg, package_id: 'package-3'}],
+    dependency_changes: {
+        status: 'available', added_count: 1, removed_count: 0,
+        added: [{ dependent: pkg, dependency: {...pkg, package_id: 'linked', package_name: 'lib'} }],
+        removed: [],
+    },
     vulns_added: ['CVE-2026-0001'], vulns_removed: ['CVE-2026-0002'],
     vulns_unchanged: ['CVE-2026-0003'], assessment_count: 3,
     assessments_added: [assessment], assessments_removed: [{...assessment, vulnerability_id: 'CVE-2026-0002'}],
@@ -540,6 +545,9 @@ describe('ScanHistory selected variant scope', () => {
         fireEvent.click(await screen.findByRole('button', {name: 'View Scan Diff'}));
         expect(await screen.findByTestId('scan-diff-modal-backdrop')).toBeInTheDocument();
         expect(screen.getByText('Added packages (1)')).toBeInTheDocument();
+        expect(screen.getByRole('region', {name: 'Dependency relationships'})).toBeInTheDocument();
+        expect(screen.getByText('Added relationships (1)')).toBeInTheDocument();
+        expect(screen.getByText('Removed relationships (0)')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', {name: /Findings/}));
         expect(screen.getByText('Findings on upgraded packages (1)')).toBeInTheDocument();
         const diffModal = screen.getByTestId('scan-diff-modal-backdrop');
