@@ -14,6 +14,10 @@ depends_on = None
 
 
 def upgrade():
+    # Current-model schemas may already contain the column before being stamped.
+    existing = {column['name'] for column in sa.inspect(op.get_bind()).get_columns('package_dependencies')}
+    if 'declarations' in existing:
+        return
     with op.batch_alter_table('package_dependencies') as batch_op:
         batch_op.add_column(sa.Column('declarations', sa.JSON(), nullable=True))
 
