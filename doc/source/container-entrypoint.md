@@ -65,7 +65,7 @@ docker run -d --name vulnscout \
   -v "$(pwd)/.vulnscout-container/outputs:/scan/outputs:Z" \
   -v "$(pwd)/.vulnscout-container/config:/etc/vulnscout:Z" \
   -v "$(pwd)/example:/imports:ro,Z" \
-  docker.io/sflinux/vulnscout:v0.23 daemon
+  docker.io/sflinux/vulnscout:v0.24 daemon
 
 docker exec vulnscout /scan/src/entrypoint.sh \
   --project demo --variant x86 \

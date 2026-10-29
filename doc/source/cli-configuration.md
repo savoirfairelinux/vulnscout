@@ -24,7 +24,7 @@ its image has changed:
 ./vulnscout update
 ```
 
-The default tag is `v0.23`; `update` does not select a newer release tag
+The default tag is `v0.24`; `update` does not select a newer release tag
 automatically. To change releases, set `VULNSCOUT_IMAGE` to the desired published
 tag, then run `update` and `restart` (or `start` if no container is running).
 
@@ -109,7 +109,7 @@ an already-running web server must be restarted to pick up config-file changes.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VULNSCOUT_CONTAINER` | Name of the container; export on the host before invocation | `vulnscout` |
-| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.23` |
+| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.24` |
 | `VULNSCOUT_BUILD_DIR` | Root build directory on the host; export before first run | `.vulnscout` beside the launcher |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config); export before first run | `$VULNSCOUT_BUILD_DIR/cache` |
