@@ -173,7 +173,8 @@ def init_app(app: Flask) -> None:
         for document_id, document_members in members.items():
             scan_packages.setdefault(scan_of[document_id], set()).update(document_members)
         edges = db.session.execute(
-            db.select(PackageDependency.sbom_document_id, PackageDependency.package_id, PackageDependency.dependency_id)
+            db.select(PackageDependency.sbom_document_id, PackageDependency.package_id, PackageDependency.dependency_id,
+                      PackageDependency.declarations)
             .join(SBOMDocument, SBOMDocument.id == PackageDependency.sbom_document_id)
             .where(SBOMDocument.scan_id.in_(scan_ids))
         ).all()
@@ -200,11 +201,20 @@ def init_app(app: Flask) -> None:
                 **package_version_info(package.version, evidence['purl'], evidence['cpe'],
                                        evidence['source_urls'], evidence['source_revisions']),
             })
-        for document_id, package_id, dependency_id in edges:
+        source_names = {str(document_id): source_name for document_id, _, source_name, *_ in document_rows}
+        for document_id, package_id, dependency_id, declarations in edges:
+            declarations = declarations or [{
+                'relationship_type': '', 'lifecycle_scope': '', 'source_document_id': str(document_id),
+            }]
             document_id = document_ids[document_id]
             if package_id in members[document_id] and dependency_id in scan_packages[scan_of[document_id]]:
                 result[document_id]['edges'].append({
                     'package_id': public_ids[package_id], 'dependency_id': public_ids[dependency_id],
+                    'declarations': [
+                        {**declaration, 'source_name': source_names.get(
+                            declaration['source_document_id'], declaration.get('source_name', ''))}
+                        for declaration in declarations
+                    ],
                 })
         for document in result.values():
             document['packages'].sort(key=lambda package: (package['name'] or '', package['version'] or ''))
