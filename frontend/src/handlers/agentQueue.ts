@@ -309,7 +309,10 @@ async function drain() {
         const verify = task.kind === 'review' ? await prepareAssessmentReviewVerification(task.assessmentId!) : undefined;
         const result = await agentRequest<{ reply: string; model: string; usage: AgentUsage }>('/messages', {
             method: 'POST', headers,
-            body: JSON.stringify({ message: task.text, context: contextForTurn(task.context), model }),
+            body: JSON.stringify({
+                message: task.text, context: contextForTurn(task.context), model,
+                ...(task.kind !== 'message' && target.threadId ? { action: task.kind } : {}),
+            }),
         }, event => {
             if (event.type === 'status') updateConversation(id, { progress: event.text });
             if (event.type === 'delta') {
