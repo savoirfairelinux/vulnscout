@@ -63,6 +63,7 @@ RUN pip3 install --no-cache-dir -r requirements/base.txt --break-system-packages
 RUN mkdir -p src
 COPY src ./src
 COPY vulnscout_mcp ./vulnscout_mcp
+COPY .github/skills ./.github/skills
 RUN chmod +x src/entrypoint.sh
 COPY --from=buildfront /src/static ./src/static
 

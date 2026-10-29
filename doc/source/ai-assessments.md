@@ -171,11 +171,14 @@ Use the saved context and uploaded codebase references, and explain any
 missing evidence.
 ```
 
-The embedded Agent uses its own system instructions, not the repository's
-external `cve-assessment` skill. It can inspect VulnScout data and uploaded source
-references, but has **no web research, shell, or arbitrary filesystem tools**.
-Supply relevant advisory, source, build, and deployment evidence; missing
-evidence must remain an uncertainty rather than proof that the product is safe.
+Assess and review actions follow the repository's `cve-assessment` and
+`assessment-review` skills, so the built-in Agent and external clients use the
+same methodology. The Agent can read VulnScout data, uploaded source references
+and the skill files, and fetch public advisory pages such as NVD and GHSA
+(disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no shell or host
+filesystem access**, so a variant's `codebase_path` is not readable; upload the
+source instead. Missing evidence remains an uncertainty, never proof that the
+product is safe.
 
 Submitted AI assessments remain pending until a human approves them.
 A vulnerability has at most one pending AI assessment per variant and package.
@@ -369,7 +372,7 @@ depend on it. SBOM relationships describe declared dependencies, not proof of
 runtime use or exploitability.
 
 For lifecycle, LTS, or end-of-life questions, supply dated authoritative evidence.
-The embedded Agent cannot browse the web to verify current support policies;
+Free chat cannot browse the web to verify current support policies;
 missing release or support evidence must be reported as unknown. Upstream
 support and vendor/distribution backports are separate questions.
 
@@ -392,7 +395,7 @@ support and vendor/distribution backports are separate questions.
 ## Optional: External AI Clients
 
 Use an external client when you need your own agent environment, host-side
-source access, or web research tools. MCP integration and repository skills
+source access or web research in free chat. MCP integration and repository skills
 remain supported, but are not required for the built-in Agent.
 
 ```{toctree}
