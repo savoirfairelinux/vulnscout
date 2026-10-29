@@ -336,6 +336,16 @@ SCHEMAS: dict[str, Any] = {
         **{key: _COUNT for key in ("package_count", "finding_count", "vuln_count", "assessment_count")},
     }, ("scan_id", "scan_type", "packages", "findings", "vulnerabilities", "assessments")),
     "ScanDiff": _object({
+        "dependency_changes": _object({
+            "status": {**_STRING, "enum": [
+                "available", "no_previous_import", "incomparable_scope", "not_recorded", "not_applicable",
+            ]},
+            "added_count": {**_COUNT, "nullable": True},
+            "removed_count": {**_COUNT, "nullable": True},
+            **{key: _array(_object({
+                "dependent": _ref("ScanPackage"), "dependency": _ref("ScanPackage"),
+            }), nullable=True) for key in ("added", "removed")},
+        }),
         "scan_id": _UUID, "scan_type": _STRING, "previous_scan_id": _NULL_UUID, "is_first": _BOOL,
         **{key: _COUNT for key in ("finding_count", "package_count", "vuln_count", "assessment_count")},
         **{f"findings_{key}": _array(_ref("ScanFinding")) for key in ("added", "removed", "unchanged")},

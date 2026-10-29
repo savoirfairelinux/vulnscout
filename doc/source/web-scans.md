@@ -93,6 +93,33 @@ Clicking the **Details** button on any scan entry opens a full diff modal. The m
 
 Each tab header carries its own badge counts, and every table inside supports a text filter so you can search for a specific package or CVE without scrolling through long lists.
 
+### Dependency relationship changes
+
+The **Import SBOM** details' Packages tab also shows dependency relationships
+separately from added, removed, and upgraded packages. Expand **Added
+relationships** or **Removed relationships** to see the dependent → dependency
+package names and versions. Counts describe unique directed package pairs across
+the import's documents; duplicate links are counted once. Dependency type and
+scope metadata are not compared. A version upgrade can remove an old-version link
+and add a new-version link, independently of the package upgrade classification.
+
+The baseline is the same immediately preceding SBOM import used by the package
+history, ordered by timestamp and scan ID, in the **same variant**. Tool scans do
+not participate. Comparisons additionally require the same document inventory
+(source filenames and formats, including duplicate filenames); upload paths are
+not part of that scope. A different scope does not cause a search for an older
+matching import.
+
+Relationships are frozen at successful import completion after cross-document
+resolution, not reconstructed from the editable current dependency graph.
+Identical re-imports (including recorded empty graphs) show zero changes. First
+imports, changed document scopes, and either import lacking a recorded snapshot
+show **No comparable dependency baseline**, with a reason, instead of treating
+unknown relationships as empty and reporting mass additions or removals. The
+migration deliberately does not infer snapshots for older imports from live
+edges; reimport the same document scope twice to establish a comparable baseline.
+Packages and other existing history details remain available.
+
 ## Scan Result Modal
 
 Clicking the **Scan Result** button on a scan entry opens a modal showing the complete state of the global result at that point in time — the union of SBOM packages and all tool-scan findings. The modal displays packages, findings, and vulnerabilities tabs, each with their total counts. This is useful for understanding the full picture at a given snapshot rather than just the delta.

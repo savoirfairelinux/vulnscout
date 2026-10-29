@@ -70,6 +70,7 @@ from ._scan_queries import (  # noqa: F401  — re-exports
     _TOOL_SOURCE_LABELS,
 )
 from ._scan_diff import (  # noqa: F401  — re-exports
+    _dependency_changes,
     _classify_finding_changes,
     _prev_scan_map,
     _serialize_list_with_diff,
@@ -1522,6 +1523,7 @@ def init_app(app: Flask) -> None:
             "packages_removed": diff["packages_removed"],
             "packages_upgraded": diff["packages_upgraded"],
             "packages_unchanged": diff["packages_unchanged"],
+            "dependency_changes": diff["dependency_changes"],
             "vulns_added": diff["vulns_added"],
             "vulns_removed": diff["vulns_removed"],
             "vulns_unchanged": diff["vulns_unchanged"],
@@ -1856,6 +1858,7 @@ def init_app(app: Flask) -> None:
 
         return {
             "previous_scan_id": prev_scan_id,
+            "dependency_changes": _dependency_changes(scan, _prev_scan),
             "is_first": prev_scan_id is None,
             "finding_count": len(current_finding_ids),
             "package_count": len(curr_pkg_ids),

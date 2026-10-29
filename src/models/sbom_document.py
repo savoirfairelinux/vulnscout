@@ -26,6 +26,8 @@ class SBOMDocument(Base):
     scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scans.id"), index=True)
     # False until parsed with dependency support, so missing relationships are not reported as zero.
     dependencies_recorded: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # Immutable import evidence, independent of subsequent edits to the live graph.
+    dependency_snapshot: Mapped[list[list[str]] | None] = mapped_column(JSON)
     jsonld_groups: Mapped[list[dict] | None] = mapped_column(JSON)
 
     scan: Mapped["Scan"] = relationship("Scan", back_populates="sbom_documents")
