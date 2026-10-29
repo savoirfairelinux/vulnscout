@@ -1050,7 +1050,8 @@ def agent_message():
     reported in the stream rather than by changing the HTTP status.
 
     OpenAPI:
-    body AgentMessageRequest required Message and optional model and browser context.
+    body AgentMessageRequest required Message, optional model, browser context and thread action (assess or review).
+    response 400 Error Invalid message, context or action.
     response 200 AgentReply Completed reply, selected model, and usage.
     response 200 ndjson Newline-delimited agent events when Accept is application/x-ndjson.
     response 409 Error Another request is using this conversation.
@@ -1076,6 +1077,14 @@ def agent_message():
         context = _validated_context(data.get("context"))
     except ValueError as exc:
         return _response({"error": str(exc)}, key, 400)
+    action = data.get("action")
+    if action is not None and (not isinstance(action, str) or action not in agent_skills.PROFILES):
+        return _response({"error": "Invalid agent action."}, key, 400)
+    profile = agent_skills.PROFILES[action] if action else conversation.profile
+    if action and conversation.root is None:
+        return _response({"error": "Agent actions run only in their own conversation."}, key, 400)
+    if action and conversation.profile not in (None, profile):
+        return _response({"error": "This conversation already runs a different action."}, key, 400)
     user_message = message.strip()
     agent_prompt = user_message
     if context:
@@ -1086,25 +1095,31 @@ def agent_message():
         return _response({"error": (
             "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override."
         )}, key, 503)
+    if profile and agent_skills.skills_path() is None:
+        return _response({"error": agent_skills.SKILLS_MISSING_ERROR}, key, 503)
     try:
         scope = _scope_for_context(context)
     except ValueError as exc:
         return _response({"error": str(exc)}, key, 400)
     if not conversation.lock.acquire(blocking=False):
         return _response({"error": BUSY_AGENT_ERROR}, key, 409)
+    conversation.profile = profile
+    options = {"profile": profile, "timeout": agent_skills.ACTION_TIMEOUT} if profile else {}
     if request.headers.get("Accept") == "application/x-ndjson":
         return _stream_reply(key, conversation, agent_prompt, user_message,
-                             path, model, scope)
+                             path, model, scope, options)
     return _json_reply(key, conversation, agent_prompt, user_message,
-                       path, model, scope)
+                       path, model, scope, options)
 
 
-def _json_reply(key, conversation, agent_prompt, user_message, path, model, scope):
+def _json_reply(key, conversation, agent_prompt, user_message, path, model, scope, options):
     try:
         try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope))
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, **options))
         except UnavailableModelError as exc:
             return _response({"error": str(exc)}, key, 400)
+        except agent_skills.AgentSkillError as exc:
+            return _response({"error": str(exc)}, key, 503)
         except Exception:
             current_app.logger.exception("Agent request failed")
             return _response({
@@ -1137,7 +1152,7 @@ def _stream_events(events, disconnected):
         disconnected.set()
 
 
-def _stream_reply(key, conversation, agent_prompt, user_message, path, model, scope):
+def _stream_reply(key, conversation, agent_prompt, user_message, path, model, scope, options):
     events: queue.Queue = queue.Queue(maxsize=256)
     disconnected = threading.Event()
     logger = current_app.logger
@@ -1152,13 +1167,13 @@ def _stream_reply(key, conversation, agent_prompt, user_message, path, model, sc
 
     def run():
         try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, publish))
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, publish, **options))
             conversation.messages.extend(({"role": "user", "content": user_message},
                                           {"role": "assistant", "content": reply}))
             conversation.model = model
             conversation.usage = usage
             terminal_event = {"type": "done", "reply": reply, "model": model, "usage": usage}
-        except UnavailableModelError as exc:
+        except (UnavailableModelError, agent_skills.AgentSkillError) as exc:
             terminal_event = {"type": "error", "error": str(exc)}
         except Exception:
             logger.exception("Agent streaming request failed")

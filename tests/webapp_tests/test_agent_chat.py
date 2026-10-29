@@ -1418,3 +1418,91 @@ def test_ephemeral_session_is_deleted_when_disconnect_fails(monkeypatch):
             agent.Conversation(), "Assess", agent._mcp_path(), "model", "{}", ephemeral=True,
         ))
     assert deleted == ["assess-session"]
+
+
+def _capture_reply(monkeypatch, error=None):
+    from src.routes import agent
+
+    calls = []
+
+    async def reply(conversation, prompt, path, model, scope, publish=None, **kwargs):
+        calls.append(kwargs)
+        if error:
+            raise error
+        return "ok", {"cost": None, "input_tokens": None, "output_tokens": None}
+
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+    monkeypatch.setattr(agent, "_reply", reply)
+    return calls
+
+
+def test_action_binds_a_skill_profile_to_its_thread(client, monkeypatch):
+    from src.routes import agent_skills
+
+    calls = _capture_reply(monkeypatch)
+    thread = {"X-Agent-Thread": str(uuid4())}
+    assert client.post("/api/agent/messages", json={"message": "Hi"}).status_code == 200
+    assert client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
+                       headers=thread).status_code == 200
+    assert client.post("/api/agent/messages", json={"message": "Why?"}, headers=thread).status_code == 200
+    assert calls == [{}, {"profile": agent_skills.ASSESS, "timeout": agent_skills.ACTION_TIMEOUT},
+                     {"profile": agent_skills.ASSESS, "timeout": agent_skills.ACTION_TIMEOUT}]
+    switched = client.post("/api/agent/messages", json={"message": "Review", "action": "review"}, headers=thread)
+    assert switched.status_code == 400 and "different action" in switched.get_json()["error"]
+
+
+@pytest.mark.parametrize("body, thread, error", [
+    ({"action": "hack"}, True, "Invalid agent action."),
+    ({"action": ["assess"]}, True, "Invalid agent action."),
+    ({"action": "assess"}, False, "own conversation"),
+])
+def test_invalid_actions_are_rejected(client, monkeypatch, body, thread, error):
+    calls = _capture_reply(monkeypatch)
+    headers = {"X-Agent-Thread": str(uuid4())} if thread else {}
+    response = client.post("/api/agent/messages", json={"message": "Go", **body}, headers=headers)
+    assert response.status_code == 400 and error in response.get_json()["error"]
+    assert calls == []
+
+
+def test_action_requires_bundled_skills(client, monkeypatch, tmp_path):
+    from src.routes import agent_skills
+
+    calls = _capture_reply(monkeypatch)
+    monkeypatch.setenv("VULNSCOUT_SKILLS_PATH", str(tmp_path / "missing"))
+    response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
+                           headers={"X-Agent-Thread": str(uuid4())})
+    assert response.status_code == 503 and response.get_json()["error"] == agent_skills.SKILLS_MISSING_ERROR
+    assert calls == []
+
+
+def test_busy_thread_does_not_bind_a_profile(client, monkeypatch):
+    from src.routes import agent
+
+    _capture_reply(monkeypatch)
+    thread_id = str(uuid4())
+    headers = {"X-Agent-Thread": thread_id}
+    client.delete("/api/agent/conversation", headers=headers)
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    client.post("/api/agent/messages", json={"message": "Hi"}, headers=headers)
+    thread = root.threads[thread_id]
+    with thread.lock:
+        response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
+                               headers=headers)
+    assert response.status_code == 409 and thread.profile is None
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_skill_errors_are_reported(client, monkeypatch, stream):
+    from src.routes import agent_skills
+
+    _capture_reply(monkeypatch, agent_skills.AgentSkillError("Agent skill cve-assessment could not be loaded."))
+    headers = {"X-Agent-Thread": str(uuid4())}
+    if stream:
+        headers["Accept"] = "application/x-ndjson"
+    response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"}, headers=headers)
+    if stream:
+        events = [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
+        assert events[-1] == {"type": "error", "error": "Agent skill cve-assessment could not be loaded."}
+    else:
+        assert response.status_code == 503
+        assert response.get_json()["error"] == "Agent skill cve-assessment could not be loaded."
