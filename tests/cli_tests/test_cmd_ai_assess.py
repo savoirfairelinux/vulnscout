@@ -390,7 +390,10 @@ def test_run_assesses_every_target_with_assess_tools(app, ids, monkeypatch):
     assert entry["usage"] == {"cost": 1.0, "input_tokens": 10, "output_tokens": 5}
     [call] = calls
     assert call["message"].startswith("Assess CVE-2024-0001 for exactly these targets")
-    assert call["tools"] == agent.ASSESS_TOOLS and call["timeout"] == 30 and call["ephemeral"] is True
+    from src.routes import agent_skills
+
+    assert call["profile"] is agent_skills.ASSESS and "tools" not in call
+    assert call["timeout"] == 30 and call["ephemeral"] is True
     assert call["api_url"].startswith("http://127.0.0.1:")
     assert call["token"] == "gho_test" and call["model"] == "test-model"
     assert call["scope"] == {"project_ids": [ids["demo"]], "variant_ids": sorted([ids["x86"], ids["arm"]])}
@@ -613,6 +616,15 @@ def test_missing_mcp_server_aborts(app, ids, monkeypatch, tmp_path):
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001")
     assert result.exit_code == 1
     assert "Bundled MCP server not found" in result.stderr
+    assert calls == []
+
+
+def test_missing_skills_abort(app, ids, monkeypatch, tmp_path):
+    monkeypatch.setenv("VULNSCOUT_SKILLS_PATH", str(tmp_path / "missing"))
+    calls = _fake_reply(monkeypatch, lambda call: None)
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001")
+    assert result.exit_code == 1
+    assert "Bundled agent skills not found" in result.stderr
     assert calls == []
 
 

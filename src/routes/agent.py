@@ -40,8 +40,6 @@ WRITE_TOOLS = (
     "write_assessment", "update_ai_assessment", "update_project_context",
     "update_variant_context", "write_assessment_review",
 )
-# CLI assessment runs may only read and write AI assessments; no context or review writes.
-ASSESS_TOOLS = READ_TOOLS + ("write_assessment",)
 COOKIE = "vulnscout_agent"
 MAX_SCOPE_VARIANTS = 1000
 MAX_PROMPT_VARIANTS = 50
