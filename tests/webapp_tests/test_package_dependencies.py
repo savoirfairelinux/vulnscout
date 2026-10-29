@@ -1311,12 +1311,11 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
     assert {name: len(graph['packages']) for name, graph in graphs.items()} == {
         'app.jsonld': 1, 'build.jsonld': 3, 'modules-deps.jsonld': 2, 'zephyr.jsonld': 1,
     }
-    assert graphs['build.jsonld']['edges'] == [
-        {'package_id': 'app@', 'dependency_id': 'mbedtls@'},
-        {'package_id': 'mbedtls@', 'dependency_id': 'tfpsacrypto@'},
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graphs['build.jsonld']['edges']] == [
+        ('app@', 'mbedtls@'), ('mbedtls@', 'tfpsacrypto@'),
     ]
-    assert graphs['modules-deps.jsonld']['edges'] == [
-        {'package_id': f'zephyr-deps@{revision}', 'dependency_id': 'mbedtls@4.1.1'},
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graphs['modules-deps.jsonld']['edges']] == [
+        (f'zephyr-deps@{revision}', 'mbedtls@4.1.1'),
     ]
     module_graph = next(package for package in graphs['modules-deps.jsonld']['packages']
                         if package['name'] == 'mbedtls')
@@ -1384,7 +1383,13 @@ def test_spdx3_dependencies_resolve_namespaces_and_companion_documents(app, tmp_
     graphs = {document['source_name']: document for document in client.get(
         f'/api/package-dependencies?variant_id={variant_id}'
     ).json['documents']}
-    assert graphs['app.jsonld']['edges'] == [{'package_id': 'app@', 'dependency_id': 'lib@'}]
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graphs['app.jsonld']['edges']] == [('app@', 'lib@')]
+    declarations = graphs['app.jsonld']['edges'][0]['declarations']
+    expected_declarations = {('hasPrerequisite', 'build', 'app.jsonld')}
+    if source_ref != 'app-ref':
+        expected_declarations.add(('dependencyOf', '', 'lib.jsonld'))
+    assert {(item['relationship_type'], item['lifecycle_scope'], item['source_name'])
+            for item in declarations} == expected_declarations
     assert graphs['lib.jsonld']['edges'] == []
 
     for name, document in documents.items():
@@ -1447,6 +1452,104 @@ def _yocto_spdx2(name, packages=(), refs=(), relationships=()):
         'relationships': [{'spdxElementId': source, 'relationshipType': kind, 'relatedSpdxElement': target}
                           for source, kind, target in relationships],
     }
+
+
+@pytest.mark.parametrize('version', ['2', '3'])
+@pytest.mark.parametrize('ignore_parsing_errors', ['false', 'true'])
+def test_dependency_declarations_preserve_types_scopes_and_count_pairs_once(
+        app, tmp_path, monkeypatch, version, ignore_parsing_errors):
+    monkeypatch.setenv('IGNORE_PARSING_ERRORS', ignore_parsing_errors)
+    if version == '2':
+        kinds = ['DEPENDS_ON', 'BUILD_DEPENDENCY_OF', 'RUNTIME_DEPENDENCY_OF', 'OPTIONAL_DEPENDENCY_OF']
+        document = _yocto_spdx2('typed', packages=(('SPDXRef-app', 'app'), ('SPDXRef-lib', 'lib')), relationships=[
+            ('SPDXRef-app', kind, 'SPDXRef-lib') if kind == 'DEPENDS_ON'
+            else ('SPDXRef-lib', kind, 'SPDXRef-app') for kind in kinds
+        ])
+        expected = {('DEPENDS_ON', ''), ('BUILD_DEPENDENCY_OF', 'build'),
+                    ('RUNTIME_DEPENDENCY_OF', 'runtime'), ('OPTIONAL_DEPENDENCY_OF', '')}
+    else:
+        document = _spdx3()
+        document['@graph'] = document['@graph'][:4] + [
+            {'type': 'LifecycleScopedRelationship', 'relationshipType': kind, 'scope': scope,
+             'from': 'pkg:app', 'to': ['pkg:lib']}
+            for kind, scope in [('dependsOn', 'runtime'), ('dependsOn', 'build'),
+                                ('hasPrerequisite', 'test'), ('dependsOn', '')]
+        ]
+        expected = {('dependsOn', 'runtime'), ('dependsOn', 'build'), ('hasPrerequisite', 'test'), ('dependsOn', '')}
+    variant_id, scan_id = _scan(app, tmp_path, 'typed', document)
+    client = app.test_client()
+
+    def graph():
+        return client.get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+
+    first = graph()
+    assert len(first['edges']) == 1
+    declarations = first['edges'][0]['declarations']
+    assert {(item['relationship_type'], item['lifecycle_scope']) for item in declarations} == expected
+    assert {item['source_name'] for item in declarations} == {'typed.json'}
+    assert {item['source_document_id'] for item in declarations} == {first['id']}
+    assert client.get(f'/api/package-dependencies?variant_id={variant_id}&counts=1').json['counts'] == {
+        'app@1.0': {'in': 1, 'out': 0}, 'lib@1.0': {'in': 0, 'out': 1},
+    }
+    read_inputs(ControllersCache(), scan_id)
+    assert graph() == first
+    if version == '2':
+        document['relationships'] = document['relationships'][:1]
+    else:
+        document['@graph'] = document['@graph'][:5]
+    (tmp_path / 'typed.json').write_text(json.dumps(document))
+    read_inputs(ControllersCache(), scan_id)
+    remaining = graph()['edges']
+    assert len(remaining) == 1
+    assert len(remaining[0]['declarations']) == 1
+    assert remaining[0]['declarations'][0]['relationship_type'] == ('DEPENDS_ON' if version == '2' else 'dependsOn')
+
+
+def test_bundled_yocto_keeps_runtime_declaration_and_excludes_build_nodes(app, tmp_path):
+    path = Path(__file__).resolve().parents[2] / 'example/yocto-wrynose-spdx3'
+    document = json.loads((path / 'core-image-minimal-qemux86-64.rootfs.spdx.json').read_text())
+    nodes = {item.get('spdxId'): item for item in document['@graph']}
+    acl = next(item for item in nodes.values() if item.get('name') == 'acl:do_create_spdx:recipe')
+    libtool = next(item for item in nodes.values() if item.get('name') == 'libtool-cross:do_create_spdx:recipe')
+    assert acl['type'] == libtool['type'] == 'build_Build'
+    assert any(item.get('from') == acl['spdxId'] and libtool['spdxId'] in item.get('to', [])
+               and item.get('scope') == 'build' and item.get('relationshipType') == 'dependsOn'
+               for item in document['@graph'])
+    variant_id, _ = _scan(app, tmp_path, 'core-image-minimal-qemux86-64.rootfs.spdx', document)
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    packages = {package['id']: package['name'] for package in graph['packages']}
+    edge = next(edge for edge in graph['edges']
+                if packages[edge['package_id']] == 'busybox-syslog'
+                and packages[edge['dependency_id']] == 'busybox')
+    assert [(item['relationship_type'], item['lifecycle_scope'], item['source_name'])
+            for item in edge['declarations']] == [
+        ('dependsOn', 'runtime', 'core-image-minimal-qemux86-64.rootfs.spdx.json'),
+    ]
+    assert not any(':do_create_spdx:' in name for name in packages.values())
+
+
+def test_dependency_declaration_migration_preserves_legacy_pairs(app, tmp_path):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    variant_id, _ = _scan(app, tmp_path, 'legacy', _spdx3())
+    migration = import_module('src.migrations.versions.f2b4d6e8a0c1_preserve_dependency_declarations')
+    db.session.remove()
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            assert 'declarations' not in {column['name'] for column in inspect(connection).get_columns(
+                'package_dependencies')}
+            migration.upgrade()
+        assert connection.execute(text('SELECT count(*) FROM package_dependencies')).scalar() == 3
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    assert len(graph['edges']) == 3
+    for edge in graph['edges']:
+        assert edge['declarations'] == [{
+            'relationship_type': '', 'lifecycle_scope': '', 'source_document_id': graph['id'],
+            'source_name': 'legacy.json',
+        }]
 
 
 def _yocto_archive():
@@ -2023,6 +2126,14 @@ def test_yocto_spdx2_dependencies_resolve_across_documents_of_one_scan(
             for document in documents if document['edges']] == [
         ('first', 'first-recipe-app.spdx.json', 2), ('second', 'second-recipe-app.spdx.json', 2),
     ]
+    for document in documents:
+        for edge in document['edges']:
+            expected = ('BUILD_DEPENDENCY_OF', 'build', 'recipe-app') if edge['dependency_id'] == 'lib@1.0' else (
+                'RUNTIME_DEPENDENCY_OF', 'runtime', 'runtime-app')
+            assert [(item['relationship_type'], item['lifecycle_scope'], item['source_name'])
+                    for item in edge['declarations']] == [
+                (expected[0], expected[1], f"{document['variant_name']}-{expected[2]}.spdx.json"),
+            ]
 
     recipe = _yocto_archive()['recipe-app']
     recipe['relationships'] = []
@@ -2298,7 +2409,9 @@ def test_deleting_package_removes_incoming_and_outgoing_edges(app, tmp_path):
     assert counts.json['counts'] == {'app@1.0': {'in': 1, 'out': 0}, 'util@1.0': {'in': 0, 'out': 1}}
     graph = client.get(f'/api/package-dependencies?variant_id={variant_id}')
     assert graph.status_code == 200
-    assert graph.json['documents'][0]['edges'] == [{'package_id': 'app@1.0', 'dependency_id': 'util@1.0'}]
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graph.json['documents'][0]['edges']] == [
+        ('app@1.0', 'util@1.0'),
+    ]
 
 
 def test_documents_without_recorded_dependencies_are_not_reported_as_zero(app, tmp_path):

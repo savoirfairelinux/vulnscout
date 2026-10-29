@@ -24,7 +24,8 @@ def test_dependency_parser_ignores_invalid_endpoints_and_preserves_valid_relatio
     parser.merge_dependencies_into_controller({"@graph": graph})
     controllers.packages.add_spdx3_dependencies.assert_called_once_with(
         parser._document_refs, {"ns": "https://example.org/"},
-        {("ns:app", "ns:lib"), ("ns:app", "ns:runtime")},
+        {("ns:app", "ns:lib", "dependsOn", ""), ("ns:app", "ns:lib", "dependencyOf", ""),
+         ("ns:app", "ns:runtime", "hasPrerequisite", "")},
     )
 
 

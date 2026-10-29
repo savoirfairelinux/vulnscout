@@ -82,6 +82,36 @@ Grype, Yocto `cve-check`, Yocto VEX, and OpenVEX files carry no dependency relat
 
 SPDX 2.3 and SPDX 3.0 exports write the dependencies recorded by the exported active scans back as `DEPENDS_ON` and `dependsOn` relationships between packages respectively, so re-importing an export restores the same graph.
 
+### Dependency declaration metadata and limitations
+
+The dependency API (`/api/package-dependencies`) keeps one directed edge per
+package pair in each owning document. Each edge has a `declarations` array with
+`relationship_type`, `lifecycle_scope`, `source_document_id`, and `source_name`.
+SPDX 3 retains the original supported relationship spelling and explicit `scope`.
+SPDX 2 retains its original supported relationship type; `BUILD_DEPENDENCY_OF`,
+`RUNTIME_DEPENDENCY_OF`, `DEV_DEPENDENCY_OF`, and `TEST_DEPENDENCY_OF` map their
+explicit lifecycle qualifiers to `build`, `runtime`, `development`, and `test`.
+Other supported SPDX 2 types have no lifecycle scope: optional/provided are not
+lifecycle stages. Empty metadata is **Unspecified**, including legacy untyped
+edges and CycloneDX edges. Reimport to populate legacy SPDX metadata.
+
+Declarations remain separate by document and variant, including when a
+relationship in a companion document resolves to packages in other documents
+of the same scan. Reimporting the same document replaces its declarations.
+Types/scopes do not multiply counts or change package comparison semantics.
+Exports preserve the package-pair graph, **not** declaration types/scopes or
+original source-document attribution.
+
+Only the relationship mappings listed above are supported. SPDX `contains`,
+`describes`, `hasInput`, `hasOutput`, provenance, and other relationship types
+are not dependency edges. SPDX 3 `build_Build` nodes are not packages: the bundled
+Yocto `acl:do_create_spdx:recipe` → `libtool-cross:do_create_spdx:recipe`
+build-scoped declaration is not converted into a runtime package relationship.
+General build-node visualization and additional relationship mappings are not
+supported. A build-scoped relationship **between imported packages** is retained
+and displayed as Build. No lifecycle scope is guessed and no vulnerability is
+suppressed based on this declaration metadata.
+
 ## CycloneDX VEX Reference Resolution
 
 Local `bom-ref` affects retain path-order resolution when multiple BOMs reuse a

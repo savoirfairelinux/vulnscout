@@ -1,7 +1,17 @@
 import type { PackageVersionMetadata } from '../helpers/packageVersions';
 
 export type DependencyPackage = PackageVersionMetadata & { id: string; name: string; version: string };
-export type DependencyEdge = { package_id: string; dependency_id: string };
+export type DependencyDeclaration = {
+    relationship_type: string;
+    lifecycle_scope: string;
+    source_document_id: string;
+    source_name: string;
+};
+export type DependencyEdge = {
+    package_id: string;
+    dependency_id: string;
+    declarations?: DependencyDeclaration[];
+};
 export type DependencyDocument = {
     id: string;
     source_name: string;

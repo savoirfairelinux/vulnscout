@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
+from typing import AbstractSet
 
 from ..models import Package, Finding, SBOMDocument, SBOMPackage, PackageDependency, Variant
 from ..models.sbom_package import PackageEvidence
@@ -12,6 +13,11 @@ from ..extensions import db
 from ._base import to_dict_with_fallback
 
 SpdxKey = tuple[str, str]
+DependencyReference = tuple[str, str] | tuple[str, str, str, str]
+
+
+def _dependency_reference(edge: DependencyReference) -> tuple[str, str, str, str]:
+    return (*edge, "", "") if len(edge) == 2 else edge
 
 
 def _spdx_key(ref: str, namespace: str | None, external_documents: dict[str, str]) -> SpdxKey | None:
@@ -55,8 +61,8 @@ class PackagesController:
         # (scan_id, namespace, SPDXID) -> (document_id, string_id) for packages read in this session.
         self._spdx_refs: dict[tuple[uuid.UUID, str, str], tuple[uuid.UUID, str]] = {}
         self._spdx_documents: dict[uuid.UUID, uuid.UUID] = {}
-        self._spdx_edges: list[tuple[uuid.UUID, str, str]] = []
-        self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey]] = []
+        self._spdx_edges: list[tuple[uuid.UUID, str, str, str, str, uuid.UUID]] = []
+        self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey, str, str, uuid.UUID]] = []
         self._source_provenance = SPDXSources()
         self._document_evidence: dict[uuid.UUID, dict[str, PackageEvidence]] = {}
         self._export_document_ids: set[uuid.UUID] = set()
@@ -169,7 +175,7 @@ class PackagesController:
         )
 
     def add_spdx_dependencies(self, namespace: str | None, references: dict[str, str],
-                              external_documents: dict[str, str], edges: set[tuple[str, str]]) -> None:
+                              external_documents: dict[str, str], edges: AbstractSet[DependencyReference]) -> None:
         """Queue the active document's SPDX 2 edges; :meth:`flush_spdx_dependencies` persists them."""
         document = self._current_sbom_document
         if document is None:
@@ -178,18 +184,20 @@ class PackagesController:
         if namespace:
             for ref, string_id in references.items():
                 self._spdx_refs[(document.scan_id, namespace, ref)] = (document.id, string_id)
-        for source, target in edges:
+        for edge in edges:
+            source, target, kind, scope = _dependency_reference(edge)
             if not source.startswith("DocumentRef-") and not target.startswith("DocumentRef-"):
                 if source in references and target in references:
-                    self._spdx_edges.append((document.id, references[source], references[target]))
+                    self._spdx_edges.append(
+                        (document.id, references[source], references[target], kind, scope, document.id))
                 continue
             source_key = _spdx_key(source, namespace, external_documents)
             target_key = _spdx_key(target, namespace, external_documents)
             if source_key is not None and target_key is not None:
-                self._pending_spdx_edges.append((document.scan_id, source_key, target_key))
+                self._pending_spdx_edges.append((document.scan_id, source_key, target_key, kind, scope, document.id))
 
     def add_spdx3_dependencies(self, references: dict[str, str], namespaces: dict[str, str],
-                               edges: set[tuple[str, str]]) -> None:
+                               edges: AbstractSet[DependencyReference]) -> None:
         """Queue SPDX 3 URI references for resolution across documents of the same scan."""
         document = self._current_sbom_document
         if document is None:
@@ -199,13 +207,14 @@ class PackagesController:
         for ref, string_id in references.items():
             key = _spdx3_key(ref, namespaces) or (local_namespace, ref)
             self._spdx_refs[(document.scan_id, *key)] = (document.id, string_id)
-        for source, target in edges:
+        for edge in edges:
+            source, target, kind, scope = _dependency_reference(edge)
             if source in references and target in references:
-                self._spdx_edges.append((document.id, references[source], references[target]))
+                self._spdx_edges.append((document.id, references[source], references[target], kind, scope, document.id))
                 continue
             source_key = _spdx3_key(source, namespaces) or (local_namespace, source)
             target_key = _spdx3_key(target, namespaces) or (local_namespace, target)
-            self._pending_spdx_edges.append((document.scan_id, source_key, target_key))
+            self._pending_spdx_edges.append((document.scan_id, source_key, target_key, kind, scope, document.id))
 
     def flush_spdx_dependencies(self) -> None:
         """Replace the edges of every queued document; cross-document ones go to the dependent's document."""
@@ -214,18 +223,31 @@ class PackagesController:
         pending, self._pending_spdx_edges = self._pending_spdx_edges, []
         if not documents:
             return
-        for scan_id, source_key, target_key in pending:
+        for scan_id, source_key, target_key, kind, scope, evidence_document_id in pending:
             source_ref = self._spdx_refs.get((scan_id, *source_key))
             target_ref = self._spdx_refs.get((scan_id, *target_key))
             if source_ref is not None and target_ref is not None:
-                edges.append((source_ref[0], source_ref[1], target_ref[1]))
+                edges.append((source_ref[0], source_ref[1], target_ref[1], kind, scope, evidence_document_id))
         rows: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = set()
-        for document_id, source, target in edges:
+        evidence: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], set[tuple[str, str, str]]] = {}
+        for document_id, source, target, kind, scope, evidence_document_id in edges:
             source_id = self.get_or_resolve_db_id(source)
             target_id = self.get_or_resolve_db_id(target)
             if source_id is not None and target_id is not None and source_id != target_id:
-                rows.add((document_id, source_id, target_id))
-        PackageDependency.replace_for_documents(set(documents), rows)
+                key = (document_id, source_id, target_id)
+                rows.add(key)
+                if kind:
+                    evidence.setdefault(key, set()).add((kind, scope, str(evidence_document_id)))
+        source_names = {str(document_id): name for document_id, name in db.session.execute(
+            db.select(SBOMDocument.id, SBOMDocument.source_name).where(SBOMDocument.id.in_(documents))
+        )}
+        declarations = {
+            key: [{'relationship_type': kind, 'lifecycle_scope': scope, 'source_document_id': source,
+                   'source_name': source_names[source]}
+                  for kind, scope, source in sorted(values)]
+            for key, values in evidence.items()
+        }
+        PackageDependency.replace_for_documents(set(documents), rows, declarations)
 
     def add_spdx_sources(self, namespace: str | None, references: dict[str, str],
                          external_documents: dict[str, str], urls: dict[str, str],
