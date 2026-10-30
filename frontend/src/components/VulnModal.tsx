@@ -38,6 +38,7 @@ import useAgentQueue from '../hooks/useAgentQueue';
 import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
 import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
 import { assessmentReviewKey, buildAssessmentReviewAction } from "../helpers/aiAssessmentReview";
+import VulnHistory from "./VulnHistory";
 
 type Props = {
     vuln: Vulnerability;
@@ -544,6 +545,7 @@ type VariantScopedSnapshot = {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
+    const [historyVersion, setHistoryVersion] = useState(0);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
 
@@ -700,6 +702,7 @@ type VariantScopedSnapshot = {
             setRefreshError(String(error) + " Please try again later.");
         } finally {
             setRefreshing(false);
+            setHistoryVersion(version => version + 1);
         }
     }, [vuln, patchVuln]);
 
@@ -1935,6 +1938,8 @@ type VariantScopedSnapshot = {
                                 )}
                             </div>
                         )}
+
+                        <VulnHistory vulnId={vuln.id} reloadKey={historyVersion} />
 
                         <div className="mb-6 mt-6" tabIndex={isEditing ? undefined : -1}>
                             <TimeEstimateEditor

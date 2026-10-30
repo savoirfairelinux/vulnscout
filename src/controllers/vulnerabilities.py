@@ -19,6 +19,8 @@ from ..controllers.epss_db import EPSS_DB
 from ..controllers.scc_engine import get_cve_json
 from ..controllers.nvd_extract import api_weaknesses_to_list_str, api_references_filter_patches
 from ..helpers.verbose import verbose
+from ..helpers.history_source import history_source
+from ..helpers.refresh_runs import target_result
 from ._base import to_dict_with_fallback
 from .progress_reporter import NULL_REPORTER, ProgressReporter
 from ..models.cvss import CVSS
@@ -346,6 +348,7 @@ class VulnerabilitiesController:
             return True
         return False
 
+    @history_source("epss")
     def fetch_epss_scores(self, reporter: Optional[ProgressReporter] = None) -> EnrichmentResult:
         if reporter is None:
             reporter = NULL_REPORTER
@@ -367,6 +370,8 @@ class VulnerabilitiesController:
         }
         skipped_non_cve = len(self.vulnerabilities) - len(all_cve_ids)
         skipped_already_fetched = len(all_cve_ids) - len(cve_vulns)
+        for identifier in set(all_cve_ids) - set(cve_vulns):
+            target_result("epss", identifier, "skipped", "Already enriched; not checked in this invocation")
 
         total = len(cve_vulns)
         msg = f"=== EPSS: starting enrichment for {total} CVEs"
@@ -393,6 +398,8 @@ class VulnerabilitiesController:
             try:
                 batch_results = self.epss_api.api_get_epss_batch(chunk)
             except Exception as e:
+                for identifier in chunk:
+                    target_result("epss", identifier, "failed", str(e)[:500])
                 verbose(f"[fetch_epss_scores batch {chunk_idx}] {e}")
                 failed += len(chunk)
                 processed += len(chunk)
@@ -402,6 +409,7 @@ class VulnerabilitiesController:
             for cve_id in chunk:
                 result = batch_results.get(cve_id)
                 if result is None:
+                    target_result("epss", cve_id, "skipped", "Provider record unavailable")
                     continue
                 vuln = cve_vulns[cve_id]
                 try:
@@ -417,7 +425,9 @@ class VulnerabilitiesController:
                             commit=False,
                         )
                     nb_vuln += 1
+                    target_result("epss", cve_id)
                 except Exception as e:
+                    target_result("epss", cve_id, "failed", str(e)[:500])
                     verbose(f"[fetch_epss_scores {cve_id!r}] {e}")
                     failed += 1
             processed += len(chunk)
@@ -437,6 +447,7 @@ class VulnerabilitiesController:
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
         return EnrichmentResult(successful=nb_vuln, failed=failed)
 
+    @history_source("euvd")
     def fetch_euvd_data(self) -> EnrichmentResult:
         """Enrich the currently loaded CVEs from the cached ENISA EUVD data."""
         from ..controllers.euvd_db import EUVD_DB
@@ -489,7 +500,9 @@ class VulnerabilitiesController:
                             )
                         else:
                             rec.update_record(euvd_fetched_at=now, commit=False)
+                    target_result("euvd", vuln_id)
             except Exception as e:
+                target_result("euvd", vuln_id, "failed", str(e)[:500])
                 verbose(f"[fetch_euvd_data {vuln_id!r}] {e}")
                 failed += 1
 
@@ -557,6 +570,7 @@ class VulnerabilitiesController:
                     except Exception:
                         pass
 
+    @history_source("nvd")
     def fetch_nvd_data(self, reporter: Optional[ProgressReporter] = None) -> EnrichmentResult:
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
@@ -594,6 +608,7 @@ class VulnerabilitiesController:
             try:
                 cve_json = get_cve_json(vuln.id)
                 if cve_json is None:
+                    target_result("nvd", vuln.id, "skipped", "Provider record unavailable")
                     print(f"=== NVD: {vuln.id} not found in local database.", flush=True)
                     try:
                         rec = self._db_record_cache.get(vuln.id) or Vulnerability.get_by_id(vuln.id)
@@ -603,6 +618,7 @@ class VulnerabilitiesController:
                                 commit=False,
                             )
                     except Exception as e:
+                        target_result("nvd", vuln.id, "failed", str(e)[:500])
                         verbose(f"[fetch_nvd_data not_found sentinel {vuln.id!r}] {e}")
                         failed += 1
                 else:
@@ -643,11 +659,14 @@ class VulnerabilitiesController:
                                 nvd_data_updated_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
                                 commit=False,
                             )
+                            target_result("nvd", vuln.id)
                     except Exception as e:
+                        target_result("nvd", vuln.id, "failed", str(e)[:500])
                         verbose(f"[fetch_nvd_data persist {vuln.id!r}] {e}")
                         failed += 1
                     nb_vuln += 1
             except Exception as e:
+                target_result("nvd", vuln.id, "failed", str(e)[:500])
                 verbose(f"[fetch_nvd_data {vuln.id!r}] {e}")
                 failed += 1
             done += 1
@@ -657,8 +676,10 @@ class VulnerabilitiesController:
 
         # Fetch GHSA dates concurrently with a thread pool and a timeout
         if ghsa_vulns:
+            # Commit the pending NVD updates first so they keep their own source.
+            _batch_commit(done, total, "NVD")
             max_workers = min(10, len(ghsa_vulns))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with history_source("ghsa"), ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_id = {
                     executor.submit(self._fetch_ghsa_published, vid): vid
                     for vid in ghsa_vulns
@@ -683,15 +704,26 @@ class VulnerabilitiesController:
                                         ),
                                         commit=False,
                                     )
+                                    target_result("ghsa", vid)
                             except Exception as e:
+                                target_result("ghsa", vid, "failed", str(e)[:500])
                                 verbose(f"[fetch_nvd_data persist GHSA {vid!r}] {e}")
                                 failed += 1
                             nb_vuln += 1
+                        else:
+                            target_result("ghsa", vid, "skipped", "Provider record unavailable")
                     except Exception as e:
+                        target_result("ghsa", vid, "failed", str(e)[:500])
                         print(f"Error for {vid}: {e}")
                         failed += 1
                     done += 1
                     reporter.report(done, total, f"NVD enrichment: {done}/{total} ({vid})")
+                try:
+                    db.session.commit()
+                except Exception as e:
+                    verbose(f"[fetch_nvd_data GHSA commit] {e}")
+                    db.session.rollback()
+                    failed += 1
 
         # Final commit for any remaining deferred NVD/GHSA updates.
         try:

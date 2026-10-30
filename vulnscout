@@ -84,8 +84,11 @@ _vulnscout_complete() {
     done
 
     case "$prev" in
-        -p|--project|-v|--variant|--condition) return 0 ;;
-        --format) mapfile -t COMPREPLY < <(compgen -W "pdf html" -- "$cur"); return 0 ;;
+        -p|--project|-v|--variant|--condition|--run-id) return 0 ;;
+        --format)
+            local formats="pdf html"
+            [ "$verb" = export ] && formats="json csv"
+            mapfile -t COMPREPLY < <(compgen -W "$formats" -- "$cur"); return 0 ;;
         --timestamps) mapfile -t COMPREPLY < <(compgen -W "original current" -- "$cur"); return 0 ;;
         --spdx|--cdx|--cve-check|--yocto-vex|--openvex)
             _vulnscout_files "$cur"; return 0 ;;
@@ -128,7 +131,7 @@ _vulnscout_complete() {
             _vulnscout_files "$cur"
             return 0 ;;
         export)
-            words="spdx cdx openvex custom-data custom-openvex context --amend" ;;
+            words="spdx cdx openvex custom-data custom-openvex context refresh-changes --run-id --format --amend" ;;
         import)
             # The kind is the first positional word; --timestamps and -v depend on it.
             local kind="" k
@@ -170,7 +173,9 @@ _vulnscout_complete() {
                 mapfile -t COMPREPLY < <(compgen -W "add $globals" -- "$cur")
             fi
             return 0 ;;
-        match-condition|refresh)
+        refresh)
+            words="--run-id" ;;
+        match-condition)
             words="" ;;
     esac
     mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
@@ -373,6 +378,7 @@ EOF
             ;;
         export) cat <<'EOF'
 Usage: vulnscout [-p <project>] [-v <variant>] export <kind>... [--amend]
+       vulnscout export refresh-changes [--project <name>] [--variant <name>] --run-id <id> [--format json|csv]
 
 Kinds: spdx, cdx, openvex, custom-data, custom-openvex, context
 Options:
@@ -403,12 +409,13 @@ Examples:
 EOF
             ;;
         refresh) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] refresh
+Usage: vulnscout refresh [-p <project>] [-v <variant>] [--run-id <id>]
 
 Refresh stored vulnerability data, including EPSS.
 Options:
     -p, --project <name>    Project; without it, all projects are refreshed
     -v, --variant <name>    Variant; requires --project
+    --run-id <id>           Unique caller identity for exact-run archival (optional)
 
 Examples:
     vulnscout refresh
@@ -1148,13 +1155,22 @@ verb_match_condition() {
 }
 
 verb_refresh() {
-    require_no_args refresh "$@"
+    local -a refresh_args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id)
+                require_value "$1" "$#" "${2:-}"
+                refresh_args+=(--refresh-run-id "$2")
+                shift 2 ;;
+            *) reject_option refresh "$1" ;;
+        esac
+    done
     if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
         die "'refresh' --variant requires --project."
     fi
     ensure_running
     set_explicit_scope_args
-    exec_container "${SCOPE_ARGS[@]}" --refresh-vulnerability-data
+    exec_container "${SCOPE_ARGS[@]}" --refresh-vulnerability-data "${refresh_args[@]}"
 }
 
 verb_asset() {
@@ -1236,6 +1252,11 @@ verb_report() {
 }
 
 verb_export() {
+    if [ "${1:-}" = refresh-changes ]; then
+        shift
+        verb_export_refresh_changes "$@"
+        return
+    fi
     local amend=false has_custom=false kind
     local -a kinds=() export_args=()
     while [ $# -gt 0 ]; do
@@ -1275,6 +1296,27 @@ verb_export() {
     ensure_running
     set_project_scope_args
     exec_container "${SCOPE_ARGS[@]}" "${export_args[@]}"
+}
+
+verb_export_refresh_changes() {
+    local run_id="" format="json"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id|--format)
+                require_value "$1" "$#" "${2:-}"
+                if [ "$1" = --run-id ]; then run_id="$2"; else format="$2"; fi
+                shift 2 ;;
+            *) reject_option "export refresh-changes" "$1" ;;
+        esac
+    done
+    [ -n "$run_id" ] || die "'export refresh-changes' requires --run-id; latest is never substituted."
+    case "$format" in json|csv) ;; *) die "--format must be json or csv." ;; esac
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'export refresh-changes' --variant requires --project."
+    fi
+    ensure_running >&2
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --export-refresh-changes "$run_id" --refresh-changes-format "$format"
 }
 
 verb_import() {
