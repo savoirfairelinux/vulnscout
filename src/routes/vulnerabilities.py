@@ -30,6 +30,7 @@ from ..models import (
 )
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.history_source import history_source
+from ..helpers.refresh_runs import tracked_single_refresh
 from ..extensions import db
 from ..controllers.scc_engine import get_cve_json
 from ..controllers.nvd_db import NVD_DB
@@ -1381,6 +1382,7 @@ def init_app(app: Flask) -> None:
         return response, 200 if results else 400
 
     @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
+    @tracked_single_refresh("nvd")
     @history_source("nvd")
     def refresh_single_cve(cve_id: str) -> ResponseReturnValue:
         """Refresh NVD data for a single CVE.
@@ -1499,6 +1501,7 @@ def init_app(app: Flask) -> None:
         return jsonify({"vulnerabilities": [data]}), 200
 
     @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
+    @tracked_single_refresh("epss")
     @history_source("epss")
     def refresh_single_cve_epss(cve_id: str) -> ResponseReturnValue:
         """Refresh EPSS data for a single CVE.
@@ -1542,6 +1545,7 @@ def init_app(app: Flask) -> None:
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
 
     @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
+    @tracked_single_refresh("ghsa")
     @history_source("ghsa")
     def refresh_single_ghsa(ghsa_id: str) -> ResponseReturnValue:
         """Refresh GitHub advisory metadata for a single GHSA identifier.
