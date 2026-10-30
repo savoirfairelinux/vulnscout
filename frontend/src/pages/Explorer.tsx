@@ -19,6 +19,7 @@ import TableVulnerabilities from "./TableVulnerabilities";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
+import RefreshOverview from "./RefreshOverview";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
@@ -41,6 +42,7 @@ const tabLabels: Record<string, string> = {
         packages: 'SBOM',
         vulnerabilities: 'Vulnerabilities',
         scans: 'Scans',
+        refresh: 'Refresh',
         review: 'Review',
         exports: 'Export',
         settings: 'Settings',
@@ -55,7 +57,7 @@ const tabLabels: Record<string, string> = {
  */
 type ExplorerNavState = {
     vulnFilter?: {
-        label: "Source" | "Severity" | "Status" | "Package";
+        label: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
         value: string;
         vulnerabilityIds?: string[];
     };
@@ -739,6 +741,10 @@ function Explorer() {
                         variantIds={currentVariantIds}
                         onScanComplete={handleScanComplete}
                     />
+                } />
+                <Route path={ROUTES.refresh} element={
+                    <RefreshOverview key={`${currentProjectId}-${currentVariantId}`} projectId={currentProjectId} variantId={currentVariantId}
+                        comparisonScope={!!currentBaseVariantId || (currentVariantIds?.length ?? 0) > 1} dataRevision={dataRevision} />
                 } />
                 <Route path={ROUTES.review} element={
                     <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} />

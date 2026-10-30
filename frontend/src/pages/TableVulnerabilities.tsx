@@ -80,7 +80,7 @@ type Props = {
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
-    filterLabel?: "Source" | "Severity" | "Status" | "Package";
+    filterLabel?: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
     filterValue?: string;
     filterVulnerabilityIds?: string[];
     preferenceScopeKey?: string;
@@ -1946,6 +1946,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 <span className="h-6 border-l border-gray-400" aria-hidden="true" />
                 <RefreshVulnerabilityData
                     vulnerabilities={vulnerabilities}
+                    projectId={projectId}
+                    variantId={baseVariantId || (variantIds?.length ?? 0) > 1 ? undefined : variantId}
                     getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
                     onRefreshComplete={onRefreshComplete}
                     triggerBanner={triggerBanner}

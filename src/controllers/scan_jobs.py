@@ -20,6 +20,7 @@ import uuid as uuid_module
 from typing import Callable, Dict, List, Sequence, Set, Tuple
 
 from ..extensions import db
+from ..helpers.history_source import SOURCE_ENV_VAR
 from ..helpers.scan_filters import is_kernel_package_name, is_native_package_name
 from ..helpers.scan_runs import tool_scan as _tool_scan
 from ..models.finding import Finding
@@ -353,20 +354,21 @@ def run_grype_scan(ctx: JobContext) -> None:
         ctx.check_cancelled()
         ctx.report(2, 4, "3/4 Merging results")
         ctx.log("[3/4] Merging Grype results into database…")
+        history_env = {**os.environ, SOURCE_ENV_VAR: "grype"}
         merge_command = [
             "flask", "--app", FLASK_APP, "merge", "--project", project_name,
             "--variant", variant.name, "--grype", grype_out,
         ]
         if ctx.queue_id:
             merge_command += ["--run-id", ctx.queue_id]
-        _run(merge_command, GRYPE_MERGE_TIMEOUT)
+        _run(merge_command, GRYPE_MERGE_TIMEOUT, env=history_env)
         ctx.report(3, 4, "3/4 Merging results")
         ctx.log("[3/4] Merge complete")
 
         ctx.check_cancelled()
         ctx.report(3, 4, "4/4 Processing")
         ctx.log("[4/4] Processing scan results…")
-        _run(["flask", "--app", FLASK_APP, "process"], GRYPE_PROCESS_TIMEOUT)
+        _run(["flask", "--app", FLASK_APP, "process"], GRYPE_PROCESS_TIMEOUT, env=history_env)
 
         ctx.report(4, 4, "Scan complete")
         ctx.log("✓ Grype scan complete")

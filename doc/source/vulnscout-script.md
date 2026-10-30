@@ -22,6 +22,7 @@ v0.25 and print a deprecation warning; see
 | `add --spdx\|--cdx\|--cve-check\|--yocto-vex\|--openvex\|--grype <path>` | Import input files. Options repeat and mix; one call is processed as one import. | default `default` | default `default` |
 | `scan [--grype] [--nvd] [--osv] [--sbom-cve-check] [--all]` | Run the selected scanners together on the current data. Positional types (`scan nvd,osv`) also work; no selection means `all`. | default `default` | default `default` |
 | `refresh` | Refresh EPSS, NVD, ENISA EUVD and GitHub Advisory data. | optional; all data when omitted | optional; needs `-p` |
+| `export refresh-changes --run-id <id> [--format json\|csv]` | Export one exact persisted refresh artifact to stdout. | optional visibility filter | optional; needs `-p` |
 | `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional; needs `-p` |
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
 | `export <kind>... [--amend]` | Write `spdx`, `cdx`, `openvex`, `custom-data`, `custom-openvex` or `context` to the outputs directory. `--amend` applies to `custom-*` only. | default `default` | optional; all variants when omitted |
@@ -78,4 +79,5 @@ It is registered for `vulnscout` (on `PATH`) and `./vulnscout`. For any other in
 :maxdepth: 1
 
 cli-migration
+cli-refresh-runs
 ```
