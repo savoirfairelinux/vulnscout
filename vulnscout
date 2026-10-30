@@ -190,7 +190,7 @@ if [ "${1:-}" = "completion" ]; then
 fi
 
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.23}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.24}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
 VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
