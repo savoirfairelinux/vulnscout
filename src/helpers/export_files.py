@@ -7,6 +7,8 @@ import json
 
 EVIDENCE_PREFIX = "VulnScout recorded file evidence v1:\n"
 INVENTORY_UNKNOWN_COMMENT = "VulnScout: file inventory not recorded."
+SPDX2_INVENTORY_PREFIX = "VulnScout recorded inventory v1:\n"
+SPDX2_ASSOCIATION_COMMENT = "VulnScout: recorded file association (not package file analysis)."
 SPDX2_FIELDS = {
     "fileTypes", "checksums", "licenseConcluded", "licenseInfoInFiles",
     "licenseComments", "copyrightText", "fileContributors", "attributionTexts", "noticeText",
@@ -22,6 +24,28 @@ HASH_ALGORITHMS = {
     "MD5": "md5", "ADLER32": "adler32", "BLAKE2b-256": "blake2b256",
     "BLAKE2b-384": "blake2b384", "BLAKE2b-512": "blake2b512", "BLAKE3": "blake3",
 }
+
+
+def spdx2_annotation_inventory(document: dict) -> tuple[list[dict], list[dict]]:
+    files: list[dict] = []
+    relationships: list[dict] = []
+    for annotation in document.get("annotations", []):
+        if not isinstance(annotation, dict):
+            continue
+        comment = annotation.get("comment")
+        if not isinstance(comment, str) or not comment.startswith(SPDX2_INVENTORY_PREFIX):
+            continue
+        try:
+            inventory = json.loads(comment[len(SPDX2_INVENTORY_PREFIX):])
+        except ValueError:
+            continue
+        if not isinstance(inventory, dict):
+            continue
+        for field, destination in (("files", files), ("relationships", relationships)):
+            values = inventory.get(field)
+            if isinstance(values, list):
+                destination.extend(value for value in values if isinstance(value, dict))
+    return files, relationships
 
 
 def recorded_evidence(properties: dict) -> dict | None:

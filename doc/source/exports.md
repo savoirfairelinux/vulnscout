@@ -26,13 +26,25 @@ from the selected **active** SBOM scans, including companion documents and binar
 outputs. Superseded scans and unselected variants are excluded. Export does not
 reopen original SBOMs or source files. Paths and checksums are emitted only when
 recorded: no contents are exported and no hashes are calculated or invented.
-Some SPDX validators require file hashes; a hashless recorded inventory can
-therefore be rejected by those validators rather than being filled with fake
-values. VulnScout can reimport these inventories with either parser mode.
+
+SPDX 2.3's schema requires a nonempty checksum list for a native `File`; the
+normative file validator additionally requires SHA1 and a relative file path.
+Only recorded files satisfying these requirements are emitted as native SPDX 2
+file objects. Other records (including hashless records, SHA256-only records,
+and absolute paths) are retained in a standard document `OTHER` annotation
+whose comment begins `VulnScout recorded inventory v1:`. Its JSON payload stores
+the recorded file properties and associated package references. These private
+file identifiers are not referenced by native document relationships.
+This keeps the document valid without inventing hashes or changing paths.
+Other tools may ignore the annotation; VulnScout restores all its records with
+either parser mode. SPDX 3 supports native hashless file records.
 
 Each persisted file record has its own document-local identifier. Different
 records with the same path remain distinct; a shared record is emitted once,
-with containment relationships to each supported package owner. Recorded SPDX 2
+with associations to each supported package owner. SPDX 3 uses `contains`.
+SPDX 2 uses labelled `OTHER` relationships rather than asserting package
+file analysis (`filesAnalyzed` remains false); associations to annotation-only
+records stay inside that annotation. Recorded SPDX 2
 checksums and SPDX 3 hashes are translated when their algorithms are supported.
 Native file types, licenses, and other supported properties are retained in the
 matching format; properties without a native equivalent are retained in the
