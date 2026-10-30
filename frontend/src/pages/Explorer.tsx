@@ -57,7 +57,7 @@ const tabLabels: Record<string, string> = {
  */
 type ExplorerNavState = {
     vulnFilter?: {
-        label: "Source" | "Severity" | "Status" | "Package";
+        label: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
         value: string;
         vulnerabilityIds?: string[];
     };
