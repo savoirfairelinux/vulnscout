@@ -401,12 +401,9 @@ class SccEngine:
             tuple[frozenset, str | None],
             list[tuple[tuple, ...]],
         ] = {}
-        # Cache the per-CVE version verdict (affected / not_affected / fixed /
-        # under_investigation) under the same signature, so the costly
-        # version-range evaluation runs once per signature instead of once per
-        # sibling package.
+        # Verdicts additionally depend on the build's compiled source paths.
         self._verdict_cache: dict[
-            tuple[frozenset, str | None], dict[str, str]
+            tuple[frozenset, str | None, frozenset[str]], dict[str, str]
         ] = {}
 
     def _warn_degraded(self, key: str, message: str) -> None:
@@ -553,15 +550,13 @@ class SccEngine:
         ~16k advisories and re-runs the very same version-range verdicts — the
         dominant cost of a full scan.
 
-        Both the applicable-vulnerability set and the per-CVE version verdict are
-        pure functions of the package's *index-relevant* identifiers and version:
+        The candidate set depends on *index-relevant* identifiers and version:
         an identifier whose product name is absent from the index can neither
         pull a candidate CVE nor loosely match one (the index and the loose-match
         check are both derived from each advisory's applicable component names),
         so it is dropped from the signature.  Packages sharing a signature
-        therefore share both heavy computations; only the cheap per-package
-        :class:`ComputedVulnInfo` wrappers (which carry the correct component for
-        reporting) are rebuilt, so results are unchanged.
+        therefore share candidate retrieval. Verdicts additionally include the
+        compiled-source signature so different builds cannot reuse exclusions.
         """
         comp_build = build_comp_build(pkg)
         if comp_build is None:
@@ -585,7 +580,10 @@ class SccEngine:
                 self._verdict_cache.clear()
             self._applicable_cache[key] = entry_groups
 
-        verdicts = self._verdict_cache.setdefault(key, {})
+        verdict_key = (*key, frozenset(comp_build.compiled_sources))
+        if len(self._verdict_cache) >= 50_000:
+            self._verdict_cache.clear()
+        verdicts = self._verdict_cache.setdefault(verdict_key, {})
         for entries in entry_groups:
             computed = ComputedVulnInfo(comp_build, entries)
             cve_id = str(computed.identifier)

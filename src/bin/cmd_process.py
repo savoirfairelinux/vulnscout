@@ -194,12 +194,15 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     templates = Templates(controllers)
 
     use_fastspdx = get_bool_env('IGNORE_PARSING_ERRORS', False)
+    from ..helpers.sbom_files import record_source_files, spdx2_file_graph
+
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
 
     pkgCtrl: PackagesController = controllers.packages
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
+    file_documents = []
     detached_cdx_documents: list[SBOMDocument] = []
     detached_cdx_refs: dict[SBOMDocument, dict[str, str]] = {}
 
@@ -223,6 +226,10 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             ):
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
+                    file_documents.append(
+                        (doc, data, dict(fastspdx3._document_refs),
+                         fastspdx3._namespace_map(data.get('@graph', [])))
+                    )
                     if is_zephyr_jsonld(data):
                         jsonld_documents.append(
                             (doc, data, dict(fastspdx3._document_refs),
@@ -232,9 +239,13 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                         doc.jsonld_groups = None
                 elif use_fastspdx:
                     fastspdx.parse_from_dict(data)
+                    file_graph, references = spdx2_file_graph(doc, data, fastspdx._document_refs)
+                    file_documents.append((doc, file_graph, references, {}))
                 else:
                     spdx.load_from_file(doc.path)
                     spdx.parse_and_merge()
+                    file_graph, references = spdx2_file_graph(doc, data, spdx._document_refs)
+                    file_documents.append((doc, file_graph, references, {}))
             elif fmt == "cdx" or (
                 fmt is None and (
                     data.get("bomFormat") == "CycloneDX"
@@ -345,6 +356,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                     assessment.packages = stored.packages
             for package_id in assessment.packages:
                 assessCtrl._by_vuln_pkg.setdefault((assessment.vuln_id, package_id), []).append(key)
+    for current_scan_id in {document.scan_id for document, *_ in file_documents}:
+        record_source_files([entry for entry in file_documents if entry[0].scan_id == current_scan_id])
     _db.session.commit()
 
     return {

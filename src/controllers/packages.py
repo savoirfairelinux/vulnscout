@@ -85,7 +85,7 @@ class PackagesController:
                 for document in SBOMDocument.get_by_scan(scan_id)
             }
             self._export_document_ids = set(document_ids)
-            evidence = SBOMPackage.evidence_for_documents(document_ids)
+            evidence = SBOMPackage.evidence_for_documents(document_ids, package_ids=allowed)
             for pkg in Package.get_all():
                 if allowed is not None and pkg.id not in allowed:
                     continue
@@ -384,7 +384,9 @@ class PackagesController:
                 return None  # out of the export scope
             if pkg:
                 if self._scope is not None:
-                    evidence = SBOMPackage.evidence_for_documents(self._scope.active_sbom_document_ids)
+                    evidence = SBOMPackage.evidence_for_documents(
+                        self._scope.active_sbom_document_ids, package_ids={pkg.id},
+                    )
                     pkg = pkg.with_sbom_evidence(**evidence.get(
                         pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
                     ))

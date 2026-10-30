@@ -11,7 +11,7 @@ from ..extensions import db, Base
 from . import Variant, Scan
 
 if typing.TYPE_CHECKING:
-    from . import SBOMPackage, SBOMObservation, PackageDependency
+    from . import SBOMPackage, SBOMObservation, PackageDependency, SBOMFile, SBOMBuild
 
 
 class SBOMDocument(Base):
@@ -27,6 +27,8 @@ class SBOMDocument(Base):
     # False until parsed with dependency support, so missing relationships are not reported as zero.
     dependencies_recorded: Mapped[bool] = mapped_column(default=False, server_default=false())
     jsonld_groups: Mapped[list[dict] | None] = mapped_column(JSON)
+    files: Mapped[list["SBOMFile"]] = relationship(back_populates="sbom_document", cascade="all, delete-orphan")
+    builds: Mapped[list["SBOMBuild"]] = relationship(back_populates="sbom_document", cascade="all, delete-orphan")
 
     scan: Mapped["Scan"] = relationship("Scan", back_populates="sbom_documents")
     sbom_packages: Mapped[list["SBOMPackage"]] = relationship(
@@ -119,6 +121,13 @@ class SBOMDocument(Base):
         return self
 
     def delete(self) -> None:
-        """Delete this variant (and its scans via cascade) from the database."""
+        """Delete a document and invalidate its companions' recorded build evidence."""
+        from .sbom_package import SBOMPackage
+
+        companion_ids = db.select(SBOMDocument.id).where(SBOMDocument.scan_id == self.scan_id)
+        db.session.execute(db.update(SBOMPackage).where(
+            SBOMPackage.sbom_document_id.in_(companion_ids),
+            SBOMPackage.compiled_sources_complete.is_not(None),
+        ).values(compiled_sources_complete=False))
         db.session.delete(self)
         db.session.commit()
