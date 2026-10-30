@@ -23,6 +23,7 @@ v0.25 and print a deprecation warning; see
 | `scan [--grype] [--nvd] [--osv] [--sbom-cve-check] [--all]` | Run the selected scanners together on the current data. Positional types (`scan nvd,osv`) also work; no selection means `all`. | default `default` | default `default` |
 | `refresh` | Refresh EPSS, NVD, ENISA EUVD and GitHub Advisory data. | optional; all data when omitted | optional; needs `-p` |
 | `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional; needs `-p` |
+| `assess --cve <id>...\|--filter <expr> [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Create pending AI assessments with the configured AI provider. Use `--cve` or `--filter`, not both; see [Assess from the CLI or CI](ai-assessments.md#assess-from-the-cli-or-ci). | optional; all variants of the project | optional, repeatable; needs `-p` |
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
 | `export <kind>... [--amend]` | Write `spdx`, `cdx`, `openvex`, `custom-data`, `custom-openvex` or `context` to the outputs directory. `--amend` applies to `custom-*` only. | default `default` | optional; all variants when omitted |
 | `import custom-data <path> [--timestamps original\|current]` | Import custom VulnScout JSON data. | default `default` | rejected (the file names its variants) |

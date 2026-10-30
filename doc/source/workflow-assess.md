@@ -18,6 +18,8 @@ justify **Not affected**.
    request independent reviews of custom assessments. Proposed AI assessments
    remain pending until a human approves them; an independent review does not
    change the underlying assessment.
+   In CI, `./vulnscout assess` proposes AI assessments for a selection of
+   vulnerabilities; see [Assess from the CLI or CI](ai-assessments.md#assess-from-the-cli-or-ci).
 4. Audit recorded decisions in [Review](web-review.md). Reassess when product
    context or source evidence changes rather than blindly carrying an old
    conclusion forward.

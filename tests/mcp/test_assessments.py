@@ -517,3 +517,30 @@ class TestUpdateAiAssessmentImpl:
         assert not patch_route.called
         assert "Error" in result
         assert "no fields" in result
+
+
+def test_scoped_write_rejects_targets_outside_the_run_before_request():
+    from unittest.mock import patch
+
+    from vulnscout_mcp.client import ScopedVulnScoutClient
+
+    client = ScopedVulnScoutClient(BASE_URL, {
+        "project_ids": ["p1"], "variant_ids": ["v1"],
+        "write_targets": [{"vuln_id": "CVE-1", "variant_id": "v1", "package": "a@1"}],
+    })
+    with patch.object(VulnScoutClient, "write_assessment", return_value={}) as write:
+        for vuln_id, payload in (
+            ("CVE-2", {"targets": [{"package": "a@1", "variant_id": "v1"}]}),
+            ("CVE-1", {"targets": [{"package": "a@0.9", "variant_id": "v1"}]}),
+            ("CVE-1", {"packages": ["a@1", "b@1"], "variant_id": "v1"}),
+        ):
+            with pytest.raises(VulnScoutError, match="outside the targets"):
+                client.write_assessment(vuln_id, {"status": "affected", **payload})
+        write.assert_not_called()
+        client.write_assessment("CVE-1", {"status": "affected", "packages": ["a@1"], "variant_ids": ["v1"]})
+        write.assert_called_once()
+
+    unrestricted = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": ["v1"]})
+    with patch.object(VulnScoutClient, "write_assessment", return_value={}) as write:
+        unrestricted.write_assessment("CVE-2", {"status": "affected", "packages": ["b@1"], "variant_id": "v1"})
+        write.assert_called_once()

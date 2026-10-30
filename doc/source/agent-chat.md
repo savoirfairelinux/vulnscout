@@ -29,6 +29,12 @@ without extraction or execution. **Codebase Path** is an external-client hint,
 not a container mount. Dependency discovery does not establish runtime use or
 exploitability.
 
+`flask ai-assess` (`./vulnscout assess`) runs the same SDK turn without the web
+session. Each turn is ephemeral (its SDK session is deleted) and exposes only the
+read tools plus `write_assessment`. The command serves the app's API on an
+ephemeral `127.0.0.1` port for the MCP server, because the CLI process does not
+run the web server. It reads provider settings from the same `config.env`.
+
 ## Configuration and Credentials
 
 Access tokens and API keys stay on the backend and are never returned to the

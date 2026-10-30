@@ -1,6 +1,7 @@
 """Local Copilot chat backed by the VulnScout stdio MCP server."""
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import os
@@ -39,6 +40,8 @@ WRITE_TOOLS = (
     "write_assessment", "update_ai_assessment", "update_project_context",
     "update_variant_context", "write_assessment_review",
 )
+# CLI assessment runs may only read and write AI assessments; no context or review writes.
+ASSESS_TOOLS = READ_TOOLS + ("write_assessment",)
 COOKIE = "vulnscout_agent"
 MAX_SCOPE_VARIANTS = 1000
 MAX_PROMPT_VARIANTS = 50
@@ -638,7 +641,9 @@ def _publish_event(event, publish, write_calls=None):
                  "write": write_calls is not None and event_data.tool_call_id in write_calls})
 
 
-async def _reply(conversation, message, path, model, scope, publish=None):
+async def _reply(conversation, message, path, model, scope, publish=None, *,
+                 tools=READ_TOOLS + WRITE_TOOLS, timeout=120, api_url=None, ephemeral=False):
+    """Run one agent turn; ephemeral turns never resume a session and delete theirs afterwards."""
     from copilot.session import PermissionHandler
 
     async with _sdk_client(conversation.credentials.token) as client:
@@ -656,15 +661,15 @@ async def _reply(conversation, message, path, model, scope, publish=None):
             "model": provider_options["model_id"] if provider_options else model,
             "streaming": publish is not None,
             "on_permission_request": PermissionHandler.approve_all,
-            "available_tools": [f"mcp:vulnscout-{tool}" for tool in READ_TOOLS + WRITE_TOOLS],
+            "available_tools": [f"mcp:vulnscout-{tool}" for tool in tools],
             "mcp_servers": {"vulnscout": {
                 "type": "local", "command": sys.executable,
                 "args": [str(path)], "cwd": str(path.parent),
                 "env": {
-                    "VULNSCOUT_BASE_URL": os.getenv("VULNSCOUT_AGENT_API_URL", "http://localhost:7275"),
+                    "VULNSCOUT_BASE_URL": api_url or os.getenv("VULNSCOUT_AGENT_API_URL", "http://localhost:7275"),
                     "VULNSCOUT_AGENT_SCOPE": scope,
                 },
-                "tools": list(READ_TOOLS + WRITE_TOOLS),
+                "tools": list(tools),
             }},
             "system_message": {"mode": "append", "content": (
                 "You are the VulnScout agent. Use only VulnScout MCP tools for facts and actions. "
@@ -706,7 +711,8 @@ async def _reply(conversation, message, path, model, scope, publish=None):
         if provider_options:
             options["provider"] = provider_options
         if (
-            conversation.session_id
+            not ephemeral
+            and conversation.session_id
             and conversation.session_scope == scope
         ):
             session = await client.resume_session(conversation.session_id, **options)
@@ -721,15 +727,23 @@ async def _reply(conversation, message, path, model, scope, publish=None):
                 _publish_event(event, publish, write_calls)
 
             session.on(on_event)
-            event = await asyncio.wait_for(session.send_and_wait(message), timeout=120)
+            # The SDK stops waiting after its own timeout (default 60 s), so pass the turn's limit to it as well.
+            event = await asyncio.wait_for(session.send_and_wait(message, timeout=timeout), timeout=timeout)
             if event is None or not event.data.content:
                 raise RuntimeError("The agent did not return a response.")
-            conversation.session_id = session.session_id
-            conversation.session_scope = scope
+            if not ephemeral:
+                conversation.session_id = session.session_id
+                conversation.session_scope = scope
             usage = _add_usage(conversation.usage, _session_usage(live_events))
             return event.data.content, usage
         finally:
-            await session.disconnect()
+            try:
+                await session.disconnect()
+            finally:
+                if ephemeral:
+                    # Best effort: a failed delete must not hide the turn's own result or error.
+                    with contextlib.suppress(Exception):
+                        await client.delete_session(session.session_id)
 
 
 @agent_blueprint.route("/api/agent", methods=["GET"])

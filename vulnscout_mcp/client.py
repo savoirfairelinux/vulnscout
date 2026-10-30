@@ -418,6 +418,10 @@ class ScopedVulnScoutClient(VulnScoutClient):
         super().__init__(base_url)
         self.project_ids = frozenset(scope["project_ids"])
         self.variant_ids = frozenset(scope["variant_ids"])
+        # CLI assessment turns may only write their selected (vulnerability, variant, package) targets.
+        self.write_targets = frozenset(
+            (target["vuln_id"], target["variant_id"], target["package"]) for target in scope["write_targets"]
+        ) if "write_targets" in scope else None
 
     def _project(self, project_id: str) -> None:
         if project_id not in self.project_ids:
@@ -503,6 +507,14 @@ class ScopedVulnScoutClient(VulnScoutClient):
             raise VulnScoutError("Assessment targets require a scoped variant.")
         for variant_id in ids:
             self._variant(variant_id)
+        if self.write_targets is not None:
+            if targets:
+                pairs = [(target.get("package"), target.get("variant_id")) for target in targets]
+            else:
+                pairs = [(package, variant_id) for package in payload.get("packages") or [] for variant_id in ids]
+            if not pairs or any((vuln_id, variant_id, package) not in self.write_targets
+                                for package, variant_id in pairs):
+                raise VulnScoutError("Assessment target is outside the targets of this assessment run.")
         result = super().write_assessment(vuln_id, {**payload, "ai_generated": True})
         if "assessment" in result:
             result["assessment"] = self._assessment(result["assessment"])

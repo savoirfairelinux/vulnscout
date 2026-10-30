@@ -607,3 +607,18 @@ class TestCmdProcessCoverage:
         assert f"Error importing {path}" in output
         assert "UNIQUE constraint failed" in output
         assert "Ignored:" not in output
+
+    def test_evaluate_condition_quiet_suppresses_match_lines(self, app, capsys):
+        from src.bin.cmd_process import evaluate_condition
+
+        vuln = SimpleNamespace(
+            severity_max_score=9.8, severity_min_score=9.8, epss={"score": None},
+            effort={"likely": None, "optimistic": None, "pessimistic": None}, euvd_known_exploited=False,
+        )
+        vulns = SimpleNamespace(vulnerabilities={"CVE-2024-9999": vuln})
+        assessments = SimpleNamespace(gets_by_vuln=lambda vuln_id: [])
+
+        assert evaluate_condition(vulns, assessments, "cvss >= 9", quiet=True) == ["CVE-2024-9999"]
+        assert "triggered fail condition" not in capsys.readouterr().out
+        assert evaluate_condition(vulns, assessments, "cvss >= 9") == ["CVE-2024-9999"]
+        assert "triggered fail condition: CVE-2024-9999" in capsys.readouterr().out
