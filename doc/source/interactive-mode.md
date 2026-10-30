@@ -154,6 +154,7 @@ web-dependencies
 web-vulnerabilities
 web-vulnerability-details
 web-scans
+web-refresh
 web-review
 web-export
 web-settings
