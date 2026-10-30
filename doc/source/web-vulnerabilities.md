@@ -53,6 +53,10 @@ The available sources are:
 - **GHSA** — refreshes the publication date of GitHub Security Advisory (`GHSA-…`) identifiers in the current scope via the GitHub Advisory API.
 - **ENISA EUVD** — annotates CVEs in the current scope from the European Union Vulnerability Database (see below). This option is only available when the scope contains at least one CVE identifier.
 
+Inspect persisted run results in the [Refresh view](web-refresh.md), including
+field-level changes, source coverage, first enrichment and incomplete runs.
+Viewing results does not acknowledge changes or clear indicators.
+
 ## ENISA EUVD Enrichment
 
 The **ENISA EUVD** refresh annotates each selected CVE with information from the [European Union Vulnerability Database](https://euvd.enisa.europa.eu/), the vulnerability registry operated by ENISA. It is a **data enrichment, not a scanner**: it never discovers new vulnerabilities and performs no per-CVE network round-trips. Instead it loads two ENISA dumps once and maps them onto the CVEs you selected.
