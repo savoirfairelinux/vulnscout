@@ -5,6 +5,7 @@ from .packages import init_app as init_pkg_app
 from .dependencies import init_app as init_dependencies_app
 from .vulnerabilities import init_app as init_vuln_app
 from .vulnerability_history import init_app as init_vuln_history_app
+from .refresh_runs import init_app as init_refresh_runs_app
 from .assessments import init_app as init_assess_app
 from .assessment_reviews import init_app as init_assess_review_app
 from .documents import init_app as init_doc_app
@@ -26,6 +27,7 @@ def init_app(app):
     init_dependencies_app(app)
     init_vuln_app(app)
     init_vuln_history_app(app)
+    init_refresh_runs_app(app)
     init_assess_app(app)
     init_assess_review_app(app)
     init_doc_app(app)
