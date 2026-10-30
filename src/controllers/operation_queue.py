@@ -29,6 +29,7 @@ from typing import Callable, Deque, Dict, List, Optional
 
 from flask import Flask
 
+from ..helpers.history_source import history_operation, history_source
 from .job_context import CancelledError, JobContext, OperationError
 from .operation_registry import (
     LANE_EXPORT,
@@ -205,8 +206,11 @@ class OperationQueue:
 
     def _run_body(self, job: _Job) -> None:
         assert self._app is not None, "OperationQueue.init_app() was never called"
+        operation = registry.get(job.op_id) or {}
         try:
-            with self._app.app_context():
+            with self._app.app_context(), history_source(operation.get("source")), history_operation(
+                operation.get("queue_id"), job.op_id
+            ):
                 job.runner(job.ctx)
         except CancelledError:
             job.ctx.flush()
