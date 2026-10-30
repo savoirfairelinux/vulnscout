@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -7,6 +7,13 @@ import React from "react";
 import VulnHistory from "../../src/components/VulnHistory";
 import VulnerabilityHistory from "../../src/handlers/vulnerabilityHistory";
 import type { HistoryEntry } from "../../src/handlers/vulnerabilityHistory";
+import VulnerabilityRefreshRun from "../../src/handlers/vulnerabilityRefreshRun";
+import type { RefreshRun } from "../../src/handlers/vulnerabilityRefreshRun";
+import { getSnapshot, subscribe } from "../../src/handlers/operationStore";
+
+jest.mock("../../src/handlers/operationStore", () => ({
+    getSnapshot: jest.fn(() => []), subscribe: jest.fn(() => () => {}),
+}));
 
 const row = (field: string, old_value: unknown, value: unknown, source: string, changed_at: string): HistoryEntry => ({
     field, old_value, value, source, changed_at,
@@ -26,6 +33,7 @@ describe("VulnHistory", () => {
 
     beforeEach(() => {
         list = jest.spyOn(VulnerabilityHistory, "list").mockResolvedValue(rows);
+        jest.spyOn(VulnerabilityRefreshRun, "latest").mockResolvedValue(null);
     });
 
     afterEach(() => jest.restoreAllMocks());
@@ -113,5 +121,60 @@ describe("VulnHistory", () => {
         resolve(rows);
         await Promise.resolve();
         expect(list).toHaveBeenCalledTimes(1);
+    });
+
+    test("never fetches unscoped field history for a shared CVE and resets on scope changes", async () => {
+        const latest = jest.mocked(VulnerabilityRefreshRun.latest);
+        const makeRun = (id: string): RefreshRun => ({
+            run_id: id, scope: { project_id: id, variant_id: null }, sources: [],
+            started_at: '2026-01-01T00:00:00Z', finished_at: null, status: 'incomplete',
+            coverage: [], changes: [], summary: { total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
+            total: 0, limit: 1000, offset: 0,
+        });
+        latest.mockResolvedValueOnce(makeRun('first-project'));
+        const { rerender } = render(<VulnHistory vulnId="CVE-1" projectId="p1" variantId="v1" />);
+        await expand();
+        await screen.findByText('first-project');
+        let resolve: (value: RefreshRun) => void = () => {};
+        latest.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+        rerender(<VulnHistory vulnId="CVE-1" projectId="p2" variantId="v2" />);
+        expect(screen.queryByText('first-project')).not.toBeInTheDocument();
+        await expand();
+        expect(screen.getByText('Loading refresh changes…')).toBeInTheDocument();
+        expect(latest).toHaveBeenLastCalledWith('CVE-1', { projectId: 'p2', variantId: 'v2' }, expect.any(AbortSignal));
+        rerender(<VulnHistory vulnId="CVE-2" projectId="p2" variantId="v2" />);
+        await act(async () => resolve(makeRun('stale-project')));
+        expect(screen.queryByText('stale-project')).not.toBeInTheDocument();
+        await expand();
+        await waitFor(() => expect(latest).toHaveBeenLastCalledWith('CVE-2', { projectId: 'p2', variantId: 'v2' }, expect.any(AbortSignal)));
+        expect(list).not.toHaveBeenCalled();
+    });
+
+    test("reloads scoped changes after explicit refresh invalidation and queue status updates", async () => {
+        const { rerender } = render(<VulnHistory vulnId="CVE-1" projectId="p" reloadKey={0} />);
+        await expand();
+        await screen.findByText(/No refresh baseline/);
+        const latest = jest.mocked(VulnerabilityRefreshRun.latest);
+        rerender(<VulnHistory vulnId="CVE-1" projectId="p" reloadKey={1} />);
+        await waitFor(() => expect(latest).toHaveBeenCalledTimes(2));
+        const calls = jest.mocked(subscribe).mock.calls;
+        const listener = calls[calls.length - 1][0];
+        jest.mocked(getSnapshot).mockReturnValueOnce([{
+            op_id: 'refresh:nvd', kind: 'refresh', status: 'done', source: 'nvd',
+            label: 'NVD', lane: 'pipeline', scope: null, progress: { current: 1, total: 1, message: '' },
+            logs: [], error: null, queue_id: 'q-1', position: null, options: {}, cancellable: false,
+            created_at: '', started_at: null, finished_at: null, result: null,
+        }]);
+        act(() => listener());
+        await waitFor(() => expect(latest).toHaveBeenCalledTimes(3));
+        expect(list).not.toHaveBeenCalled();
+    });
+
+    test("reports scoped request failure instead of claiming no changes", async () => {
+        jest.mocked(VulnerabilityRefreshRun.latest).mockRejectedValue(new Error('HTTP 500'));
+        render(<VulnHistory vulnId="CVE-1" projectId="p" />);
+        await expand();
+        expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load the scoped refresh run');
+        expect(screen.queryByText(/No data changed/)).not.toBeInTheDocument();
     });
 });

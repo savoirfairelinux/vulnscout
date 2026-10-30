@@ -70,6 +70,8 @@ export type OperationJob = {
     ids?: string[];
     exclude_ids?: string[];
     options?: {
+        project_id?: string;
+        variant_id?: string;
         exclude_kernel?: boolean;
         exclude_native?: boolean;
         native_package_exceptions?: string[];
