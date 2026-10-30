@@ -3,7 +3,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "ab721d903ef1"
-down_revision = "f4e1c9a7b2d3"
+down_revision = ("f4e1c9a7b2d3", "a3d5e7f9b1c2")
 branch_labels = None
 depends_on = None
 
@@ -18,6 +18,7 @@ def upgrade():
         sa.Column("sources", sa.JSON(), nullable=False),
         sa.Column("source_status", sa.JSON(), nullable=False),
         sa.Column("coverage", sa.JSON(), nullable=False),
+        sa.Column("owner", sa.JSON(), nullable=False),
     )
     op.create_index("ix_refresh_runs_started_at", "refresh_runs", ["started_at"])
     op.create_table(

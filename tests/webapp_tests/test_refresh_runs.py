@@ -19,6 +19,7 @@ from src.helpers.refresh_runs import capture_source, create_run, finish_source, 
 from src.models import Finding, Observation, Project, Scan, Variant, Vulnerability
 from src.models.metrics import Metrics
 from src.models.refresh_run import RefreshRun
+from sqlalchemy.orm import Session
 from . import setup_demo_db
 
 CVE = "CVE-2020-35492"
@@ -246,3 +247,161 @@ def test_duplicate_identity_and_invalid_pagination_fail_explicitly(app, client):
             create_run({"epss": []}, run_id="duplicate")
     assert client.get("/api/refresh-runs/duplicate?limit=no").status_code == 400
     assert client.get("/api/refresh-runs/duplicate/export?format=pdf").status_code == 400
+
+
+def test_stale_loaded_instance_records_actual_committed_predecessor(app, client):
+    with app.app_context():
+        run = create_run({"epss": [CVE]})
+        with Session(db.engine) as stale:
+            record = stale.get(Vulnerability, CVE)
+            fresh = db.session.get(Vulnerability, CVE)
+            fresh.epss_score = 0.6
+            db.session.commit()
+            with capture_source(run, "epss"):
+                record.epss_score = 0.7
+                stale.commit()
+        with capture_source(run, "epss"):
+            target_result("epss", CVE)
+            db.session.commit()
+        finish_source(run, "epss")
+    row = client.get(f"/api/refresh-runs/{run}").get_json()["changes"][0]
+    assert (row["before"], row["after"]) == (0.6, 0.7)
+
+
+def test_artifact_rolls_back_with_failed_write_and_records_incomplete(app, client, monkeypatch):
+    with app.app_context():
+        run = create_run({"epss": [CVE]})
+        commit = db.session.commit
+        calls = []
+
+        def fail_once():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("write rejected")
+            return commit()
+
+        with patch("src.controllers.refresh_jobs.EPSS_DB") as api:
+            api.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.9}}
+            monkeypatch.setattr(db.session, "commit", fail_once)
+            with pytest.raises(RuntimeError, match="write rejected"):
+                run_epss_refresh(JobContext("test", {"ids": [CVE]}, run))
+            assert float(db.session.get(Vulnerability, CVE).epss_score) == pytest.approx(0.31132)
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert data["status"] == "incomplete"
+    assert data["changes"] == []
+    assert data["coverage"][0]["status"] == "failed"
+
+
+def test_cancel_after_committed_chunk_preserves_partial_artifact(app, client, monkeypatch):
+    from src.controllers import refresh_jobs as jobs
+    with app.app_context():
+        other = "CVE-2099-1112"
+        Vulnerability.create_record(id=other, epss_score=0.1)
+        run = create_run({"epss": [CVE, other]})
+        ctx = JobContext("test", {"ids": [CVE, other]}, run)
+        original_apply = jobs._apply_epss_score
+
+        def apply_then_cancel(*args):
+            original_apply(*args)
+            ctx.request_cancel()
+
+        monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 1)
+        monkeypatch.setattr(jobs, "_apply_epss_score", apply_then_cancel)
+        with patch("src.controllers.refresh_jobs.EPSS_DB") as api:
+            api.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}}
+            with pytest.raises(CancelledError):
+                run_epss_refresh(ctx)
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert data["status"] == "incomplete"
+    assert [entry["status"] for entry in data["coverage"]] == ["complete", "cancelled"]
+    assert [entry["vuln_id"] for entry in data["changes"]] == [CVE]
+
+
+def test_zero_target_initiating_scope_and_skipped_deferred_source_are_visible(app, client):
+    from src.controllers import refresh_jobs as jobs
+    from src.helpers.refresh_runs import tracked_refresh
+    with app.app_context():
+        run = create_run({"epss": []}, scope={"project_id": PROJECT, "variant_id": VARIANT})
+        ctx = JobContext("refresh:epss", {"ids": [], "source": "epss", "variant_ids": [VARIANT]}, run)
+        with patch.object(jobs.registry, "get", return_value={"queue_id": run, "position": 2}), \
+                patch.object(jobs.registry, "snapshot", return_value=[
+                    {"queue_id": run, "kind": "scan", "position": 1, "status": "error"},
+                ]):
+            tracked_refresh("epss")(jobs.run_deferred_refresh)(ctx)
+    data = client.get("/api/refresh-runs/latest", query_string={"project_id": PROJECT}).get_json()
+    assert data["run_id"] == run and data["status"] == "incomplete"
+    assert data["source_status"] == {"epss": "incomplete"}
+    assert data["coverage"] == []
+    assert client.get(f"/api/refresh-runs/{run}?project_id={uuid.uuid4()}").status_code == 404
+
+
+def test_grouped_queue_keeps_exact_run_and_initiating_scope(app, client, monkeypatch):
+    from src.controllers import refresh_jobs as jobs
+    from src.controllers.operation_queue import queue
+    from src.controllers.operation_registry import registry
+    registry.clear()
+    submitted = []
+    monkeypatch.setattr(type(queue), "submit", lambda self, **kwargs: submitted.append(kwargs))
+    payload = {"jobs": [
+        {"kind": "refresh", "source": source, "ids": [CVE],
+         "options": {"project_id": PROJECT, "variant_id": VARIANT}}
+        for source in ("nvd", "epss")
+    ]}
+    response = client.post("/api/operations", json=payload)
+    assert response.status_code == 202
+    run = response.get_json()["queue_id"]
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert data["status"] == "running"
+    assert data["scope"] == {"project_id": PROJECT, "variant_id": VARIANT}
+    with app.app_context(), patch.object(jobs, "_get_scc_engine"), \
+            patch.object(jobs, "_refresh_nvd_record", return_value=True), \
+            patch.object(jobs, "EPSS_DB") as api:
+        api.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}}
+        for job in submitted:
+            job["runner"](job["ctx"])
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert data["status"] == "complete"
+    assert data["sources"] == ["nvd", "epss"]
+    assert len(data["coverage"]) == 2 and data["total"] == 1
+    registry.clear()
+
+
+def test_queued_refresh_rejects_targets_outside_initiating_scope(client):
+    response = client.post("/api/operations", json={"jobs": [
+        {"kind": "refresh", "source": "nvd", "ids": ["CVE-2099-9999"],
+         "options": {"project_id": PROJECT}},
+    ]})
+    assert response.status_code == 400
+    assert "outside" in response.get_json()["error"]
+
+
+def test_dead_owner_is_incomplete_but_concurrent_live_owner_is_not(app, client):
+    with app.app_context():
+        interrupted = create_run({"epss": [CVE]}, run_id="interrupted")
+        live = create_run({"epss": [CVE]}, run_id="live")
+        run = db.session.get(RefreshRun, interrupted)
+        run.owner = {**run.owner, "process_start": "previous-process-incarnation"}
+        db.session.commit()
+    data = client.get(f"/api/refresh-runs/{interrupted}").get_json()
+    assert data["status"] == "incomplete"
+    assert data["coverage"][0]["status"] == "failed"
+    assert client.get(f"/api/refresh-runs/{live}").get_json()["status"] == "running"
+
+
+def test_cli_refresh_partial_run_is_nonzero_but_exports_remain_available(app):
+    from src.controllers import refresh_jobs as jobs
+    with patch.object(jobs, "_get_scc_engine", side_effect=RuntimeError("unavailable")), \
+            patch.object(jobs, "EPSS_DB") as epss, patch.object(jobs, "EUVD_DB") as euvd:
+        epss.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}}
+        euvd.return_value.get_full_mapping.return_value = {}
+        result = app.test_cli_runner().invoke(args=[
+            "refresh-vulnerability-data", "--project", "demo", "--run-id", "cli-partial",
+        ])
+    assert result.exit_code == 1
+    assert "Refresh run: cli-partial" in result.output
+    export = app.test_cli_runner().invoke(args=["export-refresh-changes", "--run-id", "cli-partial"])
+    assert export.exit_code == 0
+    data = json.loads(export.output)
+    assert data["status"] == "incomplete" and data["changes"]
+    duplicate = app.test_cli_runner().invoke(args=["refresh-vulnerability-data", "--run-id", "cli-partial"])
+    assert duplicate.exit_code == 1 and "already exists" in duplicate.output
