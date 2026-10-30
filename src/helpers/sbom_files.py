@@ -11,7 +11,9 @@ import uuid
 from ..extensions import db
 from ..models import Package, PackageSourceFile, SBOMBuild, SBOMDocument, SBOMFile, SBOMFileBuild, SBOMPackage
 from ..models.sbom_file import has_compilation_evidence
-from .export_files import recorded_evidence, INVENTORY_UNKNOWN_COMMENT
+from .export_files import (
+    recorded_evidence, spdx2_annotation_inventory, INVENTORY_UNKNOWN_COMMENT, SPDX2_ASSOCIATION_COMMENT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,7 @@ def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, s
         qualified = _spdx_key(ref, namespace, external_documents)
         return f'{qualified[0]}#{qualified[1]}' if qualified else f'{document.id}:{ref}'
 
+    annotated_files, annotated_relationships = spdx2_annotation_inventory(data)
     graph: list[dict] = []
     for package in data.get('packages') or []:
         if not isinstance(package, dict) or not isinstance(package.get('SPDXID'), str):
@@ -44,7 +47,7 @@ def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, s
             {'relationshipType': 'contains', 'from': owner, 'to': [key(ref)]}
             for ref in package.get('hasFiles') or [] if isinstance(ref, str)
         )
-    for file in data.get('files') or []:
+    for file in [*(data.get('files') or []), *annotated_files]:
         if not isinstance(file, dict):
             continue
         ref = file.get('SPDXID')
@@ -52,13 +55,15 @@ def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, s
             'type': 'software_File', 'spdxId': key(ref) if isinstance(ref, str) else None,
             'name': file.get('fileName'), '_file_properties': file,
         })
-    for relation in data.get('relationships') or []:
+    for relation in [*(data.get('relationships') or []), *annotated_relationships]:
         if not isinstance(relation, dict):
             continue
         source, target = relation.get('spdxElementId'), relation.get('relatedSpdxElement')
         if not isinstance(source, str) or not isinstance(target, str):
             continue
         kind = relation.get('relationshipType')
+        if kind == 'OTHER' and relation.get('comment') == SPDX2_ASSOCIATION_COMMENT:
+            kind = 'CONTAINS'
         if kind == 'CONTAINED_BY':
             source, target = target, source
         if kind in {'CONTAINS', 'CONTAINED_BY'}:

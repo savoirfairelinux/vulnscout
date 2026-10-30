@@ -5,7 +5,7 @@ from ..models.package import Package
 from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from .fast_spdx import SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_provenance_only_sources
-from ..helpers.export_files import file_metadata
+from ..helpers.export_files import file_metadata, SPDX2_INVENTORY_PREFIX, SPDX2_ASSOCIATION_COMMENT
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
@@ -26,6 +26,7 @@ from spdx_tools.spdx.model.actor import Actor, ActorType
 from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
 from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
 from spdx_tools.spdx.model.spdx_none import SpdxNone
+from spdx_tools.spdx.validation.file_validator import validate_file
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from io import StringIO
@@ -81,12 +82,15 @@ class _SPDXDocumentConverter(DocumentConverter):
         super().__init__()
         self.recorded_files: list[dict] = []
         self.recorded_relationships: list[dict] = []
+        self.recorded_annotations: list[dict] = []
 
     def convert(self, instance: Document, document: Document | None = None) -> dict:
         result = super().convert(instance, document)
         if self.recorded_files:
             result.setdefault("files", []).extend(self.recorded_files)
             result.setdefault("relationships", []).extend(self.recorded_relationships)
+        if self.recorded_annotations:
+            result.setdefault("annotations", []).extend(self.recorded_annotations)
         # spdx-tools emits enum names instead of SPDX's hyphenated JSON/XML values.
         for package in result.get("packages", []):
             if package.get("primaryPackagePurpose") == "OPERATING_SYSTEM":
@@ -329,15 +333,34 @@ class SPDX:
 
         stream = StringIO()
         converter = _SPDXDocumentConverter()
+        annotated_files: list[dict] = []
+        annotated_relationships: list[dict] = []
         for record in self.packagesCtrl.recorded_files():
             ref = f"SPDXRef-File-{uuid7(as_type='str')}"
-            converter.recorded_files.append({
+            file = {
                 "SPDXID": ref, "fileName": record["path"], **file_metadata(record, spdx3=False),
-            })
-            converter.recorded_relationships.extend({
-                "spdxElementId": self.pkg_to_ref[owner], "relationshipType": "CONTAINS",
+            }
+            try:
+                parsed = FileParser().parse_file(file)
+                native = parsed is not None and not validate_file(parsed, "SPDX-2.3")
+            except (SPDXParsingError, TypeError, ValueError):
+                native = False
+            destination = converter.recorded_files if native else annotated_files
+            relationships = converter.recorded_relationships if native else annotated_relationships
+            destination.append(file)
+            relationships.extend({
+                "spdxElementId": self.pkg_to_ref[owner], "relationshipType": "OTHER",
                 "relatedSpdxElement": ref,
+                "comment": SPDX2_ASSOCIATION_COMMENT,
             } for owner in record["packages"] if owner in self.pkg_to_ref)
+        if annotated_files:
+            converter.recorded_annotations.append({
+                "annotationDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "annotationType": "OTHER", "annotator": "Tool: VulnScout",
+                "comment": SPDX2_INVENTORY_PREFIX + json.dumps({
+                    "files": annotated_files, "relationships": annotated_relationships,
+                }, sort_keys=True),
+            })
         # CPE validation may fail because the SPDX spec expects special characters in package
         # names to be escaped, but our CPE strings may contain unescaped special characters
         if with_cpe:

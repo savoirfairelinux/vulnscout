@@ -735,7 +735,25 @@ def _export_files(variant, version):
     controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
     controllers.packages._preload_cache()
     view = SPDX(controllers) if version == 2 else SPDX3(controllers)
-    return json.loads(view.output_as_json())
+    output = json.loads(view.output_as_json())
+    if version == 2:
+        import jsonschema
+        from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+        schema = Path(__file__).resolve().parents[1] / "schemas" / "spdx" / "spdx-schema-2.3.json"
+        jsonschema.validate(output, json.loads(schema.read_text()))
+        parser = SPDX(ControllersCache())
+        parser.load_from_dict(output)
+        assert validate_full_spdx_document(parser.sbom) == []
+    return output
+
+
+def _exported_file_records(output, version):
+    from src.helpers.export_files import spdx2_annotation_inventory
+
+    if version == 2:
+        annotated, _ = spdx2_annotation_inventory(output)
+        return [*output.get("files", []), *annotated]
+    return [item for item in output["@graph"] if item.get("type") == "software_File"]
 
 
 @pytest.mark.parametrize("version", [2, 3])
@@ -745,6 +763,9 @@ def test_file_exports_roundtrip_companion_identity_shared_records_and_active_sco
 ):
     monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
     documents = _spdx2_documents()
+    documents["z-source.spdx.json"]["files"][0]["checksums"].append({
+        "algorithm": "SHA1", "checksumValue": "c" * 40,
+    })
     built = documents["a-built.spdx.json"]
     built["packages"].append({**built["packages"][0], "SPDXID": "SPDXRef-shared", "name": "shared"})
     built["relationships"].append({**built["relationships"][0], "spdxElementId": "SPDXRef-shared"})
@@ -778,16 +799,20 @@ def test_file_exports_roundtrip_companion_identity_shared_records_and_active_sco
     assert "old-scan-only.c" not in encoded
     assert "other-variant-only.c" not in encoded
     assert "FILE CONTENT MUST NOT BE EXPORTED" not in encoded
-    files = output["files"] if version == 2 else [
-        item for item in output["@graph"] if item.get("type") == "software_File"
-    ]
+    files = _exported_file_records(output, version)
     assert len(files) == 2
     id_field = "SPDXID" if version == 2 else "spdxId"
     assert len({file[id_field] for file in files}) == 2
     hash_field = "checksums" if version == 2 else "verifiedUsing"
     assert sum(hash_field in file for file in files) == 1
-    relationships = output["relationships"] if version == 2 else output["@graph"]
-    assert sum(item.get("relationshipType") == ("CONTAINS" if version == 2 else "contains")
+    if version == 2:
+        from src.helpers.export_files import spdx2_annotation_inventory
+        _, annotated_relationships = spdx2_annotation_inventory(output)
+        assert len(output["files"]) == 1
+        relationships = [*output["relationships"], *annotated_relationships]
+    else:
+        relationships = output["@graph"]
+    assert sum(item.get("relationshipType") == ("OTHER" if version == 2 else "contains")
                for item in relationships) == 3
     restored = Variant.create("restored", variant.project_id)
     name = "export.spdx.json" if version == 2 else "export.jsonld"
@@ -801,9 +826,7 @@ def test_file_exports_roundtrip_companion_identity_shared_records_and_active_sco
     assert shared["source_files"][0]["spdx_id"] in {item["spdx_id"] for item in lib["source_files"]}
     assert not any(package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
     again = _export_files(restored, version)
-    assert len(again["files"] if version == 2 else [
-        node for node in again["@graph"] if node.get("type") == "software_File"
-    ]) == 2
+    assert len(_exported_file_records(again, version)) == 2
 
 
 @pytest.mark.parametrize("version", [2, 3])
@@ -815,9 +838,7 @@ def test_file_exports_preserve_recorded_compilation_without_fabricating_graph_co
     documents = _documents(extra=True)
     variant, _ = _import(tmp_path, documents)
     output = _export_files(variant, version)
-    files = output["files"] if version == 2 else [
-        item for item in output["@graph"] if item.get("type") == "software_File"
-    ]
+    files = _exported_file_records(output, version)
     assert len(files) == 3  # Includes the recorded binary output, not just source counts.
     if version == 3:
         identifiers = [node.get("spdxId", node.get("@id")) for node in output["@graph"]]
@@ -886,14 +907,58 @@ def test_spdx2_xml_exports_recorded_files_and_shared_containment(app, tmp_path):
     from src.helpers.export_scope import compute_export_scope
     from src.views.spdx import SPDX
 
-    variant, _ = _import(tmp_path, _documents(extra=True))
+    documents = _documents(extra=True)
+    source = next(node for node in documents["z-source.jsonld"]["@graph"] if node.get("type") == "software_File")
+    source["verifiedUsing"].append({"type": "Hash", "algorithm": "sha1", "hashValue": "c" * 40})
+    variant, _ = _import(tmp_path, documents)
     controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
     controllers.packages._preload_cache()
-    root = ElementTree.fromstring(SPDX(controllers).output_as_xml())
+    output = SPDX(controllers).output_as_xml()
+    root = ElementTree.fromstring(output)
+    path = tmp_path / "export.spdx.xml"
+    path.write_text(output)
+    parser = SPDX(ControllersCache())
+    parser.load_from_file(str(path))
+    from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+    assert validate_full_spdx_document(parser.sbom) == []
     files = root.findall("files")
-    assert len(files) == 3
-    assert len({file.findtext("SPDXID") for file in files}) == 3
+    assert len(files) == 1
+    assert len({file.findtext("SPDXID") for file in files}) == 1
     assert sum(file.find("checksums") is not None for file in files) == 1
-    contains = [relation for relation in root.findall("relationships")
-                if relation.findtext("relationshipType") == "CONTAINS"]
-    assert len(contains) == 3
+    associations = [relation for relation in root.findall("relationships")
+                    if relation.findtext("relationshipType") == "OTHER"]
+    assert len(associations) == 2
+    from src.helpers.export_files import SPDX2_INVENTORY_PREFIX
+    annotation = root.findtext("annotations/comment")
+    assert annotation.startswith(SPDX2_INVENTORY_PREFIX)
+    inventory = json.loads(annotation[len(SPDX2_INVENTORY_PREFIX):])
+    assert len(inventory["files"]) == 2
+    assert len(inventory["relationships"]) == 1
+
+
+@pytest.mark.parametrize("absolute_path", [False, True])
+def test_spdx2_hashless_and_sha256_only_records_are_valid_annotation_evidence(app, tmp_path, absolute_path):
+    from src.helpers.export_files import spdx2_annotation_inventory
+
+    documents = _documents(extra=True)
+    if absolute_path:
+        source = next(node for node in documents["z-source.jsonld"]["@graph"] if node.get("type") == "software_File")
+        source["name"] = "/recorded/source.c"
+        source["verifiedUsing"].append({"type": "Hash", "algorithm": "sha1", "hashValue": "c" * 40})
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, 2)
+    # Even a recorded SHA256 alone cannot satisfy SPDX2's normative SHA1 requirement.
+    assert not output.get("files")
+    files, relationships = spdx2_annotation_inventory(output)
+    assert len(files) == 3
+    hashed = next(file for file in files if file["fileName"] == (
+        "/recorded/source.c" if absolute_path else "src/enabled.c"
+    ))
+    expected_hashes = [{"algorithm": "SHA256", "checksumValue": "a" * 64}]
+    if absolute_path:
+        expected_hashes.append({"algorithm": "SHA1", "checksumValue": "c" * 40})
+    assert hashed["checksums"] == expected_hashes
+    assert all(not file.get("checksums") for file in files if file is not hashed)
+    private_ids = {file["SPDXID"] for file in files}
+    assert all(relation["relatedSpdxElement"] not in private_ids for relation in output["relationships"])
+    assert len(relationships) == 3
