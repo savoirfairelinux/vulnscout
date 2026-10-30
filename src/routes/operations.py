@@ -270,6 +270,40 @@ def _plan_refresh_job(job: dict) -> List[dict]:
         if deferred
         else _explicit_refresh_options(source, job, mode)
     )
+    from ..extensions import db
+    from ..models import Project, Variant
+    scope = {key: options.get(key) for key in ("project_id", "variant_id")}
+    for key, model in (("project_id", Project), ("variant_id", Variant)):
+        if scope[key] is not None:
+            try:
+                scope[key] = str(uuid_module.UUID(scope[key]))
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise _PlanError(f"Invalid {key}") from exc
+            if db.session.get(model, uuid_module.UUID(scope[key])) is None:
+                raise _PlanError(f"Unknown {key}", 404)
+    if scope["variant_id"]:
+        variant = db.session.get(Variant, uuid_module.UUID(scope["variant_id"]))
+        assert variant is not None
+        if scope["project_id"] and str(variant.project_id) != scope["project_id"]:
+            raise _PlanError("variant_id does not belong to project_id")
+        scope["project_id"] = str(variant.project_id)
+    if deferred:
+        scope["variant_ids"] = job_options["variant_ids"]
+        variant_scopes: list[dict] = []
+        for identifier in job_options["variant_ids"]:
+            selected_variant = db.session.get(Variant, uuid_module.UUID(identifier))
+            assert selected_variant is not None
+            variant_scopes.append({"variant_id": identifier, "project_id": str(selected_variant.project_id)})
+        scope["variants"] = variant_scopes
+    elif scope["project_id"] or scope["variant_id"]:
+        from ..controllers.refresh_jobs import _scoped_vulnerability_ids
+        selected_ids = (
+            [scope["variant_id"]] if scope["variant_id"] else [
+                str(variant.id) for variant in Variant.get_by_project(uuid_module.UUID(scope["project_id"]))
+            ]
+        )
+        if set(job_options["ids"]) - _scoped_vulnerability_ids(selected_ids):
+            raise _PlanError("Refresh identifiers are outside the selected scope")
 
     return [{
         "op_id": refresh_op_id(source),
@@ -277,7 +311,7 @@ def _plan_refresh_job(job: dict) -> List[dict]:
         "source": source,
         "label": REFRESH_LABELS[source],
         "lane": LANE_PIPELINE,
-        "scope": {key: options.get(key) for key in ("project_id", "variant_id")},
+        "scope": scope,
         "options": job_options,
         "runner": run_deferred_refresh if deferred else REFRESH_JOBS[source],
     }]
@@ -334,9 +368,15 @@ def _enqueue(planned: List[dict]) -> Tuple[str, List[dict]]:
     refresh_items = [item for item in planned if item["kind"] == KIND_REFRESH]
     if refresh_items:
         from ..helpers.refresh_runs import create_run
+        scopes = [item["scope"] for item in refresh_items]
+        scope = scopes[0] if all(item == scopes[0] for item in scopes) else {
+            "project_id": None, "variant_id": None,
+            "source_scopes": {item["source"]: item["scope"] for item in refresh_items},
+            "variants": [variant for item in scopes for variant in item.get("variants", [])],
+        }
         create_run(
             {item["source"]: item["options"].get("ids", []) for item in refresh_items},
-            run_id=queue_id, scope=refresh_items[0]["scope"],
+            run_id=queue_id, scope=scope,
         )
     created: List[dict] = []
     for position, item in enumerate(planned, 1):

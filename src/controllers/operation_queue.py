@@ -194,6 +194,12 @@ class OperationQueue:
     def _execute(self, job: _Job) -> None:
         try:
             if job.ctx.is_cancelled():
+                operation = registry.get(job.op_id) or {}
+                if operation.get("kind") == "refresh" and operation.get("queue_id") and self._app:
+                    from ..helpers.refresh_runs import finish_source
+                    with self._app.app_context():
+                        finish_source(operation["queue_id"], operation["source"], "cancelled",
+                                      "Cancelled before start")
                 registry.update(
                     job.op_id,
                     status=STATUS_CANCELLED,

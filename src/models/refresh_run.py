@@ -20,6 +20,7 @@ class RefreshRun(Base):
     sources: Mapped[list] = mapped_column(JSON)
     source_status: Mapped[dict] = mapped_column(JSON)
     coverage: Mapped[list] = mapped_column(JSON)
+    owner: Mapped[dict] = mapped_column(JSON)
 
 
 class RefreshChange(Base):
