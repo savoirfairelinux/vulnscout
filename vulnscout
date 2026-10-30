@@ -67,8 +67,8 @@ _vulnscout_files() {
 }
 _vulnscout_complete() {
     local cur prev word verb="" i k
-    local data_verbs="add scan match-condition report export import refresh"
-    local all_verbs="add scan match-condition report export import refresh delete list config asset start stop restart update version serve"
+    local data_verbs="add scan match-condition assess report export import refresh"
+    local all_verbs="add scan match-condition assess report export import refresh delete list config asset start stop restart update version serve"
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -84,7 +84,7 @@ _vulnscout_complete() {
     done
 
     case "$prev" in
-        -p|--project|-v|--variant|--condition) return 0 ;;
+        -p|--project|-v|--variant|--condition|--cve|--filter|--model|--timeout) return 0 ;;
         --format) mapfile -t COMPREPLY < <(compgen -W "pdf html" -- "$cur"); return 0 ;;
         --timestamps) mapfile -t COMPREPLY < <(compgen -W "original current" -- "$cur"); return 0 ;;
         --spdx|--cdx|--cve-check|--yocto-vex|--openvex)
@@ -108,6 +108,8 @@ _vulnscout_complete() {
             words="$all_verbs" ;;
         add)
             words="--spdx --cdx --cve-check --yocto-vex --openvex --grype" ;;
+        assess)
+            words="--cve --filter --model --timeout --dry-run --json" ;;
         scan)
             local prefix=""
             if [[ "$cur" == *,* ]]; then
@@ -249,9 +251,12 @@ PROJECT="default"
 PROJECT_SPECIFIED=false
 VARIANT=""
 VARIANT_SPECIFIED=false
+# Every -v given to a command, in order; only 'assess' accepts several (others use the last, VARIANT).
+VARIANTS=()
 MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false
+EXEC_ENV=()
 
 VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.25"
 LEGACY_TOKENS=()
@@ -264,7 +269,7 @@ Usage: vulnscout [global options] <command> [arguments] [options]
        vulnscout <command> --help
 
 Global options (before or after the command):
-    --dev                   Mount local src/ and vulnscout_mcp/; start, restart and serve
+    --dev                   Mount local src/, vulnscout_mcp/ and .github/skills/; start, restart and serve
                             also run the frontend dev server
     -h, --help              Show help for a command, or this overview
     --version               Show the VulnScout version
@@ -273,6 +278,7 @@ Data commands (also accept --project and --variant; see '<command> --help'):
     add                     Add SBOMs and scan results, then process them
     scan                    Run vulnerability scans
     match-condition         Test stored vulnerabilities against a condition
+    assess                  Assess vulnerabilities with the embedded AI agent
     report                  Generate reports
     export                  Export SBOMs, custom data, assessments or context
     import                  Import custom data, assessments or context
@@ -354,6 +360,32 @@ Exit codes: 0 no match, 1 error, 2 match
 Examples:
     vulnscout match-condition "cvss >= 9.0"
     vulnscout match-condition -p demo -v x86 "epss >= 50%"
+EOF
+            ;;
+        assess) cat <<'EOF'
+Usage: vulnscout assess (--cve <id>... | --filter <expr>) [-p <project>] [-v <variant>] [options]
+
+Assess vulnerabilities with the AI provider configured for the web UI Agent.
+Each result is a pending AI assessment that replaces the earlier pending AI
+assessment on the same targets; approved assessments are never changed.
+Options:
+    --cve <id>              Vulnerability to assess (repeatable); not with --filter
+    --filter <expr>         Assess every vulnerability matching a match-condition expression; not with --cve
+    -p, --project <name>    Project (default: "default"); alone, uses every variant
+    -v, --variant <name>    Variant (repeatable); requires --project
+    --model <id>            Model to use instead of AI_MODEL
+    --timeout <seconds>     Limit for each agent turn (default: 600)
+    --dry-run               Show the vulnerabilities and targets without calling the AI
+    --json                  Print the summary as JSON
+Exit codes: 0 every vulnerability assessed (or none matched), 1 error or any vulnerability not fully assessed
+Ctrl-C stops after cancelling the current agent turn and still prints the summary; press it again to stop now.
+To combine specific IDs with other conditions, list them in the filter with "id == <id>".
+
+Examples:
+    vulnscout assess -p demo --filter "pending and cvss >= 9"
+    vulnscout assess -p demo -v x86 --cve CVE-2024-3094 --json
+    vulnscout assess -p demo -v x86 -v arm64 --filter "new and cvss >= 7" --dry-run
+    vulnscout assess -p demo --filter "(id == CVE-2024-3094 or id == CVE-2023-4863) and pending"
 EOF
             ;;
         report) cat <<'EOF'
@@ -538,7 +570,60 @@ exec_container() {
         --env "_VULNSCOUT_COLOR_STDOUT=$stdout" \
         --env "_VULNSCOUT_COLOR_STDERR=$stderr" \
         --env "NO_COLOR=${NO_COLOR:-}" --env "TERM=${TERM:-}" \
+        ${EXEC_ENV[@]+"${EXEC_ENV[@]}"} \
         "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
+}
+
+# Run an entrypoint command that Ctrl-C, CI cancellation (SIGTERM) or a closed terminal (SIGHUP) can stop.
+# A non-TTY `exec` does not forward signals, and the engine client exits on SIGINT while the command keeps
+# running in the container. So the client runs in its own process group (set -m) and this shell forwards
+# the first signal as SIGINT (clean stop, partial report) and any further one as SIGTERM to the PID that
+# entrypoint.sh publishes for VULNSCOUT_RUN_ID.
+run_interruptible() {
+    local run_id="host-$$-$RANDOM" client status=0 final=0
+    local -a EXEC_ENV=(--env "VULNSCOUT_RUN_ID=$run_id")
+    FORWARDED_SIGNALS=0
+    # Trap before starting the client, which resets it to the default: a signal in between must not
+    # stop only this shell.
+    # shellcheck disable=SC2064  # run_id is fixed for this run
+    trap "forward_container_signal '$run_id'" INT TERM HUP
+    set -m
+    exec_container "$@" &
+    client=$!
+    set +m
+    while :; do
+        wait "$client" && status=0 || status=$?
+        # wait also returns when a trapped signal arrives; keep waiting while the client still runs.
+        kill -0 "$client" 2>/dev/null || break
+    done
+    # A signal can interrupt the last wait just as the client exits: collect the client's own status
+    # (127: the wait above already collected it).
+    wait "$client" 2>/dev/null || final=$?
+    [ "$final" -eq 127 ] || status=$final
+    trap - INT TERM HUP
+    return "$status"
+}
+
+# Forward first, then warn: writing to a closed terminal or a broken stderr must not stop the forwarding.
+# Only a delivered signal counts, so presses before the command publishes its PID do not escalate.
+forward_container_signal() {
+    local signal=INT
+    if [ "$FORWARDED_SIGNALS" -gt 0 ]; then
+        signal=TERM
+    fi
+    # shellcheck disable=SC2016  # expanded by the container shell
+    if ! call_container_engine exec "$CONTAINER_NAME" sh -c \
+        'f="${TMPDIR:-/tmp}/vulnscout-ai-assess-$1.pid"; [ -f "$f" ] && kill -"$2" "$(cat "$f")"' \
+        _ "$1" "$signal" >/dev/null 2>&1; then
+        console_err warning "Not started yet; press Ctrl-C again to stop." || true
+        return 0
+    fi
+    FORWARDED_SIGNALS=$((FORWARDED_SIGNALS + 1))
+    if [ "$signal" = TERM ]; then
+        console_err warning "Stopping now; the report may be lost." || true
+    else
+        console_err warning "Stopping after the current step; press Ctrl-C again to stop now." || true
+    fi
 }
 
 container_has_dev_mount() {
@@ -548,6 +633,9 @@ container_has_dev_mount() {
     grep -qx '/scan/src' <<< "$mounts" || return 1
     if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
         grep -qx '/scan/vulnscout_mcp' <<< "$mounts" || return 1
+    fi
+    if [[ -d "$SCRIPT_DIR/.github/skills" ]]; then
+        grep -qx '/scan/.github/skills' <<< "$mounts" || return 1
     fi
 }
 
@@ -716,7 +804,7 @@ find_legacy_tokens() {
                     skip_value=true ;;
                 --dev|-h|--help|--version)
                     ;;
-                start|stop|restart|update|version|serve|add|scan|match-condition|refresh|asset|report|export|import|delete|list)
+                start|stop|restart|update|version|serve|add|scan|match-condition|assess|refresh|asset|report|export|import|delete|list)
                     # A new-grammar verb as first command: the rest are its arguments, never legacy flags.
                     if [ "$seen_command" = false ]; then
                         return 1
@@ -873,6 +961,9 @@ EOF
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src:Z)
         if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
             vol_args+=(-v "$SCRIPT_DIR/vulnscout_mcp":/scan/vulnscout_mcp:Z)
+        fi
+        if [[ -d "$SCRIPT_DIR/.github/skills" ]]; then
+            vol_args+=(-v "$SCRIPT_DIR/.github/skills":/scan/.github/skills:Z)
         fi
         env_args+=(-e DEV_MODE=true)
         console_out info "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
@@ -1145,6 +1236,62 @@ verb_match_condition() {
     set_explicit_scope_args
     # Exit 2 (condition matched) propagates as the wrapper's exit code.
     exec_container "${SCOPE_ARGS[@]}" --match-condition "$1"
+}
+
+verb_assess() {
+    local has_cve=false has_filter=false
+    local -a args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cve)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]; then
+                    die "invalid vulnerability ID '$2'."
+                fi
+                args+=(--cve "$2"); has_cve=true; shift 2 ;;
+            --filter)
+                if [ $# -lt 2 ] || [ -z "$2" ]; then
+                    die "--filter requires a non-empty expression."
+                fi
+                if [ "$has_filter" = true ]; then
+                    die "'assess' accepts only one --filter."
+                fi
+                args+=(--filter "$2"); has_filter=true; shift 2 ;;
+            --model)
+                require_value "$1" "$#" "${2:-}"
+                args+=(--model "$2"); shift 2 ;;
+            --timeout)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                    die "--timeout must be a positive number of seconds."
+                fi
+                args+=(--timeout "$2"); shift 2 ;;
+            --dry-run|--json)
+                args+=("$1"); shift ;;
+            *)
+                reject_option assess "$1" ;;
+        esac
+    done
+    if [ "$has_cve" = true ] && [ "$has_filter" = true ]; then
+        die "'assess' needs exactly one of --cve or --filter; to combine them, list the IDs in the filter, e.g. --filter \"(id == CVE-2024-3094 or id == CVE-2023-4863) and pending\"."
+    elif [ "$has_cve" = false ] && [ "$has_filter" = false ]; then
+        die "'assess' needs exactly one of --cve or --filter."
+    fi
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'assess' --variant requires --project."
+    fi
+    local variant
+    local -a variant_args=()
+    for variant in "${VARIANTS[@]}"; do
+        variant_args+=(--variant "$variant")
+    done
+    ensure_running
+    SCOPE_ARGS=()
+    if [ "$PROJECT_SPECIFIED" = true ]; then
+        SCOPE_ARGS+=(--project "$PROJECT")
+    fi
+    # The entrypoint takes a single --variant; ai-assess itself accepts several.
+    run_interruptible "${SCOPE_ARGS[@]}" --ai-assess "${variant_args[@]}" "${args[@]}"
 }
 
 verb_refresh() {
@@ -1489,7 +1636,7 @@ parse_new() {
                 require_value "$1" "$#" "${2:-}"
                 case "$1" in
                     -p|--project) PROJECT="$2"; PROJECT_SPECIFIED=true ;;
-                    *) VARIANT="$2"; VARIANT_SPECIFIED=true ;;
+                    *) VARIANT="$2"; VARIANT_SPECIFIED=true; VARIANTS+=("$2") ;;
                 esac
                 shift 2 ;;
             --dev)
@@ -1526,6 +1673,7 @@ parse_new() {
         add) verb_add "${rest[@]}" ;;
         scan) verb_scan "${rest[@]}" ;;
         match-condition) verb_match_condition "${rest[@]}" ;;
+        assess) verb_assess "${rest[@]}" ;;
         refresh) verb_refresh "${rest[@]}" ;;
         asset) verb_asset "${rest[@]}" ;;
         report) verb_report "${rest[@]}" ;;

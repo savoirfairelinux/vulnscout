@@ -1,5 +1,9 @@
 # VulnScout Skills
 
+The built-in VulnScout Agent loads `cve-assessment` for assess actions and
+`vulnscout assess`, and `assessment-review` for review actions. Changes here
+affect both the built-in Agent and external clients.
+
 ## SBOM Dependencies and Lifecycle Skill
 
 [`sbom-dependencies/SKILL.md`](./sbom-dependencies/SKILL.md) answers questions such

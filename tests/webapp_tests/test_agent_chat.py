@@ -83,6 +83,7 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
     assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
     assert captured["enable_skills"] is False
+    assert captured["on_permission_request"].__name__ == "approve_all" and "custom_agents" not in captured
     assert "untrusted evidence" in captured["system_message"]["content"]
     dependency_tools = {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies"}
     assert dependency_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
@@ -1283,3 +1284,265 @@ def test_public_event_projection_excludes_tool_payloads():
     _publish_event(SimpleNamespace(data={"private": "secret"}), records.append)
     _publish_event(SimpleNamespace(data=payloads[0]), None)
     assert len(records) == 5
+
+
+def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
+    """Install a fake SDK client; return (captured create/resume options + sent message, deleted session ids)."""
+    import asyncio
+    from src.routes import agent
+
+    captured, deleted = {}, []
+
+    class Session:
+        session_id = "assess-session"
+
+        def on(self, callback):
+            pass
+
+        async def send_and_wait(self, message):
+            captured["message"] = message
+            await asyncio.sleep(delay)
+            return SimpleNamespace(data=SimpleNamespace(content="Assessed"))
+
+        async def disconnect(self):
+            if disconnect_error:
+                raise disconnect_error
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def list_models(self):
+            return [SimpleNamespace(id="model", policy=None)]
+
+        async def create_session(self, **options):
+            captured.update(options)
+            return Session()
+
+        async def resume_session(self, session_id, **options):
+            captured.update(options, resumed=session_id)
+            return Session()
+
+        async def delete_session(self, session_id):
+            deleted.append(session_id)
+
+    monkeypatch.setattr(agent, "_sdk_client", lambda token: Client())
+    return captured, deleted
+
+
+def test_ephemeral_assess_profile_turn_limits_tools_and_deletes_its_session(monkeypatch):
+    import asyncio
+    from src.routes import agent, agent_skills
+
+    monkeypatch.delenv("VULNSCOUT_AGENT_WEB_ACCESS", raising=False)
+    captured, deleted = _assess_sdk(monkeypatch)
+    conversation = agent.Conversation(session_id="old", session_scope="{}")
+    reply, _ = asyncio.run(agent._reply(
+        conversation, "Assess", agent._mcp_path(), "model", "{}",
+        profile=agent_skills.ASSESS, timeout=5, api_url="http://127.0.0.1:4321", ephemeral=True,
+    ))
+
+    assert reply == "Assessed" and "resumed" not in captured
+    tools = agent.READ_TOOLS + agent_skills.ASSESS.write_tools
+    server = captured["mcp_servers"]["vulnscout"]
+    assert server["tools"] == list(tools)
+    assert server["env"]["VULNSCOUT_BASE_URL"] == "http://127.0.0.1:4321"
+    assert captured["available_tools"] == ([f"mcp:vulnscout-{tool}" for tool in tools]
+                                           + ["builtin:skill", "builtin:view", "builtin:web_fetch"])
+    assert not {"update_project_context", "update_variant_context", "write_assessment_review"} & set(tools)
+    assert captured["enable_skills"] is True and captured["agent"] == "vulnscout-assess"
+    assert captured["custom_agents"][0]["skills"] == ["cve-assessment"]
+    assert captured["on_permission_request"](SimpleNamespace(kind="shell"), {}).kind == "reject"
+    assert captured["system_message"]["content"] == agent_skills.PROFILE_SYSTEM_MESSAGE
+    assert captured["message"] == "Use the cve-assessment skill.\n\nAssess"
+    assert deleted == ["assess-session"]
+    assert conversation.session_id == "old"
+
+
+def test_profile_options_are_resupplied_on_resume(monkeypatch):
+    import asyncio
+    from src.routes import agent, agent_skills
+
+    monkeypatch.setenv("VULNSCOUT_AGENT_WEB_ACCESS", "off")
+    captured, _ = _assess_sdk(monkeypatch)
+    conversation = agent.Conversation(session_id="thread-session", session_scope="{}")
+    asyncio.run(agent._reply(conversation, "Is it fixed?", agent._mcp_path(), "model", "{}",
+                             profile=agent_skills.REVIEW))
+    assert captured["resumed"] == "thread-session"
+    assert captured["agent"] == "vulnscout-review"
+    assert "builtin:web_fetch" not in captured["available_tools"]
+    assert "mcp:vulnscout-write_assessment" not in captured["available_tools"]
+    assert "Web research is unavailable" in captured["message"]
+
+
+@pytest.mark.parametrize("remove", ["root", "skill"])
+def test_profile_turn_fails_when_skills_are_missing(monkeypatch, tmp_path, remove):
+    import asyncio
+    import re
+    import shutil
+    from src.routes import agent, agent_skills
+
+    root = tmp_path / "skills"
+    shutil.copytree(Path(agent_skills.__file__).resolve().parents[2] / ".github" / "skills", root)
+    if remove == "root":
+        shutil.rmtree(root)
+    else:
+        (root / "cve-assessment" / "SKILL.md").unlink()
+    monkeypatch.setenv("VULNSCOUT_SKILLS_PATH", str(root))
+    captured, _ = _assess_sdk(monkeypatch)
+    expected = (agent_skills.SKILLS_MISSING_ERROR if remove == "root"
+                else "Agent skill cve-assessment could not be loaded.")
+    with pytest.raises(agent_skills.AgentSkillError, match=re.escape(expected)):
+        asyncio.run(agent._reply(agent.Conversation(), "Review", agent._mcp_path(), "model", "{}",
+                                 profile=agent_skills.REVIEW))
+    assert captured == {}
+
+
+def test_agent_turn_timeout_is_configurable(monkeypatch):
+    import asyncio
+    from src.routes import agent
+
+    _, deleted = _assess_sdk(monkeypatch, delay=1)
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(agent._reply(
+            agent.Conversation(), "Assess", agent._mcp_path(), "model", "{}",
+            timeout=0.01, ephemeral=True,
+        ))
+    assert deleted == ["assess-session"]
+
+
+def test_ephemeral_session_is_deleted_when_disconnect_fails(monkeypatch):
+    import asyncio
+    from src.routes import agent
+
+    _, deleted = _assess_sdk(monkeypatch, disconnect_error=RuntimeError("disconnect failed"))
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        asyncio.run(agent._reply(
+            agent.Conversation(), "Assess", agent._mcp_path(), "model", "{}", ephemeral=True,
+        ))
+    assert deleted == ["assess-session"]
+
+
+def _capture_reply(monkeypatch, error=None):
+    from src.routes import agent
+
+    calls = []
+
+    async def reply(conversation, prompt, path, model, scope, publish=None, **kwargs):
+        calls.append(kwargs)
+        if error:
+            raise error
+        return "ok", {"cost": None, "input_tokens": None, "output_tokens": None}
+
+    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
+    monkeypatch.setattr(agent, "_reply", reply)
+    return calls
+
+
+def test_action_binds_a_skill_profile_to_its_thread(client, monkeypatch):
+    from src.routes import agent_skills
+
+    calls = _capture_reply(monkeypatch)
+    thread = {"X-Agent-Thread": str(uuid4())}
+    assert client.post("/api/agent/messages", json={"message": "Hi"}).status_code == 200
+    assert client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
+                       headers=thread).status_code == 200
+    assert client.post("/api/agent/messages", json={"message": "Why?"}, headers=thread).status_code == 200
+    assert calls == [{}, {"profile": agent_skills.ASSESS, "timeout": agent_skills.ACTION_TIMEOUT},
+                     {"profile": agent_skills.ASSESS, "timeout": agent_skills.ACTION_TIMEOUT}]
+    switched = client.post("/api/agent/messages", json={"message": "Review", "action": "review"}, headers=thread)
+    assert switched.status_code == 400 and "different action" in switched.get_json()["error"]
+
+
+@pytest.mark.parametrize("body, thread, error", [
+    ({"action": "hack"}, True, "Invalid agent action."),
+    ({"action": ["assess"]}, True, "Invalid agent action."),
+    ({"action": "assess"}, False, "own conversation"),
+])
+def test_invalid_actions_are_rejected(client, monkeypatch, body, thread, error):
+    calls = _capture_reply(monkeypatch)
+    headers = {"X-Agent-Thread": str(uuid4())} if thread else {}
+    response = client.post("/api/agent/messages", json={"message": "Go", **body}, headers=headers)
+    assert response.status_code == 400 and error in response.get_json()["error"]
+    assert calls == []
+
+
+def test_action_requires_bundled_skills(client, monkeypatch, tmp_path):
+    from src.routes import agent_skills
+
+    calls = _capture_reply(monkeypatch)
+    monkeypatch.setenv("VULNSCOUT_SKILLS_PATH", str(tmp_path / "missing"))
+    response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
+                           headers={"X-Agent-Thread": str(uuid4())})
+    assert response.status_code == 503 and response.get_json()["error"] == agent_skills.SKILLS_MISSING_ERROR
+    assert calls == []
+
+
+def test_busy_thread_does_not_bind_a_profile(client, monkeypatch):
+    from src.routes import agent
+
+    _capture_reply(monkeypatch)
+    thread_id = str(uuid4())
+    headers = {"X-Agent-Thread": thread_id}
+    client.delete("/api/agent/conversation", headers=headers)
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    client.post("/api/agent/messages", json={"message": "Hi"}, headers=headers)
+    thread = root.threads[thread_id]
+    with thread.lock:
+        response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
+                               headers=headers)
+    assert response.status_code == 409 and thread.profile is None
+
+
+@pytest.mark.parametrize("action, status, bound", [(None, 200, "review"), ("assess", 400, "review")])
+def test_profile_is_resolved_after_taking_the_thread_lock(client, monkeypatch, action, status, bound):
+    """A thread bound by a concurrent action turn keeps that binding."""
+    from src.routes import agent, agent_skills
+
+    calls = _capture_reply(monkeypatch)
+    thread_id = str(uuid4())
+    headers = {"X-Agent-Thread": thread_id}
+    client.delete("/api/agent/conversation", headers=headers)
+    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
+    client.post("/api/agent/messages", json={"message": "Hi"}, headers=headers)
+    thread = root.threads[thread_id]
+    real_lock = thread.lock
+
+    class BoundWhileWaiting:
+        def acquire(self, blocking=True):
+            thread.profile = agent_skills.REVIEW
+            return real_lock.acquire(blocking)
+
+        def release(self):
+            real_lock.release()
+
+        def locked(self):
+            return real_lock.locked()
+
+    thread.lock = BoundWhileWaiting()
+    body = {"message": "Next", **({"action": action} if action else {})}
+    response = client.post("/api/agent/messages", json=body, headers=headers)
+    assert response.status_code == status
+    assert thread.profile.action == bound and not real_lock.locked()
+    if status == 200:
+        assert calls[-1] == {"profile": agent_skills.REVIEW, "timeout": agent_skills.ACTION_TIMEOUT}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_skill_errors_are_reported(client, monkeypatch, stream):
+    from src.routes import agent_skills
+
+    _capture_reply(monkeypatch, agent_skills.AgentSkillError("Agent skill cve-assessment could not be loaded."))
+    headers = {"X-Agent-Thread": str(uuid4())}
+    if stream:
+        headers["Accept"] = "application/x-ndjson"
+    response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"}, headers=headers)
+    if stream:
+        events = [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
+        assert events[-1] == {"type": "error", "error": "Agent skill cve-assessment could not be loaded."}
+    else:
+        assert response.status_code == 503
+        assert response.get_json()["error"] == "Agent skill cve-assessment could not be loaded."

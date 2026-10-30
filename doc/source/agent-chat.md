@@ -22,12 +22,33 @@ configured provider keys, and the agent can change assessments and context.
 Conversation state is managed in memory; this is not a durable multi-user
 session service.
 
-The SDK session exposes only the allowed VulnScout MCP tools. External skill
-discovery, shell tools, arbitrary filesystem access, and web research are not
-enabled. Uploaded source is inspected through scoped codebase-reference tools,
-without extraction or execution. **Codebase Path** is an external-client hint,
-not a container mount. Dependency discovery does not establish runtime use or
-exploitability.
+Free chat exposes only the allowed VulnScout MCP tools. Assess and review actions
+(each in its own conversation) and `./vulnscout assess` additionally load the
+bundled skills from `.github/skills`: `cve-assessment` for assessments,
+`assessment-review` (with `cve-assessment`) for reviews. These sessions may read
+only the skill files and fetch public `http(s)` pages; loopback, private,
+link-local and other non-public addresses are refused, and redirect targets rely
+on the Copilot runtime's own private-address guard. Set
+`VULNSCOUT_AGENT_WEB_ACCESS` to `off` (or `0`, `false`, `no`) to disable web
+fetch; the skills then report missing NVD/advisory evidence. Shell tools and
+host filesystem access stay disabled. Uploaded source is inspected through
+scoped codebase-reference tools, without extraction or execution. **Codebase
+Path** is an external-client hint, not a container mount. Dependency discovery
+does not establish runtime use or exploitability.
+
+```{warning}
+With web fetch enabled, the model that reads your project data can also request
+public URLs. Fetched pages and uploaded source are treated as untrusted, but a
+prompt injection in them could still try to encode data into a URL. Disable web
+access for confidential projects or untrusted uploads.
+```
+
+`flask ai-assess` (`./vulnscout assess`) runs the same SDK turn without the web
+session. Each turn is ephemeral (its SDK session is deleted) and runs the
+`cve-assessment` skill with the read tools plus `write_assessment` and
+`update_ai_assessment`. The command serves the app's API on an ephemeral
+`127.0.0.1` port for the MCP server, because the CLI process does not run the
+web server. It reads provider settings from the same `config.env`.
 
 ## Configuration and Credentials
 
@@ -128,6 +149,10 @@ proxy and backend MCP connection.
 
 `VULNSCOUT_MCP_SERVER_PATH` optionally overrides the stdio entrypoint. Remove old
 overrides pointing at a separate MCP checkout to use the bundled implementation.
+
+`VULNSCOUT_SKILLS_PATH` optionally overrides the skills directory (default:
+`.github/skills` in the installation). Assess and review actions fail with an
+error when it is missing.
 
 ## Develop in the Container
 

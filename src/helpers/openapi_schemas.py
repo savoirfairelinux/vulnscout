@@ -534,6 +534,7 @@ SCHEMAS: dict[str, Any] = {
     "AgentMessageRequest": _object({
         "message": {"type": "string", "minLength": 1, "maxLength": 8000},
         "model": {"type": "string", "minLength": 1, "maxLength": 100},
+        "action": {"type": "string", "enum": ["assess", "review"]},
         "context": _object({
             "page": {"type": "string", "enum": [
                 "metrics", "packages", "vulnerabilities", "scans", "review",

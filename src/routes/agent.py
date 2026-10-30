@@ -1,6 +1,7 @@
 """Local Copilot chat backed by the VulnScout stdio MCP server."""
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import os
@@ -21,6 +22,7 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
+from . import agent_skills
 from .config import _config_file_path, _has_control_characters, persist_env_keys
 from ..models.project import Project
 from ..models.variant import Variant
@@ -77,6 +79,7 @@ class Conversation:
     credentials: AgentCredentials = field(default_factory=AgentCredentials)
     session_id: str | None = None
     session_scope: str | None = None
+    profile: agent_skills.AgentProfile | None = None
     model: str = "auto"
     usage: dict = field(default_factory=lambda: {"cost": None, "input_tokens": None, "output_tokens": None})
     messages: list[dict[str, str]] = field(default_factory=list)
@@ -638,9 +641,25 @@ def _publish_event(event, publish, write_calls=None):
                  "write": write_calls is not None and event_data.tool_call_id in write_calls})
 
 
-async def _reply(conversation, message, path, model, scope, publish=None):
+async def _reply(conversation, message, path, model, scope, publish=None, *,
+                 tools=READ_TOOLS + WRITE_TOOLS, timeout=120, api_url=None, ephemeral=False, profile=None):
+    """Run one agent turn; ephemeral turns never resume a session and delete theirs afterwards.
+
+    A *profile* runs the turn with its bundled skills; its write tools replace *tools*.
+    """
     from copilot.session import PermissionHandler
 
+    profile_options: dict = {}
+    if profile:
+        skills_root = agent_skills.skills_path()
+        if skills_root is None:
+            raise agent_skills.AgentSkillError(agent_skills.SKILLS_MISSING_ERROR)
+        if missing := agent_skills.missing_skills(skills_root, profile):
+            raise agent_skills.AgentSkillError(f"Agent skill {missing[0]} could not be loaded.")
+        web_enabled = agent_skills.web_access_enabled()
+        tools = READ_TOOLS + profile.write_tools
+        message = agent_skills.profile_message(profile, web_enabled, message)
+        profile_options = agent_skills.session_options(profile, skills_root, web_enabled, tools)
     async with _sdk_client(conversation.credentials.token) as client:
         if conversation.credentials.provider:
             if model not in {choice["id"] for choice in conversation.credentials.provider.models}:
@@ -656,15 +675,15 @@ async def _reply(conversation, message, path, model, scope, publish=None):
             "model": provider_options["model_id"] if provider_options else model,
             "streaming": publish is not None,
             "on_permission_request": PermissionHandler.approve_all,
-            "available_tools": [f"mcp:vulnscout-{tool}" for tool in READ_TOOLS + WRITE_TOOLS],
+            "available_tools": [f"mcp:vulnscout-{tool}" for tool in tools],
             "mcp_servers": {"vulnscout": {
                 "type": "local", "command": sys.executable,
                 "args": [str(path)], "cwd": str(path.parent),
                 "env": {
-                    "VULNSCOUT_BASE_URL": os.getenv("VULNSCOUT_AGENT_API_URL", "http://localhost:7275"),
+                    "VULNSCOUT_BASE_URL": api_url or os.getenv("VULNSCOUT_AGENT_API_URL", "http://localhost:7275"),
                     "VULNSCOUT_AGENT_SCOPE": scope,
                 },
-                "tools": list(READ_TOOLS + WRITE_TOOLS),
+                "tools": list(tools),
             }},
             "system_message": {"mode": "append", "content": (
                 "You are the VulnScout agent. Use only VulnScout MCP tools for facts and actions. "
@@ -703,10 +722,12 @@ async def _reply(conversation, message, path, model, scope, publish=None):
             "enable_skills": False,
             "enable_file_hooks": False,
         }
+        options.update(profile_options)
         if provider_options:
             options["provider"] = provider_options
         if (
-            conversation.session_id
+            not ephemeral
+            and conversation.session_id
             and conversation.session_scope == scope
         ):
             session = await client.resume_session(conversation.session_id, **options)
@@ -721,15 +742,22 @@ async def _reply(conversation, message, path, model, scope, publish=None):
                 _publish_event(event, publish, write_calls)
 
             session.on(on_event)
-            event = await asyncio.wait_for(session.send_and_wait(message), timeout=120)
+            event = await asyncio.wait_for(session.send_and_wait(message), timeout=timeout)
             if event is None or not event.data.content:
                 raise RuntimeError("The agent did not return a response.")
-            conversation.session_id = session.session_id
-            conversation.session_scope = scope
+            if not ephemeral:
+                conversation.session_id = session.session_id
+                conversation.session_scope = scope
             usage = _add_usage(conversation.usage, _session_usage(live_events))
             return event.data.content, usage
         finally:
-            await session.disconnect()
+            try:
+                await session.disconnect()
+            finally:
+                if ephemeral:
+                    # Best effort: a failed delete must not hide the turn's own result or error.
+                    with contextlib.suppress(Exception):
+                        await client.delete_session(session.session_id)
 
 
 @agent_blueprint.route("/api/agent", methods=["GET"])
@@ -1027,7 +1055,8 @@ def agent_message():
     reported in the stream rather than by changing the HTTP status.
 
     OpenAPI:
-    body AgentMessageRequest required Message and optional model and browser context.
+    body AgentMessageRequest required Message, optional model, browser context and thread action (assess or review).
+    response 400 Error Invalid message, context or action.
     response 200 AgentReply Completed reply, selected model, and usage.
     response 200 ndjson Newline-delimited agent events when Accept is application/x-ndjson.
     response 409 Error Another request is using this conversation.
@@ -1053,6 +1082,13 @@ def agent_message():
         context = _validated_context(data.get("context"))
     except ValueError as exc:
         return _response({"error": str(exc)}, key, 400)
+    action = data.get("action")
+    if action is not None and (not isinstance(action, str) or action not in agent_skills.PROFILES):
+        return _response({"error": "Invalid agent action."}, key, 400)
+    if action and conversation.root is None:
+        return _response({"error": "Agent actions run only in their own conversation."}, key, 400)
+    if action and conversation.profile not in (None, agent_skills.PROFILES[action]):
+        return _response({"error": "This conversation already runs a different action."}, key, 400)
     user_message = message.strip()
     agent_prompt = user_message
     if context:
@@ -1063,25 +1099,36 @@ def agent_message():
         return _response({"error": (
             "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override."
         )}, key, 503)
+    if (action or conversation.profile) and agent_skills.skills_path() is None:
+        return _response({"error": agent_skills.SKILLS_MISSING_ERROR}, key, 503)
     try:
         scope = _scope_for_context(context)
     except ValueError as exc:
         return _response({"error": str(exc)}, key, 400)
     if not conversation.lock.acquire(blocking=False):
         return _response({"error": BUSY_AGENT_ERROR}, key, 409)
+    # Resolve the profile under the lock so a concurrent action turn's binding is neither lost nor switched.
+    profile = agent_skills.PROFILES[action] if action else conversation.profile
+    if conversation.profile not in (None, profile):
+        conversation.lock.release()
+        return _response({"error": "This conversation already runs a different action."}, key, 400)
+    conversation.profile = profile
+    options = {"profile": profile, "timeout": agent_skills.ACTION_TIMEOUT} if profile else {}
     if request.headers.get("Accept") == "application/x-ndjson":
         return _stream_reply(key, conversation, agent_prompt, user_message,
-                             path, model, scope)
+                             path, model, scope, options)
     return _json_reply(key, conversation, agent_prompt, user_message,
-                       path, model, scope)
+                       path, model, scope, options)
 
 
-def _json_reply(key, conversation, agent_prompt, user_message, path, model, scope):
+def _json_reply(key, conversation, agent_prompt, user_message, path, model, scope, options):
     try:
         try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope))
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, **options))
         except UnavailableModelError as exc:
             return _response({"error": str(exc)}, key, 400)
+        except agent_skills.AgentSkillError as exc:
+            return _response({"error": str(exc)}, key, 503)
         except Exception:
             current_app.logger.exception("Agent request failed")
             return _response({
@@ -1114,7 +1161,7 @@ def _stream_events(events, disconnected):
         disconnected.set()
 
 
-def _stream_reply(key, conversation, agent_prompt, user_message, path, model, scope):
+def _stream_reply(key, conversation, agent_prompt, user_message, path, model, scope, options):
     events: queue.Queue = queue.Queue(maxsize=256)
     disconnected = threading.Event()
     logger = current_app.logger
@@ -1129,13 +1176,13 @@ def _stream_reply(key, conversation, agent_prompt, user_message, path, model, sc
 
     def run():
         try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, publish))
+            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, publish, **options))
             conversation.messages.extend(({"role": "user", "content": user_message},
                                           {"role": "assistant", "content": reply}))
             conversation.model = model
             conversation.usage = usage
             terminal_event = {"type": "done", "reply": reply, "model": model, "usage": usage}
-        except UnavailableModelError as exc:
+        except (UnavailableModelError, agent_skills.AgentSkillError) as exc:
             terminal_event = {"type": "error", "error": str(exc)}
         except Exception:
             logger.exception("Agent streaming request failed")
