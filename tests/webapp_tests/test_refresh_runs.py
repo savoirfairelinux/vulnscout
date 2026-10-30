@@ -706,8 +706,6 @@ def test_cli_refresh_partial_run_is_nonzero_but_exports_remain_available(app):
     assert data["status"] == "incomplete" and data["changes"]
     duplicate = app.test_cli_runner().invoke(args=["refresh-vulnerability-data", "--run-id", "cli-partial"])
     assert duplicate.exit_code == 1 and "already exists" in duplicate.output
-
-
 def test_queued_cancellation_waits_and_never_overwrites_concurrently_committed_outcomes(monkeypatch, tmp_path):
     """Cancelling EPSS while NVD holds an uncommitted write must keep NVD's outcome."""
     import threading

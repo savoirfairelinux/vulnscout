@@ -1843,8 +1843,8 @@ Package links contain `package_id`, `package` (supplier-aware string ID), `name`
 `version`, `variant_id`, and `project_id`. Run lists return
 `{runs: [...], total, limit, offset}`; each run has the detail metadata, `status`
 and `summary` but no `coverage`, `changes`, `total`, `limit` or `offset`, so a
-page only costs work for the runs it contains. Summary counts cover
-the complete filtered change set, not just the current page; changed CVEs include
+page only costs work for the runs it contains. Summary counts cover the complete
+filtered change set, not just the current page; changed CVEs include
 first enrichments. A zero-change run with complete coverage is successful.
 `running` means sources remain pending; `incomplete` means some source/target was
 not successfully checked. Coverage statuses are `pending`, `complete`, `failed`,
