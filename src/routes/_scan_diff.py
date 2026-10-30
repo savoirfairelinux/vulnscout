@@ -19,6 +19,7 @@ from ..extensions import db
 
 import uuid
 import threading
+from collections import Counter
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -37,6 +38,64 @@ from ._scan_queries import (
 # ---------------------------------------------------------------------------
 # Package-change classification
 # ---------------------------------------------------------------------------
+
+def _dependency_changes(scan: Scan, previous: Optional[Scan]) -> dict:
+    """Compare frozen package pairs against the existing history predecessor.
+
+    Different document inventories are not comparable. Do not skip an
+    unrecorded predecessor to find an older, apparently usable baseline.
+    """
+    result: dict = {
+        "status": "no_previous_import",
+        "added": None, "removed": None,
+        "added_count": None, "removed_count": None,
+    }
+    if (scan.scan_type or "sbom") != "sbom":
+        result["status"] = "not_applicable"
+        return result
+    if previous is None:
+        return result
+    current_docs = scan.sbom_documents
+    previous_docs = previous.sbom_documents
+    if (scan.variant_id != previous.variant_id
+            or Counter((d.source_name, d.format) for d in current_docs)
+            != Counter((d.source_name, d.format) for d in previous_docs)
+            or not current_docs):
+        result["status"] = "incomparable_scope"
+        return result
+    if any(not d.dependencies_recorded or d.dependency_snapshot is None
+           for d in [*current_docs, *previous_docs]):
+        result["status"] = "not_recorded"
+        return result
+
+    current = {tuple(edge) for d in current_docs for edge in d.dependency_snapshot or []}
+    before = {tuple(edge) for d in previous_docs for edge in d.dependency_snapshot or []}
+    added, removed = current - before, before - current
+    package_ids = {uuid.UUID(pid) for edge in added | removed for pid in edge}
+    packages = _package_rows(package_ids)
+
+    def serialize(edges: set[tuple[str, ...]]) -> list[dict]:
+        def endpoint(pid: str) -> dict:
+            pkg = packages.get(uuid.UUID(pid))
+            return {
+                "package_id": pid,
+                "package_name": pkg.name if pkg else "unknown",
+                "package_version": (pkg.version or "") if pkg else "",
+            }
+
+        rows = [{"dependent": endpoint(source), "dependency": endpoint(target)} for source, target in edges]
+        return sorted(rows, key=lambda row: (
+            row["dependent"]["package_name"], row["dependent"]["package_version"],
+            row["dependency"]["package_name"], row["dependency"]["package_version"],
+            row["dependent"]["package_id"], row["dependency"]["package_id"],
+        ))
+
+    return {
+        "status": "available",
+        "added": serialize(added), "removed": serialize(removed),
+        "added_count": len(added), "removed_count": len(removed),
+    }
+
 
 def _classify_package_changes(
     added_pkg_ids: set[uuid.UUID],

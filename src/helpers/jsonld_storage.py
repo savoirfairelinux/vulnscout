@@ -12,7 +12,7 @@ import uuid
 
 from packageurl import PackageURL
 from sqlalchemy import delete, insert, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from ..models import Package, SBOMDocument, SBOMPackage, Scan
 from ..models.assessment import Assessment
@@ -206,7 +206,12 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
 
 def consolidate_jsonld_packages(session: Session) -> bool:
     """Consolidate recorded, unprocessed groups in the caller's transaction."""
-    documents = {document.id: document for document in session.scalars(select(SBOMDocument))}
+    # This helper also runs in migrations before later document columns exist.
+    documents = {document.id: document for document in session.scalars(
+        select(SBOMDocument).options(load_only(
+            SBOMDocument.id, SBOMDocument.scan_id, SBOMDocument.jsonld_groups,
+        )),
+    )}
     groups_by_scan: dict[uuid.UUID, list[dict]] = defaultdict(list)
     documents_by_scan: dict[uuid.UUID, list[SBOMDocument]] = defaultdict(list)
     for document in documents.values():
