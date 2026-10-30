@@ -1946,6 +1946,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 <span className="h-6 border-l border-gray-400" aria-hidden="true" />
                 <RefreshVulnerabilityData
                     vulnerabilities={vulnerabilities}
+                    projectId={projectId}
+                    variantId={baseVariantId || (variantIds?.length ?? 0) > 1 ? undefined : variantId}
                     getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
                     onRefreshComplete={onRefreshComplete}
                     triggerBanner={triggerBanner}
