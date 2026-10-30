@@ -70,6 +70,7 @@ class PackagesController:
         self._export_document_ids: set[uuid.UUID] = set()
         self._document_packages: dict[tuple, list[Package]] = {}
         self._document_aliases: dict[str, str] = {}
+        self._document_evidence_aliases: dict[uuid.UUID, dict[str, str]] = {}
         self._coalesced_bare: dict[str, Package] = {}
         self._provisional_epoch_metadata: dict[str, tuple[Package, Package]] = {}
 
@@ -128,6 +129,7 @@ class PackagesController:
         self._coalesced_bare = {}
         self._provisional_epoch_metadata = {}
         if doc is not None:
+            self._document_evidence_aliases[doc.id] = self._document_aliases
             for link in db.session.execute(
                 db.select(SBOMPackage).options(joinedload(SBOMPackage.package))
                 .where(SBOMPackage.sbom_document_id == doc.id)
@@ -198,6 +200,7 @@ class PackagesController:
     def add_spdx_dependencies(self, namespace: str | None, references: dict[str, str],
                               external_documents: dict[str, str], edges: set[tuple[str, str]]) -> None:
         """Queue the active document's SPDX 2 edges; :meth:`flush_spdx_dependencies` persists them."""
+        references = {ref: self.canonical_id(string_id) for ref, string_id in references.items()}
         document = self._current_sbom_document
         if document is None:
             return
@@ -218,6 +221,7 @@ class PackagesController:
     def add_spdx3_dependencies(self, references: dict[str, str], namespaces: dict[str, str],
                                edges: set[tuple[str, str]]) -> None:
         """Queue SPDX 3 URI references for resolution across documents of the same scan."""
+        references = {ref: self.canonical_id(string_id) for ref, string_id in references.items()}
         document = self._current_sbom_document
         if document is None:
             return
@@ -290,6 +294,7 @@ class PackagesController:
         document = self._current_sbom_document
         if document is not None:
             self._document_evidence.setdefault(document.id, {})
+        references = {ref: self.canonical_id(string_id) for ref, string_id in references.items()}
         self._source_provenance.record(document.scan_id if document else None, references, urls,
                                        derivations, inputs, builds, document.id if document else None)
         if document is None:
@@ -312,13 +317,27 @@ class PackagesController:
         """Resolve companion documents after import; persist provenance through the scan transaction."""
         self._apply_source_provenance()
         for document_id, packages in self._document_evidence.items():
-            by_id = {self.get_or_resolve_db_id(package_id): evidence for package_id, evidence in packages.items()}
+            aliases = self._document_evidence_aliases.get(document_id, {})
+            by_id: dict[uuid.UUID, PackageEvidence] = {}
+            for package_id, evidence in packages.items():
+                canonical_id = aliases.get(package_id, package_id)
+                uid = self._db_id_cache.get(canonical_id)
+                if uid is None:
+                    package = Package.get_by_string_id(canonical_id)
+                    uid = package.id if package is not None else None
+                if uid is None:
+                    continue
+                combined = by_id.setdefault(uid, {"cpe": [], "purl": [], "source_urls": []})
+                combined["cpe"] = sorted(set(combined["cpe"]) | set(evidence["cpe"]))
+                combined["purl"] = sorted(set(combined["purl"]) | set(evidence["purl"]))
+                combined["source_urls"] = sorted(set(combined["source_urls"]) | set(evidence["source_urls"]))
             for link in SBOMPackage.get_by_document(document_id):
                 evidence = by_id.get(link.package_id, {"cpe": [], "purl": [], "source_urls": []})
                 link.cpe = evidence["cpe"]
                 link.purl = evidence["purl"]
                 link.source_urls = evidence["source_urls"]
         self._document_evidence = {}
+        self._document_evidence_aliases = {}
         self._source_provenance = SPDXSources()
 
     @staticmethod
@@ -484,6 +503,7 @@ class PackagesController:
                             self._current_sbom_document.id,
                             self._db_id_cache[string_id],
                         )
+                if self._current_sbom_document is not None:
                     self._track_document_package(self._cache[string_id], replaced)
                 return self._cache[string_id]
             else:

@@ -188,6 +188,42 @@ def test_same_sbom_epoch_and_bare_version_share_package(app, versions):
     assert ctrl.get_or_resolve_db_id("mesa@1.0.0") == linked[0].package_id
 
 
+@pytest.mark.parametrize("versions", [("1.0", "1_1.0"), ("1_1.0", "1.0")])
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_epoch_document_evidence_survives_document_switch(app, versions, ambiguous):
+    from src.controllers.packages import PackagesController
+    from src.models import SBOMDocument, SBOMPackage
+
+    project = Project.create("epoch-evidence")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    first = SBOMDocument.create("first.json", "first", scan.id)
+    second = SBOMDocument.create("second.json", "second", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = first
+    for version in versions:
+        ctrl.add(Package("lib", version, purl=[f"pkg:generic/lib@{version}"]))
+    if ambiguous:
+        ctrl.add(Package("lib", "2_1.0", purl=["pkg:generic/lib@2_1.0"]))
+    ctrl.current_sbom_document = second
+    ctrl.add(Package("lib", "1.0", purl=["pkg:generic/other/lib@1.0"]))
+    ctrl.current_sbom_document = None
+    ctrl.flush_spdx_sources()
+
+    evidence = {
+        link.package.version: set(link.purl or [])
+        for link in SBOMPackage.get_by_document(first.id)
+    }
+    if ambiguous:
+        assert evidence == {
+            version: {f"pkg:generic/lib@{version}"}
+            for version in ("1.0", "1_1.0", "2_1.0")
+        }
+    else:
+        assert evidence == {"1_1.0": {"pkg:generic/lib@1.0", "pkg:generic/lib@1_1.0"}}
+    assert SBOMPackage.get_by_document(second.id)[0].purl == ["pkg:generic/other/lib@1.0"]
+
+
 def test_epoch_versions_and_suppliers_remain_distinct(app):
     from src.controllers.packages import PackagesController
     from src.models.sbom_document import SBOMDocument
