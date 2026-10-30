@@ -18,11 +18,21 @@ from src.controllers import refresh_jobs as jobs
 
 def job_context(ids, **options):
     return SimpleNamespace(
+        queue_id=None,
+        op_id="test-refresh",
         options={"ids": ids, **options},
         report=MagicMock(),
         is_cancelled=lambda: False,
         check_cancelled=MagicMock(),
     )
+
+
+@pytest.fixture(autouse=True)
+def isolate_provider_job_bodies(monkeypatch):
+    """Artifact persistence is integration-tested in test_refresh_runs."""
+    for source in ("nvd", "epss", "ghsa", "euvd"):
+        name = f"run_{source}_refresh"
+        monkeypatch.setattr(jobs, name, getattr(jobs, name).__wrapped__)
 
 
 def test_normalisers_sleep_interval_and_safe_commit(monkeypatch):
@@ -319,7 +329,10 @@ def test_apply_and_run_euvd_refresh(monkeypatch):
     )
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(get=MagicMock(return_value=record)))
     now = datetime.datetime.now(datetime.timezone.utc)
-    assert jobs._apply_euvd("CVE-2024-1", {"CVE-2024-1": "EUVD-1"}, {"CVE-2024-1": {"sources": ["kev"], "date_added": "2024-01-01"}}, now) == (True, True)
+    assert jobs._apply_euvd(
+        "CVE-2024-1", {"CVE-2024-1": "EUVD-1"},
+        {"CVE-2024-1": {"sources": ["kev"], "date_added": "2024-01-01"}}, now,
+    ) == (True, True)
     assert record.update_record.call_args.kwargs["euvd_id"] == "EUVD-1"
 
     record.reset_mock()

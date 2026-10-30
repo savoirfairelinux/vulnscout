@@ -660,6 +660,7 @@ cmd_scan() {
         local -a refresh_args=()
         [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_args+=(--project "$PROJECT_NAME")
         [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_args+=(--variant "$VARIANT_NAME")
+        [[ -n "${REFRESH_RUN_ID:-}" ]] && refresh_args+=(--run-id "$REFRESH_RUN_ID")
         (cd "$BASE_DIR" && flask --app src.bin.webapp refresh-vulnerability-data "${refresh_args[@]}") || _cmd_scan_exit=$?
     elif [[ "${INTERACTIVE_MODE}" == "true" ]] && [[ "$has_inputs" == "false" ]]; then
         set_status "1" "No new input files to merge, skipping"
@@ -1064,6 +1065,12 @@ while [[ $# -gt 0 ]]; do
             request_scans sbom-cve-check; shift ;;
         --refresh-vulnerability-data)
             REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
+        --refresh-run-id)
+            REFRESH_RUN_ID="$2"; shift 2 ;;
+        --export-refresh-changes)
+            EXPORT_REFRESH_RUN_ID="$2"; shift 2 ;;
+        --refresh-changes-format)
+            REFRESH_CHANGES_FORMAT="$2"; shift 2 ;;
         --dry-run)
             DRY_RUN=true; shift ;;
         --all-variants)
@@ -1130,6 +1137,14 @@ while [[ $# -gt 0 ]]; do
             console_out error "Unknown command: $1"; console_out info "Run --help for usage."; exit 1 ;;
     esac
 done
+
+if [[ -n "${EXPORT_REFRESH_RUN_ID:-}" ]]; then
+    refresh_export_args=(--run-id "$EXPORT_REFRESH_RUN_ID" --format "${REFRESH_CHANGES_FORMAT:-json}")
+    [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_export_args+=(--project "$PROJECT_NAME")
+    [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_export_args+=(--variant "$VARIANT_NAME")
+    cd "$BASE_DIR"
+    exec flask --app src.bin.webapp export-refresh-changes "${refresh_export_args[@]}"
+fi
 
 if [[ -n "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-}" && -z "${IMPORT_CUSTOM_VULNSCOUT_DATA_FILE:-}" && -z "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
     console_err error "Error: timestamp options require a custom VulnScout or OpenVEX import."

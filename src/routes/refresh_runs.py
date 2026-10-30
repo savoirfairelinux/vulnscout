@@ -30,7 +30,12 @@ def artifact(run: RefreshRun, params: dict, *, paginate: bool = True) -> dict | 
             continue
         coverage.append({**entry, "packages": packages})
     if not coverage and (params.get("project_id") or params.get("variant_id") or params.get("vuln_id")):
-        return None
+        scope_matches = not params.get("vuln_id") and any(
+            all(not params.get(key) or entry.get(key) == params[key] for key in ("project_id", "variant_id"))
+            for entry in [run.scope, *run.scope.get("variants", [])]
+        )
+        if not scope_matches:
+            return None
     changes = []
     for change in db.session.scalars(
         db.select(RefreshChange).where(RefreshChange.run_id == run.run_id).order_by(RefreshChange.id)
@@ -70,6 +75,8 @@ def artifact(run: RefreshRun, params: dict, *, paginate: bool = True) -> dict | 
 
 
 def retained_runs():
+    from ..helpers.refresh_runs import reconcile_interrupted_runs
+    reconcile_interrupted_runs()
     days = current_app.config.get("REFRESH_RUN_RETENTION_DAYS", 90)
     return db.select(RefreshRun).where(
         RefreshRun.started_at >= datetime.now(timezone.utc) - timedelta(days=days)

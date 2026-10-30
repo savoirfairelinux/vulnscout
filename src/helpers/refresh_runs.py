@@ -9,14 +9,65 @@ from typing import Iterator
 from uuid import uuid4
 from functools import wraps
 import re
+import os
+import socket
+from pathlib import Path
 
-from sqlalchemy import insert
+from sqlalchemy import event, insert
+from sqlalchemy.orm import Session
 
 from ..extensions import db
 from ..models.refresh_run import RefreshChange, RefreshRun
 from .history_source import history_operation, history_source
 
 _capture: ContextVar[tuple[str, str] | None] = ContextVar("refresh_run_capture", default=None)
+
+
+def _process_start(pid: int) -> str | None:
+    try:
+        # /proc stat's command may contain spaces and parentheses.
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def reconcile_interrupted_runs() -> None:
+    """Reconcile dead local owners, preserving concurrent live CLI/server runs.
+
+    Remote/container owners cannot be probed by PID. Their last committed
+    heartbeat expires after a day rather than claiming activity indefinitely.
+    """
+    from datetime import timedelta
+    changed = False
+    now = datetime.now(timezone.utc)
+    for run in db.session.scalars(db.select(RefreshRun).where(RefreshRun.finished_at.is_(None))):
+        owner = run.owner
+        interrupted = False
+        if owner["host"] == socket.gethostname():
+            try:
+                os.kill(owner["pid"], 0)
+            except ProcessLookupError:
+                interrupted = True
+            except PermissionError:
+                continue
+            else:
+                current_start = _process_start(owner["pid"])
+                interrupted = bool(owner.get("process_start") and current_start
+                                   and owner["process_start"] != current_start)
+        else:
+            interrupted = now - datetime.fromisoformat(owner["last_seen_at"]) > timedelta(days=1)
+        if not interrupted:
+            continue
+        run.coverage = [
+            {**entry, "status": "failed", "error": "Refresh owner stopped or its heartbeat expired"}
+            if entry["status"] == "pending" else entry for entry in run.coverage
+        ]
+        run.source_status = {source: "incomplete" if status == "pending" else status
+                             for source, status in run.source_status.items()}
+        run.finished_at = now
+        changed = True
+    if changed:
+        db.session.commit()
 
 
 def visibility_for(vuln_ids: list[str]) -> dict[str, list[dict]]:
@@ -57,10 +108,14 @@ def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
     targets = {source: list(dict.fromkeys(ids)) for source, ids in targets.items()}
     links = visibility_for(list(dict.fromkeys(identifier for ids in targets.values() for identifier in ids)))
     run = RefreshRun(
-        run_id=run_id, started_at=datetime.now(timezone.utc), finished_at=None,
+        run_id=run_id, started_at=datetime.now(timezone.utc),
+        finished_at=None if targets else datetime.now(timezone.utc),
         scope=scope or {"project_id": None, "variant_id": None},
         sources=list(targets),
         source_status={source: "pending" for source in targets},
+        owner={"host": socket.gethostname(), "pid": os.getpid(),
+               "process_start": _process_start(os.getpid()),
+               "last_seen_at": datetime.now(timezone.utc).isoformat()},
         coverage=[
             {"source": source, "vuln_id": identifier, "status": "pending", "error": None,
              "packages": links[identifier]}
@@ -78,6 +133,8 @@ def add_targets(run_id: str, source: str, ids: list[str]) -> None:
         raise ValueError("Refresh run unavailable")
     existing = {(entry["source"], entry["vuln_id"]) for entry in run.coverage}
     new_ids = [identifier for identifier in dict.fromkeys(ids) if (source, identifier) not in existing]
+    if not new_ids:
+        return
     links = visibility_for(new_ids) if new_ids else {}
     run.coverage = run.coverage + [
         {"source": source, "vuln_id": identifier, "status": "pending", "error": None,
@@ -99,6 +156,7 @@ def target_result(source: str, vuln_id: str, status: str = "complete", error: st
         if entry["source"] == source and entry["vuln_id"] == vuln_id else entry
         for entry in run.coverage
     ]
+    run.owner = {**run.owner, "last_seen_at": datetime.now(timezone.utc).isoformat()}
 
 
 def finish_source(run_id: str, source: str, status: str = "failed", error: str | None = None) -> None:
@@ -114,8 +172,10 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
     run.source_status = {**run.source_status, source: (
         "complete" if status == "failed" and error is None
         and all(entry["status"] == "complete" for entry in source_entries)
+        and run.source_status.get(source) != "incomplete"
         else "incomplete"
     )}
+    run.owner = {**run.owner, "last_seen_at": datetime.now(timezone.utc).isoformat()}
     if all(value != "pending" for value in run.source_status.values()):
         run.finished_at = datetime.now(timezone.utc)
     db.session.commit()
@@ -227,12 +287,50 @@ def capture_changes(session, rows: list[dict]) -> None:
             after = normalize_value(connection.execute(
                 db.select(getattr(Vulnerability, field)).where(Vulnerability.id == row["vuln_id"])
             ).scalar_one_or_none())
-        packages = next((entry["packages"] for entry in coverage
-                         if entry["source"] == capture[1] and entry["vuln_id"] == row["vuln_id"]), [])
+        packages: list[dict] = next((entry["packages"] for entry in coverage
+                                    if entry["source"] == capture[1] and entry["vuln_id"] == row["vuln_id"]), [])
+        before = session.info.get("refresh_before", {}).get((row["vuln_id"], field), row["old_value"])
+        if before == after:
+            continue
         snapshots.append({"run_id": capture[0], "snapshot": {
             "vuln_id": row["vuln_id"], "source": capture[1], "field": field,
-            "before": row["old_value"], "after": after,
-            "kind": "first_enrichment" if row["old_value"] is None else "changed",
+            "before": before, "after": after,
+            "kind": "first_enrichment" if before is None else "changed",
             "changed_at": row["changed_at"].isoformat(), "packages": packages,
         }})
-    connection.execute(insert(RefreshChange), snapshots)
+    if snapshots:
+        connection.execute(insert(RefreshChange), snapshots)
+
+
+@event.listens_for(Session, "before_flush")
+def _capture_persisted_before(session, _flush_context, _instances):
+    """Read the actual predecessor while holding the existing session write lock.
+
+    An ORM instance may have been loaded before another refresh committed.
+    Its attribute history is then insufficient evidence of the value replaced.
+    """
+    session.info.pop("refresh_before", None)
+    if _capture.get() is None:
+        return
+    from ..models.metrics import Metrics
+    from ..models.vulnerability import Vulnerability
+    from ..models.vulnerability_history import TRACKED_FIELDS, cvss_field, cvss_value, normalize_value
+    before = {}
+    connection = session.connection()
+    for obj in session.dirty:
+        if isinstance(obj, Vulnerability):
+            columns = [getattr(Vulnerability, field) for field in TRACKED_FIELDS]
+            row = connection.execute(db.select(*columns).where(Vulnerability.id == obj.id)).first()
+            if row:
+                before.update({(obj.id, field): normalize_value(value) for field, value in zip(TRACKED_FIELDS, row)})
+    for obj in list(session.dirty) + list(session.deleted):
+        if isinstance(obj, Metrics):
+            row = connection.execute(db.select(
+                Metrics.vulnerability_id, Metrics.variant_id,
+                Metrics.version, Metrics.author, Metrics.score, Metrics.vector,
+            ).where(Metrics.id == obj.id)).first()
+            if row and row.variant_id is None:
+                before[(row.vulnerability_id, cvss_field(row.version, row.author, obj.id))] = (
+                    cvss_value(row.score, row.vector)
+                )
+    session.info["refresh_before"] = before

@@ -1747,6 +1747,75 @@ The registry and replay buffer are process-local, so a restart clears queued and
 
 ---
 
+## Refresh Run Artifacts
+
+Refresh artifacts are durable, exact-run records, not a time-window query over
+field history. Queued refresh groups use the returned `queue_id` as `run_id`.
+Pass `options.project_id` and/or `options.variant_id` in refresh jobs to record
+the initiating scope; deferred jobs additionally record their selected variants.
+Single-CVE refresh responses expose `X-Refresh-Run-ID`. Synchronous CLI refreshes
+print their ID and accept a unique caller-provided `--run-id`.
+
+```
+GET /api/refresh-runs
+GET /api/refresh-runs/latest
+GET /api/refresh-runs/<run_id>
+GET /api/refresh-runs/<run_id>/export?format=json|csv
+```
+
+All accept optional `project_id`, `variant_id`, `vuln_id`, `source`, `field`,
+`kind=first_enrichment|changed`, and
+`change_type=addition|modification|removal`. Scope uses immutable captured active
+observation/package links, including shared CVEs, and removes other scopes'
+package links. `latest` chooses by scoped target coverage, not by whether any
+fields changed. Empty-target runs match only their captured initiating scope.
+`limit` defaults to 100 (maximum 1000), `offset` to 0; pagination applies to
+changes in detail responses and to runs in list responses. Exports include all
+filtered changes without pagination. Coverage is never truncated or affected
+by source/field/kind/change-type filters.
+
+Detail/latest responses have this shape:
+
+```json
+{
+  "run_id": "q-1234",
+  "scope": {"project_id": "…", "variant_id": null},
+  "sources": ["epss"],
+  "source_status": {"epss": "complete"},
+  "started_at": "2026-10-30T12:00:00+00:00",
+  "finished_at": "2026-10-30T12:00:01+00:00",
+  "status": "complete",
+  "coverage": [
+    {"source": "epss", "vuln_id": "CVE-2020-35492", "status": "complete",
+     "error": null, "packages": []}
+  ],
+  "summary": {"total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0},
+  "changes": [
+    {"vuln_id": "CVE-2020-35492", "source": "epss", "field": "epss_score",
+     "before": 0.1, "after": 0.2, "kind": "changed", "change_type": "modification",
+     "changed_at": "2026-10-30T12:00:01+00:00", "packages": []}
+  ],
+  "total": 1, "limit": 100, "offset": 0
+}
+```
+
+Package links contain `package_id`, `package` (supplier-aware string ID), `name`,
+`version`, `variant_id`, and `project_id`. Run lists return
+`{runs: [<detail without changes>], total, limit, offset}`. Summary counts cover
+the complete filtered change set, not just the current page; changed CVEs include
+first enrichments. A zero-change run with complete coverage is successful.
+`running` means sources remain pending; `incomplete` means some source/target was
+not successfully checked. Coverage statuses are `pending`, `complete`, `failed`,
+`skipped` or `cancelled`; source statuses are `pending`, `complete` or `incomplete`.
+Provider absence is not evidence of a removal.
+
+Snapshots share the originating data-write transaction and store both sides,
+including CVSS vectors under `cvss:<version>:<author>:<metric_id>`. Later refreshes,
+live-data deletion, or field-history pruning cannot change an artifact.
+Unavailable, expired or out-of-scope exact runs return `404`, never another run.
+The default retention window is 90 days; see
+[CLI archival and cleanup](cli-refresh-runs.md).
+
 ## Vulnerability History
 
 Every change to a vulnerability's data is recorded, whichever path wrote it: SBOM import, scans, bulk refreshes or single-CVE refreshes. Tracked fields are the description, severity (`status`), published date, attack vector, EPSS score, links, weaknesses, affected CPEs, patch links, the ENISA EUVD fields, and scanner-level CVSS scores, keyed `cvss:<version>:<author>`. User-entered, variant-scoped CVSS scores are not tracked.
@@ -1782,7 +1851,9 @@ Returns `404` if the vulnerability does not exist.
 GET /api/vulnerabilities/history?since=<iso-8601>&source=nvd,epss
 ```
 
-Counts the changes recorded at or after `since`, optionally restricted to comma-separated sources. The frontend calls it when a bulk refresh finishes to report what the refresh changed.
+Counts changes recorded at or after `since`, optionally restricted to comma-separated sources.
+This legacy time-window endpoint is not an exact refresh-run artifact and can
+include concurrent writers; use `/api/refresh-runs/<run_id>` for attribution.
 
 **Response:**
 ```json
