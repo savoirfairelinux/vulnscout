@@ -59,6 +59,43 @@ def app(tmp_path, monkeypatch):
 class TestCmdProcessCoverage:
     """flask process and helper-function coverage."""
 
+    def test_read_inputs_attributes_mixed_sbom_and_grype_documents(self, app, tmp_path):
+        from src.bin.cmd_process import read_inputs
+        from src.controllers import ControllersCache
+        from src.helpers.history_source import history_source
+        from src.models.sbom_document import SBOMDocument
+        from src.models.scan import Scan
+        from src.models.vulnerability_history import VulnerabilityHistory
+
+        sbom_file = tmp_path / "input.cdx.json"
+        sbom_file.write_text(json.dumps({
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "components": [{"type": "library", "name": "openssl", "version": "3.0", "bom-ref": "openssl"}],
+            "vulnerabilities": [{"id": "CVE-2099-0041", "description": "SBOM finding",
+                                 "affects": [{"ref": "openssl"}]}],
+        }))
+        grype_file = tmp_path / "input.grype.json"
+        grype_file.write_text(json.dumps({"matches": [{
+            "artifact": {"name": "openssl", "version": "3.0"},
+            "vulnerability": {"id": "CVE-2099-0042", "description": "Grype finding"},
+        }]}))
+        with app.app_context():
+            scan = _db.session.execute(_db.select(Scan)).scalar_one()
+            SBOMDocument.create(str(sbom_file), sbom_file.name, scan.id, format="cdx")
+            SBOMDocument.create(str(grype_file), grype_file.name, scan.id, format="grype")
+            _db.session.commit()
+
+            with history_source("grype"):
+                read_inputs(ControllersCache(), scan_id=scan.id)
+            sources = {
+                vuln_id: {row.source for row in _db.session.execute(_db.select(VulnerabilityHistory).where(
+                    VulnerabilityHistory.vuln_id == vuln_id
+                )).scalars()}
+                for vuln_id in ("CVE-2099-0041", "CVE-2099-0042")
+            }
+
+        assert sources == {"CVE-2099-0041": {"sbom"}, "CVE-2099-0042": {"grype"}}
+
     def test_process_command_invokes_run_main(self, app):
         """flask process calls _run_main (line 236)."""
         with patch("src.bin.cmd_process._run_main") as mock_main:

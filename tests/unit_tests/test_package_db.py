@@ -809,7 +809,8 @@ def test_already_upgraded_pr_database_remains_compatible_with_consolidated_migra
     runner = app.test_cli_runner()
     result = runner.invoke(args=["db", "stamp", "c83e91ab402d"])
     assert result.exit_code == 0, result.output
-    result = runner.invoke(args=["db", "upgrade"])
+    # create_all already installed later tables; exercise only the consolidation.
+    result = runner.invoke(args=["db", "upgrade", "d8f63a29b104"])
     assert result.exit_code == 0, result.output
     _db.session.expire_all()
     assert link.source_urls == [url]
