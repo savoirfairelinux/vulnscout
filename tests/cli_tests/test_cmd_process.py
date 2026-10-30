@@ -7,6 +7,7 @@ Targets uncovered branches reported by the CI coverage run:
 """
 
 import json
+import uuid
 import pytest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -58,6 +59,43 @@ def app(tmp_path, monkeypatch):
 
 class TestCmdProcessCoverage:
     """flask process and helper-function coverage."""
+
+    def test_read_inputs_attributes_mixed_sbom_and_grype_documents(self, app, tmp_path):
+        from src.bin.cmd_process import read_inputs
+        from src.controllers import ControllersCache
+        from src.helpers.history_source import history_source
+        from src.models.sbom_document import SBOMDocument
+        from src.models.scan import Scan
+        from src.models.vulnerability_history import VulnerabilityHistory
+
+        sbom_file = tmp_path / "input.cdx.json"
+        sbom_file.write_text(json.dumps({
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "components": [{"type": "library", "name": "openssl", "version": "3.0", "bom-ref": "openssl"}],
+            "vulnerabilities": [{"id": "CVE-2099-0041", "description": "SBOM finding",
+                                 "affects": [{"ref": "openssl"}]}],
+        }))
+        grype_file = tmp_path / "input.grype.json"
+        grype_file.write_text(json.dumps({"matches": [{
+            "artifact": {"name": "openssl", "version": "3.0"},
+            "vulnerability": {"id": "CVE-2099-0042", "description": "Grype finding"},
+        }]}))
+        with app.app_context():
+            scan = _db.session.execute(_db.select(Scan)).scalar_one()
+            SBOMDocument.create(str(sbom_file), sbom_file.name, scan.id, format="cdx")
+            SBOMDocument.create(str(grype_file), grype_file.name, scan.id, format="grype")
+            _db.session.commit()
+
+            with history_source("grype"):
+                read_inputs(ControllersCache(), scan_id=scan.id)
+            sources = {
+                vuln_id: {row.source for row in _db.session.execute(_db.select(VulnerabilityHistory).where(
+                    VulnerabilityHistory.vuln_id == vuln_id
+                )).scalars()}
+                for vuln_id in ("CVE-2099-0041", "CVE-2099-0042")
+            }
+
+        assert sources == {"CVE-2099-0041": {"sbom"}, "CVE-2099-0042": {"grype"}}
 
     def test_process_command_invokes_run_main(self, app):
         """flask process calls _run_main (line 236)."""
@@ -215,33 +253,43 @@ class TestCmdProcessCoverage:
         assert message in capsys.readouterr().out
 
     def test_standalone_refresh_uses_all_vulnerabilities(self, app):
-        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh:
-            result = app.test_cli_runner().invoke(args=["refresh-vulnerability-data"])
+        from src.models.refresh_run import RefreshRun
+        result = app.test_cli_runner().invoke(args=["refresh-vulnerability-data", "--run-id", "global-empty"])
 
         assert result.exit_code == 0
-        assert set(refresh.call_args.args[1]) == set(refresh.call_args.args[0].vulnerabilities.vulnerabilities)
+        with app.app_context():
+            run = _db.session.get(RefreshRun, "global-empty")
+            assert run.scope == {"project_id": None, "variant_id": None}
+            assert run.coverage == []
+            assert set(run.source_status.values()) == {"complete"}
         assert "Vulnerability data refresh complete." in result.output
 
     def test_standalone_refresh_scopes_to_project(self, app):
-        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh:
-            result = app.test_cli_runner().invoke(
-                args=["refresh-vulnerability-data", "--project", "ProcessProject"]
-            )
+        from src.models import Project, RefreshRun
+        result = app.test_cli_runner().invoke(
+            args=["refresh-vulnerability-data", "--project", "ProcessProject", "--run-id", "project-empty"]
+        )
 
         assert result.exit_code == 0
-        assert refresh.call_args.args[0]._scope is not None
+        with app.app_context():
+            assert _db.session.get(RefreshRun, "project-empty").scope == {
+                "project_id": str(Project.get_by_name("ProcessProject").id), "variant_id": None,
+            }
 
     def test_standalone_refresh_scopes_to_variant(self, app):
-        with patch("src.bin.cmd_process.refresh_vulnerability_sources", return_value=[]) as refresh:
-            result = app.test_cli_runner().invoke(
-                args=[
-                    "refresh-vulnerability-data", "--project", "ProcessProject",
-                    "--variant", "ProcessVariant",
-                ]
-            )
+        from src.models import RefreshRun, Variant
+        result = app.test_cli_runner().invoke(
+            args=[
+                "refresh-vulnerability-data", "--project", "ProcessProject",
+                "--variant", "ProcessVariant", "--run-id", "variant-empty",
+            ]
+        )
 
         assert result.exit_code == 0
-        assert len(refresh.call_args.args[0]._scope.variant_ids) == 1
+        with app.app_context():
+            run = _db.session.get(RefreshRun, "variant-empty")
+            variant = _db.session.get(Variant, uuid.UUID(run.scope["variant_id"]))
+            assert variant.name == "ProcessVariant"
 
     def test_standalone_refresh_rejects_variant_without_project(self, app):
         result = app.test_cli_runner().invoke(
@@ -255,8 +303,8 @@ class TestCmdProcessCoverage:
         with patch("src.bin.cmd_process.read_inputs"), \
                 patch("src.bin.cmd_process.populate_observations"):
             with patch(
-                    "src.bin.cmd_process.refresh_vulnerability_sources",
-                    return_value=["NVD", "GHSA"],
+                "src.bin.cmd_process.refresh_vulnerability_sources",
+                return_value=["NVD", "GHSA"],
             ):
                 runner = app.test_cli_runner()
                 result = runner.invoke(args=["process", "--refresh-vulnerability-data"])
@@ -271,12 +319,14 @@ class TestCmdProcessCoverage:
                 on_source_start(label, step, len(labels))
             return []
 
-        with patch("src.bin.cmd_process.read_inputs"), \
-                patch("src.bin.cmd_process.populate_observations"), \
-                patch(
-                    "src.bin.cmd_process.refresh_vulnerability_sources",
-                    side_effect=report_all_sources,
-                ):
+        with (
+            patch("src.bin.cmd_process.read_inputs"),
+            patch("src.bin.cmd_process.populate_observations"),
+            patch(
+                "src.bin.cmd_process.refresh_vulnerability_sources",
+                side_effect=report_all_sources,
+            ),
+        ):
             runner = app.test_cli_runner()
             result = runner.invoke(args=["process", "--refresh-vulnerability-data"])
 
@@ -287,7 +337,7 @@ class TestCmdProcessCoverage:
         assert "Refreshing GHSA data (step 4 of 4)..." in result.output
         assert "Vulnerability data refresh complete." in result.output
 
-    def test_refresh_vulnerability_sources_uses_settings_order_and_scope(self):
+    def test_refresh_vulnerability_sources_uses_settings_order_and_scope(self, app):
         from src.bin.cmd_process import refresh_vulnerability_sources
         from src.controllers.vulnerabilities import EnrichmentResult
 
@@ -318,7 +368,7 @@ class TestCmdProcessCoverage:
             side_effect=lambda _: events.append(
                 ("fetch-epss", tuple(vulnerabilities.vulnerabilities))
             ) or EnrichmentResult(successful=1),
-        ):
+        ), app.app_context():
             failed = refresh_vulnerability_sources(
                 controllers,
                 {"CVE-2026-0001", "GHSA-aaaa-bbbb-cccc"},
@@ -340,7 +390,7 @@ class TestCmdProcessCoverage:
         ]
         assert vulnerabilities.vulnerabilities is original_vulnerabilities
 
-    def test_refresh_progress_excludes_inapplicable_ghsa_source(self):
+    def test_refresh_progress_excludes_inapplicable_ghsa_source(self, app):
         from src.bin.cmd_process import refresh_vulnerability_sources
         from src.controllers.vulnerabilities import EnrichmentResult
 
@@ -358,7 +408,7 @@ class TestCmdProcessCoverage:
         with patch(
             "src.bin.cmd_process.post_treatment",
             return_value=EnrichmentResult(successful=1),
-        ):
+        ), app.app_context():
             failed = refresh_vulnerability_sources(
                 controllers,
                 ["CVE-2026-0001"],
@@ -374,7 +424,7 @@ class TestCmdProcessCoverage:
             ("EUVD", 3, 3),
         ]
 
-    def test_refresh_vulnerability_sources_continues_after_failure(self):
+    def test_refresh_vulnerability_sources_continues_after_failure(self, app):
         from src.bin.cmd_process import refresh_vulnerability_sources
         from src.controllers.vulnerabilities import EnrichmentResult
 
@@ -395,7 +445,7 @@ class TestCmdProcessCoverage:
         with patch(
             "src.bin.cmd_process.post_treatment",
             side_effect=RuntimeError("EPSS unavailable"),
-        ):
+        ), app.app_context():
             failed = refresh_vulnerability_sources(
                 controllers,
                 ["CVE-2026-0001"],

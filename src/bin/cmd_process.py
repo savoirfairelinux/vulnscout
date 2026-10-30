@@ -20,6 +20,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.env_vars import get_bool_env
+from ..helpers.history_source import history_source
 from ..extensions import batch_session, db as _db
 import click
 from ._console import Command, echo, print_message, verbose, warn
@@ -112,6 +113,14 @@ def refresh_vulnerability_sources(
         )
     ]
     failed_sources: list[str] = []
+    from ..helpers.refresh_runs import capture_source, create_run, finish_source
+    run_id = create_run({
+        source: [identifier for identifier in selected_vulnerability_ids
+                 if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")
+                 and identifier in all_vulnerabilities]
+        for source in applicable_sources
+    })
+    click.echo(f"Refresh run: {run_id}")
     try:
         for step, source in enumerate(applicable_sources, start=1):
             prefix = "GHSA-" if source == "ghsa" else "CVE-"
@@ -124,9 +133,14 @@ def refresh_vulnerability_sources(
             if on_source_start is not None:
                 on_source_start(label, step, len(applicable_sources))
             try:
-                if not _refresh_source(controllers, source):
+                with capture_source(run_id, source):
+                    completed = _refresh_source(controllers, source)
+                if not completed:
                     failed_sources.append(label)
+                finish_source(run_id, source, error=None if completed else "Source refresh failed")
             except Exception as exc:
+                _db.session.rollback()
+                finish_source(run_id, source, error="Source refresh failed")
                 failed_sources.append(label)
                 verbose(f"{label} enrichment failed: {exc}")
     finally:
@@ -176,6 +190,7 @@ def evaluate_condition(
     return failed_vulns
 
 
+@history_source("sbom")
 def read_inputs(controllers: ControllersCache, scan_id=None):
     """Parse all SBOM documents registered in the DB.
 
@@ -284,7 +299,10 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             elif fmt == "yocto_cve_check" or (fmt is None and "package" in data and "matches" not in data):
                 yocto.load_from_dict(data)
             elif fmt == "grype" or (fmt is None and "matches" in data):
-                grype.load_from_dict(data)
+                _db.session.flush()
+                with history_source("grype"):
+                    grype.load_from_dict(data)
+                    _db.session.flush()
             else:
                 print_message(f"Warning: unknown format for {doc.path}, skipping", role="warning")
                 continue
@@ -347,6 +365,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 assessCtrl._by_vuln_pkg.setdefault((assessment.vuln_id, package_id), []).append(key)
     _db.session.commit()
 
+    _db.session.flush()
     return {
         "cdx": cdx,
         "templates": templates
@@ -446,10 +465,14 @@ def process_command(
 @click.command("refresh-vulnerability-data", cls=Command)
 @click.option("--project", "project_name", default=None, help="Refresh vulnerabilities in this project only.")
 @click.option("--variant", "variant_name", default=None, help="Refresh vulnerabilities in this project variant only.")
+@click.option("--run-id", default=None, help="Unique caller-supplied identity for this refresh (never reused).")
 @with_appcontext
-def refresh_vulnerability_data_command(project_name: str | None, variant_name: str | None) -> None:
+def refresh_vulnerability_data_command(project_name: str | None, variant_name: str | None,
+                                       run_id: str | None = None) -> None:
     """Refresh vulnerability data already stored in the database."""
     scope = None
+    project = None
+    variant = None
     if variant_name and not project_name:
         raise click.UsageError("--variant requires --project.")
     if project_name:
@@ -463,17 +486,33 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
             scope = compute_export_scope(project_id=project.id)
 
     controllers = ControllersCache(scope=scope)
-    failed_sources = refresh_vulnerability_sources(
-        controllers,
-        controllers.vulnerabilities.vulnerabilities,
-        on_source_start=lambda label, step, total: echo(
-            f"Refreshing {label} data (step {step} of {total})...", role="info"
-        ),
-    )
-    if failed_sources:
-        unique_failed = list(dict.fromkeys(failed_sources))
+    from ..controllers.refresh_jobs import REFRESH_JOBS
+    from ..controllers.job_context import JobContext
+    from ..helpers.refresh_runs import create_run
+    from ..models.refresh_run import RefreshRun
+    identifiers = list(controllers.vulnerabilities.vulnerabilities)
+    targets = {source: [identifier for identifier in identifiers
+                        if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")]
+               for source in ("nvd", "epss", "ghsa", "euvd")}
+    try:
+        run_id = create_run(targets, run_id=run_id, scope={
+            "project_id": str(project.id) if project is not None else None,
+            "variant_id": str(variant.id) if variant is not None else None,
+        })
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Refresh run: {run_id}")
+    errors = []
+    for source, ids in targets.items():
+        echo(f"Refreshing {source.upper()} data...", role="info")
+        try:
+            REFRESH_JOBS[source](JobContext(f"cli-refresh:{source}", {"ids": ids, "mode": "local"}, run_id))
+        except Exception as exc:
+            errors.append(f"{source}: {exc}")
+    run = _db.session.get(RefreshRun, run_id)
+    if errors or run is None or any(value != "complete" for value in run.source_status.values()):
         raise click.ClickException(
-            f"{', '.join(unique_failed)} vulnerability-data refresh failed."
+            f"Refresh run {run_id} is incomplete. " + "; ".join(errors)
         )
     echo("Vulnerability data refresh complete.", role="success")
 
