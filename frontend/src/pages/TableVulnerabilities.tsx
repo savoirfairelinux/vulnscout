@@ -80,7 +80,7 @@ type Props = {
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
-    filterLabel?: "Source" | "Severity" | "Status" | "Package";
+    filterLabel?: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
     filterValue?: string;
     filterVulnerabilityIds?: string[];
     preferenceScopeKey?: string;
