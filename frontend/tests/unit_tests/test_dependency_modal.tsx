@@ -35,6 +35,45 @@ const documents: DependencyDocument[] = [
     },
 ];
 
+test('inspects each imported declaration without multiplying graph links or counts', async () => {
+    const declared: DependencyDocument[] = [{ ...documents[0], edges: [{
+        package_id: 'app', dependency_id: 'lib',
+        declarations: [
+            { relationship_type: 'dependsOn', lifecycle_scope: 'runtime',
+                source_document_id: 'doc-one', source_name: 'packages.spdx.json' },
+            { relationship_type: 'dependsOn', lifecycle_scope: 'build',
+                source_document_id: 'doc-one', source_name: 'packages.spdx.json' },
+            { relationship_type: 'hasPrerequisite', lifecycle_scope: '',
+                source_document_id: 'doc-two', source_name: 'companion.spdx.json' },
+        ],
+    }] }];
+    render(<DependencyModalView documents={declared} packageId="app" onSelectPackage={() => {}} />);
+    expect(screen.getAllByText('Deps: 1 / Req by: 0')).toHaveLength(2);
+    const user = userEvent.setup();
+    await user.click(screen.getByText('Inspect dependency links'));
+    await user.click(screen.getByRole('button', { name: 'Inspect app depends on lib' }));
+    const details = within(screen.getByRole('dialog', { name: 'Dependency link details' }));
+    expect(details.getAllByText('Relationship: dependsOn')).toHaveLength(2);
+    for (const value of ['Lifecycle scope: Runtime', 'Lifecycle scope: Build', 'Lifecycle scope: Unspecified',
+        'Relationship: hasPrerequisite', 'Source: companion.spdx.json']) {
+        expect(details.getByText(value)).toBeTruthy();
+    }
+    expect(details.getByText(/not proof that a vulnerable function is reachable/)).toBeTruthy();
+    await user.click(details.getByRole('button', { name: 'Close link details' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+test('legacy edges show unspecified metadata and the SBOM source', async () => {
+    render(<DependencyModalView documents={documents} packageId="app" onSelectPackage={() => {}} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByText('Inspect dependency links'));
+    await user.click(screen.getByRole('button', { name: 'Inspect app depends on lib' }));
+    const details = within(screen.getByRole('dialog', { name: 'Dependency link details' }));
+    expect(details.getByText('Relationship: Unspecified')).toBeTruthy();
+    expect(details.getByText('Lifecycle scope: Unspecified')).toBeTruthy();
+    expect(details.getByText('Source: packages.spdx.json')).toBeTruthy();
+});
+
 test('shows release/revision metadata while navigation keeps commit-based package identity', async () => {
     const revision = 'a'.repeat(40);
     const id = `lib@${revision}`;

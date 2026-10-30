@@ -135,6 +135,7 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
     const [hiddenVariants, setHiddenVariants] = useState<Set<string>>(new Set());
     const [documentId, setDocumentId] = useState('all');
     const [diagramWidth, setDiagramWidth] = useState(0);
+    const [selectedLink, setSelectedLink] = useState<{ package_id: string; dependency_id: string }>();
     const diagramRef = useRef<HTMLDivElement>(null);
     const packageIds = useMemo(() => new Set(documents.flatMap(doc => doc.packages.map(pkg => pkg.id))), [documents]);
     const variants = useMemo(() => {
@@ -156,6 +157,12 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
     const scoped = useMemo(() => documents.filter(doc => documentId === 'all' || doc.id === documentId),
         [documents, documentId]);
     const visible = useMemo(() => scoped.filter(doc => !hiddenVariants.has(doc.variant_id)), [scoped, hiddenVariants]);
+    useEffect(() => { setSelectedLink(undefined); }, [packageId, documentId, hiddenVariants, documents]);
+    const linkDeclarations = selectedLink ? visible.flatMap(doc => doc.edges
+        .filter(edge => edge.package_id === selectedLink.package_id && edge.dependency_id === selectedLink.dependency_id)
+        .flatMap(edge => (edge.declarations?.length ? edge.declarations : [{
+            relationship_type: '', lifecycle_scope: '', source_document_id: doc.id, source_name: doc.source_name,
+        }]).map(declaration => ({ ...declaration, variant_name: doc.variant_name })))) : [];
     const packages = useMemo(() => {
         const primaryIds = new Set(visible.flatMap(doc => doc.packages.map(pkg => pkg.id)));
         const visibleDocumentIds = new Set(visible.map(doc => doc.id));
@@ -269,10 +276,37 @@ export function DependencyModalView({ documents, packageId, onSelectPackage, loa
                 </select>
             </label>}
         </div>
+        <details className="mb-3 text-sm">
+            <summary>Inspect dependency links</summary>
+            {dependencies.map(id => <button key={`dep:${id}`} type="button" className="m-1 underline"
+                onClick={() => setSelectedLink({ package_id: packageId, dependency_id: id })}>
+                Inspect {packageId} depends on {id}
+            </button>)}
+            {dependents.map(id => <button key={`req:${id}`} type="button" className="m-1 underline"
+                onClick={() => setSelectedLink({ package_id: id, dependency_id: packageId })}>
+                Inspect {id} depends on {packageId}
+            </button>)}
+        </details>
+        {selectedLink && linkDeclarations.length > 0 && <section role="dialog" aria-label="Dependency link details"
+            className="mb-3 rounded border border-neutral-600 p-3 text-sm">
+            <button type="button" className="float-right underline" onClick={() => setSelectedLink(undefined)}>
+                Close link details
+            </button>
+            <h3>{selectedLink.package_id} depends on {selectedLink.dependency_id}</h3>
+            <ul>{linkDeclarations.map((declaration, index) => <li key={index} className="my-2">
+                <p>Relationship: {declaration.relationship_type || 'Unspecified'}</p>
+                <p>Lifecycle scope: {declaration.lifecycle_scope
+                    ? declaration.lifecycle_scope[0].toUpperCase() + declaration.lifecycle_scope.slice(1) : 'Unspecified'}</p>
+                <p>Source: {declaration.source_name}</p>
+                <p>Variant: {declaration.variant_name}</p>
+            </li>)}</ul>
+            <p>This is an SBOM declaration, not proof that a vulnerable function is reachable.</p>
+        </section>}
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
             <div className="flex min-h-0 min-w-0 flex-col" aria-label="Dependency graph">
                 <div ref={diagramRef} className="h-[48vh] min-h-[280px] w-full border border-neutral-700 lg:h-full" aria-label="Dependency diagram">
                     <ReactFlow key={`${packageId}:${hiddenKey}:${documentId}:${diagramWidth}`} nodes={graph.nodes} edges={graph.edges}
+                        onEdgeClick={(_, edge) => setSelectedLink({ package_id: edge.target, dependency_id: edge.source })}
                         style={{ '--xy-controls-button-background-color': '#262626',
                             '--xy-controls-button-background-color-hover': '#404040',
                             '--xy-controls-button-color': '#f5f5f5',

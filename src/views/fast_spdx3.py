@@ -634,13 +634,15 @@ class FastSPDX3:
         graph = spdx.get('@graph', [])
         if not isinstance(graph, list):
             return
-        edges: set[tuple[str, str]] = set()
+        edges: set[tuple[str, str, str, str]] = set()
         for relationship in graph:
             if not isinstance(relationship, dict) or relationship.get('type') not in (
                 'Relationship', 'LifecycleScopedRelationship'
             ):
                 continue
             relation = relationship.get('relationshipType')
+            scope = relationship.get('scope')
+            scope = scope if isinstance(scope, str) else ''
             source = relationship.get('from')
             targets = relationship.get('to')
             if not isinstance(source, str):
@@ -652,9 +654,9 @@ class FastSPDX3:
             for target in targets:
                 if isinstance(target, str):
                     if relation in {'dependsOn', 'hasPrerequisite'}:
-                        edges.add((source, target))
+                        edges.add((source, target, relation, scope))
                     elif relation == 'dependencyOf':
-                        edges.add((target, source))
+                        edges.add((target, source, relation, scope))
         self.packagesCtrl.add_spdx3_dependencies(self._document_refs, self._namespace_map(graph), edges)
 
     def _namespace_map(self, graph: List[Dict[str, Any]]) -> Dict[str, str]:

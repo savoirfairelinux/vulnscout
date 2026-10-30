@@ -915,8 +915,15 @@ class TestSBOMUpload:
         restored = next(package for package in packages if package["name"] == "cairo")
         assert restored["source_urls"] == [source_url]
         graphs = client.get(f"/api/package-dependencies?variant_id={variant_id}").get_json()["documents"]
+        imported_graph, = graphs
         assert [edge for document in graphs for edge in document["edges"]] == [
-            {"package_id": "cairo@1.16.0", "dependency_id": "libpng@1.6.37"},
+            {
+                "package_id": "cairo@1.16.0", "dependency_id": "libpng@1.6.37",
+                "declarations": [{
+                    "relationship_type": "dependsOn", "lifecycle_scope": "",
+                    "source_document_id": imported_graph["id"], "source_name": "spdx_v3_0.spdx.json",
+                }],
+            },
         ]
 
     def test_upload_single_file(self, queued_import, client):
@@ -1006,8 +1013,15 @@ class TestSBOMUpload:
         assert library["source_revision"] == revision
         assert library["source_urls"] == [f"git+https://example.org/lib@{revision}"]
         graphs = client.get(f"/api/package-dependencies?variant_id={vid}").get_json()["documents"]
+        build_graph = next(document for document in graphs if document["source_name"] == "build.jsonld")
         assert [edge for document in graphs for edge in document["edges"]] == [
-            {"package_id": "upload-app@1.0", "dependency_id": f"upload-lib@{revision}"},
+            {
+                "package_id": "upload-app@1.0", "dependency_id": f"upload-lib@{revision}",
+                "declarations": [{
+                    "relationship_type": "hasPrerequisite", "lifecycle_scope": "",
+                    "source_document_id": build_graph["id"], "source_name": "build.jsonld",
+                }],
+            },
         ]
         assert upload_temp_files and all(not os.path.exists(path) for path in upload_temp_files)
 

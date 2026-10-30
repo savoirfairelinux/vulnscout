@@ -672,6 +672,10 @@ SCHEMAS: dict[str, Any] = {
                     }, ("id", "name", "version"))),
                     "edges": _array(_object({
                         "package_id": _PACKAGE_ID, "dependency_id": _PACKAGE_ID,
+                        "declarations": _array(_object({
+                            "relationship_type": _STRING, "lifecycle_scope": _STRING,
+                            "source_document_id": _UUID, "source_name": _STRING,
+                        }, ("relationship_type", "lifecycle_scope", "source_document_id", "source_name"))),
                     }, ("package_id", "dependency_id"))),
                 }, ("id", "source_name", "variant_id", "variant_name", "packages", "edges"))),
             }, ("documents",)),
