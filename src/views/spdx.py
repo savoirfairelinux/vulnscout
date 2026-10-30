@@ -5,10 +5,13 @@ from ..models.package import Package
 from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from .fast_spdx import SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_provenance_only_sources
+from ..helpers.export_files import file_metadata
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
+from spdx_tools.spdx.parser.jsonlikedict.file_parser import FileParser
+from spdx_tools.spdx.model.file import File as SpdxFile
 from spdx_tools.spdx.jsonschema.document_converter import DocumentConverter
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
 from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_document_to_xml_stream
@@ -45,6 +48,27 @@ def _normalize_spdx_dict(doc_dict: dict) -> None:
         creation_info["licenseListVersion"] = f"{major}.{minor}"
 
 
+class _RecordedFileParser(FileParser):
+    def parse_file(self, file_dict: dict):
+        name, spdx_id = file_dict.get("fileName"), file_dict.get("SPDXID")
+        if (not isinstance(name, str) or not isinstance(spdx_id, str)
+                or (file_dict.get("checksums") is not None and file_dict["checksums"] != [])):
+            return super().parse_file(file_dict)
+        # File inventories can be recorded without hashing the source tree.
+        # Keep raw properties in the inventory recorder; do not invent a hash
+        # merely to satisfy spdx-tools' mandatory constructor argument.
+        return SpdxFile(
+            name=name, spdx_id=spdx_id, checksums=[],
+            comment=file_dict.get("comment"),
+        )
+
+
+def _recorded_file_parser() -> JsonLikeDictParser:
+    parser = JsonLikeDictParser()
+    parser.file_parser = _RecordedFileParser()
+    return parser
+
+
 _ACTOR_TYPE_LABELS = {
     ActorType.ORGANIZATION: "Organization",
     ActorType.PERSON: "Person",
@@ -53,8 +77,16 @@ _ACTOR_TYPE_LABELS = {
 
 
 class _SPDXDocumentConverter(DocumentConverter):
+    def __init__(self):
+        super().__init__()
+        self.recorded_files: list[dict] = []
+        self.recorded_relationships: list[dict] = []
+
     def convert(self, instance: Document, document: Document | None = None) -> dict:
         result = super().convert(instance, document)
+        if self.recorded_files:
+            result.setdefault("files", []).extend(self.recorded_files)
+            result.setdefault("relationships", []).extend(self.recorded_relationships)
         # spdx-tools emits enum names instead of SPDX's hyphenated JSON/XML values.
         for package in result.get("packages", []):
             if package.get("primaryPackagePurpose") == "OPERATING_SYSTEM":
@@ -81,8 +113,11 @@ class SPDX:
 
     def load_from_dict(self, spdx: dict):
         """Read data from SPDX json parsed format."""
-        parser = JsonLikeDictParser()
-        self.sbom = parser.parse(spdx)
+        parser = _recorded_file_parser()
+        from copy import deepcopy
+        normalized = deepcopy(spdx)
+        _normalize_spdx_dict(normalized)
+        self.sbom = parser.parse(normalized)
 
     def load_from_file(self, spdx_file: str):
         """Read data from SPDX file, detecting format automatically."""
@@ -94,7 +129,7 @@ class SPDX:
                 with open(spdx_file) as f:
                     doc_dict = json.load(f)
                 _normalize_spdx_dict(doc_dict)
-                try_reading = JsonLikeDictParser().parse(doc_dict)
+                try_reading = _recorded_file_parser().parse(doc_dict)
             except Exception:
                 raise original_err
         if try_reading:
@@ -293,12 +328,22 @@ class SPDX:
             self.sbom.relationships = [Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, SpdxNone())]
 
         stream = StringIO()
+        converter = _SPDXDocumentConverter()
+        for record in self.packagesCtrl.recorded_files():
+            ref = f"SPDXRef-File-{uuid7(as_type='str')}"
+            converter.recorded_files.append({
+                "SPDXID": ref, "fileName": record["path"], **file_metadata(record, spdx3=False),
+            })
+            converter.recorded_relationships.extend({
+                "spdxElementId": self.pkg_to_ref[owner], "relationshipType": "CONTAINS",
+                "relatedSpdxElement": ref,
+            } for owner in record["packages"] if owner in self.pkg_to_ref)
         # CPE validation may fail because the SPDX spec expects special characters in package
         # names to be escaped, but our CPE strings may contain unescaped special characters
         if with_cpe:
-            writer(self.sbom, stream, validate=False, converter=_SPDXDocumentConverter())
+            writer(self.sbom, stream, validate=False, converter=converter)
         else:
-            writer(self.sbom, stream, validate=validate, converter=_SPDXDocumentConverter())
+            writer(self.sbom, stream, validate=validate, converter=converter)
         return stream.getvalue()
 
     def output_as_json(self, validate=True, author=None, with_cpe=False) -> str:

@@ -725,3 +725,175 @@ def test_checked_in_yocto_spdx3_recipe_inputs_do_not_exclude_cves(app, tmp_path)
     assert all(file["builds"] and not file["builds"][0]["compiled"] for file in row["source_files"])
     assert not any(file["path"].startswith("usr/lib/") for file in row["source_files"])
     assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+
+
+def _export_files(variant, version):
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.spdx import SPDX
+    from src.views.spdx3 import SPDX3
+
+    controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    view = SPDX(controllers) if version == 2 else SPDX3(controllers)
+    return json.loads(view.output_as_json())
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("fast", [False, True])
+def test_file_exports_roundtrip_companion_identity_shared_records_and_active_scope(
+    app, tmp_path, monkeypatch, version, fast,
+):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _spdx2_documents()
+    built = documents["a-built.spdx.json"]
+    built["packages"].append({**built["packages"][0], "SPDXID": "SPDXRef-shared", "name": "shared"})
+    built["relationships"].append({**built["relationships"][0], "spdxElementId": "SPDXRef-shared"})
+    duplicate = json.loads(json.dumps(documents["z-source.spdx.json"]))
+    duplicate["documentNamespace"] = "https://example.org/duplicate"
+    # Same local SPDX ID and same path, but a distinct companion-document record.
+    duplicate["files"][0].pop("checksums")
+    duplicate["files"][0]["fileContent"] = "FILE CONTENT MUST NOT BE EXPORTED"
+    documents["duplicate.spdx.json"] = duplicate
+    built["externalDocumentRefs"].append({
+        **built["externalDocumentRefs"][0], "externalDocumentId": "DocumentRef-duplicate",
+        "spdxDocument": duplicate["documentNamespace"],
+    })
+    built["relationships"].append({
+        **built["relationships"][0], "relatedSpdxElement": "DocumentRef-duplicate:SPDXRef-source",
+    })
+    variant, _ = _import(tmp_path, _spdx2_documents())
+    old_file = db.session.scalars(db.select(SBOMFile)).one()
+    old_file.path = "old-scan-only.c"
+    db.session.commit()
+    _import(tmp_path, documents, variant)
+    other = Variant.create("other", variant.project_id)
+    _, other_scan = _import(tmp_path, _spdx2_documents(), other)
+    for file in db.session.scalars(db.select(SBOMFile).join(SBOMDocument).where(
+        SBOMDocument.scan_id == other_scan.id,
+    )):
+        file.path = "other-variant-only.c"
+    db.session.commit()
+    output = _export_files(variant, version)
+    encoded = json.dumps(output)
+    assert "old-scan-only.c" not in encoded
+    assert "other-variant-only.c" not in encoded
+    assert "FILE CONTENT MUST NOT BE EXPORTED" not in encoded
+    files = output["files"] if version == 2 else [
+        item for item in output["@graph"] if item.get("type") == "software_File"
+    ]
+    assert len(files) == 2
+    id_field = "SPDXID" if version == 2 else "spdxId"
+    assert len({file[id_field] for file in files}) == 2
+    hash_field = "checksums" if version == 2 else "verifiedUsing"
+    assert sum(hash_field in file for file in files) == 1
+    relationships = output["relationships"] if version == 2 else output["@graph"]
+    assert sum(item.get("relationshipType") == ("CONTAINS" if version == 2 else "contains")
+               for item in relationships) == 3
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _, scan = _import(tmp_path, {name: output}, restored)
+    lib = _package(app, restored)
+    shared = _package(app, restored, "shared")
+    assert lib["source_file_count"] == 2
+    assert shared["source_file_count"] == 1
+    assert lib["compiled_source_file_count"] == shared["compiled_source_file_count"] == 0
+    assert len({item["spdx_id"] for item in lib["source_files"]}) == 2
+    assert shared["source_files"][0]["spdx_id"] in {item["spdx_id"] for item in lib["source_files"]}
+    assert not any(package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+    again = _export_files(restored, version)
+    assert len(again["files"] if version == 2 else [
+        node for node in again["@graph"] if node.get("type") == "software_File"
+    ]) == 2
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("fast", [False, True])
+def test_file_exports_preserve_recorded_compilation_without_fabricating_graph_completeness(
+    app, tmp_path, monkeypatch, version, fast,
+):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _documents(extra=True)
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, version)
+    files = output["files"] if version == 2 else [
+        item for item in output["@graph"] if item.get("type") == "software_File"
+    ]
+    assert len(files) == 3  # Includes the recorded binary output, not just source counts.
+    if version == 3:
+        identifiers = [node.get("spdxId", node.get("@id")) for node in output["@graph"]]
+        assert len(identifiers) == len(set(identifiers))
+        assert not any(node.get("type") == "build_Build" for node in output["@graph"])
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _, scan = _import(tmp_path, {name: output}, restored)
+    source = _package(app, restored, "lib-sources")
+    built = _package(app, restored)
+    assert source["source_file_count"] == 2
+    assert source["compiled_source_file_count"] == built["compiled_source_file_count"] == 1
+    assert not source["compiled_sources_complete"]
+    assert not built["compiled_sources_complete"]
+    compiled, listed = source["source_files"]
+    assert compiled["path"] == "src/enabled.c"
+    assert compiled["builds"][0]["compiled"] is True
+    assert compiled["builds"][0]["parameters"] == [{"key": "compile:flags:C", "value": "-DCONFIG_FEATURE=1"}]
+    assert compiled["builds"][0]["outputs"] == ["https://example.org/evidence/output"]
+    assert listed["path"] == "src/listed.c"
+    assert listed["builds"] == []
+    assert not any(package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+    read_inputs(ControllersCache(), scan.id)
+    assert _package(app, restored, "lib-sources")["compiled_source_file_count"] == 1
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_file_exports_do_not_invent_inventory_for_unrecorded_packages(app, tmp_path, version):
+    from src.models import SBOMPackage
+
+    project = Project.create("source-test")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("legacy inventory", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("gone", "legacy", scan.id)
+    package = Package.create("lib", "1.0")
+    SBOMPackage.create(document.id, package.id)
+    output = _export_files(variant, version)
+    assert not output.get("files")
+    assert not any(node.get("type") == "software_File" for node in output.get("@graph", []))
+    restored = Variant.create("restored", project.id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _import(tmp_path, {name: output}, restored)
+    row = _package(app, restored)
+    assert row["source_file_count"] is None
+    assert not row["compiled_sources_complete"]
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_file_exports_do_not_upgrade_recipe_input_observations_to_compilation(app, tmp_path, version):
+    documents = _documents()
+    build = next(node for node in documents["a-build.jsonld"]["@graph"] if node.get("type") == "build_Build")
+    build["build_buildType"] = "http://openembedded.org/bitbake/do_create_spdx/recipe"
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, version)
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _import(tmp_path, {name: output}, restored)
+    file = _package(app, restored)["source_files"][0]
+    assert file["builds"]
+    assert file["builds"][0]["compiled"] is False
+    assert _package(app, restored)["compiled_source_file_count"] == 0
+
+
+def test_spdx2_xml_exports_recorded_files_and_shared_containment(app, tmp_path):
+    from xml.etree import ElementTree
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.spdx import SPDX
+
+    variant, _ = _import(tmp_path, _documents(extra=True))
+    controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    root = ElementTree.fromstring(SPDX(controllers).output_as_xml())
+    files = root.findall("files")
+    assert len(files) == 3
+    assert len({file.findtext("SPDXID") for file in files}) == 3
+    assert sum(file.find("checksums") is not None for file in files) == 1
+    contains = [relation for relation in root.findall("relationships")
+                if relation.findtext("relationshipType") == "CONTAINS"]
+    assert len(contains) == 3

@@ -11,6 +11,7 @@ import uuid
 from ..extensions import db
 from ..models import Package, PackageSourceFile, SBOMBuild, SBOMDocument, SBOMFile, SBOMFileBuild, SBOMPackage
 from ..models.sbom_file import has_compilation_evidence
+from .export_files import recorded_evidence, INVENTORY_UNKNOWN_COMMENT
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,9 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
             documents[0][0].scan_id,
         )
     complete = resolved and all(data.get('_compilation_complete', True) for _, data, *_ in documents)
+    # Export comments retain observations, not the graph needed to prove completeness.
+    if any(recorded_evidence(file.properties) is not None for file in files.values()):
+        complete = False
     compiled: dict[str, list[SBOMBuild]] = defaultdict(list)
     incomplete_packages: set[tuple[uuid.UUID, uuid.UUID]] = set()
     associations: dict[str, set[str]] = defaultdict(set)
@@ -243,6 +247,10 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         packages[ref] for _, data, *_ in documents for ref in data.get('_unknown_inventories', [])
         if ref in packages
     }
+    unknown.update(
+        packages[ref] for ref, (_, node) in nodes.items()
+        if ref in packages and node.get("comment") == INVENTORY_UNKNOWN_COMMENT
+    )
     unknown -= {packages[owner] for file_owners in owners.values() for owner in file_owners}
     for link_key, link in links.items():
         link.compiled_sources_complete = (
@@ -263,3 +271,47 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
                 file_document_id=file.sbom_document_id, spdx_id=ref,
             )
     db.session.add_all(rows.values())
+    restore_recorded_builds(list(files.values()))
+
+
+def restore_recorded_builds(files: list[SBOMFile]) -> None:
+    """Restore explicitly labelled observations without inventing build relationships."""
+    import json
+
+    builds: dict[tuple, SBOMBuild] = {}
+    for file in files:
+        evidence = recorded_evidence(file.properties)
+        if evidence is None:
+            continue
+        seen: set[tuple] = set()
+        for item in evidence["builds"]:
+            if not isinstance(item, dict) or not isinstance(item.get("spdx_id"), str):
+                continue
+            parameters, outputs = item.get("parameters"), item.get("outputs")
+            build_type = item.get("build_type")
+            if (not isinstance(parameters, list) or not isinstance(outputs, list)
+                    or any(not isinstance(output, str) for output in outputs)
+                    or (build_type is not None and not isinstance(build_type, str))):
+                continue
+            original_id = item["spdx_id"]
+            ref = original_id if original_id.startswith("urn:vulnscout:recorded-build:") else (
+                "urn:vulnscout:recorded-build:" + str(uuid.uuid5(
+                    uuid.NAMESPACE_URL, json.dumps([item.get("document_id"), original_id]),
+                ))
+            )
+            key = file.sbom_document_id, ref
+            if key in seen:
+                continue
+            seen.add(key)
+            if key not in builds:
+                build = SBOMBuild(
+                    sbom_document_id=file.sbom_document_id, spdx_id=ref, build_type=build_type,
+                    parameters=parameters, outputs=outputs,
+                    compiled=item.get("compiled") is True and has_compilation_evidence([item]),
+                )
+                db.session.add(build)
+                db.session.flush()
+                builds[key] = build
+            db.session.add(SBOMFileBuild(
+                file_document_id=file.sbom_document_id, spdx_id=file.spdx_id, build_id=builds[key].id,
+            ))
