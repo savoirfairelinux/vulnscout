@@ -277,7 +277,7 @@ def _plan_refresh_job(job: dict) -> List[dict]:
         "source": source,
         "label": REFRESH_LABELS[source],
         "lane": LANE_PIPELINE,
-        "scope": None,
+        "scope": {key: options.get(key) for key in ("project_id", "variant_id")},
         "options": job_options,
         "runner": run_deferred_refresh if deferred else REFRESH_JOBS[source],
     }]
@@ -331,6 +331,13 @@ class _ConflictError(Exception):
 
 def _enqueue(planned: List[dict]) -> Tuple[str, List[dict]]:
     queue_id = new_queue_id()
+    refresh_items = [item for item in planned if item["kind"] == KIND_REFRESH]
+    if refresh_items:
+        from ..helpers.refresh_runs import create_run
+        create_run(
+            {item["source"]: item["options"].get("ids", []) for item in refresh_items},
+            run_id=queue_id, scope=refresh_items[0]["scope"],
+        )
     created: List[dict] = []
     for position, item in enumerate(planned, 1):
         operation = registry.create(
