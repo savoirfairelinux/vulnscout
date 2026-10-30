@@ -11,6 +11,7 @@ from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..models.vulnerability import Vulnerability as VulnModel
 from ..models.metrics import Metrics as MetricsModel
+from ..models.vulnerability_history import record_bulk_inserts
 from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget
 from ..models.package import Package
@@ -18,6 +19,7 @@ from ..models.sbom_package import SBOMReimportRequiredError
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
+from ..helpers.history_source import history_source
 from ..helpers.scan_filters import filter_scannable_packages
 from ..helpers.scan_runs import tool_scan
 from ..controllers.operation_registry import new_queue_id
@@ -114,6 +116,7 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
 @click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
 @serialized_engine_operation
+@history_source("nvd")
 def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str | None = None) -> None:
     """Run an NVD-based vulnerability scan for the given project/variant.
 
@@ -238,6 +241,7 @@ def _nvd_scan_local(variant_uuid, packages, scan: ScanModel, engine, failure_cle
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
 @click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
+@history_source("osv")
 def osv_scan_command(project: str, variant: str | None, run_id: str | None = None) -> None:
     """Run an OSV PURL-based vulnerability scan for the given project/variant.
 
@@ -670,6 +674,7 @@ class _SccBulkWriter:
                 _db.session.bulk_insert_mappings(sa_inspect(VulnModel), self._vuln_rows)
             if self._metric_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(MetricsModel), self._metric_rows)
+            record_bulk_inserts(_db.session, self._vuln_rows, self._metric_rows)
             if self._finding_rows:
                 _db.session.bulk_insert_mappings(sa_inspect(FindingModel), self._finding_rows)
             if self._obs_rows:
@@ -859,6 +864,7 @@ class _SccBulkWriter:
 @click.option("--run-id", default=None, help="Group tool scans from the same invocation under this run ID.")
 @with_appcontext
 @serialized_engine_operation
+@history_source("scc")
 def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str | None = None) -> None:
     """Run a local CVE-database scan (NVD-FKIE + CVEList V5) with version-range evaluation.
 
