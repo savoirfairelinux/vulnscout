@@ -9,11 +9,17 @@ import VulnerabilityHistory, {
     sourceLabel,
 } from "../handlers/vulnerabilityHistory";
 import type { HistoryEntry } from "../handlers/vulnerabilityHistory";
+import VulnerabilityRefreshRun from "../handlers/vulnerabilityRefreshRun";
+import type { RefreshRun } from "../handlers/vulnerabilityRefreshRun";
+import { getSnapshot, subscribe } from "../handlers/operationStore";
+import VulnRefreshChanges from "./VulnRefreshChanges";
 
 type Props = {
     vulnId: string;
     /** Bump to reload an open history, e.g. after a refresh. */
     reloadKey?: number;
+    projectId?: string;
+    variantId?: string;
 };
 
 const dateOptions: Intl.DateTimeFormatOptions = {
@@ -35,21 +41,63 @@ const changeLabel = (field: string, row: HistoryEntry, isFirst: boolean): string
     return describeChange(field, row.old_value, row.value);
 };
 
-function VulnHistory({ vulnId, reloadKey = 0 }: Readonly<Props>) {
+function ScopedVulnHistory({ vulnId, reloadKey = 0, projectId, variantId }: Readonly<Props>) {
     const [expanded, setExpanded] = useState(false);
     const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [run, setRun] = useState<RefreshRun | null>(null);
+    const [runLoading, setRunLoading] = useState(true);
+    const [runError, setRunError] = useState<string | null>(null);
+    const [operationVersion, setOperationVersion] = useState(0);
+    const scoped = Boolean(projectId || variantId);
+
+    useEffect(() => {
+        if (!expanded) return;
+        const key = () => getSnapshot().filter(operation => operation.kind === 'refresh')
+            .map(operation => `${operation.op_id}:${operation.status}`).join(',');
+        let previous = key();
+        return subscribe(() => {
+            const next = key();
+            if (next !== previous) {
+                previous = next;
+                setOperationVersion(version => version + 1);
+            }
+        });
+    }, [expanded]);
+
+    useEffect(() => {
+        if (!expanded) return;
+        const controller = new AbortController();
+        setRunLoading(true);
+        setRunError(null);
+        setRun(null);
+        VulnerabilityRefreshRun.latest(vulnId, { projectId, variantId }, controller.signal)
+            .then(value => {
+                if (!controller.signal.aborted) {
+                    setRun(value);
+                    setRunLoading(false);
+                }
+            })
+            .catch(() => {
+                if (!controller.signal.aborted) {
+                    setRunError('Unable to load the scoped refresh run. Try reopening Data history.');
+                    setRunLoading(false);
+                }
+            });
+        return () => controller.abort();
+    }, [expanded, vulnId, projectId, variantId, reloadKey, operationVersion]);
 
     // Fetched only once opened, so the modal's own mount requests stay unchanged.
     useEffect(() => {
-        if (!expanded) return;
+        if (!expanded || scoped) return;
         let cancelled = false;
+        setEntries(null);
         setError(null);
         VulnerabilityHistory.list(vulnId)
             .then(rows => { if (!cancelled) setEntries(rows); })
             .catch(err => { if (!cancelled) setError(String(err)); });
         return () => { cancelled = true; };
-    }, [expanded, vulnId, reloadKey]);
+    }, [expanded, vulnId, reloadKey, scoped, operationVersion]);
 
     const renderBody = () => {
         if (error) return <p className="text-sm text-red-400">Failed to load history: {error}</p>;
@@ -111,9 +159,21 @@ function VulnHistory({ vulnId, reloadKey = 0 }: Readonly<Props>) {
                     <FontAwesomeIcon className={expanded ? "rotate-180 transition-transform" : "transition-transform"} icon={faChevronDown} />
                 </button>
             </div>
-            {expanded && renderBody()}
+            {expanded && (
+                <div className="space-y-4">
+                    {runLoading ? <p className="text-sm text-gray-400">Loading refresh changes…</p>
+                        : runError ? <p role="alert" className="text-sm text-red-400">{runError}</p>
+                            : <VulnRefreshChanges run={run} vulnId={vulnId} />}
+                    {scoped ? <p className="text-xs text-gray-400">The global field timeline is hidden in a project or variant scope because older history does not record scope.</p>
+                        : <div><h4 className="mb-2 font-semibold">All recorded field history</h4>{renderBody()}</div>}
+                </div>
+            )}
         </div>
     );
+}
+
+function VulnHistory(props: Readonly<Props>) {
+    return <ScopedVulnHistory key={JSON.stringify([props.vulnId, props.projectId, props.variantId])} {...props} />;
 }
 
 export default VulnHistory;
