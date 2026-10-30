@@ -113,6 +113,14 @@ def refresh_vulnerability_sources(
         )
     ]
     failed_sources: list[str] = []
+    from ..helpers.refresh_runs import capture_source, create_run, finish_source
+    run_id = create_run({
+        source: [identifier for identifier in selected_vulnerability_ids
+                 if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")
+                 and identifier in all_vulnerabilities]
+        for source in applicable_sources
+    })
+    click.echo(f"Refresh run: {run_id}")
     try:
         for step, source in enumerate(applicable_sources, start=1):
             prefix = "GHSA-" if source == "ghsa" else "CVE-"
@@ -125,9 +133,14 @@ def refresh_vulnerability_sources(
             if on_source_start is not None:
                 on_source_start(label, step, len(applicable_sources))
             try:
-                if not _refresh_source(controllers, source):
+                with capture_source(run_id, source):
+                    completed = _refresh_source(controllers, source)
+                if not completed:
                     failed_sources.append(label)
+                finish_source(run_id, source, error=None if completed else "Source refresh failed")
             except Exception as exc:
+                _db.session.rollback()
+                finish_source(run_id, source, error="Source refresh failed")
                 failed_sources.append(label)
                 verbose(f"{label} enrichment failed: {exc}")
     finally:
@@ -458,6 +471,8 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
                                        run_id: str | None = None) -> None:
     """Refresh vulnerability data already stored in the database."""
     scope = None
+    project = None
+    variant = None
     if variant_name and not project_name:
         raise click.UsageError("--variant requires --project.")
     if project_name:
@@ -481,8 +496,8 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
                for source in ("nvd", "epss", "ghsa", "euvd")}
     try:
         run_id = create_run(targets, run_id=run_id, scope={
-            "project_id": str(project.id) if project_name else None,
-            "variant_id": str(variant.id) if variant_name else None,
+            "project_id": str(project.id) if project is not None else None,
+            "variant_id": str(variant.id) if variant is not None else None,
         })
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
