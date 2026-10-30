@@ -211,7 +211,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                 <p className="text-sm">{page.total} field changes match. A CVE may continue on the next page. Missing provider responses are never treated as removals.</p>
                 {[...changedGroups].map(([vulnId, changes]) => <details key={`${offset}-${vulnId}`} className="rounded border border-gray-600 p-3">
                     <summary className="cursor-pointer font-bold">{vulnId} — {changes.length} field changes on this page</summary>
-                    <Link className="text-sky-300 underline" to={ROUTES.vulnerabilities} state={{ vulnFilter: { vulnerabilityIds: [vulnId] } }}>Open {vulnId} vulnerability</Link>
+                    <Link className="text-sky-300 underline" to={ROUTES.vulnerabilities} state={{ vulnFilter: { label: 'Vulnerability', value: vulnId, vulnerabilityIds: [vulnId] } }}>Open {vulnId} vulnerability</Link>
                     {changes.map((change, index) => <article key={`${change.source}-${change.field}-${index}`} className="my-4 space-y-2 border-t border-gray-600 pt-3">
                         <h3 className="font-semibold">{fieldLabel(change.field)} · {sourceLabel(change.source)} · {changeLabel(change)}</h3>
                         <time className="text-sm">{change.changed_at}</time>
