@@ -99,6 +99,17 @@ for import commands and expected findings.
 
 ## Scoped Scanner Evidence
 
+For imported SPDX 3 Build-profile evidence, the local advisory engine receives
+compiled-source paths from the selected variant's active SBOMs. When an advisory
+identifies affected files and none were compiled, it can record a `not_affected`
+assessment; the finding remains available for review. Incomplete evidence or
+advisories without file information retain ordinary matching. This does not
+evaluate Kconfig or infer release versions from Git revisions. Yocto recipe
+inputs and SPDX 2 file inventories alone cannot enable refinement. Unknown,
+packaging, generator-only tasks, unresolved containment, and unaccounted
+artifact/package inputs cannot establish completeness. See
+[Recorded files](web-sbom.md#recorded-files).
+
 CLI and queued NVD API/local scans and sbom-cve-check receive package snapshots
 with only the selected variant's active SBOM evidence. Sharing a canonical
 package with another variant does not add that variant's identifiers to these

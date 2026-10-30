@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 import uuid
 
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController
+from ..helpers.export_files import file_metadata, INVENTORY_UNKNOWN_COMMENT
 
 
 def generate_spdx_namespace() -> str:
@@ -112,6 +113,8 @@ class SPDX3:
             element["externalIdentifier"] = external_ids
 
         element["software_primaryPurpose"] = "application"
+        if pkg.source_file_count is None:
+            element["comment"] = INVENTORY_UNKNOWN_COMMENT
 
         element["creationInfo"] = "_:creationInfo_0"
 
@@ -179,6 +182,16 @@ class SPDX3:
                     })
                 relationships_to_add.append(self.generate_relationship(build_ref, source_refs, "hasInput"))
                 relationships_to_add.append(self.generate_relationship(build_ref, [pkg_element["spdxId"]], "hasOutput"))
+
+        for record in self.packagesCtrl.recorded_files():
+            ref = self._next_spdx_ref()
+            elements_to_add.append({
+                "type": "software_File", "spdxId": ref, "name": record["path"],
+                "creationInfo": self._creation_info_ref, **file_metadata(record, spdx3=True),
+            })
+            for owner in record["packages"]:
+                if owner in self.pkg_to_ref:
+                    relationships_to_add.append(self.generate_relationship(self.pkg_to_ref[owner], [ref], "contains"))
 
         dependencies: Dict[str, List[str]] = {}
         for source, target in sorted(self.packagesCtrl.dependency_edges()):

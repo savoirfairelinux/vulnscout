@@ -23,6 +23,7 @@ import SourceRevision from '../components/SourceRevision';
 import { releaseVersion, versionEvidenceTitle } from '../helpers/packageVersions';
 
 const DependencyModal = lazy(() => import('../components/DependencyModal'));
+const SourceFileModal = lazy(() => import('../components/SourceFileModal'));
 
 type PackageRow = Package & {
     versionMetadataSearch: string;
@@ -97,6 +98,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const [dependencyCounts, setDependencyCounts] = useState<DependencyCounts | null>(null);
     const [dependencyError, setDependencyError] = useState(false);
     const [selectedDependencyPackage, setSelectedDependencyPackage] = useState<string | null>(null);
+    const [selectedSourcePackage, setSelectedSourcePackage] = useState<string | null>(null);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -161,7 +163,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
     const defaultVisibleColumns = useMemo(() => {
-        const cols = ['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
+        const cols = ['Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
         if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
         return cols;
     }, [hasSupplierInfo]);
@@ -183,6 +185,16 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         setDependencyColumnDefaulted(true);
         setVisibleColumns(columns => columns.includes('Dependency') ? columns : [...columns, 'Dependency']);
     }, [dependencyColumnDefaulted, setDependencyColumnDefaulted, setVisibleColumns]);
+    const [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted] = useLocalStorageState(`${preferenceKey}.sourceFilesColumnDefaulted`, false);
+    useEffect(() => {
+        if (!sourceFilesColumnDefaulted) setSourceFilesColumnDefaulted(true);
+        setVisibleColumns(columns => {
+            const renamed = columns.includes('Source Files')
+                ? columns.map(column => column === 'Source Files' ? 'Recorded Files' : column) : columns;
+            return sourceFilesColumnDefaulted || renamed.includes('Recorded Files')
+                ? renamed : [...renamed, 'Recorded Files'];
+        });
+    }, [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted, setVisibleColumns]);
     const variantIdsKey = variantIds?.join(',');
     const showDependencyColumn = visibleColumns.includes('Dependency');
     useEffect(() => {
@@ -295,6 +307,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         'version': 'Release version',
         'source_revision': 'Source revision',
         'dependencies': 'Dependency',
+        'source_files': 'Recorded Files',
         'cpe': 'CPE',
         'purl': 'PURL',
         'supplier': 'Supplier',
@@ -347,6 +360,28 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     <SourceRevision key={info.row.original.id} {...info.row.original} />
                 </div>,
                 size: 180
+            }),
+            columnHelper.accessor(row => row.source_file_count ?? -1, {
+                id: 'source_files',
+                header: () => <div className="flex items-center justify-center">Recorded Files</div>,
+                HintText: <p>
+                    Non-binary file records associated with this component in the imported SBOMs.
+                    May include source code, patches, licenses, and configuration files;
+                    not necessarily a complete source inventory.
+                </p>,
+                HintAriaLabel: 'Recorded files helper',
+                cell: info => {
+                    const pkg = info.row.original;
+                    if (pkg.outdated) return <span className="text-neutral-400">Not in active scan</span>;
+                    if (pkg.source_file_count == null) return <span className="text-neutral-400"
+                        title="Reimport the original SPDX SBOMs to record file evidence">Not recorded</span>;
+                    return <button type="button" onClick={() => setSelectedSourcePackage(pkg.id)}
+                        aria-label={`View recorded files for ${pkg.name}`}
+                        className="h-full w-full p-4 text-cyan-300 hover:bg-slate-700 hover:underline">
+                        {pkg.source_file_count}
+                    </button>;
+                },
+                size: 140,
             }),
             columnHelper.accessor(row => (row.dependencyCount?.in ?? 0) + (row.dependencyCount?.out ?? 0), {
                 id: 'dependencies',
@@ -619,6 +654,11 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }, [filteredPackages, showDependencyColumn, dependencyCounts]);
 
     return (<>
+        {selectedSourcePackage && <Suspense fallback={<div role="status">Loading recorded files...</div>}>
+            <SourceFileModal variantId={variantId} projectId={projectId} variantIds={variantIds}
+                compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
+                packageId={selectedSourcePackage} onClose={() => setSelectedSourcePackage(null)} />
+        </Suspense>}
         {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency graph…</div>}>
             <DependencyModal variantId={variantId} projectId={projectId} variantIds={variantIds}
                 compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
@@ -738,6 +778,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     'Name',
                     'Release version',
                     'Source revision',
+                    'Recorded Files',
                     'Dependency',
                     'CPE',
                     'PURL',

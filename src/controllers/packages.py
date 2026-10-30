@@ -85,7 +85,7 @@ class PackagesController:
                 for document in SBOMDocument.get_by_scan(scan_id)
             }
             self._export_document_ids = set(document_ids)
-            evidence = SBOMPackage.evidence_for_documents(document_ids)
+            evidence = SBOMPackage.evidence_for_documents(document_ids, package_ids=allowed)
             for pkg in Package.get_all():
                 if allowed is not None and pkg.id not in allowed:
                     continue
@@ -145,6 +145,39 @@ class PackagesController:
             )
             if source in exported and target in exported
         }
+
+    def recorded_files(self) -> list[dict]:
+        """Return distinct file records from active documents, with supported owners."""
+        from sqlalchemy.orm import selectinload
+        from ..models import SBOMFile, SBOMFileBuild
+        from ..models.sbom_file import has_compilation_evidence
+
+        if not self._export_document_ids:
+            return []
+        exported = {package.id: string_id for string_id, package in self._cache.items()}
+        files = db.session.scalars(
+            db.select(SBOMFile).where(SBOMFile.sbom_document_id.in_(self._export_document_ids))
+            .options(selectinload(SBOMFile.package_links),
+                     selectinload(SBOMFile.build_links).selectinload(SBOMFileBuild.build))
+            .order_by(SBOMFile.sbom_document_id, SBOMFile.spdx_id)
+        )
+        return [{
+            "identity": (file.sbom_document_id, file.spdx_id),
+            "path": file.path, "properties": file.properties,
+            "packages": sorted({
+                exported[link.package_id] for link in file.package_links
+                if link.sbom_document_id in self._export_document_ids and link.package_id in exported
+            }),
+            "builds": [{
+                "spdx_id": link.build.spdx_id, "document_id": str(link.build.sbom_document_id),
+                "build_type": link.build.build_type, "parameters": link.build.parameters,
+                "outputs": link.build.outputs,
+                "compiled": has_compilation_evidence([{
+                    "build_type": link.build.build_type, "parameters": link.build.parameters,
+                    "compiled": link.build.compiled,
+                }]),
+            } for link in file.build_links if link.build.sbom_document_id in self._export_document_ids],
+        } for file in files]
 
     def add_dependencies(self, references: dict[str, str], edges: set[tuple[str, str]]) -> None:
         """Persist source -> dependency references belonging to the active document."""
@@ -384,7 +417,9 @@ class PackagesController:
                 return None  # out of the export scope
             if pkg:
                 if self._scope is not None:
-                    evidence = SBOMPackage.evidence_for_documents(self._scope.active_sbom_document_ids)
+                    evidence = SBOMPackage.evidence_for_documents(
+                        self._scope.active_sbom_document_ids, package_ids={pkg.id},
+                    )
                     pkg = pkg.with_sbom_evidence(**evidence.get(
                         pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
                     ))

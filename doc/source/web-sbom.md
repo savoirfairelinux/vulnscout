@@ -15,7 +15,7 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ## Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Recorded Files, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
@@ -29,6 +29,45 @@ A release version and a commit hash describe separate fields, not a conflict.
 
 For version normalisation and source-evidence details, see the
 [SBOM and Scan Reference](sbom-scan-reference.md#release-versions-and-source-revisions).
+
+(source-files)=
+## Recorded files
+
+**Recorded Files** counts non-binary file records associated with a package in
+the selected active SBOMs. These can be source code, patches, licenses, or
+configuration files, not necessarily a complete source inventory. Click the
+count to inspect paths, original SPDX properties (including recorded hashes
+and licenses), source documents, and build-input associations. Filter by path
+or document. Object files, libraries, and final outputs are retained as file
+records but excluded from this count.
+
+SPDX 3 `software_File`, `contains`, and Build-profile `hasInput`/`hasOutput`
+relationships resolve across companion documents of the same import scan,
+including West's `app.jsonld`, `zephyr.jsonld`, and `build.jsonld`. Package
+consolidation preserves these associations. SPDX 2.2/2.3 `files`, `hasFiles`,
+`CONTAINS`, and `CONTAINED_BY` are supported, including namespaced
+`DocumentRef-*` references between companions.
+
+**Build input** means compilation evidence exists; **Listed only** does not
+prove compilation. Neither proves inclusion in final firmware. Yocto BitBake
+recipe inputs are **Build input (not proven compilation)**: patches, licenses,
+configuration, and archives are not compiled translation units. SPDX 2 package
+provenance likewise does not prove compilation. Proof currently requires West
+Zephyr CMake compiler targets with recorded C, C++, or assembly compiler flags,
+not unknown, packaging/copy, or generator-only tasks.
+
+**Not recorded** means unavailable evidence, not an empty inventory. Reimport
+original companions together to populate older imports. Non-SPDX formats do
+not populate this inventory. SPDX 2 packages with `filesAnalyzed: false` and no
+associated records remain **Not recorded**. Outdated packages show
+**Not in active scan**.
+
+The local advisory engine uses compiled-source paths for refinement only with
+a complete inventory and advisory affected-file information. Missing or
+malformed references, unproven source files, and unaccounted artifact/package
+inputs disable refinement rather than discarding a CVE. Sources are not traced
+through intermediate builds; Kconfig expressions are not evaluated. Reimport
+existing SBOMs to recompute proof and completeness.
 
 ## Zephyr Component Badges
 

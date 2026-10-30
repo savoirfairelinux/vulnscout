@@ -4,6 +4,21 @@ import { asVersionEvidence } from '../helpers/packageVersions';
 type VulnCounts = { [key: string]: number }
 type Severities = { [key: string]: {label: string, index: number} }
 type ComponentType = 'normal' | 'workspace' | 'built';
+export type SourceFile = {
+    spdx_id: string;
+    path: string;
+    document_id: string;
+    document_name: string;
+    scan_id: string;
+    variant_id: string;
+    variant_name: string;
+    properties: Record<string, unknown>;
+    builds: Record<string, unknown>[];
+};
+
+export const hasCompilationEvidence = (file: SourceFile): boolean => file.builds.some(build =>
+    build.compiled === true);
+
 type Package = PackageVersionMetadata & {
     id: string;
     name: string;
@@ -20,6 +35,9 @@ type Package = PackageVersionMetadata & {
     findingIds?: string[];
     findingVulnerabilityIds?: string[];
     component_types?: ComponentType[];
+    source_file_count?: number | null;
+    compiled_source_file_count?: number;
+    compiled_sources_complete?: boolean;
 };
 
 export type { Package, VulnCounts, Severities };
@@ -55,6 +73,11 @@ const asPackage = (data: any): Package | [] => {
         component_types: asStringArray(data?.component_types).filter(
             (value): value is ComponentType => value === 'normal' || value === 'workspace' || value === 'built'
         ),
+        source_file_count: Number.isInteger(data.source_file_count) && data.source_file_count >= 0
+            ? data.source_file_count : null,
+        compiled_source_file_count: Number.isInteger(data.compiled_source_file_count) && data.compiled_source_file_count >= 0
+            ? data.compiled_source_file_count : 0,
+        compiled_sources_complete: data.compiled_sources_complete === true,
     };
     if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
     if (Array.isArray(data?.cpe)) {
@@ -76,36 +99,67 @@ const asPackage = (data: any): Package | [] => {
     return pkg
 };
 
+function packageListUrl(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string,
+    variantIds?: string[], multiOperation?: string): URL {
+    const url = new URL(import.meta.env.VITE_API_URL + "/api/packages", window.location.href);
+    url.searchParams.set('format', 'list');
+    if (variantId && compareVariantId) {
+        url.searchParams.set('variant_id', variantId);
+        url.searchParams.set('compare_variant_id', compareVariantId);
+        if (operation) url.searchParams.set('operation', operation);
+    } else if (variantIds && variantIds.length >= 2) {
+        url.searchParams.set('variant_ids', variantIds.join(','));
+        if (multiOperation) url.searchParams.set('operation', multiOperation);
+        if (projectId) url.searchParams.set('project_id', projectId);
+    } else if (variantId) {
+        url.searchParams.set('variant_id', variantId);
+    } else if (projectId) {
+        url.searchParams.set('project_id', projectId);
+    }
+    return url;
+}
+
+function isSourceFile(value: unknown): value is SourceFile {
+    if (typeof value !== 'object' || value === null) return false;
+    const file = value as Record<string, unknown>;
+    return ['spdx_id', 'path', 'document_id', 'document_name', 'scan_id', 'variant_id', 'variant_name']
+        .every(key => typeof file[key] === 'string')
+        && typeof file.properties === 'object' && file.properties !== null && !Array.isArray(file.properties)
+        && Array.isArray(file.builds) && file.builds.every(build =>
+            typeof build === 'object' && build !== null && !Array.isArray(build));
+}
+
 class Packages {
     /**
      * Fetch server API to list all packages
      * @returns {Promise<Package[]>} A promise that resolves to a list of packages
      */
     static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, includeOutdated = false): Promise<Package[]> {
-        const url = new URL(import.meta.env.VITE_API_URL + "/api/packages", window.location.href);
-        url.searchParams.set('format', 'list');
+        const url = packageListUrl(variantId, projectId, compareVariantId, operation, variantIds, multiOperation);
         if (includeOutdated) {
             url.searchParams.set('include_outdated', 'true');
             url.searchParams.set('outdated_only', 'true');
-        }
-        if (variantId && compareVariantId) {
-            url.searchParams.set('variant_id', variantId);
-            url.searchParams.set('compare_variant_id', compareVariantId);
-            if (operation) url.searchParams.set('operation', operation);
-        } else if (variantIds && variantIds.length >= 2) {
-            url.searchParams.set('variant_ids', variantIds.join(','));
-            if (multiOperation) url.searchParams.set('operation', multiOperation);
-            if (projectId) url.searchParams.set('project_id', projectId);
-        } else if (variantId) {
-            url.searchParams.set('variant_id', variantId);
-        } else if (projectId) {
-            url.searchParams.set('project_id', projectId);
         }
         const response = await fetch(url.toString(), {
             mode: "cors",
         });
         const data = await response.json();
         return data.flatMap(asPackage);
+    }
+
+    static async sourceFiles(packageId: string, variantId?: string, projectId?: string, variantIds?: string[],
+        compareVariantId?: string, operation?: string): Promise<{ files: SourceFile[]; complete: boolean }> {
+        const url = packageListUrl(variantId, projectId, compareVariantId, operation, variantIds, operation);
+        url.searchParams.set('package_id', packageId);
+        url.searchParams.set('include_source_files', 'true');
+        const response = await fetch(url.toString(), { mode: 'cors' });
+        if (!response.ok) throw new Error('Unable to load recorded files');
+        const data = await response.json();
+        if (!Array.isArray(data) || data.length !== 1) throw new Error('Package is no longer available in this scope');
+        if (data[0].source_files === null) throw new Error('Files were not recorded; reimport the original SBOMs');
+        const files: unknown = data[0].source_files;
+        if (!Array.isArray(files) || !files.every(isSourceFile)) throw new Error('Invalid recorded file response');
+        return { files, complete: data[0].compiled_sources_complete === true };
     }
 
     static enrich_with_vulns(pkgs: Package[], vulns: Vulnerability[]): Package[] {

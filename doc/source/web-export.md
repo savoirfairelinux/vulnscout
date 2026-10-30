@@ -4,6 +4,11 @@ Use the **Export** page to generate rendered reports and standard SBOM/VEX
 documents. To transfer analyst decisions instead, use
 [Review import and export](web-review.md#import-and-export).
 
+SPDX exports include the selected active scans' recorded file metadata and
+supported package/file associations, never file contents or invented hashes.
+See [Recorded files in SPDX exports](exports.md#recorded-files-in-spdx-exports)
+for roundtrip guarantees and build-evidence limitations.
+
 1. **Scope** — choose a project in the navigation bar, then select its variants
    in the wizard. All project variants are initially selected, even when the
    navigation bar has a narrower variant selection; check this step explicitly.

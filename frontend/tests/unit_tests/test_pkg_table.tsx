@@ -657,7 +657,9 @@ describe('Packages Table', () => {
     test('dependency column follows version metadata and its whole cell opens a package modal', async () => {
         render(<TablePackages preferenceScopeKey="dependency-default" packages={packages} />);
         const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
-        expect(headers.slice(0, 5)).toEqual(['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities']);
+        expect(headers.slice(0, 6)).toEqual([
+            'Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities',
+        ]);
 
         await waitFor(() => expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length));
         const dependencyButton = screen.getByRole('button', { name: 'View dependency graph for aaabbbccc' });
@@ -708,7 +710,7 @@ describe('Packages Table', () => {
         try {
             const view = render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages} />);
             expect(await screen.findByText('Deps: 1 / Req by: 0')).toBeTruthy();
-            expect(screen.getByText('Not recorded')).toBeTruthy();
+            expect(screen.getByTitle('Its SBOM was imported before dependency support; import it again to record relationships')).toBeTruthy();
             expect(screen.queryByRole('button', { name: 'View dependency graph for aaabbbccc' })).toBeNull();
             expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length - 2);
             view.unmount();
@@ -717,7 +719,7 @@ describe('Packages Table', () => {
             window.localStorage.setItem('vulnscout.tables.packages.dependency-states.outdatedOnly', 'true');
             render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages}
                 onLoadOutdatedPackages={async () => [...packages, outdatedPackage]} />);
-            expect(await screen.findByText('Not in active scan')).toBeTruthy();
+            expect(await screen.findByTitle('Dependencies are only available for packages of active scans')).toBeTruthy();
             expect(screen.queryByRole('button', { name: /View dependency graph/ })).toBeNull();
         } finally {
             global.fetch = originalFetch;
