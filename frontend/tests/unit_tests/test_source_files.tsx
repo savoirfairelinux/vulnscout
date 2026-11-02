@@ -144,7 +144,7 @@ test('SBOM recorded counts explain the inventory and open details with older col
     jest.spyOn(Packages, 'sourceFiles').mockResolvedValue({ files: [file], complete: true });
     render(<TablePackages packages={[pkg, { ...pkg, id: 'unknown@1', name: 'unknown', source_file_count: null }]}
         preferenceScopeKey="source-legacy" variantId="variant" />);
-    await screen.findAllByText('In 0 / Out 0');
+    await screen.findAllByText('Deps: 0 / Req by: 0');
     const button = await screen.findByRole('button', { name: 'View recorded files for lz4' });
     expect(button).toHaveTextContent('1');
     expect(screen.getByText('Not recorded')).toBeTruthy();
