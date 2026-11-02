@@ -4,6 +4,7 @@ import { faBoxArchive, faDownload, faFileLines, faLayerGroup, faShieldHalved } f
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import { queueExport } from "../handlers/exportQueue";
+import { downloadVulnerabilityHistory, sourceLabel } from "../handlers/vulnerabilityHistory";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import type { AgentViewContext } from "../types/agent";
 
@@ -14,8 +15,8 @@ export type ExportDocument = {
 };
 
 type ExportMode = "consolidated" | "per_variant";
-type ExportType = "reports" | "sbom";
-type WizardStep = "scope" | "type" | "documents";
+type ExportType = "reports" | "sbom" | "history";
+type WizardStep = "scope" | "type" | "documents" | "history";
 
 type Selection = {
     key: string;
@@ -48,6 +49,11 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [enabledDocuments, setEnabledDocuments] = useState<Set<string>>(new Set());
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+    const [historySince, setHistorySince] = useState("");
+    const [historyUntil, setHistoryUntil] = useState("");
+    const [historyFormat, setHistoryFormat] = useState<"json" | "csv">("json");
+    const [historySource, setHistorySource] = useState("");
+    const [historyDownloaded, setHistoryDownloaded] = useState(false);
     useEffect(() => {
         if (!isOpen) return;
         onAgentContextChange?.({
@@ -90,11 +96,12 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         groups.set(selection.name, group);
         return groups;
     }, new Map<string, Selection[]>()));
-    const activeSteps: WizardStep[] = ["scope", "type", "documents"];
+    const activeSteps: WizardStep[] = ["scope", "type", exportType === "history" ? "history" : "documents"];
     const stepLabels: Record<WizardStep, string> = {
         scope: "Scope",
         type: "Export type",
         documents: "Documents",
+        history: "History options",
     };
     const stepIndex = activeSteps.indexOf(step);
 
@@ -107,6 +114,11 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         setSelected(new Set());
         setEnabledDocuments(new Set());
         setError(null);
+        setHistorySince("");
+        setHistoryUntil("");
+        setHistoryFormat("json");
+        setHistorySource("");
+        setHistoryDownloaded(false);
         dialogRef.current?.focus();
     }, [isOpen]);
 
@@ -124,6 +136,8 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
 
     const navigateToStep = (nextStep: WizardStep) => {
         focusStepHeadingOnChange.current = true;
+        setError(null);
+        setHistoryDownloaded(false);
         setStep(nextStep);
     };
 
@@ -219,10 +233,55 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         }
     };
 
+    const sinceTime = new Date(historySince).getTime();
+    const untilTime = new Date(historyUntil).getTime();
+    const historyRangeValid = Number.isFinite(sinceTime)
+        && (!historyUntil || (Number.isFinite(untilTime) && untilTime > sinceTime));
+
+    const launchHistoryExport = async () => {
+        if (!project || selectedVariantIds.size === 0 || !historyRangeValid) return;
+        setExporting(true);
+        setError(null);
+        setHistoryDownloaded(false);
+        try {
+            await downloadVulnerabilityHistory({
+                projectId: project.id,
+                variantIds: variants.filter(variant => selectedVariantIds.has(variant.id)).map(variant => variant.id),
+                since: new Date(sinceTime).toISOString(),
+                until: historyUntil ? new Date(untilTime).toISOString() : undefined,
+                source: historySource || undefined,
+                format: historyFormat,
+            });
+            setHistoryDownloaded(true);
+        } catch (reason) {
+            setError(reason instanceof Error ? reason.message : String(reason));
+        } finally {
+            setExporting(false);
+        }
+    };
+
     const footer = (
         <ModalActions align="between">
             <ModalButton onClick={() => navigateToStep(activeSteps[stepIndex - 1])} disabled={stepIndex === 0 || exporting}>Back</ModalButton>
-            {step !== "documents" ? <ModalButton variant="primary" onClick={() => navigateToStep(activeSteps[stepIndex + 1])} disabled={(step === "scope" && (!project || selectedVariantIds.size === 0)) || (step === "type" && exportType === null)}>Next</ModalButton> : <ModalButton variant="primary" onClick={launchExport} disabled={selected.size === 0 || exporting}><FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />{exporting ? "Preparing export..." : "Download export"}</ModalButton>}
+            {step === "history" || step === "documents" ? (
+                <ModalButton
+                    variant="primary"
+                    onClick={step === "history" ? launchHistoryExport : launchExport}
+                    disabled={exporting || (step === "history"
+                        ? !project || selectedVariantIds.size === 0 || !historyRangeValid
+                        : selected.size === 0)}
+                >
+                    <FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />
+                    {exporting ? "Preparing export..." : step === "history" ? "Download history" : "Download export"}
+                </ModalButton>
+            ) : (
+                <ModalButton
+                    variant="primary"
+                    onClick={() => navigateToStep(activeSteps[stepIndex + 1])}
+                    disabled={(step === "scope" && (!project || selectedVariantIds.size === 0))
+                        || (step === "type" && exportType === null)}
+                >Next</ModalButton>
+            )}
         </ModalActions>
     );
 
@@ -293,6 +352,11 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                         <FontAwesomeIcon icon={faShieldHalved} className="mt-0.5 text-cyan-400" aria-hidden="true" />
                         <span><span className="block font-medium text-white">SBOM files</span><span className="mt-1 block text-xs text-gray-300">Generated per variant and downloaded together as a ZIP archive.</span></span>
                     </label>
+                    <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "history" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                        <input type="radio" name="export-type" checked={exportType === "history"} onChange={() => { setExportType("history"); setSelected(new Set()); setEnabledDocuments(new Set()); setError(null); setHistoryDownloaded(false); }} className="mt-1 accent-cyan-500" />
+                        <FontAwesomeIcon icon={faFileLines} className="mt-0.5 text-cyan-400" aria-hidden="true" />
+                        <span><span className="block font-medium text-white">Vulnerability history</span><span className="mt-1 block text-xs text-gray-300">Recorded field changes within a time window, downloaded directly as JSON or CSV.</span></span>
+                    </label>
                 </div>
                 {exportType === "reports" && <section className="mt-4 border-t border-neutral-700 pt-4" aria-labelledby="output-layout-heading">
                     <h4 id="output-layout-heading" className="text-sm font-semibold text-white">Output layout</h4>
@@ -310,6 +374,41 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                     </label>
                     </div>
                 </section>}
+            </>}
+
+            {step === "history" && <>
+                <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Export vulnerability history</h3>
+                <p className="mt-1 text-sm text-neutral-400">Export recorded changes for vulnerabilities in the selected variants&apos; current active scope.</p>
+                <p className="mt-2 text-xs text-neutral-400">Times use your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}) and are converted to UTC for export. The start is inclusive; the end is exclusive.</p>
+                <fieldset disabled={exporting} className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <label className="text-sm text-neutral-300">
+                        <span className="mb-1 block">Since (required)</span>
+                        <input type="datetime-local" step="1" required value={historySince} onChange={event => { setHistorySince(event.target.value); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white" />
+                    </label>
+                    <label className="text-sm text-neutral-300">
+                        <span className="mb-1 block">Until (optional)</span>
+                        <input type="datetime-local" step="1" value={historyUntil} onChange={event => { setHistoryUntil(event.target.value); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white" />
+                    </label>
+                    <label className="text-sm text-neutral-300">
+                        <span className="mb-1 block">History format</span>
+                        <select value={historyFormat} onChange={event => { setHistoryFormat(event.target.value === "csv" ? "csv" : "json"); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white">
+                            <option value="json">JSON</option>
+                            <option value="csv">CSV</option>
+                        </select>
+                    </label>
+                    <label className="text-sm text-neutral-300">
+                        <span className="mb-1 block">History source</span>
+                        <select value={historySource} onChange={event => { setHistorySource(event.target.value); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white">
+                            <option value="">All sources</option>
+                            {["sbom", "grype", "osv", "scc", "nvd", "epss", "ghsa", "euvd"].map(source =>
+                                <option key={source} value={source}>{sourceLabel(source)}</option>)}
+                        </select>
+                    </label>
+                </fieldset>
+                {historySince && historyUntil && !historyRangeValid && <p role="alert" className="mt-3 text-sm text-red-300">Until must be later than Since.</p>}
+                <p className="mt-3 text-xs text-neutral-400">Leave Until empty to include all recorded changes since the start. An empty export is valid and does not prove a refresh completed successfully. Concurrent operations can contribute changes in the same window.</p>
+                {error && <div role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">{error}</div>}
+                {historyDownloaded && <p role="status" className="mt-3 text-sm text-green-300">History download started.</p>}
             </>}
 
             {step === "documents" && <>

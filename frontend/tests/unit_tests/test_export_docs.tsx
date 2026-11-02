@@ -303,4 +303,124 @@ describe('Exports Page', () => {
 
         await waitFor(() => expect(screen.queryByRole('checkbox', { name: 'first variant' })).not.toBeInTheDocument());
     });
+
+    describe('vulnerability history exports', () => {
+        beforeEach(() => {
+            Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: jest.fn(() => 'blob:history') });
+            Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: jest.fn() });
+            jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        });
+        afterEach(() => {
+            delete (URL as Partial<typeof URL>).createObjectURL;
+            delete (URL as Partial<typeof URL>).revokeObjectURL;
+            jest.restoreAllMocks();
+        });
+
+        async function openHistory(singleVariant = false) {
+            loadProject();
+            render(<Exports projectId="project-1" />);
+            await screen.findByRole('checkbox', { name: 'alpha' });
+            if (singleVariant) fireEvent.click(screen.getByRole('checkbox', { name: 'beta' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+            fireEvent.click(screen.getByRole('radio', { name: /^Vulnerability history/i }));
+            fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+            expect(screen.getByRole('heading', { name: 'Export vulnerability history' })).toHaveFocus();
+        }
+
+        test.each(['json', 'csv'])('downloads %s directly for the chosen variants and time window', async format => {
+            await openHistory(true);
+            fireEvent.change(screen.getByLabelText('Since (required)'), { target: { value: '2026-10-01T12:30' } });
+            fireEvent.change(screen.getByLabelText('Until (optional)'), { target: { value: '2026-10-02T12:30' } });
+            fireEvent.change(screen.getByLabelText('History format'), { target: { value: format } });
+            fireEvent.change(screen.getByLabelText('History source'), { target: { value: 'epss' } });
+            fetchMock.mockResponseOnce(format === 'json' ? '{"history":[],"total":0}' : '"vuln_id","field"\n', {
+                headers: { 'Content-Type': format === 'json' ? 'application/json' : 'text/csv' },
+            });
+            fireEvent.click(screen.getByRole('button', { name: 'Download history' }));
+            expect(screen.getByRole('button', { name: 'Preparing export...' })).toBeDisabled();
+            expect(screen.getByLabelText('Since (required)')).toBeDisabled();
+            expect(await screen.findByText('History download started.')).toBeInTheDocument();
+            const call = fetchMock.mock.calls.find(([url]) => String(url).includes('/history/export?'));
+            const params = new URL(String(call?.[0])).searchParams;
+            expect(params.get('project_id')).toBe('project-1');
+            expect(params.getAll('variant_id')).toEqual(['variant-1']);
+            expect(params.get('since')).toBe(new Date('2026-10-01T12:30').toISOString());
+            expect(params.get('until')).toBe(new Date('2026-10-02T12:30').toISOString());
+            expect(params.get('source')).toBe('epss');
+            expect(params.get('format')).toBe(format);
+            expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+            expect(URL.createObjectURL).toHaveBeenCalled();
+            expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:history');
+            expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
+        });
+
+        test('requires a start and rejects an equal or earlier end', async () => {
+            await openHistory();
+            const download = screen.getByRole('button', { name: 'Download history' });
+            expect(download).toBeDisabled();
+            fireEvent.change(screen.getByLabelText('Since (required)'), { target: { value: '2026-10-02T12:30' } });
+            expect(download).toBeEnabled();
+            fireEvent.change(screen.getByLabelText('Until (optional)'), { target: { value: '2026-10-02T12:30' } });
+            expect(download).toBeDisabled();
+            expect(screen.getByRole('alert')).toHaveTextContent('Until must be later than Since.');
+            fireEvent.change(screen.getByLabelText('Until (optional)'), { target: { value: '2026-10-01T12:30' } });
+            expect(download).toBeDisabled();
+            expect(URL.createObjectURL).not.toHaveBeenCalled();
+        });
+
+        test('exports all selected variants with optional bounds and source omitted', async () => {
+            await openHistory();
+            fireEvent.change(screen.getByLabelText('Since (required)'), { target: { value: '2026-10-01T12:30' } });
+            fetchMock.mockResponseOnce('{"history":[],"total":0}');
+            fireEvent.click(screen.getByRole('button', { name: 'Download history' }));
+            await screen.findByText('History download started.');
+            const call = fetchMock.mock.calls.find(([url]) => String(url).includes('/history/export?'));
+            const params = new URL(String(call?.[0])).searchParams;
+            expect(params.getAll('variant_id')).toEqual(['variant-1', 'variant-2']);
+            expect(params.has('until')).toBe(false);
+            expect(params.has('source')).toBe(false);
+        });
+
+        test('shows API failures and allows retry without reporting a download', async () => {
+            await openHistory();
+            fireEvent.change(screen.getByLabelText('Since (required)'), { target: { value: '2026-10-01T12:30' } });
+            fetchMock.mockResponseOnce('{"error":"Project not found"}', {
+                status: 404, headers: { 'Content-Type': 'application/json' },
+            });
+            fireEvent.click(screen.getByRole('button', { name: 'Download history' }));
+            expect(await screen.findByRole('alert')).toHaveTextContent('Project not found');
+            expect(screen.queryByText('History download started.')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Download history' })).toBeEnabled();
+            expect(URL.createObjectURL).not.toHaveBeenCalled();
+            fetchMock.mockResponseOnce('{"history":[],"total":0}');
+            fireEvent.click(screen.getByRole('button', { name: 'Download history' }));
+            expect(await screen.findByText('History download started.')).toBeInTheDocument();
+            expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        });
+
+        test('preserves options when navigating back and switching export families', async () => {
+            await openHistory();
+            fireEvent.change(screen.getByLabelText('Since (required)'), { target: { value: '2026-10-01T12:30' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+            fireEvent.click(screen.getByRole('radio', { name: /^Reports/i }));
+            fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+            expect(screen.getByRole('heading', { name: 'Select reports' })).toHaveFocus();
+            expect(screen.queryByLabelText('Since (required)')).not.toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+            fireEvent.click(screen.getByRole('radio', { name: /^Vulnerability history/i }));
+            fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+            expect(screen.getByLabelText('Since (required)')).toHaveValue('2026-10-01T12:30');
+        });
+
+        test('shows network failures and re-enables the form', async () => {
+            await openHistory();
+            fireEvent.change(screen.getByLabelText('Since (required)'), { target: { value: '2026-10-01T12:30' } });
+            fetchMock.mockRejectOnce(new Error('Network unavailable'));
+            fireEvent.click(screen.getByRole('button', { name: 'Download history' }));
+            expect(await screen.findByRole('alert')).toHaveTextContent('Network unavailable');
+            expect(screen.getByRole('button', { name: 'Download history' })).toBeEnabled();
+            expect(screen.getByLabelText('Since (required)')).toBeEnabled();
+            expect(URL.createObjectURL).not.toHaveBeenCalled();
+        });
+    });
 });
