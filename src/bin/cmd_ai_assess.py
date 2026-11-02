@@ -294,8 +294,9 @@ GITHUB_SIGNED_OUT = ("GitHub Copilot rejected the configured token (expired or i
 
 
 def _load_agent(model: str | None):
-    """Return (credentials, model, MCP server path) from config.env, or fail like the web Agent would."""
-    from ..routes import agent
+    """Return (credentials, model, MCP server path) from config.env, or fail like the web Agent would
+    (including missing skills)."""
+    from ..routes import agent, agent_skills
 
     root = agent.Conversation()
     error = agent._load_env_credentials(root)
@@ -314,6 +315,8 @@ def _load_agent(model: str | None):
     if path is None or not path.is_file():
         raise click.ClickException(
             "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override.")
+    if agent_skills.skills_path() is None:
+        raise click.ClickException(agent_skills.SKILLS_MISSING_ERROR)
     return root.credentials, selected, path
 
 
@@ -446,7 +449,7 @@ def _ai_targets(row_ids: list[str]) -> dict[str, set[tuple[str, str]]]:
 
 def _assess(result: Result, label: str, credentials, model: str, path, api_url: str, written: list[str],
             turns: TurnTargets, timeout: int) -> None:
-    from ..routes import agent
+    from ..routes import agent, agent_skills
 
     try:
         batches = build_prompts(result.id, result.targets)
@@ -468,11 +471,13 @@ def _assess(result: Result, label: str, credentials, model: str, path, api_url: 
             with turns.allow(result.id, batch):
                 reply, usage = asyncio.run(agent._reply(
                     agent.Conversation(credentials=credentials), prompt, path, model, scope,
-                    tools=agent.ASSESS_TOOLS, timeout=timeout, api_url=api_url, ephemeral=True))
+                    profile=agent_skills.ASSESS, timeout=timeout, api_url=api_url, ephemeral=True))
             result.replies.append(reply)
             result.usage = agent._add_usage(result.usage, usage)
         except agent.UnavailableModelError:
             raise
+        except agent_skills.AgentSkillError as exc:
+            raise click.ClickException(str(exc)) from exc
         except KeyboardInterrupt:
             # SIGINT forwarded by the host wrapper: asyncio.run cancels the turn (the SDK session is
             # disconnected and deleted in _reply's finally); still record what it already wrote.
