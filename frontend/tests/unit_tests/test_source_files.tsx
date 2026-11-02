@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
 import Packages, { hasCompilationEvidence, type Package, type SourceFile } from '../../src/handlers/packages';
@@ -10,7 +10,8 @@ const file: SourceFile = {
     document_id: 'document', document_name: 'zephyr.jsonld',
     scan_id: 'scan', variant_id: 'variant', variant_name: 'default',
     properties: { verifiedUsing: [{ algorithm: 'sha256', hashValue: '012345' }] },
-    builds: [{ spdx_id: 'compile-lz4', build_type: 'urn:spdx.dev:zephyr-cmake', compiled: true, outputs: ['liblz4.a'] }],
+    builds: [{ spdx_id: 'compile-lz4', build_type: 'urn:spdx.dev:zephyr-cmake', compiled: true, outputs: ['liblz4.a'],
+        parameters: [{ key: 'compile:flags:C', value: '-O2 -Wall', type: 'DictionaryEntry' }] }],
 };
 const pkg: Package = {
     id: 'lz4@1.0', name: 'lz4', version: '1.0', cpe: [], purl: [], vulnerabilities: {}, maxSeverity: {},
@@ -64,20 +65,29 @@ test('details expose paths, hashes, source documents, and build evidence with fi
     });
     const close = jest.fn();
     render(<SourceFileModal packageId={pkg.id} variantId="variant" onClose={close} />);
-    expect(await screen.findByText('lib/lz4.c')).toBeTruthy();
-    expect(screen.getByText('Build input')).toBeTruthy();
-    expect(screen.getByText('Listed only')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Inspect lib\/lz4.c/ })).toBeTruthy();
+    expect(screen.getByRole('dialog')).toHaveClass('h-[calc(100vh-2rem)]', 'max-w-[calc(100vw-2rem)]');
+    expect(screen.getAllByText('Compilation recorded').length).toBeGreaterThan(0);
+    expect(within(screen.getByRole('list', { name: 'Recorded files' })).getByText('Listed only')).toBeTruthy();
     expect(screen.getByText(/compiled-source CVE refinement is disabled/)).toBeTruthy();
     const user = userEvent.setup();
-    await user.click(screen.getByText('lib/lz4.c'));
-    expect(screen.getAllByText('zephyr.jsonld').length).toBe(2);
-    expect(screen.getAllByText(/012345/).length).toBe(2);
-    expect(screen.getByText(/compile-lz4/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Inspect lib\/lz4.c/ }));
+    const details = within(screen.getByRole('region', { name: 'File details' }));
+    expect(details.getByText('zephyr.jsonld')).toBeTruthy();
+    expect(within(details.getByRole('region', { name: 'File hashes' })).getByText('012345')).toBeVisible();
+    expect(within(details.getByRole('region', { name: 'Build evidence' })).getByText('compile-lz4')).toBeVisible();
+    expect(details.getByText('-O2 -Wall')).not.toBeVisible();
+    await user.click(details.getByText('Build parameters (1)'));
+    expect(details.getByText('-O2 -Wall')).toBeVisible();
+    expect(details.getByText('liblz4.a')).toBeVisible();
+    expect(details.getByText('Technical identifiers and original data').closest('details')).not.toHaveAttribute('open');
     await user.type(screen.getByLabelText('Filter recorded files'), 'lz4');
     expect(screen.queryByText('lib/listed.c')).toBeNull();
     await user.clear(screen.getByLabelText('Filter recorded files'));
     await user.type(screen.getByLabelText('Filter recorded files'), 'missing');
-    expect(screen.getByText('No recorded files match this filter.')).toBeTruthy();
+    expect(screen.getByText('No recorded files match these filters.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Reset filters' }));
+    expect(screen.getByRole('button', { name: /Inspect lib\/listed.c/ })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Close modal' }));
     expect(close).toHaveBeenCalled();
     expect(load).toHaveBeenCalledWith(pkg.id, 'variant', undefined, undefined, undefined, undefined);
@@ -103,9 +113,10 @@ test.each([true, false])('recipe inputs do not claim compilation (explicit flag:
         files: [{ ...file, path: 'fix.patch', builds: [build] }], complete: false,
     });
     render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
-    expect(await screen.findByText('fix.patch')).toBeTruthy();
-    expect(screen.getByText('Build input (not proven compilation)')).toBeTruthy();
-    expect(screen.getByText('Recorded files: 1; compiled source files: 0.')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Inspect fix.patch/ })).toBeTruthy();
+    expect(screen.getAllByText('Other build input').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Compilation is not proven/)).toBeTruthy();
+    expect(screen.getByText(/compiled source paths/)).toHaveTextContent('0 compiled source paths');
 });
 
 test.each([undefined, false, 'true', 1])('missing or non-boolean compilation proof is not accepted (%s)', compiled => {
@@ -118,9 +129,9 @@ test('packaging inputs are not shown as compiled source files', async () => {
         complete: false,
     });
     render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
-    expect(await screen.findByText('manifest.json')).toBeTruthy();
-    expect(screen.getByText('Build input (not proven compilation)')).toBeTruthy();
-    expect(screen.getByText('Recorded files: 1; compiled source files: 0.')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Inspect manifest.json/ })).toBeTruthy();
+    expect(screen.getAllByText('Other build input').length).toBeGreaterThan(0);
+    expect(screen.getByText(/compiled source paths/)).toHaveTextContent('0 compiled source paths');
 });
 
 test('changing scope ignores a late response from the previous scope', async () => {
@@ -157,8 +168,76 @@ test('SBOM recorded counts explain the inventory and open details with older col
     );
     await user.click(button);
     expect(await screen.findByTestId('source-file-modal')).toBeTruthy();
-    await waitFor(() => expect(screen.getByText(file.path)).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: /Inspect lib\/lz4.c/ })).toBeTruthy());
     expect(screen.getByRole('dialog', { name: `Recorded Files: ${pkg.id}` })).toBeTruthy();
+});
+
+test('evidence and document filters combine with search and clear without stale details', async () => {
+    jest.spyOn(Packages, 'sourceFiles').mockResolvedValue({
+        files: [
+            file,
+            { ...file, spdx_id: 'listed', path: 'LICENSE', builds: [] },
+            { ...file, spdx_id: 'recipe', path: 'fix.patch', document_id: 'other', document_name: 'recipe.spdx.json',
+                builds: [{ build_type: 'recipe', compiled: false }] },
+        ], complete: false,
+    });
+    const user = userEvent.setup();
+    render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
+    await screen.findByRole('button', { name: /Inspect lib\/lz4.c/ });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by build evidence' }), 'listed');
+    expect(screen.getByRole('status')).toHaveTextContent('Showing 1 of 3');
+    expect(screen.getByRole('button', { name: /Inspect LICENSE/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(screen.getByRole('region', { name: 'File details' })).getByRole('heading', { name: 'LICENSE' })).toBeVisible();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by SBOM document' }), 'other');
+    expect(screen.queryByRole('region', { name: 'File details' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Reset filters' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by build evidence' }), 'build');
+    expect(screen.getByRole('button', { name: /Inspect fix.patch/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Inspect lib\/lz4.c/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by SBOM document' }), 'other');
+    await user.type(screen.getByLabelText('Filter recorded files'), 'recipe.spdx');
+    expect(screen.getByRole('status')).toHaveTextContent('Showing 1 of 3');
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by build evidence' }), 'compiled');
+    expect(screen.getByRole('status')).toHaveTextContent('Showing 1 of 3');
+    expect(screen.getByRole('button', { name: /Inspect lib\/lz4.c/ })).toBeTruthy();
+});
+
+test('same-path records stay distinct across variants and compiled counts use unique paths', async () => {
+    jest.spyOn(Packages, 'sourceFiles').mockResolvedValue({
+        files: [file, { ...file, variant_id: 'second', variant_name: 'second',
+            properties: { checksums: [{ algorithm: 'SHA256', checksumValue: 'second-hash' }], licenseConcluded: 'MIT' } }],
+        complete: true,
+    });
+    const user = userEvent.setup();
+    render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
+    const second = await screen.findByRole('button', { name: /Inspect lib\/lz4.c.*\(second\)/ });
+    expect(screen.getByText(/compiled source paths/)).toHaveTextContent('1 compiled source paths');
+    await user.click(second);
+    expect(second).toHaveAttribute('aria-pressed', 'true');
+    const details = within(screen.getByRole('region', { name: 'File details' }));
+    expect(within(details.getByRole('region', { name: 'File hashes' })).getByText('second-hash')).toBeVisible();
+    expect(details.getByText('License Concluded')).toBeTruthy();
+    expect(details.getByText('MIT')).toBeVisible();
+    await user.type(screen.getByLabelText('Filter recorded files'), 'second');
+    expect(screen.getByRole('status')).toHaveTextContent('Showing 1 of 2');
+});
+
+test('changing scope resets file selection, search, and evidence filters', async () => {
+    jest.spyOn(Packages, 'sourceFiles')
+        .mockResolvedValueOnce({ files: [file], complete: true })
+        .mockResolvedValueOnce({ files: [{ ...file, path: 'new/file.c', builds: [] }], complete: false });
+    const user = userEvent.setup();
+    const view = render(<SourceFileModal packageId={pkg.id} variantId="one" onClose={() => {}} />);
+    await screen.findByRole('button', { name: /Inspect lib\/lz4.c/ });
+    await user.type(screen.getByLabelText('Filter recorded files'), 'lz4');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by build evidence' }), 'compiled');
+    view.rerender(<SourceFileModal packageId={pkg.id} variantId="two" onClose={() => {}} />);
+    expect(await screen.findByRole('button', { name: /Inspect new\/file.c/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Filter recorded files')).toHaveValue('');
+    expect(screen.getByRole('combobox', { name: 'Filter by build evidence' })).toHaveValue('all');
+    expect(screen.queryByText('lib/lz4.c')).toBeNull();
 });
 
 test.each([true, false])('renaming saved columns preserves file column visibility (%s)', async visible => {
