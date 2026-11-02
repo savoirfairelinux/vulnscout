@@ -624,7 +624,10 @@ describe('AIContext page', () => {
 
             fireEvent.click(sidebarItem('Variant 2'));
             fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
-            await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
+            await waitFor(() => {
+                const editor = within(screen.getByRole('region', { name: 'Variant 2' }));
+                expect(editor.getByLabelText('Environment')).toHaveValue('');
+            });
             expect(screen.queryByText('Invalid variant context')).not.toBeInTheDocument();
 
             fireEvent.click(sidebarItem('Variant 1'));
