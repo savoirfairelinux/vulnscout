@@ -5,6 +5,7 @@
 import io
 import logging
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -190,6 +191,7 @@ finally:
     env = dict(os.environ, _VULNSCOUT_COLOR_STDERR=hint)
     result = subprocess.run(
         [sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=15,
+        cwd=Path(__file__).resolve().parents[2],
     )
     assert result.returncode == 0, result.stderr
     assert result.stderr.count("Request warning") == 1
