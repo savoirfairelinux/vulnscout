@@ -15,6 +15,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterator
 from uuid import UUID
 
@@ -22,6 +23,7 @@ import click
 from flask import abort, current_app, make_response, request, request_finished, request_started
 from flask.cli import with_appcontext
 
+from ..controllers import ConditionParser, ControllersCache
 from ..extensions import db
 from ..helpers.active_scans import active_scan_ids_for_variant
 from ..helpers.active_targets import variant_active_packages
@@ -31,7 +33,7 @@ from ..models.observation import Observation
 from ..models.variant import Variant
 from ._common import resolve_project_variant
 from ._console import Command, echo
-from .cmd_process import _condition_matches_by_variant, _condition_scope
+from .cmd_process import _condition_scope, condition_data, newest_assessment
 
 CVE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 MESSAGE_LIMIT = 8000
@@ -139,15 +141,44 @@ def build_prompts(vuln_id: str, targets: list[Target]) -> list[tuple[str, list[T
     ]
 
 
-def _select(scope, cve_ids: tuple[str, ...], condition: str | None) -> dict[str, set[UUID]]:
-    """Vulnerability ID -> the variants to assess it on: every scope variant for --cve, matching ones for --filter."""
-    if cve_ids:
-        return {cve_id: set(scope.variant_ids) for cve_id in dict.fromkeys(cve_ids)}
-    try:
-        matches = _condition_matches_by_variant(scope, condition or "", quiet=True)
-    except Exception as exc:  # ConditionParser raises bare Exception for invalid expressions.
-        raise click.ClickException(f"Invalid filter: {exc}") from exc
-    return {vuln_id: set(variant_ids) for vuln_id, variant_ids in matches.items()}
+# One assessment per state a filter can tell apart (None: unassessed; "": any other status).
+_STATUS_SAMPLES = (None, *(SimpleNamespace(status=status)
+                           for status in ("fixed", "not_affected", "affected", "under_investigation", "")))
+
+
+def _filter_targets(scope, condition: str) -> dict[str, list[Target]]:
+    """Vulnerability ID -> its active targets in *scope* that match *condition*.
+
+    Each target is evaluated with its own newest assessment, so an assessment of a removed version or of
+    another package never decides whether a current target is selected.
+    """
+    parser = ConditionParser()
+
+    def matches(data: dict) -> bool:
+        try:
+            return parser.evaluate(condition, data)
+        except Exception as exc:  # ConditionParser raises bare Exception for invalid expressions.
+            raise click.ClickException(f"Invalid filter: {exc}") from exc
+
+    targets_by_vuln: dict[str, list[Target]] = {}
+    selected: dict[str, list[Target]] = {}
+    for variant_id in sorted(scope.variant_ids, key=str):
+        controllers = ControllersCache(scope=compute_export_scope(variant_id=variant_id))
+        for vuln_id, vuln in controllers.vulnerabilities.vulnerabilities.items():
+            # Skip the target lookup when no assessment state can make the vulnerability match.
+            if not any(matches(condition_data(vuln_id, vuln, sample)) for sample in _STATUS_SAMPLES):
+                continue
+            if vuln_id not in targets_by_vuln:
+                targets_by_vuln[vuln_id] = active_targets(vuln_id, set(scope.variant_ids))
+            assessments = controllers.assessments.gets_by_vuln(vuln_id)
+            for target in targets_by_vuln[vuln_id]:
+                if target.variant_id != str(variant_id):
+                    continue
+                pair = (UUID(target.variant_id), UUID(target.finding_id))
+                newest = newest_assessment(a for a in assessments if pair in getattr(a, "targets", []))
+                if matches(condition_data(vuln_id, vuln, newest)):
+                    selected.setdefault(vuln_id, []).append(target)
+    return selected
 
 
 def _report(results: list[Result], model: str | None, project: str | None, variants: list[str],
@@ -262,12 +293,14 @@ def _ai_assess(project_name, variant_names, cve_ids, condition, model, timeout, 
     # Vulnerability IDs are stored uppercase: canonical IDs deduplicate the selection and match the agent's writes.
     cve_ids = tuple(cve.upper() for cve in cve_ids)
     scope = _scope(project_name, variants)
-    results = [Result(vuln_id, active_targets(vuln_id, variant_ids))
-               for vuln_id, variant_ids in _select(scope, cve_ids, condition).items()]
-    if condition:
-        # A variant can match through a finding seen only by an older scan, or by another project sharing
-        # the package: those yield no targets. Only explicitly requested IDs report not_found.
-        results = [result for result in results if result.targets]
+    if cve_ids:
+        results = [Result(vuln_id, active_targets(vuln_id, set(scope.variant_ids)))
+                   for vuln_id in dict.fromkeys(cve_ids)]
+    else:
+        # Only matching active targets are selected: a match through a finding seen only by an older scan,
+        # or by another project sharing the package, yields none. Only explicitly requested IDs report
+        # not_found.
+        results = [Result(vuln_id, targets) for vuln_id, targets in _filter_targets(scope, condition).items()]
     for result in results:
         if not result.targets:
             result.outcome, result.error = "not_found", "No active targets in scope."

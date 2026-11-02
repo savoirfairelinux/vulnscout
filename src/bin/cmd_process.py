@@ -135,48 +135,55 @@ def refresh_vulnerability_sources(
     return failed_sources
 
 
+def newest_assessment(assessments):
+    """The most recent of *assessments*, or ``None``."""
+    newest = None
+    for assessment in assessments:
+        if newest is None or _ts_key(newest.timestamp) < _ts_key(assessment.timestamp):
+            newest = assessment
+    return newest
+
+
+def condition_data(vuln_id: str, vuln, assessment) -> dict:
+    """Match-condition variables of *vuln* when *assessment* is its newest assessment (``None``: unassessed)."""
+    data = {
+        "id": vuln_id,
+        "cvss": vuln.severity_max_score or vuln.severity_min_score or False,
+        "cvss_min": vuln.severity_min_score or vuln.severity_max_score or False,
+        "epss": vuln.epss["score"] or False,
+        "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
+        "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,
+        "effort_max": False if vuln.effort["pessimistic"] is None else vuln.effort["pessimistic"].total_seconds,
+        "known_exploitable": bool(vuln.euvd_known_exploited),
+        "fixed": False,
+        "ignored": False,
+        "affected": False,
+        "pending": True,
+        "new": True
+    }
+    if assessment:
+        data["fixed"] = assessment.status in ["fixed", "resolved", "resolved_with_pedigree"]
+        data["ignored"] = assessment.status in ["not_affected", "false_positive"]
+        data["affected"] = assessment.status in ["affected", "exploitable"]
+        data["pending"] = assessment.status in ["under_investigation", "in_triage"]
+        data["new"] = False
+    return data
+
+
 def evaluate_condition(
     vulnerabilitiesCtrl: VulnerabilitiesController,
     assessmentsCtrl: AssessmentsController,
     condition,
-    *,
-    quiet: bool = False,
 ):
     """Evaluate a condition and return the list of vulnerability IDs that trigger it."""
     parser = ConditionParser()
     failed_vulns = []
     for (vuln_id, vuln) in vulnerabilitiesCtrl.vulnerabilities.items():
-        data = {
-            "id": vuln_id,
-            "cvss": vuln.severity_max_score or vuln.severity_min_score or False,
-            "cvss_min": vuln.severity_min_score or vuln.severity_max_score or False,
-            "epss": vuln.epss["score"] or False,
-            "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
-            "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,
-            "effort_max": False if vuln.effort["pessimistic"] is None else vuln.effort["pessimistic"].total_seconds,
-            "known_exploitable": bool(vuln.euvd_known_exploited),
-            "fixed": False,
-            "ignored": False,
-            "affected": False,
-            "pending": True,
-            "new": True
-        }
-
-        last_assessment = None
-        for assessment in assessmentsCtrl.gets_by_vuln(vuln_id):
-            if last_assessment is None or _ts_key(last_assessment.timestamp) < _ts_key(assessment.timestamp):
-                last_assessment = assessment
-        if last_assessment:
-            data["fixed"] = last_assessment.status in ["fixed", "resolved", "resolved_with_pedigree"]
-            data["ignored"] = last_assessment.status in ["not_affected", "false_positive"]
-            data["affected"] = last_assessment.status in ["affected", "exploitable"]
-            data["pending"] = last_assessment.status in ["under_investigation", "in_triage"]
-            data["new"] = False
+        data = condition_data(vuln_id, vuln, newest_assessment(assessmentsCtrl.gets_by_vuln(vuln_id)))
         if parser.evaluate(condition, data):
             failed_vulns.append(vuln_id)
-            if not quiet:
-                # Keep this message on stdout for CI consumers.
-                print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
+            # Keep this message on stdout for CI consumers.
+            print_message(f"Vulnerability triggered fail condition: {vuln_id}", role="error")
     return failed_vulns
 
 
@@ -561,27 +568,18 @@ def _condition_scope(project_name: str | None, variant_name: str | None):
     return compute_export_scope(variant_id=variant_obj.id)
 
 
-def _condition_matches_by_variant(scope, condition: str, *, quiet: bool = False) -> dict[str, list]:
-    """Vulnerability ID -> the scope variant IDs on which *condition* matched, in evaluation order."""
-    matches: dict[str, list] = {}
+def _evaluate_condition_in_scope(scope, condition: str) -> list[str]:
+    matched_vulns: list[str] = []
     for variant_id in sorted(scope.variant_ids, key=str):
         variant_controllers = ControllersCache(
             scope=compute_export_scope(variant_id=variant_id)
         )
-        for vuln_id in evaluate_condition(
+        matched_vulns.extend(evaluate_condition(
             variant_controllers.vulnerabilities,
             variant_controllers.assessments,
             condition,
-            quiet=quiet,
-        ):
-            variants = matches.setdefault(vuln_id, [])
-            if variant_id not in variants:
-                variants.append(variant_id)
-    return matches
-
-
-def _evaluate_condition_in_scope(scope, condition: str, *, quiet: bool = False) -> list[str]:
-    return list(_condition_matches_by_variant(scope, condition, quiet=quiet))
+        ))
+    return list(dict.fromkeys(matched_vulns))
 
 
 def _run_main(
