@@ -26,6 +26,7 @@ v0.25 and print a deprecation warning; see
 | `assess --cve <id>...\|--filter <expr> [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Create pending AI assessments with the configured AI provider. Use `--cve` or `--filter`, not both; see [Assess from the CLI or CI](ai-assessments.md#assess-from-the-cli-or-ci). | optional; all variants of the project | optional, repeatable; needs `-p` |
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
 | `export <kind>... [--amend]` | Write `spdx`, `cdx`, `openvex`, `custom-data`, `custom-openvex` or `context` to the outputs directory. `--amend` applies to `custom-*` only. | default `default` | optional; all variants when omitted |
+| `export vulnerability-history --since <timestamp> [--until <timestamp>] [--format json\|csv]` | Export recorded field changes to stdout. | optional; all data when omitted | optional; needs `-p` |
 | `import custom-data <path> [--timestamps original\|current]` | Import custom VulnScout JSON data. | default `default` | rejected (the file names its variants) |
 | `import custom-openvex <path> [--timestamps original\|current]` | Import custom OpenVEX assessments. | default `default` | optional; the project's only variant when omitted |
 | `import context <path>` | Import project and variant context. | optional; retargets the file | optional; needs `-p` |
@@ -63,6 +64,56 @@ Example:
   --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
   --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ```
+
+## Export Vulnerability Changes
+
+Export the field history already recorded by VulnScout, without creating or
+selecting a refresh-run ID:
+
+```bash
+./vulnscout export vulnerability-history \
+  --since 2026-10-01T00:00:00Z --until 2026-10-02T00:00:00Z \
+  --format json > changes.json
+
+./vulnscout export vulnerability-history -p demo -v x86 \
+  --since 2026-10-01T00:00:00Z --source nvd,epss \
+  --format csv > changes.csv
+```
+
+`--since` is inclusive; optional `--until` is exclusive and must be later.
+Timestamps without a timezone mean UTC. Optional `--source` (repeatable or
+comma-separated), `--field`, and `--vuln-id` filters narrow the selection.
+Without `-p`, all vulnerabilities are eligible. With `-p`/`-v`, the selection
+uses the vulnerabilities in the **current active scope**, not historical
+project membership. Unknown projects or variants fail instead of exporting
+unscoped data.
+
+JSON includes the time bounds, total and history entries. CSV contains one row
+per field change, with JSON-encoded old/resulting values. Successful exports
+write only the document to stdout; errors exit nonzero. No changes produces an
+empty JSON history or a CSV header, not an error.
+
+For CI, record timestamps around a refresh and preserve its exit status:
+
+```bash
+since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+status=0
+./vulnscout refresh -p demo -v x86 || status=$?
+until="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+./vulnscout export vulnerability-history -p demo -v x86 \
+  --since "$since" --until "$until" --format json > changes.json || exit $?
+exit "$status"
+```
+
+This exports changes within a time window, not the outcome of an exact
+invocation: concurrent operations can contribute changes, and an empty export
+does not establish that providers completed successfully. Exports depend on
+retained vulnerability history; archive the files externally if needed.
+
+Direct Python deployments can use
+`flask --app src.bin.webapp export-vulnerability-history --since <timestamp> --format csv --output changes.csv`.
+See [Vulnerability History](api.md#vulnerability-history) for the corresponding
+HTTP export.
 
 ## Shell completion
 

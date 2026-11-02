@@ -192,6 +192,8 @@ Commands without --project or --variant:
 
         Refresh vulnerability data:
         --refresh-vulnerability-data    Refresh all projects (optionally limited by --project and --variant)
+        --export-vulnerability-history --since <timestamp> [--until <timestamp>] [--format json|csv]
+                                        Export recorded changes to stdout; remaining options go to Flask
 
         Data listing:
         --list-projects                 List all projects and their variants (optionally in JSON format with --json)
@@ -1062,6 +1064,13 @@ while [[ $# -gt 0 ]]; do
         --ai-assess)
             # Consumes the remaining arguments, like --serve.
             shift; ai_assess_exit=0; cmd_ai_assess "$@" || ai_assess_exit=$?; exit "$ai_assess_exit" ;;
+        --export-vulnerability-history)
+            shift
+            history_scope=()
+            [[ "$PROJECT_SPECIFIED" == "true" ]] && history_scope+=(--project "$PROJECT_NAME")
+            [[ "$VARIANT_SPECIFIED" == "true" ]] && history_scope+=(--variant "$VARIANT_NAME")
+            cd "$BASE_DIR"
+            exec flask --app src.bin.webapp export-vulnerability-history "${history_scope[@]}" "$@" ;;
         --match-condition)
             if [[ "$SERVE_REQUESTED" == "true" ]]; then
                 console_out error "Error: --serve and --match-condition are incompatible."; exit 1

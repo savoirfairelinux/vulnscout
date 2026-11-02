@@ -84,8 +84,12 @@ _vulnscout_complete() {
     done
 
     case "$prev" in
-        -p|--project|-v|--variant|--condition|--cve|--filter|--model|--timeout) return 0 ;;
-        --format) mapfile -t COMPREPLY < <(compgen -W "pdf html" -- "$cur"); return 0 ;;
+        -p|--project|-v|--variant|--condition|--cve|--filter|--model|--timeout|--since|--until|--source|--field|--vuln-id)
+            return 0 ;;
+        --format)
+            local formats="pdf html"
+            [ "$verb" = export ] && formats="json csv"
+            mapfile -t COMPREPLY < <(compgen -W "$formats" -- "$cur"); return 0 ;;
         --timestamps) mapfile -t COMPREPLY < <(compgen -W "original current" -- "$cur"); return 0 ;;
         --spdx|--cdx|--cve-check|--yocto-vex|--openvex)
             _vulnscout_files "$cur"; return 0 ;;
@@ -130,7 +134,13 @@ _vulnscout_complete() {
             _vulnscout_files "$cur"
             return 0 ;;
         export)
-            words="spdx cdx openvex custom-data custom-openvex context --amend" ;;
+            words="spdx cdx openvex custom-data custom-openvex context vulnerability-history --amend"
+            for ((k = i + 1; k < COMP_CWORD; k++)); do
+                if [ "${COMP_WORDS[k]}" = vulnerability-history ]; then
+                    words="--since --until --source --field --vuln-id --format"
+                    break
+                fi
+            done ;;
         import)
             # The kind is the first positional word; --timestamps and -v depend on it.
             local kind="" k
@@ -404,9 +414,12 @@ Examples:
 EOF
             ;;
         export) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] export <kind>... [--amend]
+Usage: vulnscout export <kind>... [-p <project>] [-v <variant>] [--amend]
+       vulnscout export vulnerability-history --since <timestamp> [--until <timestamp>] [--format json|csv]
 
 Kinds: spdx, cdx, openvex, custom-data, custom-openvex, context
+History export writes to stdout; optionally filter with --source, --field or --vuln-id.
+Without -p it exports all history; -p/-v restrict vulnerabilities to the current scope.
 Options:
     -p, --project <name>    Project (default: "default")
     -v, --variant <name>    Variant; without it, every variant of the project
@@ -1384,6 +1397,11 @@ verb_report() {
 }
 
 verb_export() {
+    if [ "${1:-}" = vulnerability-history ]; then
+        shift
+        verb_export_vulnerability_history "$@"
+        return
+    fi
     local amend=false has_custom=false kind
     local -a kinds=() export_args=()
     while [ $# -gt 0 ]; do
@@ -1423,6 +1441,31 @@ verb_export() {
     ensure_running
     set_project_scope_args
     exec_container "${SCOPE_ARGS[@]}" "${export_args[@]}"
+}
+
+verb_export_vulnerability_history() {
+    local since="" format="json"
+    local -a args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since|--until|--source|--field|--vuln-id|--format)
+                require_value "$1" "$#" "${2:-}"
+                case "$1" in
+                    --since) since="$2" ;;
+                    --format) format="$2" ;;
+                esac
+                args+=("$1" "$2"); shift 2 ;;
+            *) reject_option "export vulnerability-history" "$1" ;;
+        esac
+    done
+    [ -n "$since" ] || die "'export vulnerability-history' requires --since."
+    case "$format" in json|csv) ;; *) die "--format must be json or csv." ;; esac
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'export vulnerability-history' --variant requires --project."
+    fi
+    ensure_running >&2
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --export-vulnerability-history "${args[@]}"
 }
 
 verb_import() {
