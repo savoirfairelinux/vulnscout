@@ -1791,6 +1791,60 @@ Counts the changes recorded at or after `since`, optionally restricted to comma-
 
 Returns `400` if `since` is missing or is not an ISO 8601 timestamp.
 
+### Export Changes as JSON or CSV
+
+```
+GET /api/vulnerabilities/history/export?since=<iso-8601>&until=<iso-8601>&format=json
+```
+
+Exports the existing field history; no refresh-run ID or additional storage is
+required.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `since` | string | Required. Include changes at or after this ISO 8601 timestamp. |
+| `until` | string | Optional. Exclude changes at or after this timestamp; must be later than `since`. |
+| `source` | string | Optional. Comma-separated or repeated sources, e.g. `nvd,epss`. |
+| `field` | string | Optional. Restrict to one tracked field. |
+| `vuln_id` | string | Optional. Restrict to one vulnerability; case-insensitive. |
+| `format` | string | `json` (default) or `csv`. |
+
+Timestamps without a timezone are interpreted as UTC. The interval is
+`[since, until)`; omitting `until` includes every recorded change since `since`.
+JSON contains `since`, `until`, `total`, and a `history` array:
+
+```json
+{
+  "since": "2026-10-01T00:00:00+00:00",
+  "until": "2026-10-02T00:00:00+00:00",
+  "total": 1,
+  "history": [
+    {
+      "vuln_id": "CVE-2025-21758",
+      "field": "epss_score",
+      "old_value": 0.13707,
+      "value": 0.14108,
+      "source": "epss",
+      "changed_at": "2026-10-01T12:00:00+00:00"
+    }
+  ]
+}
+```
+
+Rows are chronological, with the history row ID breaking timestamp ties.
+Resulting values are reconstructed from subsequent history or the live value,
+including subsequent changes outside the selected window or from other sources.
+CSV has columns `vuln_id`, `changed_at`, `source`, `field`, `old_value`, `value`.
+The value cells are JSON-encoded, multiline text is quoted, and formula-like
+cells are escaped for spreadsheet use. An empty export is valid: an empty JSON
+history or a CSV header only.
+
+Returns `400` for missing/invalid timestamps, an invalid interval, or an
+unsupported format. History exports describe **recorded changes**, not provider
+coverage or execution success. Overlapping refreshes, scans and imports can
+contribute changes in the same interval. Deleting a vulnerability and its history
+also removes it from future exports; archive exported files when needed.
+
 ---
 
 ## Scan Sources

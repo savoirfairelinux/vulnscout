@@ -29,7 +29,7 @@ from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
     read_inputs,
     _ts_key,
 )
-from .cmd_export import export_command, report_command
+from .cmd_export import export_command, report_command, export_vulnerability_history_command
 from .cmd_assessments import (
     export_custom_openvex_assessments_command,
     export_custom_vulnscout_data_command,
@@ -59,6 +59,7 @@ def init_app(app) -> None:
     app.cli.add_command(refresh_vulnerability_data_command)
     app.cli.add_command(report_command)
     app.cli.add_command(export_command)
+    app.cli.add_command(export_vulnerability_history_command)
     app.cli.add_command(export_custom_vulnscout_data_command)
     app.cli.add_command(import_custom_vulnscout_data_command)
     app.cli.add_command(export_custom_openvex_assessments_command)
