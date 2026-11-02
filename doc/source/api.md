@@ -1808,9 +1808,17 @@ required.
 | `field` | string | Optional. Restrict to one tracked field. |
 | `vuln_id` | string | Optional. Restrict to one vulnerability; case-insensitive. |
 | `format` | string | `json` (default) or `csv`. |
+| `project_id` | UUID | Optional. Restrict to vulnerabilities in the project's current active SBOM scope. |
+| `variant_id` | UUID | Optional, repeated. Restrict to selected variants of `project_id`; requires that project. |
 
 Timestamps without a timezone are interpreted as UTC. The interval is
 `[since, until)`; omitting `until` includes every recorded change since `since`.
+Without scope parameters, the export includes global history. With `project_id`
+only, it includes all of that project's variants; repeated `variant_id` parameters
+select a subset. Invalid UUIDs and variants outside the project return `400`; an
+unknown project returns `404`. An empty current scope produces an empty export,
+not global history. Scope reflects current active SBOM membership, not membership
+at the time of each change.
 JSON contains `since`, `until`, `total`, and a `history` array:
 
 ```json
