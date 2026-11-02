@@ -346,6 +346,48 @@ def test_filter_assesses_only_the_variants_that_matched(app, ids):
         ("CVE-2024-0005", ["arm"])]
 
 
+def test_filter_evaluates_each_active_target_on_its_own_assessments(app, ids):
+    """A newer assessment of a removed version, or of another active package, does not hide an unassessed target."""
+    from datetime import datetime, timedelta, timezone
+    from uuid import UUID
+
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.scan import Scan
+    from src.models.vulnerability import Vulnerability
+
+    x86 = UUID(ids["x86"])
+    with app.app_context():
+        Vulnerability.create_record(id="CVE-2024-0005", description="CVE-2024-0005")
+        scan = _db.session.scalars(_db.select(Scan).where(Scan.variant_id == x86)).one()
+        findings = {}
+        # zlib@1.2 and openssl@3.0 are in x86's active SBOM; zlib@1.1 is a removed version.
+        for name, version in (("zlib", "1.1"), ("zlib", "1.2"), ("openssl", "3.0")):
+            package = Package.find_or_create(name, version, [], [], "")
+            _db.session.commit()
+            findings[(name, version)] = Finding.get_or_create(package.id, "CVE-2024-0005")
+            Observation.create(findings[(name, version)].id, scan.id)
+        now = datetime.now(timezone.utc)
+        Assessment.create(status="not_affected", origin="custom", targets=[(x86, findings[("openssl", "3.0")].id)],
+                          timestamp=now - timedelta(hours=2))
+        Assessment.create(status="fixed", origin="custom", targets=[(x86, findings[("zlib", "1.1")].id)],
+                          timestamp=now - timedelta(hours=1))
+        _db.session.commit()
+
+    def selected(condition):
+        result = _invoke(app, "--project", "demo", "--variant", "x86", "--filter", condition, "--dry-run", "--json")
+        assert result.exit_code == 0, result.stdout + result.stderr
+        return {entry["id"]: [t["package"] for t in entry["targets"]]
+                for entry in json.loads(result.stdout)["results"]}.get("CVE-2024-0005")
+
+    assert selected("pending") == ["zlib@1.2"]
+    assert selected("new") == ["zlib@1.2"]
+    assert selected("ignored") == ["openssl@3.0"]
+    assert selected("fixed") is None
+
+
 def test_invalid_filter_exits_1(app, ids):
     result = _invoke(app, "--project", "demo", "--filter", "pending and", "--dry-run")
     assert result.exit_code == 1
