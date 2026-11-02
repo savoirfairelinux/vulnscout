@@ -15,7 +15,7 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ## Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Recorded Files, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
@@ -29,6 +29,28 @@ A release version and a commit hash describe separate fields, not a conflict.
 
 For version normalisation and source-evidence details, see the
 [SBOM and Scan Reference](sbom-scan-reference.md#release-versions-and-source-revisions).
+
+## Recorded Files
+
+Click a **Recorded Files** count to open a fullscreen file browser, sized like
+the dependency dialog. Search by path, document, or variant, and combine the
+search with **Build evidence** and **SBOM document** filters. Select a file in
+the list to read its provenance, hashes, properties, and build inputs/outputs.
+On wide screens the list and details scroll independently; narrow screens stack
+them vertically. **Clear filters** restores all records. Long build parameters
+stay collapsed until expanded.
+Technical identifiers and the original parsed data are available in a collapsed
+section at the end of the details.
+
+**Compilation recorded** means a compiler target records the file as an input.
+**Other build input** includes recipe or packaging tasks and does not prove
+compilation. **Listed only** means no associated build task was recorded.
+None of these proves inclusion in the final firmware. The summary distinguishes
+file records from unique compiled source paths, and an incomplete-evidence notice
+explains when compiled-source CVE refinement is disabled.
+
+See [Recorded files](interactive-mode.md#recorded-files) for supported formats,
+scope, and reimport requirements.
 
 ## Zephyr Component Badges
 
