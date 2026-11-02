@@ -20,7 +20,7 @@ const threadOf = (options?: RequestInit) => (options?.headers as Record<string, 
 beforeEach(() => resetAgentQueue());
 
 test('runs requests one at a time, keeps chat messages in the main conversation and each action in its own', async () => {
-    const sent: Array<{ message: string; context: AgentContext; thread?: string }> = [];
+    const sent: Array<{ message: string; context: AgentContext; thread?: string; action?: string }> = [];
     let finish: (response: Response) => void = () => {};
     global.fetch = jest.fn(async (input, options) => {
         if (!String(input).endsWith('/messages')) return json({ messages: [], usage });
@@ -59,6 +59,7 @@ test('runs requests one at a time, keeps chat messages in the main conversation 
     await settle();
     expect(sent.map(item => item.message)).toEqual(['chat', 'cve-1 batch 1', 'cve-1 batch 2', 'cve-2']);
     expect(sent.map(item => item.thread)).toEqual([undefined, cve1.id, cve1.id, cve2.id]);
+    expect(sent.map(item => item.action)).toEqual([undefined, 'assess', 'assess', 'assess']);
     expect(sent[0].context.view?.selectedVulnerabilityIds).toEqual(['CVE-1']);
     expect(getAgentConversation().messages.map(message => message.content)).toEqual(['chat', 'Chat result']);
     expect(getAgentConversation(cve1.id).messages.map(message => message.content))
@@ -74,9 +75,11 @@ test('runs requests one at a time, keeps chat messages in the main conversation 
 test('follow-ups continue an action conversation on its thread and pause on failure until retried', async () => {
     let attempts = 0;
     const threads: Array<string | undefined> = [];
+    const actions: Array<string | undefined> = [];
     global.fetch = jest.fn(async (input, options) => {
         if (!String(input).endsWith('/messages')) return json({ messages: [], usage });
         threads.push(threadOf(options));
+        actions.push(JSON.parse(String(options?.body)).action);
         attempts++;
         if (attempts === 1) throw new TypeError('offline');
         return finished('Recovered');
@@ -93,6 +96,8 @@ test('follow-ups continue an action conversation on its thread and pause on fail
     await settle();
     expect(attempts).toBe(3);
     expect(threads).toEqual([conversationId, conversationId, conversationId]);
+    // Failed assess, retried assess, then the follow-up chat message on the same thread.
+    expect(actions).toEqual(['assess', 'assess', undefined]);
     expect(getAgentConversation(conversationId).messages.filter(message => message.role === 'user').map(message => message.content))
         .toEqual(['assess', 'follow-up']);
     expect(() => enqueueAgentMessages([action('missing')], context, 'x', 'unknown')).toThrow(/no longer available/);
