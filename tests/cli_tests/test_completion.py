@@ -129,10 +129,20 @@ def test_scan_scanner_flags(tmp_path, completion_script):
 
 def test_fixed_values(completion_script):
     assert set(complete(completion_script, ["vulnscout", "report", "--format", ""])) == {"pdf", "html"}
+    assert set(complete(
+        completion_script, ["vulnscout", "export", "vulnerability-history", "--format", ""],
+    )) == {"json", "csv"}
     assert set(complete(completion_script, ["vulnscout", "import", "custom-data", "--timestamps", ""])) == {"original", "current"}
     assert set(complete(completion_script, ["vulnscout", "delete", ""])) >= {"scan", "outdated", "empty-scans", "orphaned-vulns", "--dry-run", "--yes"}
     assert set(complete(completion_script, ["vulnscout", "config", ""])) >= {"get", "set", "unset", "list"}
     assert set(complete(completion_script, ["vulnscout", "list", ""])) >= {"projects", "scans", "--json"}
+
+
+@pytest.mark.parametrize("flag", ["--since", "--until", "--source", "--field", "--vuln-id"])
+def test_history_export_completion(completion_script, flag):
+    assert "vulnerability-history" in complete(completion_script, ["vulnscout", "export", ""])
+    assert flag in complete(completion_script, ["vulnscout", "export", "vulnerability-history", "-"])
+    assert not any(complete(completion_script, ["vulnscout", "export", "vulnerability-history", flag, ""]))
 
 
 def test_completion_matches_help(tmp_path, completion_script):
