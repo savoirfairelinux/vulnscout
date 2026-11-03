@@ -45,7 +45,9 @@ test('starts with a compact tree and progressively explores full transitive path
     await user.click(tree.getByRole('treeitem', { name: 'lib@1.0' }));
     const inspector = within(screen.getByRole('complementary', { name: 'Package inspector' }));
     expect(inspector.getByRole('heading', { name: 'lib@1.0' })).toBeInTheDocument();
-    expect(inspector.getByRole('button', { name: /Explore dependencies/ })).toHaveTextContent('1 direct');
+    expect(inspector.getByRole('list', { name: 'Relationship counts' })).toHaveTextContent(
+        'Depends on1 direct · 0 transitive onlyRequired by1 direct · 0 transitive only');
+    expect(inspector.queryByRole('button', { name: /Explore dependencies|Trace dependents/ })).not.toBeInTheDocument();
     expect(inspector.getByText('packages.spdx.json')).toBeInTheDocument();
     expect(inspector.queryByText('other.spdx.json')).not.toBeInTheDocument();
     expect(within(inspector.getByRole('list', { name: 'Selected dependency path' })).getAllByRole('button')).toHaveLength(2);
@@ -60,8 +62,9 @@ test('searches all packages and traces dependents without losing transitive path
     expect(screen.getByText('1 package matches')).toBeInTheDocument();
     await user.click(within(screen.getByRole('list', { name: 'Package search results' })).getByRole('button'));
     expect(screen.getByRole('searchbox')).toHaveValue('');
-    const inspector = within(screen.getByRole('complementary', { name: 'Package inspector' }));
-    await user.click(inspector.getByRole('button', { name: /Trace dependents/ }));
+    expect(screen.getByLabelText('Dependency diagram')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Required by' }));
+    await user.click(screen.getByRole('button', { name: 'Tree' }));
     const tree = within(screen.getByRole('tree', { name: 'alpha: Required by' }));
     expect(tree.getByRole('treeitem', { name: 'app@1.0' })).toBeInTheDocument();
     await user.click(tree.getByRole('button', { name: 'Expand lib@1.0' }));
@@ -91,12 +94,13 @@ test('keyboard navigation expands, selects, traverses, and collapses branches', 
 test('changing direction clears the previously selected path rather than presenting it as a reverse path', async () => {
     render(<DependencyExplorer documents={[documents[0]]} focusedPackageId="app" />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Tree' }));
     await user.click(screen.getByRole('treeitem', { name: 'lib@1.0' }));
     expect(screen.getByRole('list', { name: 'Selected dependency path' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Required by' }));
     expect(screen.queryByRole('list', { name: 'Selected dependency path' })).not.toBeInTheDocument();
     expect(within(screen.getByRole('complementary')).getByRole('heading', { name: 'lib@1.0' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Trace dependents/ })).toHaveTextContent('1 direct');
+    expect(screen.getByRole('list', { name: 'Relationship counts' })).toHaveTextContent('Required by1 direct');
 });
 
 test('terminates circular paths and includes unlinked packages', async () => {
@@ -106,6 +110,7 @@ test('terminates circular paths and includes unlinked packages', async () => {
     };
     render(<DependencyExplorer documents={[cyclic]} focusedPackageId="app" />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Tree' }));
     const tree = within(screen.getByRole('tree'));
     await user.click(tree.getByRole('button', { name: 'Expand lib@1.0' }));
     expect(tree.getByText('Cycle')).toBeInTheDocument();
@@ -133,42 +138,70 @@ test('browses large branches incrementally and can find packages beyond the firs
 
 test('starts at the clicked package and resets focus when selecting a different source', async () => {
     render(<DependencyExplorer documents={documents} focusedPackageId="app" />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Tree' }));
     expect(within(screen.getByRole('tree', { name: 'alpha: Depends on' })).getAllByRole('treeitem')).toHaveLength(3);
     await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'SBOM source' }), 'doc-two');
     expect(screen.queryByRole('tree', { name: 'alpha: Depends on' })).not.toBeInTheDocument();
     expect(within(screen.getByRole('tree', { name: 'beta: Depends on' })).getAllByRole('treeitem')).toHaveLength(1);
 });
 
-test('shows a bounded neighborhood diagram only on request, with readable node colors', async () => {
+test('starts on a depth-1 neighborhood graph and highlights the active view', async () => {
     render(<DependencyExplorer documents={[documents[0]]} focusedPackageId="app" />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: 'Graph' }));
+    const graphButton = screen.getByRole('button', { name: 'Graph' });
+    const treeButton = screen.getByRole('button', { name: 'Tree' });
     expect(screen.getByLabelText('Dependency diagram')).toBeInTheDocument();
+    expect(screen.queryByRole('tree')).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Graph depth' })).toHaveValue('1');
     expect(screen.getByText('3 of 3 packages within 1 level')).toBeInTheDocument();
+    expect(graphButton).toHaveAttribute('aria-pressed', 'true');
+    expect(graphButton).toHaveClass('border-cyan-600', 'bg-cyan-50');
+    expect(treeButton).toHaveAttribute('aria-pressed', 'false');
+    expect(treeButton).not.toHaveClass('border-cyan-600');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Graph depth' }), '2');
     expect(screen.getByText('3 of 3 packages within 2 levels')).toBeInTheDocument();
     await user.type(screen.getByRole('searchbox'), 'lib');
-    await user.click(screen.getByRole('button', { name: 'Back to tree' }));
+    expect(graphButton).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(screen.getByLabelText('Dependency diagram')).toBeInTheDocument();
+    await user.click(treeButton);
     expect(screen.getByRole('tree')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Tree' })).toHaveAttribute('aria-pressed', 'true');
+    expect(treeButton).toHaveAttribute('aria-pressed', 'true');
+    expect(treeButton).toHaveClass('border-cyan-600', 'bg-cyan-50');
+    expect(graphButton).toHaveAttribute('aria-pressed', 'false');
+    expect(graphButton).not.toHaveClass('border-cyan-600');
+});
+
+test('explains each direction with a tooltip and keeps the header compact', () => {
+    render(<DependencyExplorer documents={[documents[0]]} focusedPackageId="app" />);
+    const dependsOn = screen.getByRole('button', { name: 'Depends on' });
+    const requiredBy = screen.getByRole('button', { name: 'Required by' });
+    expect(dependsOn).toHaveAttribute('title', 'Packages this package needs, directly or transitively.');
+    expect(dependsOn).toHaveAccessibleDescription('Packages this package needs, directly or transitively.');
+    expect(requiredBy).toHaveAttribute('title', 'Packages that need this package, directly or transitively.');
+    expect(requiredBy).toHaveAccessibleDescription('Packages that need this package, directly or transitively.');
+    expect(screen.queryByRole('heading', { name: 'Explore SBOM relationships' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/without leaving the SBOM/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Package →/)).not.toBeInTheDocument();
 });
 
 test('explicitly reports diagram limits without limiting the full tree', async () => {
     const packages = Array.from({ length: 200 }, (_, index) => ({ id: `pkg-${index}`, name: `pkg-${index}`, version: '1' }));
     render(<DependencyExplorer focusedPackageId="pkg-0" documents={[{ ...documents[0], packages,
         edges: packages.slice(1).map(pkg => ({ package_id: 'pkg-0', dependency_id: pkg.id })) }]} />);
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Graph' }));
     expect(screen.getByRole('status')).toHaveTextContent('Diagram limited to 120 packages');
     expect(screen.getByText('120 of 200 packages within 1 level')).toBeInTheDocument();
 });
 
 test('follows a changed package instead of showing the previous root inspection', async () => {
     const view = render(<DependencyExplorer documents={documents} focusedPackageId="app" />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Tree' }));
     await userEvent.setup().click(within(screen.getByRole('tree', { name: 'alpha: Depends on' })).getByRole('treeitem', { name: 'lib@1.0' }));
     const inspector = within(screen.getByRole('complementary', { name: 'Package inspector' }));
     expect(inspector.getByRole('heading', { name: 'lib@1.0' })).toBeInTheDocument();
     view.rerender(<DependencyExplorer documents={documents} focusedPackageId="util" />);
     expect(inspector.getByRole('heading', { name: 'util@1.0' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Dependency diagram')).toBeInTheDocument();
 });
 
 test('shows loading, empty, missing package and retry states', async () => {
@@ -217,10 +250,12 @@ test('preserves commit-based identity when exploring a release-labeled package',
             version_evidence: [{ source: 'purl', version: 'v4.1.1', identifier: 'pkg:generic/lib@v4.1.1' }] },
     ], edges: [{ package_id: 'app', dependency_id: id }] }]} />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Tree' }));
     const row = screen.getByRole('treeitem', { name: 'lib@4.1.1 (aaaaaaaaaaaa)' });
     expect(within(row).getByText('lib@4.1.1 (aaaaaaaaaaaa)')).toHaveAttribute('title', expect.stringContaining('pkg:generic/lib@v4.1.1'));
     await user.click(row);
-    await user.click(screen.getByRole('button', { name: /Explore dependencies/ }));
+    await user.click(within(screen.getByRole('list', { name: 'Selected dependency path' }))
+        .getByRole('button', { name: 'lib@4.1.1 (aaaaaaaaaaaa)' }));
     expect(screen.getAllByRole('treeitem')).toHaveLength(1);
     expect(screen.getByRole('treeitem', { name: 'lib@4.1.1 (aaaaaaaaaaaa)' })).toBeInTheDocument();
 });
@@ -234,6 +269,7 @@ test('keeps variant evidence and paths separate and allows hiding every variant'
         edges: [{ package_id: 'lib', dependency_id: `child-${index}` }],
     }))} />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Tree' }));
     const alpha = within(screen.getByRole('tree', { name: 'alpha: Depends on' }));
     const beta = within(screen.getByRole('tree', { name: 'beta: Depends on' }));
     expect(alpha.getByRole('treeitem', { name: 'lib@1.0 (aaaaaaaaaaaa)' })).toBeInTheDocument();

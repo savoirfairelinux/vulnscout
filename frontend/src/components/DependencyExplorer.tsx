@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faChevronDown, faChevronRight, faDiagramProject, faMagnifyingGlass, faRotateRight } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faChevronDown, faChevronRight, faMagnifyingGlass, faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { ReactFlow, Background, Controls, MarkerType, Position } from '@xyflow/react';
 import type { Node, Edge } from '@xyflow/react';
 import dagre from 'dagre';
@@ -22,6 +22,13 @@ type Props = {
 type Selection = { id: string; variantId: string; path?: string[]; direction?: DependencyDirection };
 const buttonClass = 'rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-600 dark:border-neutral-600 dark:hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40';
 const mutedClass = 'text-gray-500 dark:text-neutral-400';
+const toggleClass = (active: boolean) =>
+    `${buttonClass} ${active ? 'border-cyan-600 bg-cyan-50 text-cyan-900 dark:bg-cyan-950 dark:text-cyan-200' : ''}`;
+const directionLabels = { dependencies: 'Depends on', dependents: 'Required by' } as const;
+const directionHelp = {
+    dependencies: 'Packages this package needs, directly or transitively.',
+    dependents: 'Packages that need this package, directly or transitively.',
+} as const;
 
 function PackageLabel({ pkg }: Readonly<{ pkg: DependencyPackage }>) {
     return <span title={versionEvidenceTitle(pkg)} className="min-w-0 break-words [overflow-wrap:anywhere]">{packageVersionLabel(pkg)}</span>;
@@ -212,15 +219,13 @@ function PackageDetails({ scope, selection, onExplore }: Readonly<{
                 </li>)}
             </ol>
         </div>}
-        <div className="space-y-2">
-            {counts.map(({ direction, direct, transitive }) => <button key={direction} type="button"
-                onClick={() => onExplore(id, scope.id, direction)}
-                className="flex w-full items-center justify-between rounded-lg border border-gray-200 p-3 text-left hover:border-cyan-600 dark:border-neutral-700">
-                <span><span className="block text-sm font-semibold">{direction === 'dependencies' ? 'Explore dependencies' : 'Trace dependents'}</span>
-                    <span className={`text-xs ${mutedClass}`}>{direct} direct · {transitive} transitive only</span></span>
-                <FontAwesomeIcon icon={faChevronRight} className="text-xs" />
-            </button>)}
-        </div>
+        <ul aria-label="Relationship counts" className="space-y-2">
+            {counts.map(({ direction, direct, transitive }) => <li key={direction}
+                className="rounded-lg border border-gray-200 p-3 dark:border-neutral-700">
+                <span className="block text-sm font-semibold">{directionLabels[direction]}</span>
+                <span className={`text-xs ${mutedClass}`}>{direct} direct · {transitive} transitive only</span>
+            </li>)}
+        </ul>
         <div><h3 className="mb-2 text-sm font-semibold">SBOM evidence</h3>
             <ul className={`space-y-2 text-sm ${mutedClass}`}>{sources.map(source => <li key={source.id} className="break-all">
                 {source.source_name}<span className="block text-xs">{source.dependencies_recorded ? 'Dependencies recorded' : 'Dependencies not recorded'}</span>
@@ -240,7 +245,8 @@ export default function DependencyExplorer({ documents, loading = false, error =
     const [hiddenVariants, setHiddenVariants] = useState(new Set<string>());
     const scopes = useMemo(() => allScopes.filter(scope => !hiddenVariants.has(scope.id)), [allScopes, hiddenVariants]);
     const [direction, setDirection] = useState<DependencyDirection>('dependencies');
-    const [mode, setMode] = useState<'tree' | 'graph'>('tree');
+    const [mode, setMode] = useState<'tree' | 'graph'>(focusedPackageId ? 'graph' : 'tree');
+    const directionHelpId = useId();
     const [query, setQuery] = useState('');
     const [searchLimit, setSearchLimit] = useState(TREE_PAGE_SIZE);
     const [rootId, setRootId] = useState(focusedPackageId);
@@ -249,7 +255,7 @@ export default function DependencyExplorer({ documents, loading = false, error =
         setRootId(focusedPackageId);
         setSelection(undefined);
         setQuery('');
-        setMode('tree');
+        setMode(focusedPackageId ? 'graph' : 'tree');
     }, [focusedPackageId]);
     const contextualSelection = selection?.rootId === rootId ? selection : undefined;
     const selectedScope = scopes.find(scope => scope.id === contextualSelection?.variantId && scope.packages.has(contextualSelection.id))
@@ -274,7 +280,8 @@ export default function DependencyExplorer({ documents, loading = false, error =
         setSelection({ id, variantId, rootId: id });
         setDirection(nextDirection);
         setQuery('');
-        setMode('tree');
+        // Leaving the overview starts graph-first, like opening the popup on a package.
+        if (!rootId) setMode('graph');
         setRootId(id);
     }
     function overview() {
@@ -284,10 +291,7 @@ export default function DependencyExplorer({ documents, loading = false, error =
         setMode('tree');
     }
     return <section aria-label="Dependency explorer" className="flex h-full min-h-0 flex-col text-gray-900 dark:text-neutral-100">
-        <header className="mb-4 flex flex-wrap items-start justify-between gap-4">
-            <div><h2 className="flex items-center gap-2 text-xl font-semibold"><FontAwesomeIcon icon={faDiagramProject} className="text-cyan-700 dark:text-cyan-400" />Explore SBOM relationships</h2>
-                <p className={`mt-1 text-sm ${mutedClass}`}>Find what a package needs and what brings it in, without leaving the SBOM.</p>
-            </div>
+        <header className="mb-4 flex flex-wrap items-start justify-end gap-4">
             <label className="flex min-w-0 max-w-full items-center gap-2 text-sm">SBOM source
                 <select aria-label="SBOM source" value={sourceId} className="min-w-0 max-w-72 rounded-md border border-gray-300 bg-white px-2 py-2 dark:border-neutral-600 dark:bg-neutral-800"
                     onChange={event => { setDocumentId(event.target.value); setSelection(undefined); overview(); }}>
@@ -332,15 +336,18 @@ export default function DependencyExplorer({ documents, loading = false, error =
                     </div>
                     <div className="flex gap-1" role="group" aria-label="Relationship direction">
                         {(['dependencies', 'dependents'] as const).map(value => <button key={value} type="button" aria-pressed={direction === value}
-                            className={`${buttonClass} ${direction === value ? 'border-cyan-600 bg-cyan-50 text-cyan-900 dark:bg-cyan-950 dark:text-cyan-200' : ''}`}
+                            className={toggleClass(direction === value)} title={directionHelp[value]}
+                            aria-describedby={`${directionHelpId}-${value}`}
                             onClick={() => {
                                 setDirection(value);
                                 setSelection(previous => previous ? { id: previous.id, variantId: previous.variantId, rootId: previous.rootId } : undefined);
-                            }}>{value === 'dependencies' ? 'Depends on' : 'Required by'}</button>)}
+                            }}>{directionLabels[value]}</button>)}
+                        {(['dependencies', 'dependents'] as const).map(value =>
+                            <span key={value} id={`${directionHelpId}-${value}`} className="sr-only">{directionHelp[value]}</span>)}
                     </div>
                     <div className="flex gap-1" role="group" aria-label="Explorer view">
-                        <button type="button" aria-pressed={viewMode === 'tree'} className={buttonClass} onClick={() => setMode('tree')}>Tree</button>
-                        <button type="button" aria-pressed={viewMode === 'graph'} className={buttonClass} disabled={!selected || !!query.trim()}
+                        <button type="button" aria-pressed={viewMode === 'tree'} className={toggleClass(viewMode === 'tree')} onClick={() => setMode('tree')}>Tree</button>
+                        <button type="button" aria-pressed={viewMode === 'graph'} className={toggleClass(viewMode === 'graph')} disabled={!selected || !!query.trim()}
                             title={!selected ? 'Select a package to view its neighborhood' : 'A focused diagram, not the whole SBOM'} onClick={() => setMode('graph')}>Graph</button>
                     </div>
                 </div>
@@ -348,7 +355,6 @@ export default function DependencyExplorer({ documents, loading = false, error =
                     <button type="button" className="text-cyan-700 underline dark:text-cyan-300" onClick={overview}>All packages</button>
                     {rootId && <><FontAwesomeIcon icon={faChevronRight} className={`text-xs ${mutedClass}`} />
                         <span className="min-w-0 break-all font-medium">{rootPackage ? packageVersionLabel(rootPackage) : rootId}</span></>}
-                    <span className={`ml-auto text-xs ${mutedClass}`}>{direction === 'dependencies' ? 'Package → its dependencies' : 'Package → packages that require it'}</span>
                 </div>
                 {scopes.length === 0 ? <p role="status" className="mb-3 text-sm">No variants selected. Select a variant to explore its relationships.</p>
                     : !rootExists && <p role="alert" className="mb-3 text-sm">This package is not in the selected scope. Choose All packages or search for another package.</p>}
@@ -356,7 +362,7 @@ export default function DependencyExplorer({ documents, loading = false, error =
                     <div className="h-[55vh] min-h-[280px] overflow-auto rounded-lg border border-gray-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 lg:h-auto lg:min-h-0">
                         {query.trim() ? <div className="p-3">
                             <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{searchResults.length} package matches</h2>
-                                <button type="button" className="text-sm text-cyan-700 underline dark:text-cyan-300" onClick={() => { setQuery(''); setMode('tree'); }}>Back to tree</button></div>
+                                <button type="button" className="text-sm text-cyan-700 underline dark:text-cyan-300" onClick={() => setQuery('')}>Clear search</button></div>
                             {!searchResults.length && <p className={`text-sm ${mutedClass}`}>No packages match “{query}”. Try a name, version or source revision.</p>}
                             <ul aria-label="Package search results" className="space-y-1">{searchResults.slice(0, searchLimit).map(({ scope, pkg }) => <li key={JSON.stringify([scope.id, pkg.id])}>
                                 <button type="button" onClick={() => explore(pkg.id, scope.id, direction)}

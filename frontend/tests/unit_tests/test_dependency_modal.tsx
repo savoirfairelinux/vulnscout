@@ -33,17 +33,22 @@ test('opens at the SBOM package and explores paths, reverse relationships and th
     const close = jest.fn();
     render(<DependencyModal variantId="popup-flow" packageId="app" onClose={close} />);
     const dialog = within(screen.getByRole('dialog', { name: 'Package dependencies' }));
-    const tree = within(await dialog.findByRole('tree', { name: 'alpha: Depends on' }));
+    expect(await dialog.findByLabelText('Dependency diagram')).toBeInTheDocument();
+    expect(dialog.getByRole('button', { name: 'Graph' })).toHaveAttribute('aria-pressed', 'true');
+    expect(dialog.getByRole('combobox', { name: 'Graph depth' })).toHaveValue('1');
+    expect(dialog.queryByText(/Explore SBOM relationships|without leaving the SBOM/)).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(dialog.getByRole('button', { name: 'Tree' }));
+    const tree = within(dialog.getByRole('tree', { name: 'alpha: Depends on' }));
     expect(tree.getByRole('treeitem', { name: 'app@1.0' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.queryByLabelText('Dependency diagram')).not.toBeInTheDocument();
-    const user = userEvent.setup();
     await user.click(tree.getByRole('button', { name: 'Expand lib@1.0' }));
     await user.click(tree.getByRole('treeitem', { name: 'util@1.0' }));
     const inspector = within(dialog.getByRole('complementary', { name: 'Package inspector' }));
     expect(inspector.getByRole('list', { name: 'Selected dependency path' })).toHaveTextContent('app@1.0lib@1.0util@1.0');
-    await user.click(inspector.getByRole('button', { name: /Trace dependents/ }));
+    await user.click(dialog.getByRole('button', { name: 'Required by' }));
     expect(dialog.getByRole('tree', { name: 'alpha: Required by' })).toBeInTheDocument();
-    expect(inspector.getByRole('button', { name: /Trace dependents/ })).toHaveTextContent('1 direct · 1 transitive only');
+    expect(inspector.getByRole('list', { name: 'Relationship counts' })).toHaveTextContent('Required by1 direct · 1 transitive only');
     await user.click(dialog.getByRole('button', { name: 'Graph' }));
     expect(dialog.getByLabelText('Dependency diagram')).toBeInTheDocument();
     await user.click(dialog.getByRole('button', { name: 'All packages' }));
@@ -58,15 +63,16 @@ test('opens at the SBOM package and explores paths, reverse relationships and th
 test('reuses the scope graph across package openings until the data revision changes', async () => {
     mockListDependencies.mockResolvedValue(documents);
     const first = render(<DependencyModal variantId="cache-scope" dataRevision={1} packageId="app" onClose={() => {}} />);
-    expect(await screen.findByRole('treeitem', { name: 'app@1.0' })).toBeInTheDocument();
+    expect(within(await screen.findByLabelText('Dependency diagram')).getByText('app@1.0')).toBeInTheDocument();
     first.unmount();
     const second = render(<DependencyModal variantId="cache-scope" dataRevision={1} packageId="lib" onClose={() => {}} />);
-    expect(await screen.findByRole('treeitem', { name: 'util@1.0' })).toBeInTheDocument();
-    expect(screen.queryByRole('treeitem', { name: 'app@1.0' })).not.toBeInTheDocument();
+    const diagram = within(await screen.findByLabelText('Dependency diagram'));
+    expect(diagram.getByText('util@1.0')).toBeInTheDocument();
+    expect(diagram.queryByText('app@1.0')).not.toBeInTheDocument();
     expect(mockListDependencies).toHaveBeenCalledTimes(1);
     second.rerender(<DependencyModal variantId="cache-scope" dataRevision={2} packageId="lib" onClose={() => {}} />);
     await waitFor(() => expect(mockListDependencies).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole('treeitem', { name: 'util@1.0' })).toBeInTheDocument();
+    expect(within(await screen.findByLabelText('Dependency diagram')).getByText('util@1.0')).toBeInTheDocument();
 });
 
 test('uses comparison semantics and resets exploration when the scope or selected package changes', async () => {
@@ -74,7 +80,7 @@ test('uses comparison semantics and resets exploration when the scope or selecte
     const close = () => {};
     const view = render(<DependencyModal variantId="v1" projectId="p1" compareVariantId="v2"
         operation="difference" dataRevision={1} packageId="app" onClose={close} />);
-    await screen.findByRole('tree');
+    await screen.findByLabelText('Dependency diagram');
     expect(mockListDependencies).toHaveBeenLastCalledWith('v1', 'p1', undefined, 'v2', 'difference');
     await userEvent.setup().type(screen.getByRole('searchbox'), 'util');
     view.rerender(<DependencyModal variantId="v1" projectId="p1" compareVariantId="v2"
@@ -84,11 +90,12 @@ test('uses comparison semantics and resets exploration when the scope or selecte
     view.rerender(<DependencyModal projectId="p1" variantIds={['v1', 'v2']} operation="intersection"
         dataRevision={1} packageId="lib" onClose={close} />);
     await waitFor(() => expect(mockListDependencies).toHaveBeenLastCalledWith(undefined, 'p1', ['v1', 'v2'], undefined, 'intersection'));
-    expect(await screen.findByRole('treeitem', { name: 'util@1.0' })).toBeInTheDocument();
+    expect(within(await screen.findByLabelText('Dependency diagram')).getByText('util@1.0')).toBeInTheDocument();
     view.rerender(<DependencyModal projectId="p1" variantIds={['v1', 'v2']} operation="intersection"
         dataRevision={1} packageId="util" onClose={close} />);
-    expect(screen.getAllByRole('treeitem')).toHaveLength(1);
-    expect(screen.getByRole('treeitem', { name: 'util@1.0' })).toBeInTheDocument();
+    const diagram = within(screen.getByLabelText('Dependency diagram'));
+    expect(diagram.getByText('util@1.0')).toBeInTheDocument();
+    expect(diagram.queryByText('lib@1.0')).not.toBeInTheDocument();
     expect(mockListDependencies).toHaveBeenCalledTimes(3);
 });
 
@@ -97,6 +104,6 @@ test('surfaces request failures and evicts failed requests so retry can succeed'
     render(<DependencyModal projectId="retry-scope" packageId="app" onClose={() => {}} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load dependencies');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Retry loading dependencies' }));
-    expect(await screen.findByRole('treeitem', { name: 'app@1.0' })).toBeInTheDocument();
+    expect(within(await screen.findByLabelText('Dependency diagram')).getByText('app@1.0')).toBeInTheDocument();
     expect(mockListDependencies).toHaveBeenCalledTimes(2);
 });
