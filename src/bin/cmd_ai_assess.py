@@ -365,22 +365,29 @@ def _check_github_sign_in(token: str) -> None:
         raise click.ClickException(GITHUB_SIGNED_OUT)
 
 
-OUTSIDE_TURN = "Write rejected: this assessment run may only write AI assessments for its listed targets."
+OUTSIDE_TURN = ("Write rejected: this assessment run may only write AI assessments for its listed targets "
+                "and revise those its current turn wrote.")
 
 
 class TurnTargets:
-    """The vulnerability and (variant_id, package) targets the current agent turn may write."""
+    """The vulnerability and (variant_id, package) targets the current agent turn may write.
+
+    ``created`` holds the IDs of the AI assessments this turn wrote: the only rows it may revise.
+    """
 
     def __init__(self) -> None:
         self.current: tuple[str, frozenset[tuple[str, str]]] | None = None
+        self.created: set[str] = set()
 
     @contextmanager
     def allow(self, vuln_id: str, targets: list[Target]) -> Iterator[None]:
         self.current = (vuln_id, frozenset((target.variant_id, target.package) for target in targets))
+        self.created = set()
         try:
             yield
         finally:
             self.current = None
+            self.created = set()
 
 
 def _write_target_pairs(payload: Any) -> list[tuple[Any, Any]]:
@@ -418,13 +425,36 @@ def _turn_allows(turn: tuple[str, frozenset[tuple[str, str]]] | None, vuln_id: A
     return True
 
 
+def _turn_allows_update(turns: TurnTargets, assessment_id: Any) -> bool:
+    """Whether the current turn wrote AI assessment *assessment_id* and all its targets are still the turn's."""
+    from ..models.assessment import Assessment
+    from ..models.assessment_target import AssessmentTarget
+
+    turn = turns.current
+    try:
+        row_id = UUID(assessment_id)
+    except (TypeError, ValueError):
+        return False
+    if turn is None or str(row_id) not in turns.created:
+        return False
+    # Lock the row and its targets until the update commits, so another writer cannot widen them in between.
+    row = db.session.execute(
+        db.select(Assessment).where(Assessment.id == row_id).with_for_update()).scalar_one_or_none()
+    targets = db.session.execute(
+        db.select(AssessmentTarget).where(AssessmentTarget.assessment_id == row_id).with_for_update()).scalars().all()
+    return row is not None and row.origin == "ai" and bool(targets) and all(
+        target.finding.vulnerability_id == turn[0]
+        and (str(target.variant_id), target.finding.package.string_id) in turn[1] for target in targets)
+
+
 @contextmanager
 def _private_api() -> Iterator[tuple[str, list[str], TurnTargets]]:
     """Serve this app's API on an ephemeral loopback port for the agent's MCP server.
 
     Also yields the IDs of the assessments created through it, in order: only this run's agent uses
     this API, so they are exactly its writes, unlike rows the web agent or another run creates meanwhile.
-    The API only accepts creating AI assessments on the targets of the current turn (see ``TurnTargets``);
+    The API only accepts creating AI assessments on the targets of the current turn (see ``TurnTargets``)
+    and revising the AI assessments that turn created while all their targets remain the turn's;
     every other write is rejected, whatever the agent asks.
     """
     from werkzeug.serving import make_server
@@ -442,12 +472,18 @@ def _private_api() -> Iterator[tuple[str, list[str], TurnTargets]]:
         if request.endpoint == "add_assessment" and _turn_allows(
                 turns.current, (request.view_args or {}).get("vuln_id"), request.get_json(silent=True)):
             return
+        if request.endpoint == "update_assessment" and _turn_allows_update(
+                turns, (request.view_args or {}).get("assessment_id")):
+            return
         abort(make_response({"error": OUTSIDE_TURN}, 403))
 
     def record_write(sender, response, **extra) -> None:
         if request.endpoint == "add_assessment" and response.status_code == 200:
             body = response.get_json(silent=True) or {}
-            written.extend(str(row["id"]) for row in body.get("assessments") or [] if row.get("id"))
+            row_ids = [str(row["id"]) for row in body.get("assessments") or [] if row.get("id")]
+            written.extend(row_ids)
+            if turns.current is not None:
+                turns.created.update(row_ids)
 
     request_started.connect(guard_write, app, weak=False)
     request_finished.connect(record_write, app, weak=False)

@@ -48,7 +48,10 @@ session. Each turn is ephemeral (its SDK session is deleted) and runs the
 `cve-assessment` skill with the read tools plus `write_assessment` and
 `update_ai_assessment`. The command serves the app's API on an ephemeral
 `127.0.0.1` port for the MCP server, because the CLI process does not run the
-web server. It reads provider settings from the same `config.env`.
+web server. That API accepts only new AI assessments on the current turn's
+targets, and revisions of the AI assessments that turn created while all their
+targets remain the turn's; every other write is rejected. It reads provider
+settings from the same `config.env`.
 
 ## Configuration and Credentials
 
