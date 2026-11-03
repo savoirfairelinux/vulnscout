@@ -626,6 +626,57 @@ def test_private_api_rejects_writes_outside_the_turns_targets(app, ids, monkeypa
         assert ai_findings("CVE-2024-0004") == [{ids["findings"]["libxml2"]}]
 
 
+def test_private_api_lets_a_turn_revise_only_its_own_ai_assessments(app, ids, monkeypatch):
+    """The skill corrects what its turn just wrote; every other update or deletion stays forbidden."""
+    from uuid import UUID
+
+    from src.models.assessment import Assessment
+    from src.models.assessment_target import AssessmentTarget
+
+    with app.app_context():
+        _store_ai(ids["x86"], ids["findings"]["zlib"])
+        [foreign] = [str(row.id) for row in Assessment.get_by_vulnerability("CVE-2024-0001") if row.origin == "ai"]
+    created, statuses = {}, {}
+
+    def write(call):
+        def create(name):
+            status, body = _request(call, "POST", "/api/vulnerabilities/CVE-2024-0001/assessments", {
+                "status": "not_affected", "justification": "component_not_present", "ai_generated": True,
+                "targets": [{"package": PACKAGES[name], "variant_id": ids["x86"]}]})
+            assert status == 200
+            [row] = body["assessments"]
+            return row["id"]
+
+        def revise(key, row_id, status="affected"):
+            statuses[key] = _request(call, "PUT", f"/api/assessments/{row_id}", {"status": status})[0]
+
+        if "CVE-2024-0001" in call["message"]:
+            revise("foreign", foreign)
+            created["own"] = create("openssl")
+            revise("own", created["own"])
+            statuses["delete"] = _request(call, "DELETE", f"/api/assessments/{created['own']}", {})[0]
+            created["widened"] = create("zlib")
+            # A target outside this turn joins the row after its creation.
+            _db.session.add(AssessmentTarget(assessment_id=UUID(created["widened"]), variant_id=UUID(ids["arm"]),
+                                             finding_id=UUID(ids["findings"]["openssl"])))
+            _db.session.commit()
+            revise("widened", created["widened"])
+        else:
+            revise("earlier_turn", created["own"], "fixed")
+
+    _fake_reply(monkeypatch, write)
+    result = _invoke(app, "--project", "demo", "--variant", "x86", "--cve", "CVE-2024-0001",
+                     "--cve", "CVE-2024-0004", "--json")
+
+    assert result.exit_code in (0, 1), result.stdout + result.stderr
+    assert statuses == {"foreign": 403, "own": 200, "delete": 403, "widened": 403, "earlier_turn": 403}
+    with app.app_context():
+        rows = {str(row.id): row for row in Assessment.get_by_vulnerability("CVE-2024-0001")}
+        assert (rows[created["own"]].origin, rows[created["own"]].status) == ("ai", "affected")
+        assert rows[created["widened"]].status == "not_affected"
+        assert foreign not in rows or rows[foreign].status == "not_affected"
+
+
 @pytest.mark.parametrize("writes, outcome", [("some", "partial"), ("none", "no_write")])
 def test_missing_writes_fail_the_run(app, ids, monkeypatch, writes, outcome):
     def write(call):
