@@ -166,7 +166,7 @@ _vulnscout_complete() {
             fi
             return 0 ;;
         delete)
-            words="scan outdated empty-scans orphaned-vulns --dry-run --yes" ;;
+            words="scan outdated empty-scans orphaned-vulns --dry-run --yes --clear-vulnerability-history" ;;
         list)
             words="projects scans --json" ;;
         config)
@@ -464,7 +464,7 @@ Examples:
 EOF
             ;;
         delete) cat <<'EOF'
-Usage: vulnscout delete <target> [--dry-run] [--yes]
+Usage: vulnscout delete <target> [--dry-run] [--yes] [--clear-vulnerability-history]
 
 Targets:
     scan <id>               A past scan (see 'vulnscout list scans')
@@ -474,9 +474,12 @@ Targets:
 Options:
     --dry-run               Show what would be deleted, delete nothing
     --yes                   Do not ask for confirmation
+    --clear-vulnerability-history
+                            Also clear all vulnerability refresh history (outdated only)
 
 Examples:
     vulnscout delete outdated --dry-run
+    vulnscout delete outdated --clear-vulnerability-history --dry-run
     vulnscout delete scan 12 --yes
 EOF
             ;;
@@ -1583,6 +1586,11 @@ verb_delete() {
         case "$1" in
             --dry-run) dry_run=true ;;
             --yes) yes=true ;;
+            --clear-vulnerability-history)
+                if [ "$target" != outdated ]; then
+                    die "--clear-vulnerability-history is only valid for 'delete outdated'."
+                fi
+                delete_args=(--clear-vulnerability-history --delete-outdated) ;;
             *) reject_option delete "$1" ;;
         esac
         shift

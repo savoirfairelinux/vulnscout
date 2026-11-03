@@ -1629,7 +1629,7 @@ then send its **complete** candidate set in the DELETE JSON body. They are not a
 
 | Endpoint | GET response (`200`) | DELETE body |
 |----------|----------------------|-------------|
-| `/api/outdated-data` | `candidate_ids` (`observations`, `assessments`, `package_pairs`), `packages`, `assessments` | `{"candidate_ids": <unchanged candidate_ids object>}` |
+| `/api/outdated-data` | `candidate_ids` (`observations`, `assessments`, `package_pairs`), `packages`, `assessments`, `vulnerability_history_count` | `{"candidate_ids": <unchanged candidate_ids object>, "clear_vulnerability_history": false}` |
 | `/api/empty-scans` | `{"scans":[...]}`; entries have `id`, `description`, `timestamp`, `project`, `variant` | `{"scan_ids":["<every preview scan id>"]}` |
 | `/api/orphaned-vulnerabilities` | `{"vulnerabilities":[{"id":"CVE-2024-1234","assessments":0}]}` | `{"vulnerability_ids":["<every preview vulnerability id>"]}` |
 
@@ -1637,7 +1637,16 @@ Outdated cleanup removes stale observations, package/variant evidence, and asses
 pruning shared rows only when no references remain. Its `package_pairs` are `{"package_id":"uuid","variant_id":"uuid"}` objects.
 The DELETE `200` response contains counts: `assessments_deleted`, `assessment_targets_removed`,
 `observations_deleted`, `sbom_packages_deleted`, `sbom_observations_deleted`, `findings_deleted`,
-`vulnerabilities_deleted`, and `packages_deleted`.
+`vulnerabilities_deleted`, `packages_deleted`, and `vulnerability_history_deleted`.
+
+The optional `clear_vulnerability_history` field defaults to `false` and must be a JSON
+boolean. Set it to `true` to clear all rows in `vulnerability_history` globally, even for
+active vulnerabilities and even when the outdated candidate sets are empty. This is not
+an age-based policy: the preview count is informational and all rows present at deletion
+time are cleared. Current vulnerability values, metrics, and `vuln_refresh` timestamps
+are not reset by this option. Normal outdated cleanup still applies; future refreshes
+can create new history. The `vulnerability_history_deleted` count covers this explicit
+clearing only (zero when omitted), not cascading history cleanup for orphaned CVEs.
 
 Empty scans are non-initial **tool** scans whose complete change statistics are zero;
 DELETE returns `{"scans_deleted":0}` with the actual count.

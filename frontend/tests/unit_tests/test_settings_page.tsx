@@ -613,7 +613,60 @@ describe("Settings scoped project and variant views", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Delete outdated data" }));
 
     expect(await screen.findByText("Outdated data removed from every project and variant.")).toBeInTheDocument();
-    expect(deleteOutdatedData).toHaveBeenCalledWith({ observations: [], assessments: [], package_pairs: [] });
+    expect(deleteOutdatedData).toHaveBeenCalledWith({ observations: [], assessments: [], package_pairs: [] }, false);
+  });
+
+  test("clears history only after explicit selection, and resets the option after cancel", async () => {
+    getOutdatedDataPreview.mockResolvedValue({
+      ok: true, preview: {
+        packages: [], assessments: [], vulnerability_history_count: 2,
+        candidate_ids: { observations: [], assessments: [], package_pairs: [] },
+      },
+    });
+    deleteOutdatedData.mockResolvedValue({ ok: true, summary: { vulnerability_history_deleted: 2 } });
+    renderSettings();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze outdated data/ }));
+    const checkbox = await screen.findByRole("checkbox", { name: /Also clear all vulnerability refresh history/ });
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByText(/refresh history \(2 rows\)/)).toBeInTheDocument();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(deleteOutdatedData).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Analyze outdated data/ }));
+    const reopened = await screen.findByRole("checkbox", { name: /Also clear all vulnerability refresh history/ });
+    await waitFor(() => expect(reopened).toBeEnabled());
+    expect(reopened).not.toBeChecked();
+    fireEvent.click(reopened);
+    fireEvent.click(screen.getByRole("button", { name: "Delete outdated data" }));
+    expect(await screen.findByText(/2 vulnerability history rows cleared/)).toBeInTheDocument();
+    expect(deleteOutdatedData).toHaveBeenCalledWith({ observations: [], assessments: [], package_pairs: [] }, true);
+  });
+
+  test("reports history cleanup failures instead of claiming success", async () => {
+    deleteOutdatedData.mockResolvedValue({ ok: false, error: "Cleanup failed" });
+    renderSettings();
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze outdated data/ }));
+    const checkbox = await screen.findByRole("checkbox", { name: /Also clear all vulnerability refresh history/ });
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Delete outdated data" }));
+    expect(await screen.findByText("Cleanup failed")).toBeInTheDocument();
+    expect(screen.queryByText(/history rows cleared/)).not.toBeInTheDocument();
+  });
+
+  test("does not submit cleanup before the deletion preview is ready", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof ScansHandler.getOutdatedDataPreview>>>();
+    getOutdatedDataPreview.mockReturnValueOnce(pending.promise);
+    renderSettings();
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze outdated data/ }));
+    expect(await screen.findByRole("checkbox", { name: /Also clear all vulnerability refresh history/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete outdated data" }));
+    expect(deleteOutdatedData).not.toHaveBeenCalled();
+    await act(async () => pending.resolve({ ok: false, error: "Preview failed" }));
+    expect(await screen.findByText("Preview failed")).toBeInTheDocument();
   });
 
   test("previews and deletes orphaned CVEs", async () => {

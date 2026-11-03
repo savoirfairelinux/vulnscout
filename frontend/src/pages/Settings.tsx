@@ -172,6 +172,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
 
   // ---- Global data maintenance ----
   const [confirmDeleteOutdatedData, setConfirmDeleteOutdatedData] = useState(false);
+  const [clearVulnerabilityHistory, setClearVulnerabilityHistory] = useState(false);
   const [outdatedDataPreview, setOutdatedDataPreview] = useState<OutdatedDataPreview | null>(null);
   const [loadingOutdatedDataPreview, setLoadingOutdatedDataPreview] = useState(false);
   const [deletingOutdatedData, setDeletingOutdatedData] = useState(false);
@@ -353,6 +354,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   };
 
   const openDeleteOutdatedDataConfirmation = async () => {
+    setClearVulnerabilityHistory(false);
     setConfirmDeleteOutdatedData(true);
     setOutdatedDataPreview(null);
     setOutdatedDataMessage(null);
@@ -377,22 +379,26 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   };
 
   const handleDeleteOutdatedData = async () => {
+    if (loadingOutdatedDataPreview || !outdatedDataPreview) return;
     setConfirmDeleteOutdatedData(false);
     setDeletingOutdatedData(true);
     setOutdatedDataMessage(null);
     onLoadingMessage?.("Deleting outdated data...");
     let refreshStarted = false;
     try {
-      const result = await ScansHandler.deleteOutdatedData(outdatedDataPreview?.candidate_ids ?? {
-        observations: [], assessments: [], package_pairs: [],
-      });
+      const result = await ScansHandler.deleteOutdatedData(outdatedDataPreview.candidate_ids, clearVulnerabilityHistory);
       if (unmountedRef.current) return;
       if (!result.ok) {
         setOutdatedDataMessage({ text: result.error ?? "Failed to delete outdated data.", type: "error" });
         return;
       }
       setOutdatedDataPreview(null);
-      setOutdatedDataMessage({ text: "Outdated data removed from every project and variant.", type: "success" });
+      setOutdatedDataMessage({
+        text: clearVulnerabilityHistory
+          ? `Outdated data removed from every project and variant. ${result.summary?.vulnerability_history_deleted ?? 0} vulnerability history rows cleared.`
+          : "Outdated data removed from every project and variant.",
+        type: "success",
+      });
       onDataChanged?.("Removing outdated data...");
       refreshStarted = Boolean(onDataChanged);
     } catch {
@@ -1709,7 +1715,26 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
         showTitleIcon={true}
         onConfirm={handleDeleteOutdatedData}
         onCancel={() => { setConfirmDeleteOutdatedData(false); setOutdatedDataPreview(null); }}
-      />
+      >
+        <p className="text-sm text-zinc-400">
+          {loadingOutdatedDataPreview ? "Loading deletion plan..." : outdatedDataPreview
+            ? `Delete ${outdatedDataPreview.packages.length} outdated package records and ${outdatedDataPreview.assessments.length} outdated assessments?`
+            : "No outdated data was found."}
+        </p>
+        <label className="mt-4 flex items-start gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={clearVulnerabilityHistory}
+            onChange={(event) => setClearVulnerabilityHistory(event.target.checked)}
+            disabled={loadingOutdatedDataPreview}
+          />
+          <span>
+            Also clear all vulnerability refresh history ({outdatedDataPreview?.vulnerability_history_count ?? 0} rows).
+            This permanently removes previous field values across every project and variant, including current
+            vulnerabilities. Current values and refresh timestamps are preserved. New refreshes can record history again.
+          </span>
+        </label>
+      </ConfirmationModal>
     </div>
   );
 }

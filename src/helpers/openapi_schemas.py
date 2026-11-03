@@ -687,6 +687,12 @@ SCHEMAS: dict[str, Any] = {
         ],
     },
     "OutdatedCleanupSelection": _object({
+        "clear_vulnerability_history": {
+            "type": "boolean", "default": False,
+            "description": (
+                "Also clear all vulnerability refresh history globally; preserve current values and timestamps."
+            ),
+        },
         "candidate_ids": _object({
             "observations": _UUIDS, "assessments": _UUIDS,
             "package_pairs": _array(_object({
@@ -699,7 +705,7 @@ SCHEMAS: dict[str, Any] = {
             _object({key: _COUNT for key in (
                 "assessments_deleted", "assessment_targets_removed", "observations_deleted",
                 "sbom_packages_deleted", "sbom_observations_deleted", "findings_deleted",
-                "vulnerabilities_deleted", "packages_deleted",
+                "vulnerabilities_deleted", "packages_deleted", "vulnerability_history_deleted",
             )}, ("assessments_deleted", "observations_deleted", "packages_deleted")),
             _object({"scans_deleted": _COUNT}, ("scans_deleted",)),
             _object({
@@ -795,6 +801,7 @@ SCHEMAS["CopyAssessmentsPreview"] = {"anyOf": [
 _CLEANUP_LABELS = {"package": _PACKAGE_ID, "project": _STRING, "variant": _STRING}
 SCHEMAS["CleanupPreview"] = {"anyOf": [
     _object({
+        "vulnerability_history_count": _COUNT,
         "candidate_ids": SCHEMAS["OutdatedCleanupSelection"]["properties"]["candidate_ids"],
         "packages": _array(_object({
             **_CLEANUP_LABELS, "vulnerabilities": _VULNS,
