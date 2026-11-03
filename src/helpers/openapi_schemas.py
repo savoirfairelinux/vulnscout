@@ -673,12 +673,26 @@ SCHEMAS: dict[str, Any] = {
     "CopyAssessmentsResult": _object({
         "copied": _COUNT, "skipped": _COUNT, "message": _STRING,
     }, ("copied", "skipped", "message")),
+    "BuildTarget": _object({
+        "id": _STRING, "name": _STRING, "package_ids": _PACKAGES,
+        "languages": _array(_object({
+            "language": _STRING, "flags": _STRINGS, "defines": _STRINGS,
+        }, ("language", "flags", "defines"))),
+    }, ("id", "name", "package_ids", "languages")),
+    "CompilerMetadataGraph": _object({
+        "documents": _array(_object({
+            "id": _UUID, "source_name": _STRING, "format": _STRING,
+            "variant_id": _UUID, "variant_name": _STRING, "package_ids": _PACKAGES,
+            "build_targets": _array(_ref("BuildTarget")),
+        }, ("id", "source_name", "format", "variant_id", "variant_name", "package_ids"))),
+    }, ("documents",)),
     "DependencyGraph": {
         "anyOf": [
             _object({
                 "documents": _array(_object({
                     "id": _UUID, "source_name": _STRING, "variant_id": _UUID, "variant_name": _STRING,
                     "dependencies_recorded": _BOOL,
+                    "build_targets": _array(_ref("BuildTarget")),
                     "packages": _array(_object({
                         "id": _PACKAGE_ID, "name": _STRING, "version": _STRING,
                         "release_version": _TEXT, "source_revision": _TEXT,
