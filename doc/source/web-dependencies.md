@@ -15,5 +15,15 @@ package-to-package relationships were recorded in the selected active documents,
 not proof that the software has no runtime dependencies.
 
 The graph describes SBOM declarations, not runtime reachability or exploitability.
+Click a graph link (or expand **Inspect dependency links** and choose a link) to
+see every retained **Relationship**, **Lifecycle scope**, source SBOM document,
+and variant. For example, the bundled Yocto Wrynose SPDX 3 image declares
+`busybox-syslog` → `busybox` as `dependsOn`, **Runtime**. Explicit package
+relationships scoped to `build` show **Build**; missing scopes and legacy
+untyped relationships show **Unspecified**, never an inferred Runtime.
+Multiple types/scopes or source documents can declare the same package pair:
+each declaration remains visible, but **Deps** and **Req by** count the pair once.
+Scope and relationship labels do not suppress vulnerabilities or establish that
+a vulnerable function is reachable.
 See [Dependency Import and Export](sbom-scan-reference.md#dependency-import-and-export)
 for supported format versions, relationship types, and round-trip behavior.
