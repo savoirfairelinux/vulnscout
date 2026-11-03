@@ -105,6 +105,8 @@ they do not imply that a vulnerable function is reachable.
 Declarations remain separate by document and variant, including when a
 relationship in a companion document resolves to packages in other documents
 of the same scan. Reimporting the same document replaces its declarations.
+West/Zephyr package consolidation preserves this evidence when remapping edges
+to canonical packages, deduplicating identical declarations on merged pairs.
 Types/scopes do not multiply counts or change package comparison semantics.
 Exports preserve the package-pair graph, **not** declaration types/scopes or
 original source-document attribution.
