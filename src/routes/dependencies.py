@@ -17,6 +17,23 @@ from ._scan_helpers import parse_uuid_or_400
 
 
 def init_app(app: Flask) -> None:
+    @app.route('/api/package-compiler-metadata')
+    def package_compiler_metadata() -> ResponseReturnValue:
+        """Return compiler metadata independently of dependency relationships.
+
+        OpenAPI:
+        query variant_id uuid optional Scope to one variant.
+        query project_id uuid optional Scope to one project.
+        query variant_ids string optional Comma-separated variant IDs for comparison.
+        query compare_variant_id uuid optional Compare against variant_id.
+        query operation string optional Difference, intersection, or union.
+        query summary string optional Return package availability without compiler values when 1.
+        query package_id string optional Filter by public package ID.
+        response 200 CompilerMetadataGraph Document-scoped compiler metadata or availability.
+        response 400 Error Missing scope or invalid variant identifiers.
+        """
+        return package_dependencies()
+
     @app.route('/api/package-dependencies')
     def package_dependencies() -> ResponseReturnValue:
         """Return packages and directed edges per active SBOM document.
@@ -98,6 +115,52 @@ def init_app(app: Flask) -> None:
                 allowed_ids = set.intersection(*selected)
             else:
                 allowed_ids = selected[1] - selected[0]
+        if request.path == '/api/package-compiler-metadata':
+            metadata_rows = db.session.execute(
+                db.select(SBOMDocument, Variant)
+                .join(Scan, Scan.id == SBOMDocument.scan_id)
+                .join(Variant, Variant.id == Scan.variant_id)
+                .where(SBOMDocument.scan_id.in_(scan_ids), SBOMDocument.build_targets.is_not(None))
+                .options(load_only(SBOMDocument.scan_id, SBOMDocument.source_name,
+                                   SBOMDocument.format, SBOMDocument.build_targets))
+                .order_by(Variant.name, SBOMDocument.source_name, SBOMDocument.id)
+            ).all()
+            target_ids = {
+                uuid.UUID(package_id) for document, _ in metadata_rows
+                for target in document.build_targets or [] for package_id in target['package_ids']
+            }
+            compiler_members = {
+                (scan_id, package.id): package.string_id for scan_id, package in db.session.execute(
+                    db.select(SBOMDocument.scan_id, Package)
+                    .join(SBOMPackage, SBOMPackage.package_id == Package.id)
+                    .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+                    .where(SBOMDocument.scan_id.in_(scan_ids), Package.id.in_(target_ids))
+                    .options(load_only(Package.name, Package.version, Package.supplier))
+                ) if allowed_ids is None or package.id in allowed_ids
+            }
+            compiler_documents = []
+            selected_package = request.args.get('package_id')
+            for document, variant in metadata_rows:
+                targets = []
+                for target in document.build_targets or []:
+                    package_names = [
+                        compiler_members[(document.scan_id, uuid.UUID(package_id))]
+                        for package_id in target['package_ids']
+                        if (document.scan_id, uuid.UUID(package_id)) in compiler_members
+                    ]
+                    if (package_names and (not selected_package or selected_package in package_names)
+                            and any(language['flags'] or language['defines'] for language in target['languages'])):
+                        targets.append({**target, 'package_ids': package_names})
+                if targets:
+                    compiler_document = {
+                        'id': str(document.id), 'source_name': document.source_name, 'format': document.format,
+                        'variant_id': str(variant.id), 'variant_name': variant.name,
+                        'package_ids': sorted({name for target in targets for name in target['package_ids']}),
+                    }
+                    if request.args.get('summary') != '1':
+                        compiler_document['build_targets'] = targets
+                    compiler_documents.append(compiler_document)
+            return {'documents': compiler_documents}
         if counts_only:
             scan_members: dict[uuid.UUID, set[uuid.UUID]] = {}
             recorded_ids: set[uuid.UUID] = set()
@@ -134,7 +197,7 @@ def init_app(app: Flask) -> None:
             return {'counts': counts, 'unrecorded': sorted(names[package_id] for package_id in unrecorded_ids)}
         document_rows = db.session.execute(
             db.select(SBOMDocument.id, SBOMDocument.scan_id, SBOMDocument.source_name, Variant.id, Variant.name,
-                      SBOMDocument.dependencies_recorded, SBOMDocument.format)
+                      SBOMDocument.dependencies_recorded, SBOMDocument.format, SBOMDocument.build_targets)
             .join(Scan, Scan.id == SBOMDocument.scan_id)
             .join(Variant, Variant.id == Scan.variant_id)
             .where(SBOMDocument.scan_id.in_(scan_ids))
@@ -143,12 +206,14 @@ def init_app(app: Flask) -> None:
         # Imported evidence needs several junction rows, not several visible SBOM sources.
         imported_documents: dict[uuid.UUID, uuid.UUID] = {}
         document_ids: dict[uuid.UUID, uuid.UUID] = {}
+        build_targets: dict[uuid.UUID, list[dict]] = {}
         documents = []
-        for document_id, scan_id, source_name, variant_id, variant_name, recorded, fmt in document_rows:
+        for document_id, scan_id, source_name, variant_id, variant_name, recorded, fmt, targets in document_rows:
             canonical_id = (
                 imported_documents.setdefault(scan_id, document_id) if fmt == 'vulnscout_json' else document_id
             )
             document_ids[document_id] = canonical_id
+            build_targets.setdefault(canonical_id, []).extend(targets or [])
             if canonical_id == document_id:
                 documents.append((document_id, scan_id, source_name, variant_id, variant_name, recorded))
         ids = [document_id for document_id, *_ in documents]
@@ -181,9 +246,15 @@ def init_app(app: Flask) -> None:
         result = {
             document_id: {'id': str(document_id), 'source_name': source_name,
                           'variant_id': str(variant_id), 'variant_name': variant_name,
-                          'dependencies_recorded': recorded, 'packages': [], 'edges': []}
+                          'dependencies_recorded': recorded, 'packages': [], 'edges': [], 'build_targets': []}
             for document_id, _, source_name, variant_id, variant_name, recorded in documents
         }
+        for document_id, targets in build_targets.items():
+            for target in targets:
+                target_packages = [public_ids[uuid.UUID(package_id)] for package_id in target['package_ids']
+                                   if uuid.UUID(package_id) in public_ids]
+                if target_packages:
+                    result[document_id]['build_targets'].append({**target, 'package_ids': target_packages})
         package_links: dict[tuple[uuid.UUID, uuid.UUID], list[SBOMPackage]] = {}
         packages = {}
         for document_id, package, link in rows:

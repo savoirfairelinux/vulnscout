@@ -11,8 +11,8 @@ import logging
 import uuid
 
 from packageurl import PackageURL
-from sqlalchemy import delete, insert, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, insert, inspect, select, update
+from sqlalchemy.orm import Session, defer
 
 from ..models import Package, SBOMDocument, SBOMPackage, Scan
 from ..models.assessment import Assessment
@@ -206,7 +206,14 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
 
 def consolidate_jsonld_packages(session: Session) -> bool:
     """Consolidate recorded, unprocessed groups in the caller's transaction."""
-    documents = {document.id: document for document in session.scalars(select(SBOMDocument))}
+    # Historical migrations also call this helper before compiler metadata exists.
+    has_build_targets = 'build_targets' in {
+        column['name'] for column in inspect(session.connection()).get_columns('sbom_documents')
+    }
+    query = select(SBOMDocument)
+    if not has_build_targets:
+        query = query.options(defer(SBOMDocument.build_targets))
+    documents = {document.id: document for document in session.scalars(query)}
     groups_by_scan: dict[uuid.UUID, list[dict]] = defaultdict(list)
     documents_by_scan: dict[uuid.UUID, list[SBOMDocument]] = defaultdict(list)
     for document in documents.values():
@@ -321,6 +328,16 @@ def consolidate_jsonld_packages(session: Session) -> bool:
                     for entry in document.jsonld_groups or []
                 ]
     associations = {(link.sbom_document_id, link.package_id): link for link in links}
+    for scan_id, mapping in mappings.items():
+        for document in documents_by_scan[scan_id]:
+            if has_build_targets and document.build_targets is not None:
+                document.build_targets = [
+                    {**target, "package_ids": sorted({
+                        str(mapping.get(uuid.UUID(package_id), uuid.UUID(package_id)))
+                        for package_id in target["package_ids"]
+                    })}
+                    for target in document.build_targets
+                ]
     for link in links:
         scan_id = documents[link.sbom_document_id].scan_id
         parent_id = mappings.get(scan_id, {}).get(link.package_id)

@@ -530,6 +530,28 @@ GET /api/package-dependencies
 
 **Response:** `{"documents": [...]}` where each active SBOM document lists its `variant_id`, `variant_name`, `dependencies_recorded`, `packages` and directed `edges` (`package_id` depends on `dependency_id`), or `{"counts": {"name@version": {"in": n, "out": n}}, "unrecorded": ["name@version", ...]}` when `counts=1` (`in`: packages it depends on, `out`: packages that depend on it). `dependencies_recorded` is `false` for documents imported before dependency support, and `unrecorded` lists packages found only in such documents, whose relationships are unknown rather than zero. An edge is listed under the dependent package's document; its dependency may appear in another document of the same scan (SPDX 2 `DocumentRef-` links). Package selection follows the same comparison rules as `GET /api/packages`.
 
+Each document also includes `build_targets` (empty when compiler metadata is
+absent). For West-generated Zephyr SPDX 3 JSON-LD, each entry contains the build's
+SPDX `id`, target `name`, associated public `package_ids`, and `languages`.
+Each language entry contains `language`, `flags`, and `defines`; the latter two
+are arrays of the original strings from `compile:flags:<language>` and
+`compile:defines:<language>`, without splitting arguments or removing quotes.
+Repeated parameter entries remain separate and ordered. Targets, source
+documents, and variants are never flattened into package-wide compiler options.
+Only targets associated with packages in the selected scope are returned.
+
+### Package Compiler Metadata
+
+`GET /api/package-compiler-metadata` accepts the same project, variant, and
+comparison scope parameters as package dependencies, but returns no dependency
+graph. Its `documents` contain `id`, `source_name`, `format`, `variant_id`,
+`variant_name`, `package_ids`, and `build_targets` in the format described above.
+Only targets with recorded flags or defines are included. Use `summary=1` to
+omit `build_targets` and retrieve lightweight package availability per document,
+or `package_id=name@version` to retrieve details for a particular package.
+An empty result is `{"documents": []}`. Source format and document names allow
+clients to apply the SBOM table's source filters consistently.
+
 ---
 
 ## Vulnerabilities

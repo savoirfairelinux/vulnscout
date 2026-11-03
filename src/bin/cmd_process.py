@@ -233,6 +233,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             # scan.sh via the --spdx / --cdx / --openvex / --yocto-cve / --yocto-vex / --grype
             # options) and fall back to content-sniffing only when it is absent.
             fmt = doc.format  # 'spdx', 'cdx', 'openvex', 'yocto_cve_check', 'yocto_vex', 'grype', or None
+            doc.build_targets = None
 
             if fmt == "spdx" or (
                 fmt is None and (
