@@ -56,10 +56,18 @@ def test_history_export_forwards_timestamps_filters_scope_and_exit_status(wrappe
     assert run(*args, exit_code=1).returncode == 1
 
 
+def test_history_export_forwards_last_refresh(wrapper):
+    run, log, _, _ = wrapper
+    result = run("export", "vulnerability-history", "--last-refresh", "--source", "nvd", "--format", "csv")
+    assert result.returncode == 0, result.stderr
+    assert "--export-vulnerability-history --last-refresh --source nvd --format csv" in log.read_text()
+
+
 @pytest.mark.parametrize("args", [
     [], ["--since"], ["--since", "2026-10-01", "--format", "pdf"],
     ["--since", "2026-10-01", "-v", "x86"], ["--since", "2026-10-01", "--run-id", "old"],
-    ["--since", "2026-10-01", "--until"],
+    ["--since", "2026-10-01", "--until"], ["--until", "2026-10-02"],
+    ["--last-refresh", "--since", "2026-10-01"], ["--until", "2026-10-02", "--last-refresh"],
 ])
 def test_history_export_rejects_missing_values_and_unsupported_options(wrapper, args):
     run, log, _, _ = wrapper

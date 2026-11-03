@@ -20,6 +20,8 @@ from typing import Iterator
 DEFAULT_SOURCE = "sbom"
 # Lets a job that shells out to ``flask`` commands attribute their writes.
 SOURCE_ENV_VAR = "VULNSCOUT_HISTORY_SOURCE"
+# Operation IDs of refresh runs; their queue ID identifies the run.
+REFRESH_OPERATION_PREFIX = "refresh:"
 
 _current_source: ContextVar[str] = ContextVar(
     "vulnerability_history_source",
@@ -63,3 +65,17 @@ def history_source(source: str | None) -> Iterator[None]:
         yield
     finally:
         _current_source.reset(token)
+
+
+@contextmanager
+def refresh_history(source: str, run_id: str | None = None) -> Iterator[None]:
+    """Attribute writes to one refresh run of *source*.
+
+    The run is *run_id*, else the enclosing queue, else a new one per entry.
+    """
+    run = run_id or _current_operation.get()[0]
+    if run is None:
+        from ..controllers.operation_registry import new_queue_id  # avoids an import cycle
+        run = new_queue_id()
+    with history_source(source), history_operation(run, f"{REFRESH_OPERATION_PREFIX}{source}"):
+        yield

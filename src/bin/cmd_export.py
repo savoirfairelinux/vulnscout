@@ -25,8 +25,10 @@ from flask.cli import with_appcontext
 
 
 @click.command("export-vulnerability-history", cls=Command)
-@click.option("--since", required=True, help="Include changes at or after this ISO 8601 timestamp.")
+@click.option("--since", default=None, help="Include changes at or after this ISO 8601 timestamp.")
 @click.option("--until", default=None, help="Exclude changes at or after this ISO 8601 timestamp.")
+@click.option("--last-refresh", is_flag=True,
+              help="Per vulnerability, export the changes of its most recent refresh run.")
 @click.option("--source", multiple=True, help="Restrict sources (repeatable or comma-separated).")
 @click.option("--field", default=None, help="Restrict to one tracked field.")
 @click.option("--vuln-id", default=None, help="Restrict to one vulnerability.")
@@ -36,12 +38,16 @@ from flask.cli import with_appcontext
 @click.option("--variant", "-v", default=None)
 @with_appcontext
 def export_vulnerability_history_command(
-    since: str, until: str | None, source: tuple[str, ...], field: str | None,
+    since: str | None, until: str | None, last_refresh: bool, source: tuple[str, ...], field: str | None,
     vuln_id: str | None, format_: str, output: str, project: str | None, variant: str | None,
 ) -> None:
     """Export recorded vulnerability changes as JSON or CSV."""
     from ..helpers.vulnerability_history_export import history_export, serialize_history_export
 
+    if last_refresh and (since is not None or until is not None):
+        raise click.UsageError("--last-refresh cannot be combined with --since or --until.")
+    if not last_refresh and since is None:
+        raise click.UsageError("Either --since or --last-refresh is required.")
     if variant and not project:
         raise click.UsageError("--variant requires --project.")
     scope = None
@@ -59,7 +65,7 @@ def export_vulnerability_history_command(
     identifiers = ControllersCache(scope=scope).vulnerabilities.vulnerabilities if scope is not None else None
     try:
         data = history_export(since, until, sources=source, field=field, vuln_id=vuln_id,
-                              vulnerability_ids=identifiers)
+                              vulnerability_ids=identifiers, last_refresh=last_refresh)
         body = serialize_history_export(data, format_)
         if output == "-":
             click.echo(body, nl=False)

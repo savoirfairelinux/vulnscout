@@ -145,6 +145,13 @@ def test_history_export_completion(completion_script, flag):
     assert not any(complete(completion_script, ["vulnscout", "export", "vulnerability-history", flag, ""]))
 
 
+def test_history_export_completes_options_after_last_refresh(completion_script):
+    assert "--last-refresh" in complete(completion_script, ["vulnscout", "export", "vulnerability-history", "-"])
+    assert "--format" in complete(
+        completion_script, ["vulnscout", "export", "vulnerability-history", "--last-refresh", "-"],
+    )
+
+
 def test_completion_matches_help(tmp_path, completion_script):
     """Drift check: every command and option documented in --help is completed."""
     overview = _run(["--help"], tmp_path).stdout

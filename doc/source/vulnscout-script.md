@@ -27,6 +27,7 @@ v0.25 and print a deprecation warning; see
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
 | `export <kind>... [--amend]` | Write `spdx`, `cdx`, `openvex`, `custom-data`, `custom-openvex` or `context` to the outputs directory. `--amend` applies to `custom-*` only. | default `default` | optional; all variants when omitted |
 | `export vulnerability-history --since <timestamp> [--until <timestamp>] [--format json\|csv]` | Export recorded field changes to stdout. | optional; all data when omitted | optional; needs `-p` |
+| `export vulnerability-history --last-refresh [--format json\|csv]` | Export each vulnerability's latest refresh changes to stdout. | optional; all data when omitted | optional; needs `-p` |
 | `import custom-data <path> [--timestamps original\|current]` | Import custom VulnScout JSON data. | default `default` | rejected (the file names its variants) |
 | `import custom-openvex <path> [--timestamps original\|current]` | Import custom OpenVEX assessments. | default `default` | optional; the project's only variant when omitted |
 | `import context <path>` | Import project and variant context. | optional; retargets the file | optional; needs `-p` |
@@ -67,8 +68,8 @@ Example:
 
 ## Export Vulnerability Changes
 
-Export the field history already recorded by VulnScout, without creating or
-selecting a refresh-run ID:
+Export the field history already recorded by VulnScout, either within a time
+window or from each vulnerability's latest refresh:
 
 ```bash
 ./vulnscout export vulnerability-history \
@@ -78,22 +79,34 @@ selecting a refresh-run ID:
 ./vulnscout export vulnerability-history -p demo -v x86 \
   --since 2026-10-01T00:00:00Z --source nvd,epss \
   --format csv > changes.csv
+
+./vulnscout export vulnerability-history -p demo --last-refresh \
+  --format csv > last-refresh.csv
 ```
 
 `--since` is inclusive; optional `--until` is exclusive and must be later.
-Timestamps without a timezone mean UTC. Optional `--source` (repeatable or
+Timestamps without a timezone mean UTC. `--last-refresh` replaces the time
+window and cannot be combined with `--since` or `--until`: for each
+vulnerability, it exports the changes made by the most recent refresh run
+(`./vulnscout refresh`, a scan with refresh, or a refresh started from the web
+interface) that updated it. Refreshes recorded by the CLI or a single-vulnerability
+refresh before this option existed carry no run identifier and are not
+considered. Optional `--source` (repeatable or
 comma-separated), `--field`, and `--vuln-id` filters narrow the selection.
 Without `-p`, all vulnerabilities are eligible. With `-p`/`-v`, the selection
 uses the vulnerabilities in the **current active scope**, not historical
 project membership. Unknown projects or variants fail instead of exporting
 unscoped data.
 
-JSON includes the time bounds, total and history entries. CSV contains one row
+JSON includes the time bounds, the `last_refresh` mode, total and history
+entries. CSV contains one row
 per field change, with JSON-encoded old/resulting values. Successful exports
 write only the document to stdout; errors exit nonzero. No changes produces an
 empty JSON history or a CSV header, not an error.
 
-For CI, record timestamps around a refresh and preserve its exit status:
+For CI, `--last-refresh` reports what the last refresh changed for each
+vulnerability. To bound the export to one exact invocation instead, record
+timestamps around a refresh and preserve its exit status:
 
 ```bash
 since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
@@ -111,7 +124,8 @@ does not establish that providers completed successfully. Exports depend on
 retained vulnerability history; archive the files externally if needed.
 
 Direct Python deployments can use
-`flask --app src.bin.webapp export-vulnerability-history --since <timestamp> --format csv --output changes.csv`.
+`flask --app src.bin.webapp export-vulnerability-history --since <timestamp> --format csv --output changes.csv`
+(or `--last-refresh` instead of `--since`).
 See [Vulnerability History](api.md#vulnerability-history) for the corresponding
 HTTP export.
 
