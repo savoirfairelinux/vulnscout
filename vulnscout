@@ -137,7 +137,7 @@ _vulnscout_complete() {
             words="spdx cdx openvex custom-data custom-openvex context vulnerability-history --amend"
             for ((k = i + 1; k < COMP_CWORD; k++)); do
                 if [ "${COMP_WORDS[k]}" = vulnerability-history ]; then
-                    words="--since --until --source --field --vuln-id --format"
+                    words="--since --until --last-refresh --source --field --vuln-id --format"
                     break
                 fi
             done ;;
@@ -416,9 +416,11 @@ EOF
         export) cat <<'EOF'
 Usage: vulnscout export <kind>... [-p <project>] [-v <variant>] [--amend]
        vulnscout export vulnerability-history --since <timestamp> [--until <timestamp>] [--format json|csv]
+       vulnscout export vulnerability-history --last-refresh [--format json|csv]
 
 Kinds: spdx, cdx, openvex, custom-data, custom-openvex, context
 History export writes to stdout; optionally filter with --source, --field or --vuln-id.
+--last-refresh exports, per vulnerability, the changes of its most recent refresh.
 Without -p it exports all history; -p/-v restrict vulnerabilities to the current scope.
 Options:
     -p, --project <name>    Project (default: "default")
@@ -428,6 +430,7 @@ Options:
 Examples:
     vulnscout export spdx
     vulnscout export -p demo -v x86 cdx custom-openvex
+    vulnscout export vulnerability-history --last-refresh --format csv
 EOF
             ;;
         import) cat <<'EOF'
@@ -1444,21 +1447,27 @@ verb_export() {
 }
 
 verb_export_vulnerability_history() {
-    local since="" format="json"
+    local since="" until="" last_refresh=false format="json"
     local -a args=()
     while [ $# -gt 0 ]; do
         case "$1" in
+            --last-refresh) last_refresh=true; args+=("$1"); shift ;;
             --since|--until|--source|--field|--vuln-id|--format)
                 require_value "$1" "$#" "${2:-}"
                 case "$1" in
                     --since) since="$2" ;;
+                    --until) until="$2" ;;
                     --format) format="$2" ;;
                 esac
                 args+=("$1" "$2"); shift 2 ;;
             *) reject_option "export vulnerability-history" "$1" ;;
         esac
     done
-    [ -n "$since" ] || die "'export vulnerability-history' requires --since."
+    if [ "$last_refresh" = true ]; then
+        [ -z "$since$until" ] || die "'export vulnerability-history' --last-refresh cannot be combined with --since or --until."
+    else
+        [ -n "$since" ] || die "'export vulnerability-history' requires --since or --last-refresh."
+    fi
     case "$format" in json|csv) ;; *) die "--format must be json or csv." ;; esac
     if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
         die "'export vulnerability-history' --variant requires --project."

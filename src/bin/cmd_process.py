@@ -20,7 +20,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.env_vars import get_bool_env
-from ..helpers.history_source import history_source
+from ..helpers.history_source import current_history_operation, history_source, refresh_history
 from ..extensions import batch_session, db as _db
 import click
 from ._console import Command, echo, print_message, verbose, warn
@@ -113,6 +113,7 @@ def refresh_vulnerability_sources(
         )
     ]
     failed_sources: list[str] = []
+    run_id = current_history_operation()[0] or new_queue_id()
     try:
         for step, source in enumerate(applicable_sources, start=1):
             prefix = "GHSA-" if source == "ghsa" else "CVE-"
@@ -125,7 +126,9 @@ def refresh_vulnerability_sources(
             if on_source_start is not None:
                 on_source_start(label, step, len(applicable_sources))
             try:
-                if not _refresh_source(controllers, source):
+                with refresh_history(source, run_id):
+                    succeeded = _refresh_source(controllers, source)
+                if not succeeded:
                     failed_sources.append(label)
             except Exception as exc:
                 failed_sources.append(label)

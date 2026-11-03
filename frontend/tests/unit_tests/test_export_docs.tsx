@@ -354,6 +354,27 @@ describe('Exports Page', () => {
             expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
         });
 
+        test('downloads each vulnerability latest refresh without dates', async () => {
+            await openHistory();
+            fireEvent.change(screen.getByLabelText('History source'), { target: { value: 'sbom' } });
+            fireEvent.click(screen.getByRole('radio', { name: /^Latest refresh/i }));
+            expect(screen.queryByLabelText('Since (required)')).not.toBeInTheDocument();
+            expect(screen.getByLabelText('History source')).toHaveValue('');
+            expect(screen.queryByRole('option', { name: 'SBOM import' })).not.toBeInTheDocument();
+            fireEvent.change(screen.getByLabelText('History source'), { target: { value: 'nvd' } });
+            fetchMock.mockResponseOnce('{"history":[],"total":0}');
+            fireEvent.click(screen.getByRole('button', { name: 'Download history' }));
+            await screen.findByText('History download started.');
+            const call = fetchMock.mock.calls.find(([url]) => String(url).includes('/history/export?'));
+            const params = new URL(String(call?.[0])).searchParams;
+            expect(params.get('last_refresh')).toBe('true');
+            expect(params.has('since')).toBe(false);
+            expect(params.get('source')).toBe('nvd');
+            fireEvent.click(screen.getByRole('radio', { name: /^Time window/i }));
+            expect(screen.getByRole('button', { name: 'Download history' })).toBeDisabled();
+            expect(screen.getByLabelText('History source')).toHaveValue('nvd');
+        });
+
         test('requires a start and rejects an equal or earlier end', async () => {
             await openHistory();
             const download = screen.getByRole('button', { name: 'Download history' });

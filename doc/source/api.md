@@ -1795,15 +1795,17 @@ Returns `400` if `since` is missing or is not an ISO 8601 timestamp.
 
 ```
 GET /api/vulnerabilities/history/export?since=<iso-8601>&until=<iso-8601>&format=json
+GET /api/vulnerabilities/history/export?last_refresh=true&format=csv
 ```
 
-Exports the existing field history; no refresh-run ID or additional storage is
-required.
+Exports the existing field history, either within a time window or from each
+vulnerability's latest refresh run.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `since` | string | Required. Include changes at or after this ISO 8601 timestamp. |
+| `since` | string | Required unless `last_refresh` is set. Include changes at or after this ISO 8601 timestamp. |
 | `until` | string | Optional. Exclude changes at or after this timestamp; must be later than `since`. |
+| `last_refresh` | boolean | Optional (`true`, `1` or `yes`). For each vulnerability, export the changes of the most recent refresh run that updated it. Cannot be combined with `since` or `until`. |
 | `source` | string | Optional. Comma-separated or repeated sources, e.g. `nvd,epss`. |
 | `field` | string | Optional. Restrict to one tracked field. |
 | `vuln_id` | string | Optional. Restrict to one vulnerability; case-insensitive. |
@@ -1813,18 +1815,26 @@ required.
 
 Timestamps without a timezone are interpreted as UTC. The interval is
 `[since, until)`; omitting `until` includes every recorded change since `since`.
+With `last_refresh`, a refresh run is the queued refresh (or CLI/single
+vulnerability refresh) that recorded the changes, identified by the history
+rows' `queue_id` and `refresh:<source>` operation. Filters apply before the
+latest run is picked, so `source=epss` returns each vulnerability's latest EPSS
+refresh changes. Refreshes recorded by the CLI or single-vulnerability refresh
+endpoints before this option existed carry no run identifier and are skipped.
 Without scope parameters, the export includes global history. With `project_id`
 only, it includes all of that project's variants; repeated `variant_id` parameters
 select a subset. Invalid UUIDs and variants outside the project return `400`; an
 unknown project returns `404`. An empty current scope produces an empty export,
 not global history. Scope reflects current active SBOM membership, not membership
 at the time of each change.
-JSON contains `since`, `until`, `total`, and a `history` array:
+JSON contains `since`, `until` (both `null` with `last_refresh`), `last_refresh`,
+`total`, and a `history` array:
 
 ```json
 {
   "since": "2026-10-01T00:00:00+00:00",
   "until": "2026-10-02T00:00:00+00:00",
+  "last_refresh": false,
   "total": 1,
   "history": [
     {
@@ -1847,7 +1857,8 @@ The value cells are JSON-encoded, multiline text is quoted, and formula-like
 cells are escaped for spreadsheet use. An empty export is valid: an empty JSON
 history or a CSV header only.
 
-Returns `400` for missing/invalid timestamps, an invalid interval, or an
+Returns `400` for missing/invalid timestamps, an invalid interval, `last_refresh`
+combined with `since`/`until`, or an
 unsupported format. History exports describe **recorded changes**, not provider
 coverage or execution success. Overlapping refreshes, scans and imports can
 contribute changes in the same interval. Deleting a vulnerability and its history

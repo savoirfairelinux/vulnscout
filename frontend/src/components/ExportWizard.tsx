@@ -18,6 +18,9 @@ type ExportMode = "consolidated" | "per_variant";
 type ExportType = "reports" | "sbom" | "history";
 type WizardStep = "scope" | "type" | "documents" | "history";
 
+const HISTORY_SOURCES: readonly string[] = ["sbom", "grype", "osv", "scc", "nvd", "epss", "ghsa", "euvd"];
+const REFRESH_SOURCES: readonly string[] = ["nvd", "epss", "ghsa", "euvd"];
+
 type Selection = {
     key: string;
     name: string;
@@ -49,6 +52,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [enabledDocuments, setEnabledDocuments] = useState<Set<string>>(new Set());
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+    const [historyMode, setHistoryMode] = useState<"window" | "last_refresh">("window");
     const [historySince, setHistorySince] = useState("");
     const [historyUntil, setHistoryUntil] = useState("");
     const [historyFormat, setHistoryFormat] = useState<"json" | "csv">("json");
@@ -114,6 +118,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         setSelected(new Set());
         setEnabledDocuments(new Set());
         setError(null);
+        setHistoryMode("window");
         setHistorySince("");
         setHistoryUntil("");
         setHistoryFormat("json");
@@ -235,8 +240,8 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
 
     const sinceTime = new Date(historySince).getTime();
     const untilTime = new Date(historyUntil).getTime();
-    const historyRangeValid = Number.isFinite(sinceTime)
-        && (!historyUntil || (Number.isFinite(untilTime) && untilTime > sinceTime));
+    const historyRangeValid = historyMode === "last_refresh" || (Number.isFinite(sinceTime)
+        && (!historyUntil || (Number.isFinite(untilTime) && untilTime > sinceTime)));
 
     const launchHistoryExport = async () => {
         if (!project || selectedVariantIds.size === 0 || !historyRangeValid) return;
@@ -247,10 +252,12 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             await downloadVulnerabilityHistory({
                 projectId: project.id,
                 variantIds: variants.filter(variant => selectedVariantIds.has(variant.id)).map(variant => variant.id),
-                since: new Date(sinceTime).toISOString(),
-                until: historyUntil ? new Date(untilTime).toISOString() : undefined,
                 source: historySource || undefined,
                 format: historyFormat,
+                ...(historyMode === "last_refresh" ? { lastRefresh: true } : {
+                    since: new Date(sinceTime).toISOString(),
+                    until: historyUntil ? new Date(untilTime).toISOString() : undefined,
+                }),
             });
             setHistoryDownloaded(true);
         } catch (reason) {
@@ -355,7 +362,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                     <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "history" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
                         <input type="radio" name="export-type" checked={exportType === "history"} onChange={() => { setExportType("history"); setSelected(new Set()); setEnabledDocuments(new Set()); setError(null); setHistoryDownloaded(false); }} className="mt-1 accent-cyan-500" />
                         <FontAwesomeIcon icon={faFileLines} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                        <span><span className="block font-medium text-white">Vulnerability history</span><span className="mt-1 block text-xs text-gray-300">Recorded field changes within a time window, downloaded directly as JSON or CSV.</span></span>
+                        <span><span className="block font-medium text-white">Vulnerability history</span><span className="mt-1 block text-xs text-gray-300">Recorded field changes within a time window or from the latest refresh, downloaded directly as JSON or CSV.</span></span>
                     </label>
                 </div>
                 {exportType === "reports" && <section className="mt-4 border-t border-neutral-700 pt-4" aria-labelledby="output-layout-heading">
@@ -379,8 +386,25 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             {step === "history" && <>
                 <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Export vulnerability history</h3>
                 <p className="mt-1 text-sm text-neutral-400">Export recorded changes for vulnerabilities in the selected variants&apos; current active scope.</p>
-                <p className="mt-2 text-xs text-neutral-400">Times use your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}) and are converted to UTC for export. The start is inclusive; the end is exclusive.</p>
+                <fieldset disabled={exporting} className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <legend className="sr-only">History selection</legend>
+                    {([
+                        ["window", "Time window", "Changes recorded between two dates."],
+                        ["last_refresh", "Latest refresh", "For each vulnerability, the changes from the most recent refresh that updated it."],
+                    ] as const).map(([value, label, description]) => (
+                        <label key={value} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${historyMode === value ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
+                            <input type="radio" name="history-mode" checked={historyMode === value} onChange={() => {
+                                setHistoryMode(value);
+                                if (value === "last_refresh" && !REFRESH_SOURCES.includes(historySource)) setHistorySource("");
+                                setHistoryDownloaded(false);
+                            }} className="mt-1 accent-cyan-500" />
+                            <span><span className="block font-medium text-white">{label}</span><span className="mt-1 block text-xs text-gray-300">{description}</span></span>
+                        </label>
+                    ))}
+                </fieldset>
+                {historyMode === "window" && <p className="mt-4 text-xs text-neutral-400">Times use your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}) and are converted to UTC for export. The start is inclusive; the end is exclusive.</p>}
                 <fieldset disabled={exporting} className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    {historyMode === "window" && <>
                     <label className="text-sm text-neutral-300">
                         <span className="mb-1 block">Since (required)</span>
                         <input type="datetime-local" step="1" required value={historySince} onChange={event => { setHistorySince(event.target.value); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white" />
@@ -389,6 +413,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                         <span className="mb-1 block">Until (optional)</span>
                         <input type="datetime-local" step="1" value={historyUntil} onChange={event => { setHistoryUntil(event.target.value); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white" />
                     </label>
+                    </>}
                     <label className="text-sm text-neutral-300">
                         <span className="mb-1 block">History format</span>
                         <select value={historyFormat} onChange={event => { setHistoryFormat(event.target.value === "csv" ? "csv" : "json"); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white">
@@ -400,13 +425,15 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                         <span className="mb-1 block">History source</span>
                         <select value={historySource} onChange={event => { setHistorySource(event.target.value); setHistoryDownloaded(false); }} className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-white">
                             <option value="">All sources</option>
-                            {["sbom", "grype", "osv", "scc", "nvd", "epss", "ghsa", "euvd"].map(source =>
+                            {(historyMode === "last_refresh" ? REFRESH_SOURCES : HISTORY_SOURCES).map(source =>
                                 <option key={source} value={source}>{sourceLabel(source)}</option>)}
                         </select>
                     </label>
                 </fieldset>
-                {historySince && historyUntil && !historyRangeValid && <p role="alert" className="mt-3 text-sm text-red-300">Until must be later than Since.</p>}
-                <p className="mt-3 text-xs text-neutral-400">Leave Until empty to include all recorded changes since the start. An empty export is valid and does not prove a refresh completed successfully. Concurrent operations can contribute changes in the same window.</p>
+                {historyMode === "window" && historySince && historyUntil && !historyRangeValid && <p role="alert" className="mt-3 text-sm text-red-300">Until must be later than Since.</p>}
+                <p className="mt-3 text-xs text-neutral-400">{historyMode === "window"
+                    ? "Leave Until empty to include all recorded changes since the start. An empty export is valid and does not prove a refresh completed successfully. Concurrent operations can contribute changes in the same window."
+                    : "Only refreshes that changed a vulnerability are considered; a vulnerability left unchanged by every refresh is omitted."}</p>
                 {error && <div role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">{error}</div>}
                 {historyDownloaded && <p role="status" className="mt-3 text-sm text-green-300">History download started.</p>}
             </>}

@@ -29,12 +29,19 @@ filters, and asset installation.
 
 ## Vulnerability history
 
-After choosing **Vulnerability history**, the final step is **History options**:
+After choosing **Vulnerability history**, the final step is **History options**.
+Pick what to export:
 
-- **Since** is required and inclusive; **Until** is optional and exclusive.
-  Until must be later than Since. Leave it empty to include all recorded changes
-  since the start. Enter times in your local timezone; the page converts them
-  to UTC before requesting the export.
+- **Time window**: **Since** is required and inclusive; **Until** is optional
+  and exclusive. Until must be later than Since. Leave it empty to include all
+  recorded changes since the start. Enter times in your local timezone; the page
+  converts them to UTC before requesting the export.
+- **Latest refresh**: for each vulnerability, the changes made by the most
+  recent refresh that updated it. No dates are needed, and the source filter
+  only offers refresh providers (NVD, EPSS, GHSA, EUVD).
+
+Then:
+
 - Choose **JSON** or **CSV**, and optionally restrict to one **History source**.
 - Click **Download history**. The file downloads directly, without a ZIP or
   queued operation. Download errors appear in the wizard and can be retried.
@@ -45,5 +52,7 @@ sources, and timestamps. It only includes vulnerabilities in the selected
 variants' **current active SBOM scope**, not historical variant membership.
 Shared vulnerability data is exported once, without per-variant duplicates.
 An empty result is a valid download, not proof that a refresh completed
-successfully. Concurrent operations can contribute changes in the same window;
-there is no refresh-run ID or new history storage.
+successfully. Concurrent operations can contribute changes in the same window.
+Latest-refresh exports group changes by the refresh run that recorded them;
+refreshes started from the CLI or a single vulnerability before this option
+existed carry no run identifier and are not considered.

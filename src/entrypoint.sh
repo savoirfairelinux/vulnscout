@@ -193,7 +193,9 @@ Commands without --project or --variant:
         Refresh vulnerability data:
         --refresh-vulnerability-data    Refresh all projects (optionally limited by --project and --variant)
         --export-vulnerability-history --since <timestamp> [--until <timestamp>] [--format json|csv]
-                                        Export recorded changes to stdout; remaining options go to Flask
+        --export-vulnerability-history --last-refresh [--format json|csv]
+                                        Export recorded changes (or each vulnerability's latest refresh)
+                                        to stdout; remaining options go to Flask
 
         Data listing:
         --list-projects                 List all projects and their variants (optionally in JSON format with --json)
