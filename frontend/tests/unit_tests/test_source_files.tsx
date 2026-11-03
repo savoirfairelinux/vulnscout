@@ -69,7 +69,7 @@ test('details expose paths, hashes, source documents, and build evidence with fi
     expect(screen.getByRole('dialog')).toHaveClass('h-[calc(100vh-2rem)]', 'max-w-[calc(100vw-2rem)]');
     expect(screen.getAllByText('Compilation recorded').length).toBeGreaterThan(0);
     expect(within(screen.getByRole('list', { name: 'Recorded files' })).getByText('Listed only')).toBeTruthy();
-    expect(screen.getByText(/compiled-source CVE refinement is disabled/)).toBeTruthy();
+    expect(screen.getByText(/not used to dismiss CVEs/)).toHaveTextContent('SPDX_INCLUDE_COMPILED_SOURCES');
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /Inspect lib\/lz4.c/ }));
     const details = within(screen.getByRole('region', { name: 'File details' }));

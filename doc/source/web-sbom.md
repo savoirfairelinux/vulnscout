@@ -46,8 +46,10 @@ section at the end of the details.
 **Other build input** includes recipe or packaging tasks and does not prove
 compilation. **Listed only** means no associated build task was recorded.
 None of these proves inclusion in the final firmware. The summary distinguishes
-file records from unique compiled source paths, and an incomplete-evidence notice
-explains when compiled-source CVE refinement is disabled.
+file records from unique compiled source paths. When compilation is not proven,
+a notice explains that the files are not used to dismiss CVEs, so advisories
+match as if no file information were available; see
+[Recorded files](interactive-mode.md#recorded-files) for what counts as proof.
 
 See [Recorded files](interactive-mode.md#recorded-files) for supported formats,
 scope, and reimport requirements.
