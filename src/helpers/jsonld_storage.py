@@ -342,14 +342,18 @@ def consolidate_jsonld_packages(session: Session) -> bool:
             link.type = metadata["type"]
     session.flush()
     document_ids = {document.id for document in documents.values() if document.scan_id in mappings}
-    edges = set()
-    for document_id, source, dependency in session.execute(select(
+    edges: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], list[dict[str, str]]] = {}
+    for document_id, source, dependency, declarations in session.execute(select(
         PackageDependency.sbom_document_id, PackageDependency.package_id, PackageDependency.dependency_id,
+        PackageDependency.declarations,
     ).where(PackageDependency.sbom_document_id.in_(document_ids))):
         mapping = mappings[documents[document_id].scan_id]
         source, dependency = mapping.get(source, source), mapping.get(dependency, dependency)
         if source != dependency:
-            edges.add((document_id, source, dependency))
+            evidence = edges.setdefault((document_id, source, dependency), [])
+            for declaration in declarations or []:
+                if declaration not in evidence:
+                    evidence.append(declaration)
     session.execute(delete(PackageDependency).where(PackageDependency.sbom_document_id.in_(document_ids)),
                     execution_options={"synchronize_session": False})
     for link in links:
@@ -360,8 +364,9 @@ def consolidate_jsonld_packages(session: Session) -> bool:
             ), execution_options={"synchronize_session": False})
     if edges:
         session.execute(insert(PackageDependency), [
-            {"sbom_document_id": doc, "package_id": source, "dependency_id": dependency}
-            for doc, source, dependency in edges
+            {"sbom_document_id": doc, "package_id": source, "dependency_id": dependency,
+             "declarations": declarations or None}
+            for (doc, source, dependency), declarations in edges.items()
         ])
     _merge_finding_references(session, mappings, documents, original_links)
     for observation in session.scalars(select(SBOMObservation).where(

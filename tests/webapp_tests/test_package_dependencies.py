@@ -1252,9 +1252,9 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
             *({'type': 'software_Package', 'spdxId': f'zephyr:packages/{name}',
                'name': name, 'software_primaryPurpose': 'library'}
               for name in ('app', 'mbedtls', 'tfpsacrypto')),
-            {'type': 'Relationship', 'relationshipType': 'hasPrerequisite',
+            {'type': 'LifecycleScopedRelationship', 'scope': 'build', 'relationshipType': 'hasPrerequisite',
              'from': 'zephyr:packages/app', 'to': ['zephyr:packages/mbedtls']},
-            {'type': 'Relationship', 'relationshipType': 'hasPrerequisite',
+            {'type': 'LifecycleScopedRelationship', 'scope': 'build', 'relationshipType': 'hasPrerequisite',
              'from': 'zephyr:packages/mbedtls', 'to': ['zephyr:packages/tfpsacrypto']},
             {'type': 'Relationship', 'relationshipType': 'contains',
              'from': 'zephyr:packages/app', 'to': ['zephyr:files/libapp.a']},
@@ -1273,7 +1273,7 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
                     'identifier': release_cpe},
                ] if name == 'mbedtls' else []}
               for name in ('zephyr', 'mbedtls')),
-            {'type': 'Relationship', 'relationshipType': 'dependsOn',
+            {'type': 'LifecycleScopedRelationship', 'scope': 'runtime', 'relationshipType': 'dependsOn',
              'from': 'zephyr:packages/zephyr-deps', 'to': ['zephyr:packages/mbedtls-deps']},
         ]),
         'zephyr': _zephyr_spdx3([
@@ -1317,6 +1317,17 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
     assert [(edge['package_id'], edge['dependency_id']) for edge in graphs['modules-deps.jsonld']['edges']] == [
         (f'zephyr-deps@{revision}', 'mbedtls@4.1.1'),
     ]
+    def assert_declarations(graphs):
+        for name, relationship, scope, count in (
+                ('build.jsonld', 'hasPrerequisite', 'build', 2),
+                ('modules-deps.jsonld', 'dependsOn', 'runtime', 1)):
+            graph = graphs[name]
+            assert [edge['declarations'] for edge in graph['edges']] == [[{
+                'relationship_type': relationship, 'lifecycle_scope': scope,
+                'source_document_id': graph['id'], 'source_name': name,
+            }]] * count
+
+    assert_declarations(graphs)
     module_graph = next(package for package in graphs['modules-deps.jsonld']['packages']
                         if package['name'] == 'mbedtls')
     assert module_graph['version'] == '4.1.1'
@@ -1337,6 +1348,53 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
     with app.app_context():
         read_inputs(ControllersCache(), scan_id)
         assert db.session.query(PackageDependency).count() == 3
+    assert_declarations({document['source_name']: document for document in client.get(
+        f'/api/package-dependencies?variant_id={variant_id}'
+    ).json['documents']})
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_jsonld_consolidation_merges_dependency_declarations(app, tmp_path, monkeypatch, legacy):
+    from src.helpers.jsonld_storage import consolidate_jsonld_packages
+
+    project = Project.create('merged-declarations')
+    variant = Variant.create('demo', project.id)
+    scan = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    documents = {document.source_name: document for document in SBOMDocument.get_by_scan(scan.id)}
+    document = documents['sources.jsonld']
+    source = Package.get_by_string_id('mbedtls-sources@' + 'a' * 40)
+    target = Package.get_by_string_id('mbedtls@')
+    crypto = Package.find_or_create('crypto', '1')
+    util = Package.find_or_create('util', '1')
+    for package in (target, crypto, util):
+        SBOMPackage.create(document.id, package.id)
+    build = {'relationship_type': 'dependsOn', 'lifecycle_scope': 'build',
+             'source_document_id': str(document.id), 'source_name': document.source_name}
+    runtime = {**build, 'lifecycle_scope': 'runtime',
+               'source_document_id': str(documents['upstream.jsonld'].id), 'source_name': 'upstream.jsonld'}
+    db.session.add_all([
+        PackageDependency(sbom_document_id=document.id, package_id=source.id, dependency_id=crypto.id,
+                          declarations=None if legacy else [build]),
+        PackageDependency(sbom_document_id=document.id, package_id=target.id, dependency_id=crypto.id,
+                          declarations=[build, runtime]),
+        PackageDependency(sbom_document_id=document.id, package_id=source.id, dependency_id=target.id,
+                          declarations=[build]),
+        PackageDependency(sbom_document_id=document.id, package_id=crypto.id, dependency_id=util.id,
+                          declarations=None if legacy else [runtime]),
+    ])
+    db.session.commit()
+    assert consolidate_jsonld_packages(db.session)
+    db.session.commit()
+    rows = db.session.query(PackageDependency).all()
+    assert len(rows) == 2
+    merged = next(row for row in rows if row.dependency_id == crypto.id)
+    assert merged.package_id == Package.get_by_string_id('mbedtls@4.1.1').id
+    assert len(merged.declarations) == 2
+    assert build in merged.declarations
+    assert runtime in merged.declarations
+    unrelated = next(row for row in rows if row.package_id == crypto.id)
+    assert unrelated.dependency_id == util.id
+    assert unrelated.declarations == (None if legacy else [runtime])
 
 
 @pytest.mark.parametrize('reverse', [False, True])
