@@ -233,8 +233,8 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
                     ? 'border-neutral-700 bg-neutral-800/50 text-neutral-300'
                     : 'border-amber-800/60 bg-amber-950/30 text-amber-200'}`}>
                     {complete
-                        ? 'Compilation evidence is complete. Recorded files may still include patches, licenses, and configuration; listing alone does not prove compilation or inclusion in firmware.'
-                        : 'Evidence is incomplete or unproven; compiled-source CVE refinement is disabled. Listed files and recipe inputs do not prove compilation or inclusion in firmware.'}
+                        ? 'Compiler build records prove which sources were compiled, so CVE matching can skip advisories whose affected files were not compiled. Recorded files may still include patches, licenses, and configuration, and none of this proves inclusion in firmware.'
+                        : 'Compilation of these files is not proven, so they are not used to dismiss CVEs: an advisory matches whether or not its affected files appear here. Only compiler build records (Zephyr West SPDX 3) prove compilation; recipe inputs and source lists, including Yocto SPDX_INCLUDE_COMPILED_SOURCES output, do not.'}
                 </p>
                 {files.length === 0 ? <p className="m-auto p-8 text-neutral-400">
                     No files are recorded for this package in the selected SBOMs.

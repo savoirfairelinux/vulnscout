@@ -97,6 +97,11 @@ translation units. SPDX 2 package provenance likewise does not prove compilation
 Compilation proof currently requires a West Zephyr CMake build with recorded
 C, C++, or assembly compiler flags. Unknown build types, packaging/copy tasks,
 and generator-only builds do not qualify.
+Yocto's `SPDX_INCLUDE_COMPILED_SOURCES` does not provide this proof either: in
+SPDX 3.0.1 output it lists original sources as well as compiled ones (the same
+as `SPDX_INCLUDE_SOURCES`), and SPDX 2.2 output has no build relationships. Its
+files are recorded and searchable, but compiled-source refinement stays disabled
+for those packages.
 
 **Not recorded** means file evidence is unavailable, not an empty recorded
 inventory. Reimport the original companion SBOMs together to populate older
