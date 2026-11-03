@@ -78,3 +78,19 @@ test('graph labels retain every declared scope and unspecified legacy evidence p
     expect(screen.getByText('Unspecified')).toBeTruthy();
     expect(screen.queryByText('Build / Development / Runtime / Test')).toBeNull();
 });
+
+test('dependency details do not expose compiler metadata', () => {
+    const documents: DependencyDocument[] = ['alpha', 'beta'].map(name => ({
+        id: name, source_name: `${name}.jsonld`, variant_id: name, variant_name: name, dependencies_recorded: true,
+        packages: [{ id: 'mbedtls', name: 'mbedtls', version: '' }, { id: 'kernel', name: 'kernel', version: '' }],
+        edges: [],
+        build_targets: [{
+            id: `builds/${name}`, name: `${name} target`, package_ids: ['mbedtls'],
+            languages: [{ language: 'C', flags: [`-${name}`], defines: [] }],
+        }],
+    }));
+    render(<DependencyModalView documents={documents} packageId="mbedtls" onSelectPackage={() => {}} />);
+    expect(screen.queryByText('-alpha')).toBeNull();
+    expect(screen.queryByText('-beta')).toBeNull();
+    expect(screen.queryByText('Compiler flags and defines')).toBeNull();
+});

@@ -12,6 +12,12 @@ export type DependencyEdge = {
     dependency_id: string;
     declarations?: DependencyDeclaration[];
 };
+export type BuildTarget = {
+    id: string;
+    name: string;
+    package_ids: string[];
+    languages: { language: string; flags: string[]; defines: string[] }[];
+};
 export type DependencyDocument = {
     id: string;
     source_name: string;
@@ -20,16 +26,26 @@ export type DependencyDocument = {
     dependencies_recorded: boolean;
     packages: DependencyPackage[];
     edges: DependencyEdge[];
+    build_targets?: BuildTarget[];
 };
 export type DependencyCounts = {
     counts: Record<string, { in: number; out: number }>;
     // Packages known only from SBOMs never parsed with dependency support.
     unrecorded: string[];
 };
+export type CompilerDocument = Pick<DependencyDocument, 'id' | 'source_name' | 'variant_id' | 'variant_name' | 'build_targets'> & {
+    format: string;
+    package_ids: string[];
+};
+
+export function filterCompilerDocuments(documents: CompilerDocument[], sources: string[], sbomDocuments: string[]) {
+    return documents.filter(document => (!sources.length || sources.includes(document.format))
+        && (!sbomDocuments.length || sbomDocuments.includes(document.source_name)));
+}
 
 function dependencyUrl(variantId?: string, projectId?: string, variantIds?: string[],
-    compareVariantId?: string, operation?: string): URL | undefined {
-    const url = new URL(import.meta.env.VITE_API_URL + '/api/package-dependencies', window.location.href);
+    compareVariantId?: string, operation?: string, path = '/api/package-dependencies'): URL | undefined {
+    const url = new URL(import.meta.env.VITE_API_URL + path, window.location.href);
     if (variantId && compareVariantId) {
         url.searchParams.set('variant_id', variantId);
         url.searchParams.set('compare_variant_id', compareVariantId);
@@ -39,6 +55,18 @@ function dependencyUrl(variantId?: string, projectId?: string, variantIds?: stri
     else return undefined;
     if (operation) url.searchParams.set('operation', operation);
     return url;
+}
+
+export async function listCompilerMetadata(summary: boolean, variantId?: string, projectId?: string,
+    variantIds?: string[], compareVariantId?: string, operation?: string, packageId?: string): Promise<CompilerDocument[]> {
+    const url = dependencyUrl(variantId, projectId, variantIds, compareVariantId, operation, '/api/package-compiler-metadata');
+    if (!url) return [];
+    if (summary) url.searchParams.set('summary', '1');
+    if (packageId) url.searchParams.set('package_id', packageId);
+    const response = await fetch(url.toString(), { mode: 'cors' });
+    if (!response.ok) throw new Error('Unable to load compiler flags and defines');
+    const data = await response.json();
+    return data.documents;
 }
 
 export async function listDependencies(variantId?: string, projectId?: string, variantIds?: string[],

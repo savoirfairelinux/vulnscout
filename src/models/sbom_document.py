@@ -29,6 +29,7 @@ class SBOMDocument(Base):
     jsonld_groups: Mapped[list[dict] | None] = mapped_column(JSON)
     files: Mapped[list["SBOMFile"]] = relationship(back_populates="sbom_document", cascade="all, delete-orphan")
     builds: Mapped[list["SBOMBuild"]] = relationship(back_populates="sbom_document", cascade="all, delete-orphan")
+    build_targets: Mapped[list[dict] | None] = mapped_column(JSON)
 
     scan: Mapped["Scan"] = relationship("Scan", back_populates="sbom_documents")
     sbom_packages: Mapped[list["SBOMPackage"]] = relationship(

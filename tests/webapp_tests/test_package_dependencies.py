@@ -179,6 +179,238 @@ def _import_legacy_components(tmp_path, variant, documents, monkeypatch):
         return _import_grouping_documents(tmp_path, variant, documents)
 
 
+def test_real_zephyr_compiler_metadata_survives_ingestion_and_api(app, tmp_path):
+    sample = Path(__file__).resolve().parents[2] / 'example' / 'zephyr' / 'build.jsonld'
+    data = json.loads(sample.read_text())
+    variant_id, scan_id = _scan(app, tmp_path, 'compiler-sample', data)
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json
+    document = graph['documents'][0]
+    target = next(target for target in document['build_targets'] if target['name'] == 'mbedtls')
+    original = next(node for node in data['@graph']
+                    if node.get('type') == 'build_Build' and node['spdxId'] == target['id'])
+    parameters = {parameter['key']: parameter['value'] for parameter in original['build_parameter']}
+    assert target['package_ids'] == ['mbedtls@']
+    assert target['languages'] == [{
+        'language': 'C', 'flags': [parameters['compile:flags:C']],
+        'defines': [parameters['compile:defines:C']],
+    }]
+    assert '-DMBEDTLS_CONFIG_FILE="config-mbedtls.h"' in target['languages'][0]['defines'][0]
+    kernel = next(target for target in document['build_targets'] if target['name'] == 'kernel')
+    assert kernel['package_ids'] != target['package_ids']
+    assert kernel['languages'][0]['flags'] != target['languages'][0]['flags']
+    assert kernel['languages'][0]['defines'] != target['languages'][0]['defines']
+    db.session.expire_all()
+    stored = SBOMDocument.get_by_scan(scan_id)[0].build_targets
+    assert next(item for item in stored if item['id'] == target['id'])['languages'] == target['languages']
+
+
+def test_compiler_endpoint_summary_details_and_empty_values(app, tmp_path):
+    variant_id, scan_id = _scan(app, tmp_path, 'compiler-endpoint', _spdx3())
+    document = SBOMDocument.get_by_scan(scan_id)[0]
+    package = Package.get_by_string_id('app@1.0')
+    document.build_targets = [
+        {'id': 'defines', 'name': 'defines only', 'package_ids': [str(package.id)], 'languages': [
+            {'language': 'C', 'flags': [], 'defines': ['-DQUOTED="value"']},
+        ]},
+        {'id': 'empty', 'name': 'empty', 'package_ids': [str(package.id)], 'languages': [
+            {'language': 'C', 'flags': [], 'defines': []},
+        ]},
+    ]
+    db.session.commit()
+    url = f'/api/package-compiler-metadata?variant_id={variant_id}'
+    statements = []
+
+    def record_statement(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(db.engine, 'before_cursor_execute', record_statement)
+    try:
+        summary = app.test_client().get(url + '&summary=1')
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record_statement)
+    assert summary.status_code == 200
+    assert summary.json == {'documents': [{
+        'id': str(document.id), 'source_name': 'compiler-endpoint.json', 'format': 'spdx',
+        'variant_id': str(variant_id), 'variant_name': 'compiler-endpoint', 'package_ids': ['app@1.0'],
+    }]}
+    assert not any('package_dependencies' in statement for statement in statements)
+    details = app.test_client().get(url + '&package_id=app@1.0')
+    assert details.status_code == 200
+    assert details.json['documents'][0]['build_targets'] == [{
+        **document.build_targets[0], 'package_ids': ['app@1.0'],
+    }]
+    assert app.test_client().get(url + '&package_id=lib@1.0').json == {'documents': []}
+    document.build_targets = [document.build_targets[1]]
+    db.session.commit()
+    assert app.test_client().get(url + '&summary=1').json == {'documents': []}
+
+
+def test_compiler_endpoint_respects_variant_comparisons_and_validates_scope(app, tmp_path):
+    first, first_scan = _scan(app, tmp_path, 'compiler-alpha', _spdx3())
+    other_data = _spdx3()
+    other_data['@graph'].append({
+        'type': 'software_Package', 'spdxId': 'pkg:extra', 'name': 'extra', 'software_packageVersion': '1.0',
+    })
+    second, second_scan = _scan(app, tmp_path, 'compiler-beta', other_data)
+    for scan_id in (first_scan, second_scan):
+        document = SBOMDocument.get_by_scan(scan_id)[0]
+        names = ['app@1.0'] if scan_id == first_scan else ['app@1.0', 'extra@1.0']
+        document.build_targets = [{
+            'id': 'target', 'name': 'target',
+            'package_ids': [str(Package.get_by_string_id(name).id) for name in names],
+            'languages': [{'language': 'C', 'flags': ['-O2'], 'defines': []}],
+        }]
+    db.session.commit()
+    client = app.test_client()
+    url = '/api/package-compiler-metadata'
+    assert client.get(url).status_code == 400
+    assert client.get(url + '?variant_id=invalid').status_code == 400
+    assert client.get(url + '?variant_ids=,').status_code == 400
+    empty_variant = Variant.create('empty', Project.get_all()[0].id)
+    assert client.get(url + f'?variant_id={empty_variant.id}&summary=1').json == {'documents': []}
+    assert {doc['variant_id'] for doc in client.get(url + f'?variant_id={first}').json['documents']} == {str(first)}
+    union = client.get(url + f'?variant_ids={first},{second}&summary=1').json['documents']
+    assert {doc['variant_id'] for doc in union} == {str(first), str(second)}
+    intersection = client.get(
+        url + f'?variant_ids={first},{second}&operation=intersection&summary=1',
+    ).json['documents']
+    assert all(doc['package_ids'] == ['app@1.0'] for doc in intersection)
+    difference = client.get(
+        url + f'?variant_id={first}&compare_variant_id={second}&operation=difference&summary=1',
+    ).json['documents']
+    assert len(difference) == 1
+    assert difference[0]['variant_id'] == str(second)
+    assert difference[0]['package_ids'] == ['extra@1.0']
+
+
+def test_compiler_metadata_keeps_targets_languages_and_consolidated_ownership(app, tmp_path):
+    documents = _grouping_documents()
+    build = next(node for node in documents['build']['@graph'] if node.get('type') == 'build_Build')
+    build['build_parameter'] = [
+        {'type': 'DictionaryEntry', 'key': 'compile:flags:C', 'value': '-Os  -g'},
+        {'type': 'DictionaryEntry', 'key': 'compile:flags:C', 'value': '-Wall'},
+        {'type': 'DictionaryEntry', 'key': 'compile:defines:C', 'value': '-DCONFIG_FILE="config.h"'},
+        {'type': 'DictionaryEntry', 'key': 'compile:flags:C++', 'value': '-std=c++17'},
+        {'type': 'DictionaryEntry', 'key': 'compile:defines:ASM', 'value': '-DASSEMBLER'},
+        {'key': 'compile:flags:C', 'value': None},
+        {'key': 'compile:flags:', 'value': 'ignored'},
+        {'key': 'other:flags:C', 'value': 'ignored'},
+        None,
+    ]
+    documents['build']['@graph'].extend([
+        {'type': 'build_Build', 'spdxId': 'https://example.org/zephyr/other-build',
+         'name': 'Other target', 'build_parameter': [
+             {'key': 'compile:flags:C', 'value': '-O0'},
+         ]},
+        {'type': 'Relationship', 'relationshipType': 'hasOutput',
+         'from': 'https://example.org/zephyr/other-build', 'to': ['https://example.org/zephyr/mbedtls']},
+        {'type': 'build_Build', 'spdxId': 'https://example.org/zephyr/malformed', 'build_parameter': None},
+    ])
+    project = Project.create('compiler-consolidation')
+    variant = Variant.create('demo', project.id)
+    scan = _import_grouping_documents(tmp_path, variant, documents)
+    assert len(Package.get_all()) == 1
+    response = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}')
+    assert response.status_code == 200
+    targets = next(doc for doc in response.json['documents'] if doc['source_name'] == 'build.jsonld')['build_targets']
+    assert len(targets) == 2
+    assert all(target['package_ids'] == ['mbedtls@4.1.1'] for target in targets)
+    assert targets[0]['languages'] == [
+        {'language': 'C', 'flags': ['-Os  -g', '-Wall'], 'defines': ['-DCONFIG_FILE="config.h"']},
+        {'language': 'C++', 'flags': ['-std=c++17'], 'defines': []},
+        {'language': 'ASM', 'flags': [], 'defines': ['-DASSEMBLER']},
+    ]
+    assert targets[1]['languages'] == [{'language': 'C', 'flags': ['-O0'], 'defines': []}]
+    # Reimports replace metadata rather than accumulating stale target records.
+    read_inputs(ControllersCache(), scan.id)
+    repeated = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}').json
+    assert next(doc for doc in repeated['documents'] if doc['source_name'] == 'build.jsonld')['build_targets'] == targets
+    for node in documents['build']['@graph']:
+        node.pop('build_parameter', None)
+    build_document = next(doc for doc in SBOMDocument.get_by_scan(scan.id) if doc.source_name == 'build.jsonld')
+    Path(build_document.path).write_text(json.dumps(documents['build']))
+    read_inputs(ControllersCache(), scan.id)
+    removed = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}').json
+    assert all(not doc['build_targets'] for doc in removed['documents'])
+
+
+@pytest.mark.parametrize('zephyr', [False, True])
+def test_absent_or_non_zephyr_compiler_metadata_is_empty(app, tmp_path, zephyr):
+    data = _spdx3()
+    if zephyr:
+        data['@graph'].append({'type': 'SoftwareAgent', 'name': 'West SPDX Generator'})
+    else:
+        data['@graph'].append({
+            'type': 'build_Build', 'spdxId': 'build:app',
+            'build_parameter': [{'key': 'compile:flags:C', 'value': '-Os'}],
+        })
+    variant_id, _ = _scan(app, tmp_path, 'no-compiler-metadata', data)
+    response = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}')
+    assert response.status_code == 200
+    assert response.json['documents'][0]['build_targets'] == []
+
+
+def test_real_zephyr_companions_keep_compiler_targets_on_canonical_package(app, tmp_path):
+    directory = Path(__file__).resolve().parents[2] / 'example' / 'zephyr'
+    documents = {path.stem: json.loads(path.read_text()) for path in directory.glob('*.jsonld')}
+    project = Project.create('real-compiler-companions')
+    variant = Variant.create('default', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}').json
+    build = next(doc for doc in graph['documents'] if doc['source_name'] == 'build.jsonld')
+    target = next(target for target in build['build_targets'] if target['name'] == 'mbedtls')
+    assert target['package_ids'] == ['mbedtls@4.1.1']
+    assert any(pkg['id'] == 'mbedtls@4.1.1' for pkg in build['packages'])
+    assert '-DMBEDTLS_CONFIG_FILE="config-mbedtls.h"' in target['languages'][0]['defines'][0]
+    assert not any(doc['build_targets'] for doc in graph['documents'] if doc['source_name'] != 'build.jsonld')
+
+
+def test_compiler_metadata_migration_preserves_documents_and_existing_metadata(app, tmp_path):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    variant_id, _ = _scan(app, tmp_path, 'compiler-migration', _spdx3())
+    migration = import_module('src.migrations.versions.e91a47b28c60_add_zephyr_build_targets')
+    client = app.test_client()
+    before = client.get(f'/api/package-dependencies?variant_id={variant_id}').json
+    db.session.remove()
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            assert 'build_targets' not in {column['name'] for column in inspect(connection).get_columns(
+                'sbom_documents')}
+            migration.upgrade()
+            assert connection.execute(text('SELECT count(*) FROM sbom_documents')).scalar() == 1
+            metadata = '[{"id": "test", "package_ids": [], "languages": []}]'
+            connection.execute(text('UPDATE sbom_documents SET build_targets = :metadata'), {'metadata': metadata})
+            migration.upgrade()
+            assert connection.execute(text('SELECT build_targets FROM sbom_documents')).scalar() == metadata
+    assert client.get(f'/api/package-dependencies?variant_id={variant_id}').json == before
+
+
+def test_historical_consolidation_migration_works_before_compiler_column_exists(app, tmp_path, monkeypatch):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    project = Project.create('legacy-compiler-schema')
+    variant = Variant.create('default', project.id)
+    _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    variant_id = variant.id
+    compiler_migration = import_module('src.migrations.versions.e91a47b28c60_add_zephyr_build_targets')
+    consolidation_migration = import_module('src.migrations.versions.d8f63a29b104_add_scoped_package_types')
+    db.session.remove()
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            compiler_migration.downgrade()
+            consolidation_migration.upgrade()
+            compiler_migration.upgrade()
+    assert len(Package.get_all()) == 1
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json
+    assert all(not document['build_targets'] for document in graph['documents'])
+
+
 def test_canonical_package_keeps_an_unknown_release_separate_from_its_revision(app, tmp_path):
     documents = _grouping_documents()
     documents['upstream']['@graph'][-1]['externalIdentifier'] = []

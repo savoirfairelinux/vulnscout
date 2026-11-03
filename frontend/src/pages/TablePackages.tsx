@@ -17,18 +17,20 @@ import { useLocalStorageState } from '../handlers/localStorage';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
 import type { AgentViewContext } from '../types/agent';
-import { listDependencyCounts } from '../handlers/dependencies';
-import type { DependencyCounts } from '../handlers/dependencies';
+import { filterCompilerDocuments, listCompilerMetadata, listDependencyCounts } from '../handlers/dependencies';
+import type { CompilerDocument, DependencyCounts } from '../handlers/dependencies';
 import SourceRevision from '../components/SourceRevision';
 import { releaseVersion, versionEvidenceTitle } from '../helpers/packageVersions';
 
 const DependencyModal = lazy(() => import('../components/DependencyModal'));
 const SourceFileModal = lazy(() => import('../components/SourceFileModal'));
+const CompilerMetadataModal = lazy(() => import('../components/CompilerMetadataModal'));
 
 type PackageRow = Package & {
     versionMetadataSearch: string;
     dependencyCount?: { in: number; out: number };
     dependenciesUnrecorded?: boolean;
+    hasCompilerMetadata?: boolean;
 };
 
 type Props = {
@@ -99,6 +101,10 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const [dependencyError, setDependencyError] = useState(false);
     const [selectedDependencyPackage, setSelectedDependencyPackage] = useState<string | null>(null);
     const [selectedSourcePackage, setSelectedSourcePackage] = useState<string | null>(null);
+    const [compilerDocuments, setCompilerDocuments] = useState<CompilerDocument[] | null>(null);
+    const [compilerError, setCompilerError] = useState(false);
+    const [compilerRetry, setCompilerRetry] = useState(0);
+    const [selectedCompilerPackage, setSelectedCompilerPackage] = useState<string | null>(null);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -197,6 +203,21 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }, [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted, setVisibleColumns]);
     const variantIdsKey = variantIds?.join(',');
     const showDependencyColumn = visibleColumns.includes('Dependency');
+    const showCompilerColumn = visibleColumns.includes('Compiler Flags');
+    useEffect(() => {
+        if (!showCompilerColumn) return;
+        let cancelled = false;
+        setCompilerDocuments(null);
+        setCompilerError(false);
+        listCompilerMetadata(true, variantId, projectId, variantIdsKey?.split(','), compareVariantId, operation)
+            .then(documents => { if (!cancelled) setCompilerDocuments(documents); })
+            .catch(() => { if (!cancelled) setCompilerError(true); });
+        return () => { cancelled = true; };
+    }, [showCompilerColumn, variantId, projectId, variantIdsKey, compareVariantId, operation, dataRevision, compilerRetry]);
+    const compilerPackages = useMemo(() => new Set(
+        filterCompilerDocuments(compilerDocuments ?? [], selectedSources, selectedSbomDocs)
+            .flatMap(document => document.package_ids)
+    ), [compilerDocuments, selectedSources, selectedSbomDocs]);
     useEffect(() => {
         if (!showDependencyColumn) return;
         let cancelled = false;
@@ -308,6 +329,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         'source_revision': 'Source revision',
         'dependencies': 'Dependency',
         'source_files': 'Recorded Files',
+        'compiler_flags': 'Compiler Flags',
         'cpe': 'CPE',
         'purl': 'PURL',
         'supplier': 'Supplier',
@@ -404,6 +426,26 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 },
                 sortDescFirst: true,
                 size: 160,
+            }),
+            columnHelper.accessor(row => row.hasCompilerMetadata ? 1 : 0, {
+                id: 'compiler_flags',
+                header: () => <div className="flex items-center justify-center">Compiler Flags</div>,
+                cell: info => {
+                    if (info.row.original.outdated) return <div className="p-4 text-center text-neutral-400"
+                        title="Compiler metadata is only available for active scans">-</div>;
+                    if (compilerError) return <button type="button" className="w-full p-4 text-amber-300"
+                        title="Unable to load compiler flags and defines. Click to retry."
+                        onClick={() => setCompilerRetry(value => value + 1)}>Retry</button>;
+                    if (!compilerDocuments) return <div role="status" className="p-4 text-center">Loading...</div>;
+                    if (!info.getValue()) return <div className="p-4 text-center text-neutral-400"
+                        title="No compiler flags or defines recorded for the selected scope">-</div>;
+                    return <button type="button" className="w-full h-full p-4 text-cyan-300 hover:bg-slate-700"
+                        title="Compiler flags and defines"
+                        aria-label={`View compiler flags and defines for ${info.row.original.name}`}
+                        onClick={() => setSelectedCompilerPackage(info.row.original.id)}>View</button>;
+                },
+                sortDescFirst: true,
+                size: 140,
             }),
             columnHelper.accessor('cpe', {
                 id: 'cpe',
@@ -602,7 +644,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 size: 10
             })
         ]
-    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError]);
+    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError, compilerError, compilerDocuments]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -644,20 +686,26 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const tableRows = useMemo<PackageRow[]>(() => {
         const unrecorded = new Set(dependencyCounts?.unrecorded);
         return filteredPackages.map(pkg => {
-            const row = { ...pkg, versionMetadataSearch:
+            const row = { ...pkg, hasCompilerMetadata: !pkg.outdated && compilerPackages.has(pkg.id), versionMetadataSearch:
                 `${pkg.id} ${pkg.source_revision ?? ''} ${versionEvidenceTitle(pkg)}` };
             if (!showDependencyColumn || !dependencyCounts || pkg.outdated) return row;
             const counts = dependencyCounts.counts[pkg.id];
             if (!counts && unrecorded.has(pkg.id)) return { ...row, dependenciesUnrecorded: true };
             return { ...row, dependencyCount: counts ?? { in: 0, out: 0 } };
         });
-    }, [filteredPackages, showDependencyColumn, dependencyCounts]);
+    }, [filteredPackages, showDependencyColumn, dependencyCounts, compilerPackages]);
 
     return (<>
         {selectedSourcePackage && <Suspense fallback={<div role="status">Loading recorded files...</div>}>
             <SourceFileModal variantId={variantId} projectId={projectId} variantIds={variantIds}
                 compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
                 packageId={selectedSourcePackage} onClose={() => setSelectedSourcePackage(null)} />
+        </Suspense>}
+        {selectedCompilerPackage && <Suspense fallback={<div role="status">Loading compiler flags and defines...</div>}>
+            <CompilerMetadataModal variantId={variantId} projectId={projectId} variantIds={variantIds}
+                compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
+                packageId={selectedCompilerPackage} sources={selectedSources} sbomDocuments={selectedSbomDocs}
+                onClose={() => setSelectedCompilerPackage(null)} />
         </Suspense>}
         {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency explorer…</div>}>
             <DependencyModal variantId={variantId} projectId={projectId} variantIds={variantIds}
@@ -780,6 +828,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     'Source revision',
                     'Recorded Files',
                     'Dependency',
+                    'Compiler Flags',
                     'CPE',
                     'PURL',
                     'Supplier',

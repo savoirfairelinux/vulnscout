@@ -23,6 +23,7 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
                          packages: "PackagesController") -> None:
     """Resolve companion-document groups within one ingestion scan, never by suffix alone."""
     nodes: dict[str, dict] = {}
+    build_documents: dict[str, SBOMDocument] = {}
     references: dict[str, str] = {}
     edges: dict[str, set[tuple[str, str]]] = defaultdict(set)
     eligible = []
@@ -30,9 +31,11 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
         graph = data.get('@graph', [])
         if not is_zephyr_jsonld(data):
             document.jsonld_groups = None
+            document.build_targets = None
             continue
         eligible.append(document)
         document.jsonld_groups = []
+        document.build_targets = []
 
         def key(ref: str) -> str:
             prefix, separator, suffix = ref.partition(':')
@@ -47,6 +50,8 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
             ref = item.get('spdxId')
             if isinstance(ref, str):
                 nodes[key(ref)] = item
+                if item.get('type') == 'build_Build':
+                    build_documents[key(ref)] = document
             source, targets = item.get('from'), item.get('to', [])
             if isinstance(targets, str):
                 targets = [targets]
@@ -66,6 +71,34 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
         outputs[build].update(owners.get(target, ()))
         if target in references:
             outputs[build].add(target)
+    for build, document in build_documents.items():
+        node = nodes[build]
+        languages: dict[str, dict] = {}
+        parameters = node.get('build_parameter', [])
+        if not isinstance(parameters, list):
+            continue
+        for parameter in parameters:
+            if not isinstance(parameter, dict):
+                continue
+            parameter_key, value = parameter.get('key'), parameter.get('value')
+            if not isinstance(parameter_key, str) or not isinstance(value, str):
+                continue
+            prefix, separator, language = parameter_key.rpartition(':')
+            if not separator or not language or prefix not in {'compile:flags', 'compile:defines'}:
+                continue
+            entry = languages.setdefault(language, {'language': language, 'flags': [], 'defines': []})
+            # Keep raw strings: tokenizing compiler arguments loses quoting and ordering.
+            entry['flags' if prefix == 'compile:flags' else 'defines'].append(value)
+        if not languages:
+            continue
+        package_ids = {
+            str(package_id) for output in outputs.get(build, ())
+            if (package_id := packages.get_or_resolve_db_id(references[output])) is not None
+        }
+        document.build_targets = [*(document.build_targets or []), {
+            'id': build, 'name': node.get('name') or build.rsplit('/', 1)[-1],
+            'package_ids': sorted(package_ids), 'languages': list(languages.values()),
+        }]
     for build, source in edges['hasInput']:
         origins = owners.get(source, set()) | ({source} if source in references else set())
         for output in outputs.get(build, ()):
