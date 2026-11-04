@@ -3,10 +3,12 @@
 """Exact-run artifact export and explicit retention cleanup."""
 
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import click
 from flask import current_app
 from flask.cli import with_appcontext
+from sqlalchemy.engine import CursorResult
 
 from ..extensions import db
 from ..models.refresh_run import RefreshChange, RefreshRun
@@ -54,6 +56,6 @@ def prune_refresh_runs_command():
     cutoff = datetime.now(timezone.utc) - timedelta(days=current_app.config.get("REFRESH_RUN_RETENTION_DAYS", 90))
     ids = db.select(RefreshRun.run_id).where(RefreshRun.started_at < cutoff)
     db.session.execute(db.delete(RefreshChange).where(RefreshChange.run_id.in_(ids)))
-    result = db.session.execute(db.delete(RefreshRun).where(RefreshRun.started_at < cutoff))
+    result = cast(CursorResult, db.session.execute(db.delete(RefreshRun).where(RefreshRun.started_at < cutoff)))
     db.session.commit()
     click.echo(f"Removed {result.rowcount} expired refresh runs.")
