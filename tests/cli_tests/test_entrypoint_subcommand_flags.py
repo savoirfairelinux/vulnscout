@@ -260,4 +260,47 @@ def test_spdx_xz_extraction_failure_stops_import(tmp_path, monkeypatch):
 
     assert result.returncode != 0
     assert result.stderr
+
+
+@pytest.mark.parametrize(("args", "expected"), [
+    (["--ai-review", "--assessment-id", "3f2b6c1e-0000-4000-8000-000000000001"],
+     "ai-review --assessment-id 3f2b6c1e-0000-4000-8000-000000000001"),
+    (["--project", "demo", "--ai-review", "--variant", "x86", "--cve", "CVE-2024-0001", "--re-review",
+      "--timeout", "30", "--model", "gpt-5", "--dry-run", "--json"],
+     "ai-review --project demo --variant x86 --cve CVE-2024-0001 --re-review --timeout 30 --model gpt-5 "
+     "--dry-run --json"),
+])
+def test_ai_review_is_forwarded(tmp_path, args, expected):
+    result, calls = _run(tmp_path, *args)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"{APP} {expected}"]
+
+
+def test_ai_review_publishes_the_flask_pid_for_ctrl_c(tmp_path, monkeypatch):
+    flask = tmp_path / "bin" / "flask"
+    flask.parent.mkdir()
+    flask.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_FLASK_LOG"\n'
+        'if [[ "$*" == *ai-review* ]]; then\n'
+        '  echo "$$ $(cat "$VULNSCOUT_AI_ASSESS_PID_FILE")" > "$TEST_FLASK_LOG.pid"\nfi\n'
+    )
+    flask.chmod(0o755)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("VULNSCOUT_RUN_ID", "host-1-2")
+
+    result, calls = _run(tmp_path, "--ai-review", "--cve", "CVE-2024-0001", fake_flask=False)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"{APP} ai-review --cve CVE-2024-0001"]
+    flask_pid, recorded_pid = (tmp_path / "flask.log.pid").read_text().split()
+    assert flask_pid == recorded_pid
+    assert (tmp_path / "vulnscout-ai-assess-host-1-2.pid").exists()
+
+
+def test_ai_review_rejects_an_unsafe_run_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("VULNSCOUT_RUN_ID", "../escape")
+    result, calls = _run(tmp_path, "--ai-review", "--cve", "CVE-2024-0001")
+    assert result.returncode == 2
+    assert "Invalid VULNSCOUT_RUN_ID." in result.stderr
     assert calls == []
