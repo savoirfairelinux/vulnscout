@@ -132,6 +132,36 @@ with click.Context(Command("test")):
     flask.chmod(0o755)
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_host_forwards_history_cleanup_to_flask(tmp_path, env, dry_run):
+    bindir = stub_engine(tmp_path, env)
+    log = tmp_path / "flask.log"
+    env["TEST_FLASK_LOG"] = str(log)
+    flask = bindir / "flask"
+    flask.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_FLASK_LOG"\n')
+    flask.chmod(0o755)
+    args = ["delete", "outdated", "--clear-vulnerability-history", "--yes"]
+    if dry_run:
+        args.append("--dry-run")
+
+    result = run(["bash", str(ROOT / "vulnscout"), *args], env)
+
+    assert result.returncode == 0, result.stderr
+    expected = "--app src.bin.webapp delete-outdated"
+    if dry_run:
+        expected += " --dry-run"
+    assert log.read_text().splitlines()[-1] == f"{expected} --clear-vulnerability-history"
+
+
+@pytest.mark.parametrize("target", ["empty-scans", "orphaned-vulns"])
+def test_host_rejects_history_option_for_other_cleanup(tmp_path, env, target):
+    stub_engine(tmp_path, env)
+    result = run(["bash", str(ROOT / "vulnscout"), "delete", target, "--clear-vulnerability-history"], env)
+    assert result.returncode == 1
+    assert "only valid for 'delete outdated'" in result.stderr
+    assert not Path(env["TEST_ENGINE_LOG"]).exists()
+
+
 @pytest.mark.parametrize(("role", "code"), [
     ("info", 36), ("success", 32), ("warning", 33), ("error", 31),
 ])

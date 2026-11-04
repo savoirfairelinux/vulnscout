@@ -53,6 +53,13 @@ historical records, empty-scan cleanup removes scans with no retained data, and
 orphan cleanup removes vulnerabilities no longer referenced by projects or
 variants, including their assessments.
 
+The outdated-data confirmation also offers an unchecked **Also clear all vulnerability
+refresh history** option with a row count. Selecting it permanently clears all previous
+vulnerability field values globally, not just outdated vulnerabilities or older dates.
+Current values and refresh timestamps remain intact, and future refreshes can record
+new history. Leave it unchecked to preserve history. The option resets when the dialog
+is reopened and can be used even if no outdated data exists.
+
 Review the listed records before confirming permanent deletion. If data changes
 after the preview and the server rejects the stale plan, analyze again rather
 than retrying the old selection. Keep a backup when history must be retained.

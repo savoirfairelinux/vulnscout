@@ -14,6 +14,25 @@ beforeEach(() => {
 });
 
 describe("ScansHandler request contracts", () => {
+  test.each([false, true])("passes the explicit history cleanup selection: %s", async (clearHistory) => {
+    const candidates = { observations: [], assessments: [], package_pairs: [] };
+    fetchSpy.mockResolvedValueOnce(response({ vulnerability_history_deleted: clearHistory ? 2 : 0 }));
+
+    expect(await ScansHandler.deleteOutdatedData(candidates, clearHistory)).toEqual({
+      ok: true, summary: { vulnerability_history_deleted: clearHistory ? 2 : 0 },
+    });
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({
+      candidate_ids: candidates, clear_vulnerability_history: clearHistory,
+    });
+  });
+
+  test("does not clear history by default and surfaces cleanup errors", async () => {
+    fetchSpy.mockResolvedValueOnce(response({ error: "Cleanup failed" }, false, 500));
+    expect(await ScansHandler.deleteOutdatedData({ observations: [], assessments: [], package_pairs: [] }))
+      .toEqual({ ok: false, error: "Cleanup failed" });
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body).clear_vulnerability_history).toBe(false);
+  });
+
   test("imports exported scan JSON and preserves API errors", async () => {
     const result = {
       scan_id: "scan-1",

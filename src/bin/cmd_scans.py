@@ -85,8 +85,12 @@ def delete_scan_command(scan_id: uuid.UUID, dry_run: bool):
 
 @click.command("delete-outdated", cls=Command)
 @click.option("--dry-run", is_flag=True, help="List outdated data without deleting it.")
+@click.option(
+    "--clear-vulnerability-history", is_flag=True,
+    help="Also clear all vulnerability refresh history, preserving current values and refresh timestamps.",
+)
 @with_appcontext
-def delete_outdated_command(dry_run: bool):
+def delete_outdated_command(dry_run: bool, clear_vulnerability_history: bool):
     """Permanently remove all package evidence and assessments marked outdated."""
     from ..helpers import outdated_cleanup
 
@@ -95,6 +99,8 @@ def delete_outdated_command(dry_run: bool):
         packages = typing.cast("list[dict[str, typing.Any]]", preview["packages"])
         assessments = typing.cast("list[dict[str, typing.Any]]", preview["assessments"])
         echo(f"Would delete {len(packages)} outdated package links and {len(assessments)} assessments", role="warning")
+        if clear_vulnerability_history:
+            echo(f"Would delete {preview['vulnerability_history_count']} vulnerability history rows", role="warning")
         for package in packages:
             echo(
                 f"  package {package['package']} in {package['project']}/{package['variant']}"
@@ -107,7 +113,7 @@ def delete_outdated_command(dry_run: bool):
             )
         return
 
-    summary = outdated_cleanup.delete_outdated_data()
+    summary = outdated_cleanup.delete_outdated_data(clear_vulnerability_history=clear_vulnerability_history)
     echo(
         "Deleted outdated data: "
         f"{summary['assessments_deleted']} assessments, "
@@ -118,6 +124,8 @@ def delete_outdated_command(dry_run: bool):
         f"{summary['vulnerabilities_deleted']} vulnerabilities, "
         f"{summary['packages_deleted']} packages", role="success"
     )
+    if clear_vulnerability_history:
+        echo(f"Deleted {summary['vulnerability_history_deleted']} vulnerability history rows", role="success")
 
 
 @click.command("delete-empty-scans", cls=Command)

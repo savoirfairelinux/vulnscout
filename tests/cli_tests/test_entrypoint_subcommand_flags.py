@@ -60,6 +60,17 @@ def test_delete_without_dry_run_is_unchanged(tmp_path):
     assert calls == [f"{APP} delete-outdated"]
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_history_selection_is_forwarded_to_outdated_cleanup(tmp_path, dry_run):
+    args = ["--clear-vulnerability-history", "--delete-outdated"]
+    if dry_run:
+        args.insert(0, "--dry-run")
+    result, calls = _run(tmp_path, *args)
+    assert result.returncode == 0, result.stderr
+    options = " --dry-run" if dry_run else ""
+    assert calls == [f"{APP} delete-outdated{options} --clear-vulnerability-history"]
+
+
 @pytest.mark.parametrize(("args", "scope"), [
     ([], "--project default --variant default"),
     (["--variant", "x86"], "--project default --variant x86"),

@@ -212,6 +212,7 @@ Commands without --project or --variant:
 
 Options used by the host wrapper's subcommands:
         --dry-run                       Preview the --delete-* flag that follows without deleting anything
+        --clear-vulnerability-history   Also clear refresh history with the --delete-outdated flag that follows
         --all-variants                  Custom OpenVEX export/import: do not default --variant to "default"
         --retarget-context              --import-context: import into --project (and --variant) instead of
                                         the names in the file
@@ -938,6 +939,7 @@ cmd_delete_scan() {
 cmd_delete_outdated() {
     local -a args=(delete-outdated)
     if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    if [[ "$CLEAR_VULNERABILITY_HISTORY" == "true" ]]; then args+=(--clear-vulnerability-history); fi
     flask --app src.bin.webapp "${args[@]}"
 }
 
@@ -1042,6 +1044,7 @@ JSON_OUTPUT=false
 DATA_REQUESTED=""
 IMPORT_CUSTOM_TIMESTAMP_POLICY=""
 DRY_RUN=false
+CLEAR_VULNERABILITY_HISTORY=false
 ALL_VARIANTS=false
 RETARGET_CONTEXT=false
 REPORT_FORMAT=""
@@ -1109,6 +1112,8 @@ while [[ $# -gt 0 ]]; do
             REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
         --dry-run)
             DRY_RUN=true; shift ;;
+        --clear-vulnerability-history)
+            CLEAR_VULNERABILITY_HISTORY=true; shift ;;
         --all-variants)
             ALL_VARIANTS=true; shift ;;
         --retarget-context)
