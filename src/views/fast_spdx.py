@@ -98,6 +98,10 @@ class FastSPDX ():
                 if isinstance(spdx_id, str):
                     self._document_refs[spdx_id] = parsed_package.string_id
 
+        self._document_refs = {
+            ref: self.packagesCtrl.canonical_id(string_id) for ref, string_id in self._document_refs.items()
+        }
+
     def _parse_package(self, pkg: dict) -> Package | None:
         name = _get_field(pkg, ["name", "Name", "packageName", "PackageName"])
         if name is None:

@@ -65,6 +65,7 @@ def test_synthetic_source_with_its_own_outgoing_relation_is_inventory():
 
 def test_fast_parser_ignores_malformed_relationships_without_losing_inventory():
     controllers = MagicMock()
+    controllers.packages.canonical_id.side_effect = lambda string_id: string_id
     parser = FastSPDX(controllers)
     source = _source()
     source["comment"] = "A real upstream source package"

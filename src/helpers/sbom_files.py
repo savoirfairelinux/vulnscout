@@ -208,17 +208,18 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     for ref in files:
         if ref not in artifacts:
             associations[ref].update(owners[ref])
-    for build, sources in inputs.items():
-        if build not in nodes or nodes[build][1].get('type') != 'build_Build' or not outputs[build]:
+    for build, targets in outputs.items():
+        if build not in nodes or nodes[build][1].get('type') != 'build_Build':
             continue
+        sources = inputs[build]
         build_document, build_node = nodes[build]
-        target_owners = {owner for target in outputs[build] for owner in owners[target]}
-        target_owners.update(target for target in outputs[build] if target in packages)
+        target_owners = {owner for target in targets for owner in owners[target]}
+        target_owners.update(target for target in targets if target in packages)
         source_refs = sources.intersection(files).difference(artifacts)
         is_compilation = has_compilation_evidence([{
             "build_type": build_node.get('build_buildType'), "parameters": build_node.get('build_parameter'),
         }])
-        if not is_compilation or sources != source_refs:
+        if not is_compilation or not sources or sources != source_refs:
             incomplete_packages.update(packages[owner] for owner in target_owners)
         if not source_refs:
             continue
