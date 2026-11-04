@@ -2,11 +2,11 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBox, faChevronDown, faChevronRight, faMagnifyingGlass, faRotateRight } from '@fortawesome/free-solid-svg-icons';
-import { ReactFlow, Background, Controls, MarkerType, Position } from '@xyflow/react';
-import type { Node, Edge } from '@xyflow/react';
+import { ReactFlow, Background, BaseEdge, Controls, EdgeLabelRenderer, getStraightPath, MarkerType, Position } from '@xyflow/react';
+import type { Node, Edge, EdgeProps } from '@xyflow/react';
 import dagre from 'dagre';
 import '@xyflow/react/dist/style.css';
-import type { DependencyDocument, DependencyPackage } from '../handlers/dependencies';
+import type { DependencyDocument, DependencyEdge, DependencyPackage } from '../handlers/dependencies';
 import { packageVersionLabel, versionEvidenceTitle } from '../helpers/packageVersions';
 import { buildDependencyScopes, dependencyLinks, dependencyNeighborhood, dependencyRoots, dependencyTreeRows,
     reachablePackages, TREE_PAGE_SIZE, treePathKey } from '../helpers/dependencyExplorer';
@@ -32,6 +32,45 @@ const directionHelp = {
 
 function PackageLabel({ pkg }: Readonly<{ pkg: DependencyPackage }>) {
     return <span title={versionEvidenceTitle(pkg)} className="min-w-0 break-words [overflow-wrap:anywhere]">{packageVersionLabel(pkg)}</span>;
+}
+
+function scopeLabel(scope: string): string {
+    return scope ? scope[0].toUpperCase() + scope.slice(1) : 'Unspecified';
+}
+
+type ScopeEdge = Edge<{ ariaLabel: string; onInspect: () => void }>;
+
+function DependencyScopeEdge({ id, sourceX, sourceY, targetX, targetY, markerEnd, label, data }: EdgeProps<ScopeEdge>) {
+    const [path, labelX, labelY] = getStraightPath({ sourceX, sourceY, targetX, targetY });
+    return <>
+        <BaseEdge id={id} path={path} markerEnd={markerEnd} interactionWidth={24} />
+        <EdgeLabelRenderer>
+            <button type="button" className="nodrag nopan absolute max-w-40 whitespace-normal rounded border border-neutral-500 bg-neutral-800 px-2 py-1 text-xs text-neutral-100 hover:border-cyan-400"
+                style={{ transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`, pointerEvents: 'all' }}
+                aria-label={data?.ariaLabel} title={data?.ariaLabel} onClick={data?.onInspect}>
+                {label}
+            </button>
+        </EdgeLabelRenderer>
+    </>;
+}
+
+const edgeTypes = { dependencyScope: DependencyScopeEdge };
+
+function DependencyLinkDetails({ scope, edge, onClose }: Readonly<{
+    scope: DependencyScope; edge: DependencyEdge; onClose: () => void;
+}>) {
+    return <section role="dialog" aria-label="Dependency link details"
+        className="mb-3 rounded border border-neutral-600 p-3 text-sm">
+        <button type="button" className="float-right underline" onClick={onClose}>Close link details</button>
+        <h3 className="break-all">{edge.package_id} depends on {edge.dependency_id}</h3>
+        <ul>{edge.declarations?.map((declaration, index) => <li key={index} className="my-2 break-all">
+            <p>Relationship: {declaration.relationship_type || 'Unspecified'}</p>
+            <p>Lifecycle scope: {scopeLabel(declaration.lifecycle_scope)}</p>
+            <p>Source: {declaration.source_name}</p>
+            <p>Variant: {scope.name}</p>
+        </li>)}</ul>
+        <p>This is an SBOM declaration, not proof that a vulnerable function is reachable.</p>
+    </section>;
 }
 
 function ExplorerTree({ scope, direction, rootId, selected, onSelect }: Readonly<{
@@ -138,8 +177,9 @@ function ExplorerTree({ scope, direction, rootId, selected, onSelect }: Readonly
     </section>;
 }
 
-function NeighborhoodGraph({ scope, selection, direction, onSelect }: Readonly<{
+function NeighborhoodGraph({ scope, selection, direction, onSelect, onInspect }: Readonly<{
     scope: DependencyScope; selection: Selection; direction: DependencyDirection; onSelect: (selection: Selection) => void;
+    onInspect: (edge: DependencyEdge) => void;
 }>) {
     const [depth, setDepth] = useState(1);
     const graph = useMemo(() => {
@@ -158,12 +198,15 @@ function NeighborhoodGraph({ scope, selection, direction, onSelect }: Readonly<{
                 style: { width: 220, minHeight: 66, overflowWrap: 'anywhere', color: '#111827',
                     background: id === selection.id ? '#cffafe' : '#f8fafc', borderColor: id === selection.id ? '#0891b2' : '#94a3b8' } };
         });
-        const edges: Edge[] = neighborhood.edges.map(edge => ({
+        const edges: ScopeEdge[] = neighborhood.edges.map(edge => ({
             id: JSON.stringify([edge.package_id, edge.dependency_id]), source: edge.package_id, target: edge.dependency_id,
+            type: 'dependencyScope',
+            label: [...new Set(edge.declarations?.map(declaration => scopeLabel(declaration.lifecycle_scope)))].sort().join(' / '),
+            data: { ariaLabel: `Inspect ${edge.package_id} depends on ${edge.dependency_id}`, onInspect: () => onInspect(edge) },
             markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: '#64748b' },
         }));
         return { nodes, edges, total: neighborhood.total };
-    }, [scope, selection.id, direction, depth]);
+    }, [scope, selection.id, direction, depth, onInspect]);
     return <div className="flex h-full min-h-[420px] flex-col">
         <div className="flex flex-wrap items-center gap-3 p-3 text-sm">
             <span className="font-semibold">Variant: {scope.name}</span>
@@ -176,19 +219,24 @@ function NeighborhoodGraph({ scope, selection, direction, onSelect }: Readonly<{
         </div>
         {graph.total > graph.nodes.length && <p role="status" className="px-3 pb-2 text-sm text-amber-700 dark:text-amber-300">Diagram limited to 120 packages for readability. Every branch remains available in Tree view.</p>}
         <div className="min-h-[360px] flex-1" aria-label="Dependency diagram">
-            <ReactFlow key={`${selection.id}:${direction}:${depth}`} nodes={graph.nodes} edges={graph.edges} fitView
+            <ReactFlow key={`${selection.id}:${direction}:${depth}`} nodes={graph.nodes} edges={graph.edges} edgeTypes={edgeTypes} fitView
                 nodesDraggable={false} onlyRenderVisibleElements minZoom={0.05} maxZoom={1.5}
                 style={{ '--xy-controls-button-background-color': '#f8fafc', '--xy-controls-button-color': '#111827',
                     '--xy-controls-button-border-color': '#94a3b8' } as CSSProperties}
-                onNodeClick={(_, node) => onSelect({ id: node.id, variantId: scope.id })}>
+                onNodeClick={(_, node) => onSelect({ id: node.id, variantId: scope.id })}
+                onEdgeClick={(_, edge) => {
+                    const link = scope.edges.find(link => edge.id === JSON.stringify([link.package_id, link.dependency_id]));
+                    if (link) onInspect(link);
+                }}>
                 <Background /><Controls showInteractive={false} />
             </ReactFlow>
         </div>
     </div>;
 }
 
-function PackageDetails({ scope, selection, onExplore }: Readonly<{
+function PackageDetails({ scope, selection, onExplore, onInspect }: Readonly<{
     scope: DependencyScope; selection: Selection; onExplore: (id: string, variantId: string, direction: DependencyDirection) => void;
+    onInspect: (edge: DependencyEdge) => void;
 }>) {
     const { id } = selection;
     const pkg = scope.packages.get(id)!;
@@ -225,6 +273,13 @@ function PackageDetails({ scope, selection, onExplore }: Readonly<{
                 <span className={`text-xs ${mutedClass}`}>{direct} direct · {transitive} transitive only</span>
             </li>)}
         </ul>
+        <details className="text-sm">
+            <summary className="cursor-pointer">Inspect dependency links</summary>
+            {scope.edges.filter(edge => edge.package_id === id || edge.dependency_id === id).map(edge =>
+                <button key={JSON.stringify([edge.package_id, edge.dependency_id])} type="button"
+                    className="my-1 block break-all text-left text-cyan-700 underline dark:text-cyan-300"
+                    onClick={() => onInspect(edge)}>Inspect {edge.package_id} depends on {edge.dependency_id}</button>)}
+        </details>
         <div><h3 className="mb-2 text-sm font-semibold">SBOM evidence</h3>
             <ul className={`space-y-2 text-sm ${mutedClass}`}>{sources.map(source => <li key={source.id} className="break-all">
                 {source.source_name}<span className="block text-xs">{source.dependencies_recorded ? 'Dependencies recorded' : 'Dependencies not recorded'}</span>
@@ -250,6 +305,7 @@ export default function DependencyExplorer({ documents, loading = false, error =
     const [searchLimit, setSearchLimit] = useState(TREE_PAGE_SIZE);
     const [rootId, setRootId] = useState(focusedPackageId);
     const [selection, setSelection] = useState<(Selection & { rootId?: string })>();
+    const [inspectedLink, setInspectedLink] = useState<{ scope: DependencyScope; packageId: string; edge: DependencyEdge }>();
     useEffect(() => {
         setRootId(focusedPackageId);
         setSelection(undefined);
@@ -388,11 +444,16 @@ export default function DependencyExplorer({ documents, loading = false, error =
                                     <ExplorerTree key={`${scope.id}:${sourceId}:${direction}:${rootId ?? ''}`} scope={scope} direction={direction}
                                         rootId={rootId} selected={selected} onSelect={next => setSelection({ ...next, rootId })} />)}
                             </div>
-                            {viewMode === 'graph' && selected && selectedScope && <NeighborhoodGraph scope={selectedScope} selection={selected} direction={direction} onSelect={next => setSelection({ ...next, rootId })} />}
+                            {viewMode === 'graph' && selected && selectedScope && <NeighborhoodGraph scope={selectedScope} selection={selected} direction={direction}
+                                onSelect={next => setSelection({ ...next, rootId })}
+                                onInspect={edge => setInspectedLink({ scope: selectedScope, packageId: selected.id, edge })} />}
                         </>}
                     </div>
                     <aside aria-label="Package inspector" className="rounded-lg border border-gray-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900 lg:min-h-0 lg:overflow-auto">
-                        {selected && selectedScope ? <PackageDetails scope={selectedScope} selection={selected} onExplore={explore} />
+                        {inspectedLink && inspectedLink.scope === selectedScope && inspectedLink.packageId === selected?.id &&
+                            <DependencyLinkDetails scope={selectedScope} edge={inspectedLink.edge} onClose={() => setInspectedLink(undefined)} />}
+                        {selected && selectedScope ? <PackageDetails scope={selectedScope} selection={selected} onExplore={explore}
+                            onInspect={edge => setInspectedLink({ scope: selectedScope, packageId: selected.id, edge })} />
                             : <div className="py-8 text-center"><FontAwesomeIcon icon={faBox} className={`mb-3 text-2xl ${mutedClass}`} />
                                 <h2 className="text-sm font-semibold">Inspect a package</h2><p className={`mt-2 text-sm ${mutedClass}`}>Select a tree row to see direct and transitive relationships, source evidence, and reverse dependency paths.</p></div>}
                     </aside>

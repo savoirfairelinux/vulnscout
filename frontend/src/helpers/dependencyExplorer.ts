@@ -46,7 +46,13 @@ export function buildDependencyScopes(documents: DependencyDocument[], sourceId:
                 unresolvedEdges++;
                 return;
             }
-            uniqueEdges.set(JSON.stringify([edge.package_id, edge.dependency_id]), edge);
+            const key = JSON.stringify([edge.package_id, edge.dependency_id]);
+            const declarations = edge.declarations?.length ? edge.declarations : [{
+                relationship_type: '', lifecycle_scope: '', source_document_id: doc.id, source_name: doc.source_name,
+            }];
+            uniqueEdges.set(key, { ...edge, declarations: [
+                ...(uniqueEdges.get(key)?.declarations ?? []), ...declarations,
+            ] });
             recorded.add(edge.package_id);
             recorded.add(edge.dependency_id);
         }));

@@ -65,6 +65,24 @@ test('renders a cycle as a terminal occurrence and shared packages on every vali
     expect(rows).toHaveLength(5);
 });
 
+test('preserves declarations from every source while deduplicating package pairs', () => {
+    const typed = document(['app', 'lib'], [['app', 'lib']]);
+    typed.edges[0].declarations = [{
+        relationship_type: 'dependsOn', lifecycle_scope: 'runtime',
+        source_document_id: typed.id, source_name: typed.source_name,
+    }];
+    const legacy = { ...document(['app', 'lib'], [['app', 'lib']]), id: 'legacy', source_name: 'legacy.json' };
+    const [scope] = buildDependencyScopes([typed, legacy], 'all');
+    expect(scope.outgoing.get('app')).toEqual(['lib']);
+    expect(scope.edges).toHaveLength(1);
+    expect(scope.edges[0].declarations).toEqual([
+        ...typed.edges[0].declarations,
+        { relationship_type: '', lifecycle_scope: '', source_document_id: 'legacy', source_name: 'legacy.json' },
+    ]);
+    expect(typed.edges[0].declarations).toHaveLength(1);
+    expect(legacy.edges[0].declarations).toBeUndefined();
+});
+
 test('handles deep dependency chains iteratively and bounds rendered rows without discarding data', () => {
     const ids = Array.from({ length: 3000 }, (_, index) => `pkg-${String(index).padStart(4, '0')}`);
     const [scope] = buildDependencyScopes([document(ids, ids.slice(1).map((id, index) => [ids[index], id]))], 'all');
