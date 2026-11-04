@@ -32,7 +32,7 @@ For version normalisation and source-evidence details, see the
 
 ## Recorded Files
 
-Click a **Recorded Files** count to open a fullscreen file browser, sized like
+Click anywhere in a **Recorded Files** count cell to open a fullscreen file browser, sized like
 the dependency dialog. Search by path, document, or variant, and combine the
 search with **Build evidence** and **SBOM document** filters. Select a file in
 the list to read its provenance, hashes, properties, and build inputs/outputs.
@@ -40,16 +40,17 @@ On wide screens the list and details scroll independently; narrow screens stack
 them vertically. **Clear filters** restores all records. Long build parameters
 stay collapsed until expanded.
 Technical identifiers and the original parsed data are available in a collapsed
-section at the end of the details.
+section at the end of the details. An em dash (**—**) means file evidence has
+not been recorded; reimport the original SPDX SBOMs to populate it. A zero count
+means the imported SBOMs recorded no files for the package.
 
 **Compilation recorded** means a compiler target records the file as an input.
 **Other build input** includes recipe or packaging tasks and does not prove
 compilation. **Listed only** means no associated build task was recorded.
 None of these proves inclusion in the final firmware. The summary distinguishes
-file records from unique compiled source paths. When compilation is not proven,
-a notice explains that the files are not used to dismiss CVEs, so advisories
-match as if no file information were available; see
-[Recorded files](interactive-mode.md#recorded-files) for what counts as proof.
+file records from unique compiled source paths. The browser presents the
+recorded evidence without a CVE-matching policy banner; see
+[Recorded files](interactive-mode.md#recorded-files) for how matching uses it.
 
 See [Recorded files](interactive-mode.md#recorded-files) for supported formats,
 scope, and reimport requirements.

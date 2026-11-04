@@ -372,9 +372,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 HintAriaLabel: 'Recorded files helper',
                 cell: info => {
                     const pkg = info.row.original;
-                    if (pkg.outdated) return <span className="text-neutral-400">Not in active scan</span>;
-                    if (pkg.source_file_count == null) return <span className="text-neutral-400"
-                        title="Reimport the original SPDX SBOMs to record file evidence">Not recorded</span>;
+                    if (pkg.outdated) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400">Not in active scan</div>;
+                    if (pkg.source_file_count == null) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-500"
+                        title="Reimport the original SPDX SBOMs to record file evidence">—</div>;
                     return <button type="button" onClick={() => setSelectedSourcePackage(pkg.id)}
                         aria-label={`View recorded files for ${pkg.name}`}
                         className="h-full w-full p-4 text-cyan-300 hover:bg-slate-700 hover:underline">

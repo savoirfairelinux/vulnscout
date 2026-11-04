@@ -241,7 +241,7 @@ describe('Packages Table', () => {
             ]};
         render(<TablePackages packages={[hashOnly, conflicting]} />);
         const hashRow = within(screen.getByRole('row', { name: /hash-only/ }));
-        expect(hashRow.getByRole('cell', { name: '—' })).toBeTruthy();
+        expect(hashRow.getAllByRole('cell', { name: '—' })).toHaveLength(2);
         expect(hashRow.queryByText('Unknown')).toBeNull();
         const conflictRow = within(screen.getByRole('row', { name: /conflicting/i }));
         expect(conflictRow.getAllByRole('cell', { name: 'Conflicting metadata' })).toHaveLength(2);
