@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Iterator
-from uuid import uuid4
 from functools import wraps
 import re
 import os
@@ -18,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..extensions import db
 from ..models.refresh_run import RefreshChange, RefreshRun
-from .history_source import history_operation, history_source
+from .history_source import refresh_history
 
 _capture: ContextVar[tuple[str, str] | None] = ContextVar("refresh_run_capture", default=None)
 
@@ -100,7 +99,8 @@ def visibility_for(vuln_ids: list[str]) -> dict[str, list[dict]]:
 
 def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
                scope: dict | None = None) -> str:
-    run_id = run_id or str(uuid4())
+    from ..controllers.operation_registry import new_queue_id
+    run_id = run_id or new_queue_id()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
         raise ValueError("Invalid run ID: use up to 128 letters, digits, dots, underscores or hyphens")
     if db.session.get(RefreshRun, run_id) is not None:
@@ -182,10 +182,10 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
 
 
 @contextmanager
-def capture_source(run_id: str, source: str, operation_id: str | None = None) -> Iterator[None]:
+def capture_source(run_id: str, source: str) -> Iterator[None]:
     token = _capture.set((run_id, source))
     try:
-        with history_operation(run_id, operation_id or source), history_source(source):
+        with refresh_history(source, run_id):
             yield
     finally:
         _capture.reset(token)
@@ -205,7 +205,7 @@ def tracked_refresh(source: str):
                 create_run({source: list(ctx.options.get("ids", []))}, run_id=run_id)
             add_targets(run_id, source, list(ctx.options.get("ids", [])))
             try:
-                with capture_source(run_id, source, ctx.op_id):
+                with capture_source(run_id, source):
                     result = function(ctx)
                     db.session.commit()
             except BaseException as exc:

@@ -101,6 +101,24 @@ def test_interleaved_runs_attribute_each_transaction_not_global_baseline(app, cl
     ]
 
 
+@pytest.mark.parametrize("queued", [False, True])
+def test_captured_refresh_remains_available_in_last_refresh_history_export(app, client, queued):
+    with app.app_context():
+        run = create_run({"epss": [CVE]})
+        if queued:
+            with patch("src.controllers.refresh_jobs.EPSS_DB") as api:
+                api.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}}
+                run_epss_refresh(JobContext("cli-refresh:epss", {"ids": [CVE]}, run))
+        else:
+            _change(run, 0.8)
+            finish_source(run, "epss")
+    response = client.get("/api/vulnerabilities/history/export",
+                          query_string={"last_refresh": "true", "vuln_id": CVE})
+    assert response.status_code == 200
+    rows = response.get_json()["history"]
+    assert [(row["field"], row["value"]) for row in rows] == [("epss_score", 0.8)]
+
+
 def test_shared_cve_visibility_is_captured_and_package_links_are_scope_filtered(app, client):
     with app.app_context():
         project = Project(id=uuid.uuid4(), name="other")
@@ -197,8 +215,13 @@ def test_expired_exact_run_never_substitutes_latest_and_can_be_pruned(app, clien
     assert result.exit_code != 0 and "expired" in result.output
     result = app.test_cli_runner().invoke(args=["prune-refresh-runs"])
     assert result.exit_code == 0
+    assert result.output == "Removed 1 expired refresh runs.\n"
     with app.app_context():
         assert db.session.get(RefreshRun, expired) is None
+        assert db.session.get(RefreshRun, "newest") is not None
+    result = app.test_cli_runner().invoke(args=["prune-refresh-runs"])
+    assert result.exit_code == 0
+    assert result.output == "Removed 0 expired refresh runs.\n"
 
 
 def test_json_csv_consistency_nested_multiline_formula_strings_and_zero_changes(app, client):

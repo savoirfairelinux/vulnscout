@@ -19,6 +19,11 @@ filter the captured package links, not today's mutable findings. A shared CVE's
 global metadata change is visible in each captured scope that observed it, but
 an export filtered to one scope never exposes other scopes' package links.
 
+Captured refreshes also remain available through
+`export vulnerability-history --last-refresh`. That export selects each
+vulnerability's latest recorded refresh; use `export refresh-changes --run-id`
+when archiving one exact run, including its unchanged targets and coverage.
+
 An unchanged, successfully checked refresh is a valid `complete` artifact with
 zero changes. A field first receiving a value is `first_enrichment`, not a
 comparison against a fabricated historical baseline. Missing provider responses,
