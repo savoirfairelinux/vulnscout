@@ -69,7 +69,7 @@ test('details expose paths, hashes, source documents, and build evidence with fi
     expect(screen.getByRole('dialog')).toHaveClass('h-[calc(100vh-2rem)]', 'max-w-[calc(100vw-2rem)]');
     expect(screen.getAllByText('Compilation recorded').length).toBeGreaterThan(0);
     expect(within(screen.getByRole('list', { name: 'Recorded files' })).getByText('Listed only')).toBeTruthy();
-    expect(screen.getByText(/not used to dismiss CVEs/)).toHaveTextContent('SPDX_INCLUDE_COMPILED_SOURCES');
+    expect(screen.queryByText(/dismiss CVEs|CVE matching can skip/)).not.toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /Inspect lib\/lz4.c/ }));
     const details = within(screen.getByRole('region', { name: 'File details' }));
@@ -158,7 +158,11 @@ test('SBOM recorded counts explain the inventory and open details with older col
     await screen.findAllByText('Deps: 0 / Req by: 0');
     const button = await screen.findByRole('button', { name: 'View recorded files for lz4' });
     expect(button).toHaveTextContent('1');
-    expect(screen.getByText('Not recorded')).toBeTruthy();
+    expect(within(screen.getByText('unknown').closest('tr')!).queryByText('Not recorded')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Reimport the original SPDX SBOMs to record file evidence')).toHaveTextContent('—');
+    expect(button.closest('td')).not.toHaveClass('p-4');
+    expect(button.closest('td')).toHaveClass('p-0');
+    expect(button).toHaveClass('h-full', 'w-full', 'p-4');
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Recorded files helper' }));
     expect(screen.getByRole('tooltip')).toHaveTextContent(

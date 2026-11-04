@@ -15,7 +15,7 @@ declare module '@tanstack/react-table' {
 }
 
 // These cells pad themselves so the whole cell stays clickable.
-const unpaddedCellColumnIds = new Set(['id', 'dependencies']);
+const unpaddedCellColumnIds = new Set(['id', 'dependencies', 'source_files']);
 
 /* tslint:disable:no-explicit-any */
 type Props<DataType> = {
@@ -507,7 +507,7 @@ function TableGeneric<DataType> ({
                                             return (
                                             <td
                                                 key={cell.id}
-                                                className={unpaddedCellColumnIds.has(cell.column.id) ? 'border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
+                                                className={unpaddedCellColumnIds.has(cell.column.id) ? 'p-0 border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
                                                 style={{
                                                     width: cell.column.getSize(),
                                                 }}
@@ -549,7 +549,7 @@ function TableGeneric<DataType> ({
                                         return (
                                         <td
                                             key={cell.id}
-                                            className={unpaddedCellColumnIds.has(cell.column.id) ? 'border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
+                                            className={unpaddedCellColumnIds.has(cell.column.id) ? 'p-0 border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
                                             style={{
                                                 width: cell.column.getSize(),
                                             }}

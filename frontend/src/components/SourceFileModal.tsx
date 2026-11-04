@@ -164,7 +164,6 @@ function FileDetails({ file }: Readonly<{ file: SourceFile }>) {
 export default function SourceFileModal({ packageId, variantId, projectId, variantIds, compareVariantId,
     operation, dataRevision, onClose }: Readonly<Props>) {
     const [files, setFiles] = useState<SourceFile[]>([]);
-    const [complete, setComplete] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [search, setSearch] = useState('');
@@ -186,7 +185,6 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
             .then(result => {
                 if (!cancelled) {
                     setFiles(result.files);
-                    setComplete(result.complete);
                 }
             })
             .catch(reason => {
@@ -229,13 +227,6 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
                     <p><strong className="text-xl text-emerald-300">{compiledCount}</strong> compiled source paths</p>
                     <p><strong className="text-xl text-white">{documents.length}</strong> SBOM documents</p>
                 </div>
-                <p className={`mb-4 shrink-0 rounded-lg border p-3 text-sm ${complete
-                    ? 'border-neutral-700 bg-neutral-800/50 text-neutral-300'
-                    : 'border-amber-800/60 bg-amber-950/30 text-amber-200'}`}>
-                    {complete
-                        ? 'Compiler build records prove which sources were compiled, so CVE matching can skip advisories whose affected files were not compiled. Recorded files may still include patches, licenses, and configuration, and none of this proves inclusion in firmware.'
-                        : 'Compilation of these files is not proven, so they are not used to dismiss CVEs: an advisory matches whether or not its affected files appear here. Only compiler build records (Zephyr West SPDX 3) prove compilation; recipe inputs and source lists, including Yocto SPDX_INCLUDE_COMPILED_SOURCES output, do not.'}
-                </p>
                 {files.length === 0 ? <p className="m-auto p-8 text-neutral-400">
                     No files are recorded for this package in the selected SBOMs.
                 </p> : <>
