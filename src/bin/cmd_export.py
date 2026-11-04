@@ -42,27 +42,33 @@ def export_vulnerability_history_command(
     vuln_id: str | None, format_: str, output: str, project: str | None, variant: str | None,
 ) -> None:
     """Export recorded vulnerability changes as JSON or CSV."""
-    from ..helpers.vulnerability_history_export import history_export, serialize_history_export
+    from ..helpers.vulnerability_history_export import (
+        history_export, history_scope_vulnerability_ids, serialize_history_export,
+    )
 
     if last_refresh and (since is not None or until is not None):
         raise click.UsageError("--last-refresh cannot be combined with --since or --until.")
     if not last_refresh and since is None:
         raise click.UsageError("Either --since or --last-refresh is required.")
-    if variant and not project:
+    if project is not None and not project.strip():
+        raise click.UsageError("--project must not be empty.")
+    if variant is not None and not variant.strip():
+        raise click.UsageError("--variant must not be empty.")
+    if variant is not None and project is None:
         raise click.UsageError("--variant requires --project.")
     scope = None
-    if project:
+    if project is not None:
         project_obj = ProjectController.get_by_name(project)
         if project_obj is None:
             raise click.ClickException(f"project not found: {project}")
-        if variant:
+        if variant is not None:
             variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
             if variant_obj is None:
                 raise click.ClickException(f"variant not found: {variant}")
             scope = compute_export_scope(variant_id=variant_obj.id)
         else:
             scope = compute_export_scope(project_id=project_obj.id)
-    identifiers = ControllersCache(scope=scope).vulnerabilities.vulnerabilities if scope is not None else None
+    identifiers = history_scope_vulnerability_ids(scope) if scope is not None else None
     try:
         data = history_export(since, until, sources=source, field=field, vuln_id=vuln_id,
                               vulnerability_ids=identifiers, last_refresh=last_refresh)
