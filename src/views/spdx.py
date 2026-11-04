@@ -163,6 +163,10 @@ class SPDX:
 
             self.packagesCtrl.add(pkg)
 
+        self._document_refs = {
+            ref: self.packagesCtrl.canonical_id(string_id) for ref, string_id in self._document_refs.items()
+        }
+
     def parse_and_merge(self):
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()

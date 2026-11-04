@@ -149,6 +149,33 @@ def test_reimport_replaces_instead_of_duplicating_files(app, tmp_path):
     assert _package(app, variant)["source_files"] == files
 
 
+@pytest.mark.parametrize("package_output", [False, True])
+def test_output_only_target_keeps_package_compilation_incomplete(app, tmp_path, package_output):
+    documents = _documents()
+    prefix = "https://example.org/evidence/"
+    graph = documents["a-build.jsonld"]["@graph"]
+    target = "package" if package_output else "unrecorded-output"
+    graph.extend([
+        {"type": "build_Build", "spdxId": prefix + "unrecorded-build",
+         "build_buildType": "urn:spdx.dev:zephyr-cmake",
+         "build_parameter": [{"key": "compile:flags:C", "value": "-DCONFIG_FEATURE=1"}]},
+        {"type": "Relationship", "relationshipType": "hasOutput",
+         "from": prefix + "unrecorded-build", "to": [prefix + target]},
+    ])
+    if not package_output:
+        graph.extend([
+            {"type": "software_File", "spdxId": prefix + target, "name": "build/unrecorded.o"},
+            {"type": "Relationship", "relationshipType": "contains",
+             "from": prefix + "package", "to": [prefix + target]},
+        ])
+    variant, scan = _import(tmp_path, documents)
+    row = _package(app, variant)
+    assert row["source_file_count"] == 1
+    assert row["compiled_source_file_count"] == 1
+    assert not row["compiled_sources_complete"]
+    _assert_no_source_exclusion(scan)
+
+
 def test_build_metadata_is_stored_once_for_many_output_packages(app, tmp_path):
     from sqlalchemy import inspect
     from src.models import SBOMPackage
@@ -431,8 +458,9 @@ def test_generated_source_is_still_a_source_when_consumed_by_another_build(app, 
     ])
     variant, scan = _import(tmp_path, documents)
     assert _package(app, variant)["source_file_count"] == 1
-    assert all(package.compiled_sources == {"src/enabled.c"}
-               for package in package_snapshots_for_sbom_scans([scan.id]))
+    built = next(package for package in package_snapshots_for_sbom_scans([scan.id]) if package.name == "lib")
+    assert built.compiled_sources == {"src/enabled.c"}
+    _assert_no_source_exclusion(scan, "lib-sources")
 
 
 @pytest.mark.parametrize("malformed", ["file", "input", "conflicting"])
@@ -691,6 +719,45 @@ def test_spdx2_external_file_references_never_use_a_different_scan(app, tmp_path
     _, scan = _import(tmp_path, {"a-built.spdx.json": documents["a-built.spdx.json"]}, other)
     assert _package(app, other)["source_file_count"] is None
     assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize("epoch_first", [False, True])
+@pytest.mark.parametrize("containment", ["CONTAINS", "hasFiles"])
+def test_spdx2_coalesced_package_elements_keep_both_file_inventories(
+    app, tmp_path, monkeypatch, fast, epoch_first, containment,
+):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    document = _spdx2_documents()["a-built.spdx.json"]
+    document.pop("externalDocumentRefs")
+    document["files"] = [
+        {**_spdx2_documents()["z-source.spdx.json"]["files"][0],
+         "SPDXID": f"SPDXRef-file-{suffix}", "fileName": f"src/{suffix}.c"}
+        for suffix in ("bare", "epoch")
+    ]
+    document["packages"] = [
+        {**document["packages"][0], "SPDXID": f"SPDXRef-{suffix}",
+         "name": "mesa", "versionInfo": version}
+        for suffix, version in (("bare", "1.0.0"), ("epoch", "1_1.0.0"))
+    ]
+    if epoch_first:
+        document["packages"].reverse()
+    document["relationships"] = []
+    for package in document["packages"]:
+        file_ref = package["SPDXID"].replace("SPDXRef-", "SPDXRef-file-")
+        if containment == "hasFiles":
+            package["hasFiles"] = [file_ref]
+        else:
+            document["relationships"].append({
+                "spdxElementId": package["SPDXID"], "relationshipType": "CONTAINS",
+                "relatedSpdxElement": file_ref,
+            })
+    variant, scan = _import(tmp_path, {"mesa.spdx.json": document})
+    row = _package(app, variant, "mesa")
+    assert row["source_file_count"] == 2
+    assert {file["path"] for file in row["source_files"]} == {"src/bare.c", "src/epoch.c"}
+    assert not row["compiled_sources_complete"]
+    _assert_no_source_exclusion(scan, "mesa")
 
 
 @pytest.mark.parametrize("fast", [False, True])

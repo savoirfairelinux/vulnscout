@@ -85,6 +85,8 @@ Source/build package consolidation preserves those associations.
 SPDX 2.2/2.3 `files`, package `hasFiles`, `CONTAINS`, and `CONTAINED_BY`
 relationships also populate the inventory, including namespaced
 `DocumentRef-*` references between companion documents.
+When bare and epoch-prefixed package versions in one document are coalesced,
+file containment through either SPDX package element is preserved.
 Original SPDX 2 checksums, licenses, and file types remain visible in the details.
 Explicit binary file types and installed package outputs are excluded from **Recorded Files**.
 
@@ -113,7 +115,9 @@ Outdated packages show **Not in active scan**.
 The local advisory engine uses resolved compiled-source paths for CVE refinement
 only when the inventory is complete and the advisory supplies affected-file
 information. Missing or malformed build/containment references disable this
-refinement. Artifact or package inputs whose source contributions are not
+refinement. Output-producing builds with no recorded inputs leave their owning
+packages incomplete, even when another target for that package records its
+compiled sources. Artifact or package inputs whose source contributions are not
 accounted for also leave the affected inventory incomplete; VulnScout does not
 trace sources through intermediate builds.
 Unproven source files also disable refinement. These gaps do not justify
