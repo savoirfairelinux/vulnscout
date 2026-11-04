@@ -5,7 +5,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from sqlalchemy import Text, DateTime, JSON, ForeignKey, UniqueConstraint, Table
 from sqlalchemy.orm import Mapped, relationship, mapped_column, contains_eager, joinedload
@@ -242,6 +242,16 @@ class AssessmentReview(Base):
     def delete(self) -> None:
         db.session.delete(self)
         db.session.commit()
+
+
+ReviewState = Literal["missing", "stale", "fresh"]
+
+
+def review_state(review: "AssessmentReview | None") -> ReviewState:
+    """Freshness of one target's review: the single rule shared by the API and the CLI."""
+    if review is None:
+        return "missing"
+    return "stale" if review.is_stale() else "fresh"
 
 
 def reap_reviews(connection: "Connection", criterion: "ColumnElement[bool]") -> None:

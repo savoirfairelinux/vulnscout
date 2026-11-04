@@ -12,7 +12,7 @@ from ..models.assessment import (
     VALID_STATUS_OPENVEX,
     VALID_JUSTIFICATION_OPENVEX,
 )
-from ..models.assessment_review import AssessmentReview, fingerprint_assessment
+from ..models.assessment_review import AssessmentReview, fingerprint_assessment, review_state
 from ..models.finding import Finding
 from ..models.variant import Variant
 from ._scan_helpers import parse_uuid_or_400
@@ -309,8 +309,7 @@ def init_app(app) -> None:
             assessments = [
                 assessment for assessment in assessments
                 if any(
-                    key not in reviews_by_target
-                    or reviews_by_target[key].is_stale()
+                    review_state(reviews_by_target.get(key)) != "fresh"
                     for key in scoped_target_keys(assessment)
                 )
             ]
@@ -362,8 +361,9 @@ def init_app(app) -> None:
                     "variant_id": str(t.variant_id),
                     "package": t.finding.package.string_id if t.finding and t.finding.package else "",
                     "has_review": (a.id, t.variant_id, t.finding_id) in reviews_by_target,
-                    "is_stale": reviews_by_target[(a.id, t.variant_id, t.finding_id)].is_stale()
-                    if (a.id, t.variant_id, t.finding_id) in reviews_by_target else False,
+                    "is_stale": review_state(
+                        reviews_by_target.get((a.id, t.variant_id, t.finding_id))
+                    ) == "stale",
                 }
                 for t in scoped_targets
             ]
