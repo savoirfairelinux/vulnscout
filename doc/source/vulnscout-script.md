@@ -96,7 +96,8 @@ comma-separated), `--field`, and `--vuln-id` filters narrow the selection.
 Without `-p`, all vulnerabilities are eligible. With `-p`/`-v`, the selection
 uses the vulnerabilities in the **current active scope**, not historical
 project membership. Unknown projects or variants fail instead of exporting
-unscoped data.
+unscoped data. Explicitly empty or whitespace-only `-p`/`-v` names are rejected;
+omit the option to leave that scope unrestricted.
 
 JSON includes the time bounds, the `last_refresh` mode, total and history
 entries. CSV contains one row
