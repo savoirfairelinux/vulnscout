@@ -18,7 +18,7 @@ from typing import Any, Callable, Iterator
 import click
 from flask import Response, abort, current_app, request_finished, request_started
 
-# Set by entrypoint.sh (cmd_ai_assess) so the host wrapper can forward Ctrl-C to this process.
+# Set by entrypoint.sh (ai-assess and ai-review) so the host wrapper can forward Ctrl-C to this process.
 PID_FILE_ENV = "VULNSCOUT_AI_ASSESS_PID_FILE"
 # Set by SIGINT so an interrupt is reported even when cancellation cleanup raises another exception.
 interrupted = threading.Event()
