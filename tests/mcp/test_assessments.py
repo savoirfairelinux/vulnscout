@@ -544,3 +544,37 @@ def test_scoped_write_rejects_targets_outside_the_run_before_request():
     with patch.object(VulnScoutClient, "write_assessment", return_value={}) as write:
         unrestricted.write_assessment("CVE-2", {"status": "affected", "packages": ["b@1"], "variant_id": "v1"})
         write.assert_called_once()
+
+
+def test_scoped_review_write_rejects_targets_outside_the_review_run():
+    from unittest.mock import patch
+
+    from vulnscout_mcp.client import ScopedVulnScoutClient
+
+    aid, other_aid = "AAAAAAAA-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000002"
+    vid, fid = "cccccccc-0000-0000-0000-000000000003", "dddddddd-0000-0000-0000-000000000004"
+    client = ScopedVulnScoutClient(BASE_URL, {
+        "project_ids": ["p1"], "variant_ids": [vid],
+        "review_targets": [{"assessment_id": aid.lower(), "variant_id": vid,
+                            "package": "libxml2@2.9", "finding_id": fid}],
+    })
+    with patch.object(ScopedVulnScoutClient, "get_assessment", return_value={}), \
+            patch.object(VulnScoutClient, "write_assessment_review", return_value={}) as write:
+        for assessment_id, payload in (
+            (aid, {"package": "libxml2@2.8"}),
+            (aid, {"finding_id": "eeeeeeee-0000-0000-0000-000000000005"}),
+            (aid, {}),
+            (other_aid, {"package": "libxml2@2.9"}),
+        ):
+            with pytest.raises(VulnScoutError, match="Review target is outside the targets of this review run."):
+                client.write_assessment_review(assessment_id, {"variant_id": vid, **payload})
+        write.assert_not_called()
+        client.write_assessment_review(aid, {"variant_id": vid, "package": "libxml2@2.9"})
+        client.write_assessment_review(aid.lower(), {"variant_id": vid, "finding_id": fid.upper()})
+        assert write.call_count == 2
+
+    unrestricted = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": [vid]})
+    with patch.object(ScopedVulnScoutClient, "get_assessment", return_value={}), \
+            patch.object(VulnScoutClient, "write_assessment_review", return_value={}) as write:
+        unrestricted.write_assessment_review(other_aid, {"variant_id": vid, "package": "x@1"})
+        write.assert_called_once()
