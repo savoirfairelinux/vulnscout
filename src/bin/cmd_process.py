@@ -20,7 +20,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.env_vars import get_bool_env
-from ..helpers.history_source import history_source
+from ..helpers.history_source import current_history_operation, history_source
 from ..extensions import batch_session, db as _db
 import click
 from ._console import Command, echo, print_message, verbose, warn
@@ -119,7 +119,7 @@ def refresh_vulnerability_sources(
                  if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")
                  and identifier in all_vulnerabilities]
         for source in applicable_sources
-    })
+    }, run_id=current_history_operation()[0])
     click.echo(f"Refresh run: {run_id}")
     try:
         for step, source in enumerate(applicable_sources, start=1):
