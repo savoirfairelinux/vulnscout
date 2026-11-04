@@ -353,7 +353,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 header: () => <div className="flex items-center justify-center">Dependency</div>,
                 cell: info => {
                     const counts = info.row.original.dependencyCount;
-                    // Dependency data covers active scans only, so historical rows have no graph to open.
+                    // Dependency data covers active scans only.
                     if (info.row.original.outdated) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
                         title="Dependencies are only available for packages of active scans">Not in active scan</div>;
                     if (info.row.original.dependenciesUnrecorded) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
@@ -362,7 +362,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         className="flex items-center justify-center gap-2 w-full h-full p-4 text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
                         onClick={() => setSelectedDependencyPackage(info.row.original.id)}
                         title="Deps: direct dependencies of this package. Req by: packages that directly depend on this package."
-                        aria-label={`View dependency graph for ${info.row.original.name}`}>
+                        aria-label={`Explore dependencies for ${info.row.original.name}`}>
                         <FontAwesomeIcon icon={faDiagramProject} />
                         {dependencyError ? 'Unavailable' : counts ? `Deps: ${counts.in} / Req by: ${counts.out}` : 'Loading…'}
                     </button>;
@@ -619,7 +619,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }, [filteredPackages, showDependencyColumn, dependencyCounts]);
 
     return (<>
-        {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency graph…</div>}>
+        {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency explorer…</div>}>
             <DependencyModal variantId={variantId} projectId={projectId} variantIds={variantIds}
                 compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
                 packageId={selectedDependencyPackage} onClose={() => setSelectedDependencyPackage(null)} />

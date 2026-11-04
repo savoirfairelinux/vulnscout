@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Edge } from '@xyflow/react';
-import { DependencyModalView } from '../../src/components/DependencyModal';
+import DependencyExplorer from '../../src/components/DependencyExplorer';
 import type { DependencyDocument } from '../../src/handlers/dependencies';
 
 // JSDOM cannot measure React Flow's SVG edges; exercise its click callback contract.
@@ -33,24 +33,26 @@ test('graph link details retain direction and separate evidence when filtering v
             source_document_id: name, source_name: `${name}.json`,
         }] }],
     }));
-    render(<DependencyModalView documents={documents} packageId="lib" onSelectPackage={() => {}} />);
+    render(<DependencyExplorer documents={documents} focusedPackageId="lib" />);
     const user = userEvent.setup();
-    const inspect = () => user.click(screen.getByRole('button', { name: /Graph link lib to app/ }));
-    expect(screen.getByText('Build / Runtime')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Required by' }));
+    const inspect = () => user.click(screen.getByRole('button', { name: /Graph link app to lib/ }));
+    expect(screen.getByText('Runtime')).toBeTruthy();
+    expect(screen.queryByText('Build')).toBeNull();
     await inspect();
     let details = within(screen.getByRole('dialog', { name: 'Dependency link details' }));
     expect(details.getByText('app depends on lib')).toBeTruthy();
     expect(details.getByText('Source: alpha.json')).toBeTruthy();
-    expect(details.getByText('Source: beta.json')).toBeTruthy();
-    await user.click(screen.getByRole('checkbox', { name: 'beta' }));
+    expect(details.queryByText('Source: beta.json')).toBeNull();
+    await user.click(screen.getByRole('checkbox', { name: /alpha/ }));
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.queryByText('Build / Runtime')).toBeNull();
-    expect(screen.getByText('Runtime')).toBeTruthy();
+    expect(screen.queryByText('Runtime')).toBeNull();
+    expect(screen.getByText('Build')).toBeTruthy();
     await inspect();
     details = within(screen.getByRole('dialog', { name: 'Dependency link details' }));
-    expect(details.getByText('Lifecycle scope: Runtime')).toBeTruthy();
-    expect(details.queryByText('Lifecycle scope: Build')).toBeNull();
-    expect(details.queryByText('Source: beta.json')).toBeNull();
+    expect(details.getByText('Lifecycle scope: Build')).toBeTruthy();
+    expect(details.queryByText('Lifecycle scope: Runtime')).toBeNull();
+    expect(details.queryByText('Source: alpha.json')).toBeNull();
 });
 
 test('graph labels retain every declared scope and unspecified legacy evidence per source', async () => {
@@ -62,13 +64,17 @@ test('graph labels retain every declared scope and unspecified legacy evidence p
                 relationship_type: 'dependsOn', lifecycle_scope: scope, source_document_id: name, source_name: `${name}.json`,
             })) : [] }],
     }));
-    render(<DependencyModalView documents={documents} packageId="app" onSelectPackage={() => {}} />);
+    render(<DependencyExplorer documents={documents} focusedPackageId="app" />);
     expect(screen.getByText('Build / Development / Runtime / Test / Unspecified')).toBeTruthy();
-    expect(screen.getAllByText('Deps: 1 / Req by: 0')).toHaveLength(2);
+    expect(screen.getAllByText('Deps: 1 / Req by: 0')).toHaveLength(1);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByRole('combobox', { name: 'SBOM source' }), 'typed');
+    await user.click(screen.getByRole('treeitem', { name: /^app@/ }));
+    await user.click(screen.getByRole('button', { name: 'Graph' }));
     expect(screen.getByText('Build / Development / Runtime / Test')).toBeTruthy();
     await user.selectOptions(screen.getByRole('combobox', { name: 'SBOM source' }), 'legacy');
+    await user.click(screen.getByRole('treeitem', { name: /^app@/ }));
+    await user.click(screen.getByRole('button', { name: 'Graph' }));
     expect(screen.getByText('Unspecified')).toBeTruthy();
     expect(screen.queryByText('Build / Development / Runtime / Test')).toBeNull();
 });
