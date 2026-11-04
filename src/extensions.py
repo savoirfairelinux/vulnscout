@@ -142,6 +142,20 @@ def setup_write_serialization(session_factory: object) -> None:
         _release_lock()
 
 
+def hold_write_lock() -> None:
+    """Hold the write lock until the current session transaction ends.
+
+    For Core INSERT/UPDATE statements executed through the session, which
+    bypass the ``before_flush`` listener.  Unlike :func:`write_lock`, the lock
+    is not released when the caller returns but by the ``after_commit`` /
+    ``after_soft_rollback`` listeners, together with the SQLite transaction.
+    """
+    if not _write_serialization_initialized or getattr(_write_lock_state, "held", False):
+        return
+    _db_write_lock.acquire()
+    _write_lock_state.held = True
+
+
 @contextmanager
 def write_lock() -> Generator[None, None, None]:
     """Hold the priority write lock for a block of manual/bulk writes.

@@ -3,7 +3,8 @@
 `refresh` persists a distinct run, its initiating project/variant selection,
 selected providers, timestamps, coverage and immutable field changes. It prints
 `Refresh run: <id>` before contacting providers. For unattended callers, supply
-your own **new** identity rather than parsing progress output:
+your own **new** identity rather than parsing progress output (`latest` is
+reserved and rejected):
 
 ```bash
 run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
@@ -14,7 +15,8 @@ run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 
 Scope options belong **after** the command. Without `-p`, refresh covers all
 stored vulnerabilities; with only `-p`, it covers that project's active scope.
-`-v` requires `-p`. Export scope names are resolved to project/variant IDs and
+`-v` requires `-p`, and an empty `-p`/`-v` value is rejected rather than
+treated as "all". Export scope names are resolved to project/variant IDs and
 filter the captured package links, not today's mutable findings. A shared CVE's
 global metadata change is visible in each captured scope that observed it, but
 an export filtered to one scope never exposes other scopes' package links.

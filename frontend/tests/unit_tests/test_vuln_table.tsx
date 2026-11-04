@@ -4,7 +4,9 @@ fetchMock.enableMocks();
 
 jest.setTimeout(15000);
 
-import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import type { RenderOptions } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import React from 'react';
@@ -14,6 +16,9 @@ import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
+
+// RefreshVulnerabilityData links to the Refresh page with client-side navigation.
+const render = (ui: React.ReactElement, options?: RenderOptions) => rtlRender(ui, { wrapper: MemoryRouter, ...options });
 
 class PassiveEventSource {
     static current: PassiveEventSource;

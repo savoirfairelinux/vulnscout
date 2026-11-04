@@ -253,15 +253,17 @@ class TestCmdProcessCoverage:
         assert message in capsys.readouterr().out
 
     def test_standalone_refresh_uses_all_vulnerabilities(self, app):
-        from src.models.refresh_run import RefreshRun
+        from src.helpers.refresh_runs import source_statuses
+        from src.models.refresh_run import RefreshRun, RefreshTarget
         result = app.test_cli_runner().invoke(args=["refresh-vulnerability-data", "--run-id", "global-empty"])
 
         assert result.exit_code == 0
         with app.app_context():
             run = _db.session.get(RefreshRun, "global-empty")
             assert run.scope == {"project_id": None, "variant_id": None}
-            assert run.coverage == []
-            assert set(run.source_status.values()) == {"complete"}
+            targets = _db.select(RefreshTarget).where(RefreshTarget.run_id == "global-empty")
+            assert _db.session.scalars(targets).all() == []
+            assert set(source_statuses("global-empty").values()) == {"complete"}
         assert "Vulnerability data refresh complete." in result.output
 
     def test_standalone_refresh_scopes_to_project(self, app):

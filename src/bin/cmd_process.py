@@ -511,8 +511,7 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
     controllers = ControllersCache(scope=scope)
     from ..controllers.refresh_jobs import REFRESH_JOBS
     from ..controllers.job_context import JobContext
-    from ..helpers.refresh_runs import create_run
-    from ..models.refresh_run import RefreshRun
+    from ..helpers.refresh_runs import create_run, source_statuses
     identifiers = list(controllers.vulnerabilities.vulnerabilities)
     targets = {source: [identifier for identifier in identifiers
                         if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")]
@@ -532,8 +531,7 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
             REFRESH_JOBS[source](JobContext(f"cli-refresh:{source}", {"ids": ids, "mode": "local"}, run_id))
         except Exception as exc:
             errors.append(f"{source}: {exc}")
-    run = _db.session.get(RefreshRun, run_id)
-    if errors or run is None or any(value != "complete" for value in run.source_status.values()):
+    if errors or any(value != "complete" for value in source_statuses(run_id).values()):
         raise click.ClickException(
             f"Refresh run {run_id} is incomplete. " + "; ".join(errors)
         )

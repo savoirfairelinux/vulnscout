@@ -1763,7 +1763,8 @@ field history. Queued refresh groups use the returned `queue_id` as `run_id`.
 Pass `options.project_id` and/or `options.variant_id` in refresh jobs to record
 the initiating scope; deferred jobs additionally record their selected variants.
 Single-CVE refresh responses expose `X-Refresh-Run-ID`. Synchronous CLI refreshes
-print their ID and accept a unique caller-provided `--run-id`.
+print their ID and accept a unique caller-provided `--run-id`. `latest` is
+reserved for the route below and is rejected as a run ID.
 
 ```
 GET /api/refresh-runs
@@ -1810,7 +1811,9 @@ Detail/latest responses have this shape:
 
 Package links contain `package_id`, `package` (supplier-aware string ID), `name`,
 `version`, `variant_id`, and `project_id`. Run lists return
-`{runs: [<detail without changes>], total, limit, offset}`. Summary counts cover
+`{runs: [...], total, limit, offset}`; each run has the detail metadata, `status`
+and `summary` but no `coverage`, `changes`, `total`, `limit` or `offset`, so a
+page only costs work for the runs it contains. Summary counts cover
 the complete filtered change set, not just the current page; changed CVEs include
 first enrichments. A zero-change run with complete coverage is successful.
 `running` means sources remain pending; `incomplete` means some source/target was

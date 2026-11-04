@@ -27,15 +27,16 @@ export type RefreshRunMetadata = {
     started_at: string;
     finished_at: string | null;
     status: 'running' | 'complete' | 'incomplete';
-    coverage: RefreshCoverage[];
     summary: { total_changes: number; changed_vulnerabilities: number; first_enrichments: number };
 };
 export type RefreshRun = RefreshRunMetadata & {
+    coverage: RefreshCoverage[];
     changes: RefreshChange[];
     total: number;
     limit: number;
     offset: number;
 };
+/** List entries omit coverage and changes so a page stays bounded. */
 export type RefreshRunList = {
     runs: RefreshRunMetadata[];
     total: number;

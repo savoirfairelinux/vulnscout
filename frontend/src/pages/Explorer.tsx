@@ -295,8 +295,9 @@ function Explorer() {
     const applyScope = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
-        // A new scope invalidates any filter the previous page navigated with.
-        navigate(location.pathname, { replace: true, state: null });
+        // A new scope invalidates any filter the previous page navigated with,
+        // but not the URL query (e.g. the exact run identity of /refresh?run=…).
+        navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
         setScopeRevision(revision => revision + 1);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
@@ -327,7 +328,7 @@ function Explorer() {
             multiActive ? variantIds : undefined,
             multiActive ? (multiOperation || undefined) : undefined,
         );
-    }, [loadData, navigate, location.pathname]);
+    }, [loadData, navigate, location.pathname, location.search]);
 
     // Changing the scope leaves the open AI context item, so unsaved edits are
     // confirmed first; false tells the selector to keep its previous scope.
