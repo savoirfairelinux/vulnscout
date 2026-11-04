@@ -428,3 +428,123 @@ def test_cli_refresh_partial_run_is_nonzero_but_exports_remain_available(app):
     assert data["status"] == "incomplete" and data["changes"]
     duplicate = app.test_cli_runner().invoke(args=["refresh-vulnerability-data", "--run-id", "cli-partial"])
     assert duplicate.exit_code == 1 and "already exists" in duplicate.output
+
+
+def test_queued_cancellation_waits_and_never_overwrites_concurrently_committed_outcomes(monkeypatch, tmp_path):
+    """Cancelling EPSS while NVD holds an uncommitted write must keep NVD's outcome."""
+    import threading
+    import time
+    from src import extensions
+    (tmp_path / "status").write_text("__END_OF_SCAN_SCRIPT__")
+    monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", f"sqlite:///{tmp_path / 'refresh.db'}")
+    monkeypatch.setenv("FLASK_TESTING", "true")
+    monkeypatch.setenv("FLASK_SCAN_FILE", str(tmp_path / "status"))
+    application = create_app()
+    setup_demo_db(application)
+    with application.app_context():
+        run = create_run({"nvd": [CVE], "epss": [CVE]}, run_id="concurrent")
+        errors = []
+
+        def cancel_epss():
+            try:
+                with application.app_context():
+                    finish_source(run, "epss", "cancelled", "Cancelled before start")
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        with capture_source(run, "nvd"):
+            target_result("nvd", CVE)
+            canceller = threading.Thread(target=cancel_epss)
+            canceller.start()
+            deadline = time.monotonic() + 5
+            while not extensions._db_write_lock._waiters and time.monotonic() < deadline:
+                time.sleep(0.01)
+            db.session.commit()
+        canceller.join(10)
+        assert not canceller.is_alive() and not errors
+        finish_source(run, "nvd")
+    data = application.test_client().get(f"/api/refresh-runs/{run}").get_json()
+    assert [(entry["source"], entry["status"]) for entry in data["coverage"]] == [
+        ("nvd", "complete"), ("epss", "cancelled"),
+    ]
+    assert data["source_status"] == {"nvd": "complete", "epss": "incomplete"}
+    assert data["status"] == "incomplete" and data["finished_at"]
+
+
+def test_target_result_updates_one_row_without_rewriting_the_run(app):
+    from sqlalchemy import event as sa_event
+    with app.app_context():
+        others = [f"CVE-2099-2{index:03d}" for index in range(5)]
+        for identifier in others:
+            Vulnerability.create_record(id=identifier, epss_score=0.1)
+        run = create_run({"epss": [CVE, *others]})
+        statements = []
+
+        def record(_conn, _cursor, statement, parameters, _context, _executemany):
+            statements.append((statement, parameters))
+
+        sa_event.listen(db.engine, "before_cursor_execute", record)
+        try:
+            with capture_source(run, "epss"):
+                for identifier in [CVE, *others]:
+                    target_result("epss", identifier)
+                db.session.commit()
+        finally:
+            sa_event.remove(db.engine, "before_cursor_execute", record)
+    writes = [statement for statement, _ in statements if statement.lstrip().upper().startswith(("UPDATE", "INSERT"))]
+    assert len([statement for statement in writes if "refresh_run_targets" in statement]) == 6
+    assert not [statement for statement in writes if "UPDATE refresh_runs" in statement]
+
+
+def test_run_list_is_paginated_in_the_database_without_loading_change_bodies(app, client):
+    from sqlalchemy import event as sa_event
+    with app.app_context():
+        for index in range(4):
+            run = create_run({"epss": [CVE]}, run_id=f"listed-{index}")
+            _change(run, 0.5 + index / 10)
+            finish_source(run, "epss")
+        other = str(uuid.uuid4())
+        create_run({"epss": []}, run_id="elsewhere", scope={"project_id": other, "variant_id": None})
+        statements = []
+
+        def record(_conn, _cursor, statement, *_args):
+            statements.append(statement)
+
+        sa_event.listen(db.engine, "before_cursor_execute", record)
+    try:
+        page = client.get("/api/refresh-runs", query_string={"project_id": PROJECT, "limit": 2, "offset": 1})
+    finally:
+        with app.app_context():
+            sa_event.remove(db.engine, "before_cursor_execute", record)
+    data = page.get_json()
+    assert data["total"] == 4
+    assert [item["run_id"] for item in data["runs"]] == ["listed-2", "listed-1"]
+    assert all("coverage" not in item and "changes" not in item for item in data["runs"])
+    assert data["runs"][0]["summary"] == {"total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0}
+    assert data["runs"][0]["status"] == "complete"
+    assert not [statement for statement in statements if "snapshot" in statement]
+    assert not [statement for statement in statements if "refresh_run_target_links.name" in statement]
+    assert client.get("/api/refresh-runs", query_string={"project_id": other}).get_json()["total"] == 1
+
+
+@pytest.mark.parametrize("args, message", [
+    (["--project", ""], "--project must not be empty"),
+    (["--project", "  "], "--project must not be empty"),
+    (["--project", "demo", "--variant", ""], "--variant must not be empty"),
+])
+def test_export_rejects_supplied_empty_scope_instead_of_broadening(app, args, message):
+    with app.app_context():
+        create_run({"epss": [CVE]}, run_id="scoped-export")
+    result = app.test_cli_runner().invoke(args=["export-refresh-changes", "--run-id", "scoped-export", *args])
+    assert result.exit_code == 2
+    assert message in result.output
+
+
+def test_reserved_latest_identity_is_rejected_so_exact_urls_never_resolve_another_run(app, client):
+    with app.app_context():
+        with pytest.raises(ValueError, match="reserved"):
+            create_run({"epss": [CVE]}, run_id="latest")
+    result = app.test_cli_runner().invoke(args=["refresh-vulnerability-data", "--run-id", "latest"])
+    assert result.exit_code == 1 and "reserved" in result.output
+    with app.app_context():
+        assert db.session.get(RefreshRun, "latest") is None

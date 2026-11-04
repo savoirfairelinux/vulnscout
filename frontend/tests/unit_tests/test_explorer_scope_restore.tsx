@@ -16,6 +16,7 @@ import Assessments from '../../src/handlers/assessments';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
 import { UnsavedGuardProvider, useUnsavedGuard } from '../../src/hooks/useUnsavedGuard';
+import RefreshRuns from '../../src/handlers/refreshRuns';
 
 class TestEventSource {
     static current: TestEventSource;
@@ -79,6 +80,15 @@ jest.mock('../../src/handlers/assessments', () => ({
     default: { list: jest.fn() },
     removeDuplicateAssessments: jest.fn((lists: unknown[][]) => lists.flat()),
     STATUS_VEX_TO_GRAPH: {},
+}));
+
+jest.mock('../../src/handlers/refreshRuns', () => ({
+    __esModule: true,
+    default: {
+        latest: jest.fn(() => Promise.resolve(null)),
+        detail: jest.fn(() => Promise.resolve(null)),
+        list: jest.fn(() => Promise.resolve({ runs: [], total: 0, limit: 20, offset: 0 })),
+    },
 }));
 
 jest.mock('../../src/components/NavigationBar', () => ({
@@ -756,5 +766,47 @@ describe('Explorer unsaved-changes guard', () => {
 
         expect(notPrevented).toBe(true);
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+});
+
+describe('Explorer refresh run identity', () => {
+    let restoreStream: () => void;
+    beforeEach(() => {
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
+        mockConfigGet.mockResolvedValue(SERVER_CONFIG);
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
+        mockVariantsListAll.mockResolvedValue([]);
+        mockPackagesList.mockResolvedValue([]);
+        mockVulnerabilitiesList.mockResolvedValue([]);
+        mockAssessmentsList.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        __reset();
+        restoreStream();
+        jest.clearAllMocks();
+    });
+
+    test('changing scope on /refresh?run=A keeps run A instead of substituting the latest run', async () => {
+        function Where() {
+            const location = useLocation();
+            return <span data-testid="location">{`${location.pathname}${location.search}`}</span>;
+        }
+        render(<Explorer />, { wrapper: ({ children }) => (
+            <MemoryRouter initialEntries={[`${ROUTES.refresh}?run=A`]}>{children}<Where /></MemoryRouter>
+        ) });
+        await waitFor(() => expect(RefreshRuns.detail).toHaveBeenCalledWith(
+            'A', { project_id: 'default-project', variant_id: 'default-variant' }, expect.anything(),
+        ));
+
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+
+        await waitFor(() => expect(RefreshRuns.detail).toHaveBeenCalledWith(
+            'A', { project_id: 'p2', variant_id: 'v9' }, expect.anything(),
+        ));
+        expect(screen.getByTestId('location')).toHaveTextContent(`${ROUTES.refresh}?run=A`);
+        expect(RefreshRuns.latest).not.toHaveBeenCalled();
+        expect(await screen.findByText(/Requested refresh run is unavailable in this scope/)).toBeInTheDocument();
     });
 });
