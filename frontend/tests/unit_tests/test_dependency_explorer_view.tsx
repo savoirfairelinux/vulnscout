@@ -35,6 +35,9 @@ test('starts with a compact tree and progressively explores full transitive path
     const user = userEvent.setup();
     const tree = within(screen.getByRole('tree', { name: 'alpha: Depends on' }));
     expect(tree.getAllByRole('treeitem')).toHaveLength(1);
+    expect(tree.getByRole('treeitem')).toHaveTextContent(/^app@1.0$/);
+    expect(screen.getByRole('group', { name: 'Variants' }).parentElement).toBe(
+        screen.getByRole('combobox', { name: 'SBOM source' }).closest('header'));
     expect(screen.queryByLabelText('Dependency diagram')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Graph' })).toBeDisabled();
     await user.click(tree.getByRole('button', { name: 'Expand app@1.0' }));
@@ -53,6 +56,24 @@ test('starts with a compact tree and progressively explores full transitive path
     expect(within(inspector.getByRole('list', { name: 'Selected dependency path' })).getAllByRole('button')).toHaveLength(2);
     await user.click(tree.getAllByRole('treeitem', { name: 'util@1.0' })[0]);
     expect(tree.getAllByRole('treeitem', { selected: true })).toHaveLength(1);
+});
+
+test.each(['missing ancestor', 'missing relationship'] as const)('refresh drops a selected path with a %s but keeps package details', async missing => {
+    const view = render(<DependencyExplorer documents={[documents[0]]} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Expand app@1.0' }));
+    await user.click(screen.getByRole('treeitem', { name: 'lib@1.0' }));
+    expect(screen.getByRole('list', { name: 'Selected dependency path' })).toBeInTheDocument();
+    const refreshed = {
+        ...documents[0],
+        packages: documents[0].packages.filter(pkg => missing !== 'missing ancestor' || pkg.id !== 'app'),
+        edges: documents[0].edges.filter(edge => edge.package_id !== 'app'),
+    };
+    view.rerender(<DependencyExplorer documents={[refreshed]} />);
+    expect(screen.queryByRole('list', { name: 'Selected dependency path' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('complementary', { name: 'Package inspector' }))
+        .getByRole('heading', { name: 'lib@1.0' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Relationship counts' })).toHaveTextContent('Required by0 direct');
 });
 
 test('searches all packages and traces dependents without losing transitive paths', async () => {

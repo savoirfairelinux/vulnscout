@@ -127,7 +127,6 @@ function ExplorerTree({ scope, direction, rootId, selected, onSelect }: Readonly
                         {row.cycle && <span className="shrink-0 rounded bg-amber-100 px-1.5 text-xs text-amber-900" title="Already in this path. Expansion stops here to avoid an infinite loop.">Cycle</span>}
                         {!row.cycle && (reverse.get(row.id)?.length ?? 0) > 1 && <span className={`shrink-0 text-xs ${mutedClass}`} title="This package appears under more than one parent.">Shared</span>}
                         {!childCount && !(reverse.get(row.id)?.length) && <span className={`shrink-0 text-xs ${mutedClass}`}>Unlinked</span>}
-                        <span className={`ml-auto shrink-0 tabular-nums ${mutedClass}`} title={`${childCount} direct ${direction}`}>{childCount || ''}</span>
                     </>}
                 </div>;
             })}
@@ -260,9 +259,16 @@ export default function DependencyExplorer({ documents, loading = false, error =
     const contextualSelection = selection?.rootId === rootId ? selection : undefined;
     const selectedScope = scopes.find(scope => scope.id === contextualSelection?.variantId && scope.packages.has(contextualSelection.id))
         ?? scopes.find(scope => rootId && scope.packages.has(rootId));
-    const selected = selectedScope && contextualSelection && selectedScope.id === contextualSelection.variantId
+    const candidate = selectedScope && contextualSelection && selectedScope.id === contextualSelection.variantId
         && selectedScope.packages.has(contextualSelection.id) ? contextualSelection
         : selectedScope && rootId ? { id: rootId, variantId: selectedScope.id } : undefined;
+    const path = candidate?.path;
+    const pathLinks = selectedScope && dependencyLinks(selectedScope, candidate?.direction ?? direction);
+    const validPath = path?.every((id, index) => selectedScope?.packages.has(id)
+        && (index === 0 || pathLinks?.get(path[index - 1])?.includes(id)));
+    const selected = candidate && path && !validPath
+        ? { id: candidate.id, variantId: candidate.variantId }
+        : candidate;
     const viewMode = selected ? mode : 'tree';
     const rootPackage = rootId ? scopes.find(scope => scope.packages.has(rootId))?.packages.get(rootId) : undefined;
     const packageCount = useMemo(() => new Set(scopes.flatMap(scope => [...scope.packages.keys()])).size, [scopes]);
@@ -291,7 +297,23 @@ export default function DependencyExplorer({ documents, loading = false, error =
         setMode('tree');
     }
     return <section aria-label="Dependency explorer" className="flex h-full min-h-0 flex-col text-gray-900 dark:text-neutral-100">
-        <header className="mb-4 flex flex-wrap items-start justify-end gap-4">
+        <header className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            {!loading && !error && allScopes.some(scope => scope.packages.size > 0) && <fieldset className="flex flex-wrap items-center gap-3 text-sm">
+                <legend className="mb-1 font-semibold">Variants</legend>
+                {allScopes.map(scope => <label key={scope.id} className="flex items-center gap-2 rounded-md border border-gray-200 px-3 py-2 dark:border-neutral-700">
+                    <input type="checkbox" checked={!hiddenVariants.has(scope.id)} onChange={() => setHiddenVariants(previous => {
+                        const next = new Set(previous);
+                        if (!next.delete(scope.id)) next.add(scope.id);
+                        return next;
+                    })} />
+                    <span>{scope.name}</span>
+                    {rootId && scope.packages.has(rootId) && <span className={`text-xs ${mutedClass}`}>
+                        {scope.recorded.has(rootId)
+                            ? `Deps: ${scope.outgoing.get(rootId)?.length ?? 0} / Req by: ${scope.incoming.get(rootId)?.length ?? 0}`
+                            : 'Not recorded'}
+                    </span>}
+                </label>)}
+            </fieldset>}
             <label className="flex min-w-0 max-w-full items-center gap-2 text-sm">SBOM source
                 <select aria-label="SBOM source" value={sourceId} className="min-w-0 max-w-72 rounded-md border border-gray-300 bg-white px-2 py-2 dark:border-neutral-600 dark:bg-neutral-800"
                     onChange={event => { setDocumentId(event.target.value); setSelection(undefined); overview(); }}>
@@ -302,22 +324,6 @@ export default function DependencyExplorer({ documents, loading = false, error =
         </header>
         {loading ? <p role="status">Loading dependency tree...</p> : error ? <div role="alert">{error} <button type="button" onClick={onRetry} className={buttonClass} aria-label="Retry loading dependencies"><FontAwesomeIcon icon={faRotateRight} /> Retry</button></div>
             : !allScopes.some(scope => scope.packages.size > 0) ? <p>No packages in this SBOM scope.</p> : <>
-                <fieldset className="mb-3 flex flex-wrap items-center gap-3 text-sm">
-                    <legend className="mb-1 font-semibold">Variants</legend>
-                    {allScopes.map(scope => <label key={scope.id} className="flex items-center gap-2 rounded-md border border-gray-200 px-3 py-2 dark:border-neutral-700">
-                        <input type="checkbox" checked={!hiddenVariants.has(scope.id)} onChange={() => setHiddenVariants(previous => {
-                            const next = new Set(previous);
-                            if (!next.delete(scope.id)) next.add(scope.id);
-                            return next;
-                        })} />
-                        <span>{scope.name}</span>
-                        {rootId && scope.packages.has(rootId) && <span className={`text-xs ${mutedClass}`}>
-                            {scope.recorded.has(rootId)
-                                ? `Deps: ${scope.outgoing.get(rootId)?.length ?? 0} / Req by: ${scope.incoming.get(rootId)?.length ?? 0}`
-                                : 'Not recorded'}
-                        </span>}
-                    </label>)}
-                </fieldset>
                 <div className={`mb-3 flex flex-wrap gap-x-5 gap-y-1 text-sm ${mutedClass}`} aria-label="Scope summary">
                     <span><strong className="text-gray-900 dark:text-neutral-100">{packageCount.toLocaleString()}</strong> packages</span>
                     <span><strong className="text-gray-900 dark:text-neutral-100">{relationshipCount.toLocaleString()}</strong> recorded relationships</span>
