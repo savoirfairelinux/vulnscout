@@ -72,6 +72,14 @@ def file_metadata(record: dict, spdx3: bool) -> dict:
             **portable,
         }
     result = {key: value for key, value in portable.items() if key in (SPDX3_FIELDS if spdx3 else SPDX2_FIELDS)}
+    if spdx3 and "verifiedUsing" in result:
+        # Old imports may still have dangling graph references; retain those only as historical evidence.
+        result["verifiedUsing"] = [
+            {key: value for key, value in item.items() if key not in {"spdxId", "@id"}}
+            for item in result["verifiedUsing"] if isinstance(item, dict)
+        ]
+        if not result["verifiedUsing"]:
+            result.pop("verifiedUsing")
     if spdx3 and "verifiedUsing" not in result:
         hashes = [
             {"type": "Hash", "algorithm": HASH_ALGORITHMS[item["algorithm"]], "hashValue": item["checksumValue"]}

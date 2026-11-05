@@ -31,7 +31,8 @@ SPDX 2.3's schema requires a nonempty checksum list for a native `File`; the
 normative file validator additionally requires SHA1 and a relative file path.
 Only recorded files satisfying these requirements are emitted as native SPDX 2
 file objects. Other records (including hashless records, SHA256-only records,
-and absolute paths) are retained in a standard document `OTHER` annotation
+absolute paths, and licenses referencing definitions or external documents
+unavailable in the export) are retained in a standard document `OTHER` annotation
 whose comment begins `VulnScout recorded inventory v1:`. Its JSON payload stores
 the recorded file properties and associated package references. These private
 file identifiers are not referenced by native document relationships.
@@ -46,6 +47,11 @@ SPDX 2 uses labelled `OTHER` relationships rather than asserting package
 file analysis (`filesAnalyzed` remains false); associations to annotation-only
 records stay inside that annotation. Recorded SPDX 2
 checksums and SPDX 3 hashes are translated when their algorithms are supported.
+SPDX 3 Hash references are resolved during import within the scan (blank-node
+identifiers remain document-local) and persisted as self-contained integrity
+metadata, so export does not depend on the original graph. Unresolved references
+from older imports are retained only in the evidence comment, not emitted as
+dangling native integrity references.
 Native file types, licenses, and other supported properties are retained in the
 matching format; properties without a native equivalent are retained in the
 labelled comment metadata.

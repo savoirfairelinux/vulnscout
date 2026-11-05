@@ -1029,3 +1029,115 @@ def test_spdx2_hashless_and_sha256_only_records_are_valid_annotation_evidence(ap
     private_ids = {file["SPDXID"] for file in files}
     assert all(relation["relatedSpdxElement"] not in private_ids for relation in output["relationships"])
     assert len(relationships) == 3
+
+
+@pytest.mark.parametrize("format", ["json", "xml"])
+@pytest.mark.parametrize("license_field", ["licenseConcluded", "licenseInfoInFiles"])
+@pytest.mark.parametrize("external", [False, True])
+def test_spdx2_custom_file_licenses_remain_valid_inventory_evidence(
+    app, tmp_path, format, license_field, external,
+):
+    from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+    from src.helpers.export_files import SPDX2_INVENTORY_PREFIX
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.spdx import SPDX
+
+    documents = _spdx2_documents()
+    source_document = documents["z-source.spdx.json"]
+    file = source_document["files"][0]
+    file["checksums"].append({"algorithm": "SHA1", "checksumValue": "c" * 40})
+    license = "LicenseRef-Proprietary"
+    if external:
+        source_document["externalDocumentRefs"] = [{
+            "externalDocumentId": "DocumentRef-licenses", "spdxDocument": "https://example.org/licenses",
+            "checksum": {"algorithm": "SHA1", "checksumValue": "d" * 40},
+        }]
+        license = "DocumentRef-licenses:" + license
+    else:
+        source_document["hasExtractedLicensingInfos"] = [{
+            "licenseId": license, "extractedText": "Custom license terms",
+        }]
+    file[license_field] = [license] if license_field == "licenseInfoInFiles" else license
+    variant, _ = _import(tmp_path, documents)
+    controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    view = SPDX(controllers)
+    output = view.output_as_json() if format == "json" else view.output_as_xml()
+    path = tmp_path / f"export.spdx.{format}"
+    path.write_text(output)
+    parser = SPDX(ControllersCache())
+    parser.load_from_file(str(path))
+    assert validate_full_spdx_document(parser.sbom) == []
+    assert not parser.sbom.files
+    annotation = next(annotation for annotation in parser.sbom.annotations
+                      if annotation.annotation_comment.startswith(SPDX2_INVENTORY_PREFIX))
+    inventory = json.loads(annotation.annotation_comment[len(SPDX2_INVENTORY_PREFIX):])
+    assert inventory["files"][0][license_field] == file[license_field]
+    assert len(inventory["relationships"]) == 1
+
+
+@pytest.mark.parametrize("version", [2, 3, "xml"])
+@pytest.mark.parametrize("identifier", ["spdxId", "@id"])
+@pytest.mark.parametrize("companion", [False, True])
+def test_referenced_spdx3_hashes_are_persisted_and_exported_self_contained(
+    app, tmp_path, version, identifier, companion,
+):
+    documents = _documents()
+    source = documents["z-source.jsonld"]["@graph"]
+    file = next(node for node in source if node.get("type") == "software_File")
+    reference = "https://example.org/evidence/hash" if companion else "_:hash0"
+    file["verifiedUsing"] = [reference]
+    hash = {"type": "Hash", identifier: reference, "algorithm": "sha1", "hashValue": "c" * 40}
+    target = documents["a-build.jsonld"]["@graph"] if companion else source
+    target.append(hash)
+    if not companion:
+        documents["a-build.jsonld"]["@graph"].append({**hash, "hashValue": "d" * 40})
+    variant, scan = _import(tmp_path, documents)
+    properties = _package(app, variant)["source_files"][0]["properties"]
+    assert properties["verifiedUsing"] == [{"type": "Hash", "algorithm": "sha1", "hashValue": "c" * 40}]
+    # Export must use persisted metadata, even after input files are removed.
+    for document in SBOMDocument.get_by_scan(scan.id):
+        Path(document.path).unlink()
+    if version == "xml":
+        from spdx_tools.spdx.jsonschema.document_converter import DocumentConverter
+        from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+        from src.helpers.export_scope import compute_export_scope
+        from src.views.spdx import SPDX
+
+        controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+        controllers.packages._preload_cache()
+        path = tmp_path / "export.spdx.xml"
+        path.write_text(SPDX(controllers).output_as_xml())
+        parser = SPDX(ControllersCache())
+        parser.load_from_file(str(path))
+        assert validate_full_spdx_document(parser.sbom) == []
+        output = DocumentConverter().convert(parser.sbom)
+        version = 2
+    else:
+        output = _export_files(variant, version)
+    exported = next(file for file in _exported_file_records(output, version)
+                    if file.get("fileName", file.get("name")) == "src/enabled.c")
+    if version == 2:
+        assert exported["checksums"] == [{"algorithm": "SHA1", "checksumValue": "c" * 40}]
+        assert exported in output["files"]
+    else:
+        assert exported["verifiedUsing"] == properties["verifiedUsing"]
+        assert reference not in exported["verifiedUsing"]
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_unresolved_hash_references_are_not_emitted_as_native_integrity(app, tmp_path, version):
+    from src.helpers.export_files import EVIDENCE_PREFIX
+
+    documents = _documents()
+    source = documents["z-source.jsonld"]["@graph"]
+    file = next(node for node in source if node.get("type") == "software_File")
+    file["verifiedUsing"] = ["_:missing"]
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, version)
+    exported = next(file for file in _exported_file_records(output, version)
+                    if file.get("fileName", file.get("name")) == "src/enabled.c")
+    assert "verifiedUsing" not in exported
+    assert "checksums" not in exported
+    evidence = json.loads(exported["comment"][len(EVIDENCE_PREFIX):])
+    assert evidence["properties"]["verifiedUsing"] == ["_:missing"]
