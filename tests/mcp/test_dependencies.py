@@ -249,7 +249,8 @@ def test_real_server_registers_dependency_tools(monkeypatch):
     monkeypatch.delenv("VULNSCOUT_AGENT_SCOPE", raising=False)
     server = create_server(BASE_URL)
     tools = asyncio.run(server.list_tools())
-    assert {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies"} <= {
+    assert {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies",
+            "get_package_source_files"} <= {
         tool.name for tool in tools
     }
 
@@ -284,3 +285,10 @@ def test_cve_assessment_integrates_dependency_evidence(tools):
         "SBOM declarations do not prove runtime usage", "under_investigation",
         "backports", "Phase 5",
     ))
+    for name in ("cve-assessment", "assessment-review", "sbom-dependencies"):
+        text = " ".join((root / f".github/skills/{name}/SKILL.md").read_text().split())
+        assert all(term in text for term in (
+            "get_package_source_files", "compiled_sources_complete", "build_targets", "flags",
+            "defines", "path_edges", "relationship_type", "lifecycle_scope", "unknown",
+            "File presence does not prove compilation",
+        ))

@@ -67,6 +67,8 @@ def _resolve_target(
             return None, None, ({"error": f"No finding for package {package!r}"}, 400)
         finding_uuid = finding.id
 
+    if finding_uuid is None:
+        return None, None, ({"error": "Internal error"}, 500)
     if (variant_uuid, finding_uuid) not in set(assessment.targets):
         return None, None, ({"error": "Not a target of this assessment"}, 400)
     return variant_uuid, finding_uuid, None

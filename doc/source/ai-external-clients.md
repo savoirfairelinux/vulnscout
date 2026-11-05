@@ -111,6 +111,7 @@ Once configured, the agent can call these assessment and context tools
 | `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
 | `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
 | `list_dependency_documents` / `list_dependency_packages` / `get_package_dependencies` | Inspect SBOM documents, package inventories and dependency relationships |
+| `get_package_source_files` | Paginate an exact package's variant-scoped recorded files and build associations; unknown coverage is not absence |
 
 ## Use the cve-assessment Skill
 

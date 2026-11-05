@@ -34,7 +34,7 @@ READ_TOOLS = (
     "get_merged_context", "get_project_context", "get_custom_assessment",
     "list_custom_assessments",
     "list_codebase_files", "read_codebase_file", "search_codebase",
-    "list_dependency_documents", "list_dependency_packages", "get_package_dependencies",
+    "list_dependency_documents", "list_dependency_packages", "get_package_dependencies", "get_package_source_files",
     "get_ai_context_form_guide",
 )
 WRITE_TOOLS = (
@@ -703,6 +703,13 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
                 "Use exact returned package IDs, follow next_offset to completion, and max_depth=0 for "
                 "transitive dependencies. Keep variants and per-source version evidence separate. "
                 "SBOM declarations do not prove runtime usage; unrecorded relationships do not prove absence. "
+                "For CVE assessment or review, also call get_package_source_files for each exact candidate. "
+                "Use recorded files/builds, per-document package build_targets (target/language flags and defines), "
+                "and path_edges declarations (relationship_type/lifecycle_scope and original provenance). "
+                "BUILD/RUNTIME scope is declared evidence, not proof of deployment or reachability. "
+                "File presence does not prove compilation; missing files or flags remain unknown. "
+                "Correlate vulnerable code and configuration to the same variant, document and build target; "
+                "do not infer not_affected from incomplete evidence. "
                 "For lifecycle/LTS/EOL analysis, distinguish upstream support from vendor/distribution "
                 "backports and entitlement. Cite authoritative policy URLs and dates checked from available "
                 "evidence; if current evidence or release identity is missing, report unknown, never guess. "

@@ -204,6 +204,41 @@ def test_real_zephyr_compiler_metadata_survives_ingestion_and_api(app, tmp_path)
     assert next(item for item in stored if item['id'] == target['id'])['languages'] == target['languages']
 
 
+def test_real_zephyr_evidence_reaches_mcp_without_flattening_targets(app, tmp_path, monkeypatch):
+    import httpx
+
+    from vulnscout_mcp.client import VulnScoutClient
+    from vulnscout_mcp.tools.dependencies import _packages_impl, _source_files_impl, _traverse_impl
+
+    sample = Path(__file__).resolve().parents[2] / 'example' / 'zephyr' / 'build.jsonld'
+    variant_id, _ = _scan(app, tmp_path, 'mcp-evidence', json.loads(sample.read_text()))
+    variant_id = str(variant_id)
+    http = app.test_client()
+
+    def get(client, url, *, params):
+        response = http.get(url.removeprefix('http://vulnscout.test'), query_string=params)
+        return httpx.Response(response.status_code, json=response.json)
+
+    monkeypatch.setattr(httpx.Client, 'get', get)
+    client = VulnScoutClient('http://vulnscout.test')
+    packages = json.loads(_packages_impl(client, variant_id, 'mbedtls@', None, 0, 100))
+    occurrence = packages['items'][0]['occurrences'][0]
+    target = next(item for item in occurrence['build_targets'] if item['name'] == 'mbedtls')
+    assert target['package_ids'] == ['mbedtls@']
+    assert '-DMBEDTLS_CONFIG_FILE="config-mbedtls.h"' in target['languages'][0]['defines'][0]
+    files = json.loads(_source_files_impl(client, variant_id, 'mbedtls@', 0, 500))
+    assert files['files_recorded'] is True
+    # This build document has compiler targets but lacks the companion file inventory.
+    assert files['source_file_count'] == 0
+    assert files['items'] == []
+    assert files['compiled_sources_complete'] is False
+    dependencies = json.loads(_traverse_impl(client, variant_id, 'mbedtls@', 'dependents', 0, None, 0, 100))
+    assert dependencies['root']['occurrences'][0]['build_targets'] == occurrence['build_targets']
+    assert dependencies['items']
+    assert all(edge['declarations'] for item in dependencies['items']
+               for hop in item['path_edges'] for edge in hop)
+
+
 def test_compiler_endpoint_summary_details_and_empty_values(app, tmp_path):
     variant_id, scan_id = _scan(app, tmp_path, 'compiler-endpoint', _spdx3())
     document = SBOMDocument.get_by_scan(scan_id)[0]
