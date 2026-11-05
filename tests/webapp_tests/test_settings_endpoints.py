@@ -845,11 +845,11 @@ def _make_spdx_json(name="test-pkg", version="1.0.0"):
     return json.dumps(doc).encode("utf-8")
 
 
-def _make_spdx_tar_archive(member_name="archive.spdx.json", package_name="archive-pkg"):
+def _make_spdx_tar_archive(member_name="archive.spdx.json", package_name="archive-pkg", mode="w"):
     """Return bytes for a tar archive containing one SPDX JSON document."""
     archive = io.BytesIO()
     payload = _make_spdx_json(package_name, "1.0.0")
-    with tarfile.open(fileobj=archive, mode="w") as tar:
+    with tarfile.open(fileobj=archive, mode=mode) as tar:
         info = tarfile.TarInfo(name=member_name)
         info.size = len(payload)
         tar.addfile(info, io.BytesIO(payload))
@@ -946,7 +946,7 @@ class TestSBOMUpload:
         assert len(queued_import["calls"]) == 1
         assert queued_import["calls"][0]["refresh_sources"] == {"epss", "euvd"}
 
-    @pytest.mark.parametrize("archive_suffix", [None, ".tar", ".tar.gz", ".tgz", ".tar.zst"])
+    @pytest.mark.parametrize("archive_suffix", [None, ".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.zst"])
     def test_upload_jsonld_companions_parses_packages_and_cross_document_dependencies(
             self, app, client, monkeypatch, upload_temp_files, archive_suffix):
         from src.models import SBOMDocument
@@ -979,7 +979,7 @@ class TestSBOMUpload:
         files = [(io.BytesIO(json.dumps(document).encode()), name) for name, document in documents]
         if archive_suffix:
             archive = io.BytesIO()
-            mode = "w:gz" if archive_suffix in {".tar.gz", ".tgz"} else "w"
+            mode = {".tar.gz": "w:gz", ".tgz": "w:gz", ".tar.xz": "w:xz"}.get(archive_suffix, "w")
             with tarfile.open(fileobj=archive, mode=mode) as tar:
                 for payload, name in files:
                     info = tarfile.TarInfo(name=f"spdx/{name}")
@@ -1331,7 +1331,8 @@ class TestSBOMUpload:
         assert "Could not parse" in resp.get_json()["error"]
         assert queued_import["calls"] == []
 
-    def test_upload_tar_archive_is_extracted(self, queued_import, client):
+    @pytest.mark.parametrize("suffix,mode", [(".tar", "w"), (".tar.xz", "w:xz"), (".TAR.XZ", "w:xz")])
+    def test_upload_tar_archive_is_extracted(self, queued_import, client, suffix, mode):
         """A tar archive containing SPDX JSON files is accepted and extracted."""
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
@@ -1339,7 +1340,7 @@ class TestSBOMUpload:
         data = {
             "project_id": pid,
             "variant_id": vid,
-            "files": (io.BytesIO(_make_spdx_tar_archive()), "sbom.tar"),
+            "files": (io.BytesIO(_make_spdx_tar_archive(mode=mode)), f"sbom{suffix}"),
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 202
@@ -1347,20 +1348,21 @@ class TestSBOMUpload:
         assert len(queued_import["calls"]) == 1
         assert len(queued_import["calls"][0]["file_paths"]) == 1
 
-    def test_upload_empty_tar_archive_rejected(self, queued_import, client):
+    @pytest.mark.parametrize("suffix,mode", [(".tar", "w"), (".tar.xz", "w:xz")])
+    def test_upload_empty_tar_archive_rejected(self, queued_import, client, suffix, mode):
         """A tar archive without SPDX JSON files is rejected."""
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
 
         empty_archive = io.BytesIO()
-        with tarfile.open(fileobj=empty_archive, mode="w"):
+        with tarfile.open(fileobj=empty_archive, mode=mode):
             pass
         empty_archive.seek(0)
 
         data = {
             "project_id": pid,
             "variant_id": vid,
-            "files": (empty_archive, "empty.tar"),
+            "files": (empty_archive, f"empty{suffix}"),
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400
@@ -2928,15 +2930,16 @@ class TestCopyAssessmentsMatchModes:
 
 class TestSBOMUploadEdgeCases:
 
-    def test_upload_corrupt_archive_returns_400(self, upload_temp_files, client):
-        """A file with a .tar extension that is not a valid tar archive triggers a 400."""
+    @pytest.mark.parametrize("suffix", [".tar", ".tar.xz"])
+    def test_upload_corrupt_archive_returns_400(self, upload_temp_files, client, suffix):
+        """An invalid tar archive triggers a 400."""
         pid = _get_project_id(client)
         vid = _get_variant_id(client, pid)
         corrupt = b"this is definitely not a tar archive"
         data = {
             "project_id": pid,
             "variant_id": vid,
-            "files": (io.BytesIO(corrupt), "sbom.tar"),
+            "files": (io.BytesIO(corrupt), f"sbom{suffix}"),
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
         assert resp.status_code == 400

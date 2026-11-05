@@ -26,6 +26,10 @@ requires confirmation. Export important review data before deleting it.
 
 ## SBOM Imports
 
+Upload individual SBOM files or SPDX archives (`.tar`, `.tar.gz`, `.tgz`,
+`.tar.xz`, `.tar.zst`) containing `.spdx.json` or `.jsonld` companion documents.
+All companion documents in an archive are imported together into the selected variant.
+
 SBOM uploads on a variant page default to **Complete refresh**. After parsing,
 VulnScout refreshes NVD, EPSS, GHSA, and ENISA EUVD metadata for vulnerabilities
 encountered in the import. This can make external provider requests and lengthen

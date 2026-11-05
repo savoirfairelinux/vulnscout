@@ -1915,6 +1915,8 @@ Follow the returned `op_id` in `GET /api/events/stream` (or `GET /api/operations
 
 The required project/variant must exist and the variant must belong to the project (`404` for missing entities, `400` for mismatches).
 Optional `format` overrides SBOM format detection. Multiple files/companion SPDX archive members form one scan.
+SPDX archives may use `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, or `.tar.zst` and must contain
+`.spdx.json` or `.jsonld` documents.
 Omitting `refresh_sources` defaults to EPSS; send `none` alone for no refresh. Unknown refresh sources return `400`.
 
 ---

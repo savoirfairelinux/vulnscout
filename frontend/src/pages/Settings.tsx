@@ -1484,7 +1484,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
               <div className={inputClass}>
                 <FileInputButton
                   key={importFiles.length}
-                  accept=".json,.jsonld,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
+                  accept=".json,.jsonld,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.xz,.tar.zst"
                   onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
                   disabled={importBusy}
                   aria-labelledby="sbom-files-label"
@@ -1496,7 +1496,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
               <p className="text-xs text-zinc-400">
                 Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto), SPDX 3 JSON-LD
                 (<code>.jsonld</code>), or tar archives
-                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.zst</code>)
+                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.xz</code>, <code>.tar.zst</code>)
                 containing SPDX 2 JSON or SPDX 3 JSON-LD companion documents.
               </p>
             </div>
