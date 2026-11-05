@@ -28,6 +28,7 @@ from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
 from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
 from spdx_tools.spdx.model.spdx_none import SpdxNone
 from spdx_tools.spdx.validation.file_validator import validate_file
+from spdx_tools.spdx.validation.license_expression_validator import validate_license_expression
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from io import StringIO
@@ -349,6 +350,12 @@ class SPDX:
             try:
                 parsed = FileParser().parse_file(file)
                 native = parsed is not None and not validate_file(parsed, "SPDX-2.3")
+                if native and parsed is not None:
+                    # File-only validation cannot detect references missing from the new document.
+                    native = not any(
+                        validate_license_expression(license, self.sbom, ref)
+                        for license in [parsed.license_concluded, *parsed.license_info_in_file]
+                    )
             except (SPDXParsingError, TypeError, ValueError):
                 native = False
             destination = converter.recorded_files if native else annotated_files
