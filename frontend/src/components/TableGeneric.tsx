@@ -15,7 +15,7 @@ declare module '@tanstack/react-table' {
 }
 
 // These cells pad themselves so the whole cell stays clickable.
-const unpaddedCellColumnIds = new Set(['id', 'dependencies', 'source_files']);
+const unpaddedCellColumnIds = new Set(['id', 'dependencies', 'source_files', 'compiler_flags']);
 
 /* tslint:disable:no-explicit-any */
 type Props<DataType> = {
