@@ -242,7 +242,7 @@ retrying a write.
 - `--timeout` limits each agent turn (positive integer, default 600 s). `--model` overrides `AI_MODEL`. `--dry-run` lists the targets without calling the AI. An expired or invalid GitHub Copilot token stops the run before the first review.
 - Target outcomes: `reviewed` (a review for the pinned assessment content was saved), `skipped_fresh`, `planned` (dry run), and the failing ones `changed` (the assessment was edited, retargeted or deleted during the run; run it again), `no_write` (the agent saved no review), `failed`, `timeout`, `interrupted`.
 - Assessment outcomes: `planned`, `skipped` (every target fresh), `reviewed`, `partial` (some targets reviewed) and `failed`.
-- Exit codes: **0** when every selected target is reviewed, already fresh (skipped) or planned (`--dry-run`); **1** on any resolution or usage error (a missing `--project`, using both or neither of `--assessment-id` and `--cve`, a malformed ID, an invalid or missing option value such as `--timeout 0`, an unknown project or variant; with `--json` these errors go to stderr and stdout stays empty; the `vulnscout` wrapper and the `flask ai-review` command both exit 1 for these) or any target with a failing outcome (`changed`, `no_write`, `failed`, `timeout`, `interrupted`).
+- Exit codes: **0** when every selected target is reviewed, already fresh (skipped) or planned (`--dry-run`) and the run was not interrupted; **1** on any resolution or usage error (a missing `--project`, using both or neither of `--assessment-id` and `--cve`, a malformed ID, an invalid or missing option value such as `--timeout 0`, an unknown project or variant; with `--json` these errors go to stderr and stdout stays empty; the `vulnscout` wrapper and the `flask ai-review` command both exit 1 for these), any target with a failing outcome (`changed`, `no_write`, `failed`, `timeout`, `interrupted`), or an interrupted run.
 - `--json` prints the report on stdout; progress, including container startup, goes to stderr. Its shape is:
 
   ```json
@@ -250,6 +250,7 @@ retrying a write.
     "model": "gpt-5",
     "scope": {"project": "demo", "variants": ["x86"]},
     "ignored_non_custom": 0,
+    "interrupted": false,
     "results": [
       {
         "assessment_id": "3f2b6c1e-0000-4000-8000-000000000001",
@@ -270,8 +271,8 @@ retrying a write.
   }
   ```
 
-  `scope.variants` is `null` when every variant of the project is selected. `counts` is per target: `failed` counts the failing outcomes above. `review` is `null` unless the target was reviewed; its `status` is the VEX status the agent concluded and `verdict` is `agrees` or `differs` relative to the assessment. `error` is the failure message of a failing target.
-- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run after cancelling the current agent turn: the remaining targets are reported as `interrupted` and the summary is still printed, with exit code 1. Press Ctrl-C a second time to stop immediately without a summary.
+  `scope.variants` is `null` when every variant of the project is selected. `interrupted` is `true` when the run was stopped by Ctrl-C or SIGTERM. `counts` is per target: `failed` counts the failing outcomes above. `review` is `null` unless the target was reviewed; its `status` is the VEX status the agent concluded and `verdict` is `agrees` or `differs` relative to the assessment. `error` is the failure message of a failing target.
+- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run after cancelling the current agent turn: reviews already saved stay `reviewed`, the remaining targets are reported as `interrupted` and the summary is still printed, with `Interrupted.` (`"interrupted": true` in `--json`) and exit code 1. Press Ctrl-C a second time to stop immediately without a summary.
 - The web **Review with AI** button is unchanged; CLI and web reviews of a target replace each other.
 
 ## AI Context page

@@ -363,6 +363,7 @@ def test_one_turn_per_variant_with_scoped_review_targets(app, ids, monkeypatch):
     for item in entry["targets"]:
         assert item["outcome"] == "reviewed" and set(item["review"]) == {"id", "status", "verdict"}
     assert report["counts"] == {"reviewed": 2, "skipped": 0, "failed": 0}
+    assert report["interrupted"] is False
     assert report["model"] == "test-model" and entry["usage"]["input_tokens"] == 20
 
 
@@ -674,6 +675,28 @@ def test_interrupt_signal_between_assessments_marks_the_rest_not_started(app, id
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
     assert result.exit_code == 1 and len(calls) == 1
     assert sorted(e["targets"][0]["outcome"] for e in _report(result)["results"]) == ["interrupted", "reviewed"]
+
+
+def test_interrupt_after_the_last_turn_saved_its_reviews_still_fails(app, ids, monkeypatch):
+    with app.app_context():
+        aid = _custom(ids, ["x86"])
+
+    def write_then_interrupt(call):
+        _write_all(call)
+        raise KeyboardInterrupt
+
+    _fake_reply(monkeypatch, write_then_interrupt)
+    result = _invoke(app, "--project", "demo", "--assessment-id", aid, "--json")
+    assert result.exit_code == 1
+    report = _report(result)
+    assert report["interrupted"] is True
+    assert _outcomes(report) == {"x86/openssl@3.0": "reviewed"}
+    assert report["counts"] == {"reviewed": 1, "skipped": 0, "failed": 0}
+    assert "Interrupted; reporting completed reviews." in result.stderr
+
+    text = _invoke(app, "--project", "demo", "--assessment-id", aid, "--re-review")
+    assert text.exit_code == 1
+    assert "Reviewed 1, skipped 0, failed 0.\nInterrupted." in text.stdout
 
 
 def test_long_target_lists_are_split_into_labelled_batches(app, ids, monkeypatch):

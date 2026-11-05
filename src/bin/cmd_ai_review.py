@@ -221,13 +221,13 @@ def _review(result: ReviewResult, label: str, credentials, model: str, path, api
                 raise KeyboardInterrupt
 
 
-def _run(results: list[ReviewResult], model: str | None, timeout: int) -> str | None:
-    """Review every pending target; returns the model used."""
+def _run(results: list[ReviewResult], model: str | None, timeout: int) -> tuple[str | None, bool]:
+    """Review every pending target; returns the model used and whether the run was interrupted."""
     from ..routes import agent, agent_skills
 
     pending = [r for r in results if any(t.outcome == "pending" for t in r.targets)]
     if not pending:
-        return _ai_runner.configured_model(model)
+        return _ai_runner.configured_model(model), False
     credentials, selected, path = _ai_runner.load_agent(model)
     if not get_bool_env("VERBOSE_MODE"):
         # The SDK logs every failed request with a traceback; the summary already reports the error.
@@ -235,6 +235,8 @@ def _run(results: list[ReviewResult], model: str | None, timeout: int) -> str | 
     if credentials.token and not credentials.provider:
         _ai_runner.check_github_sign_in(credentials.token)
     turn = ReviewTurn()
+    # Run-level: an interrupt after the last turn saved its reviews leaves no failing target.
+    interrupted = False
     with _ai_runner.private_api(turn.guard, turn.record) as api_url:
         try:
             for number, result in enumerate(pending, 1):
@@ -242,6 +244,7 @@ def _run(results: list[ReviewResult], model: str | None, timeout: int) -> str | 
                 if _ai_runner.interrupted.is_set():
                     raise KeyboardInterrupt
         except KeyboardInterrupt:
+            interrupted = True
             echo("Interrupted; reporting completed reviews.", role="warning", err=True)
             for result in pending:
                 for item in result.targets:
@@ -249,18 +252,19 @@ def _run(results: list[ReviewResult], model: str | None, timeout: int) -> str | 
                         item.outcome, item.error = "interrupted", "Not started."
         except (agent.UnavailableModelError, agent_skills.AgentSkillError) as exc:
             raise click.ClickException(str(exc)) from exc
-    return selected
+    return selected, interrupted
 
 
 def _report(results: list[ReviewResult], model: str | None, scope: dict[str, Any], ignored: int,
-            as_json: bool) -> None:
+            interrupted: bool, as_json: bool) -> None:
     targets = [t for r in results for t in r.targets]
     counts = {"reviewed": sum(t.outcome == "reviewed" for t in targets),
               "skipped": sum(t.outcome == "skipped_fresh" for t in targets),
               "failed": sum(t.outcome in FAILING_TARGET_OUTCOMES for t in targets)}
     if as_json:
         click.echo(json.dumps({"model": model, "scope": scope, "ignored_non_custom": ignored,
-                               "results": [r.to_dict() for r in results], "counts": counts}, indent=2))
+                               "interrupted": interrupted, "results": [r.to_dict() for r in results],
+                               "counts": counts}, indent=2))
         return
     for r in results:
         done = sum(t.outcome in ("reviewed", "skipped_fresh") for t in r.targets)
@@ -277,6 +281,8 @@ def _report(results: list[ReviewResult], model: str | None, scope: dict[str, Any
     if ignored:
         echo(f"Ignored {ignored} non-custom assessment(s).")
     echo(f"Reviewed {counts['reviewed']}, skipped {counts['skipped']}, failed {counts['failed']}.")
+    if interrupted:
+        echo("Interrupted.", role="error")
     if model:
         echo(f"Model: {model}")
 
@@ -371,10 +377,11 @@ def _ai_review(assessment_ids, cve_ids, project_name, variant_names, re_review, 
     results = [ReviewResult(s, [TargetResult(t, "skipped_fresh" if t.review_state == "fresh" and not re_review
                                              else ("planned" if dry_run else "pending"))
                                 for t in s.targets]) for s in selections]
+    interrupted = False
     if dry_run:
         model = _ai_runner.configured_model(model)
     else:
-        model = _run(results, model, timeout)
-    _report(results, model, report_scope, ignored, as_json)
-    if any(t.outcome in FAILING_TARGET_OUTCOMES for r in results for t in r.targets):
+        model, interrupted = _run(results, model, timeout)
+    _report(results, model, report_scope, ignored, interrupted, as_json)
+    if interrupted or any(t.outcome in FAILING_TARGET_OUTCOMES for r in results for t in r.targets):
         raise SystemExit(1)
