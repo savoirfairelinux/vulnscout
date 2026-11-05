@@ -13,6 +13,7 @@ import React from 'react';
 
 import Vulnerabilities, { type Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
+import RefreshControls from '../../src/components/RefreshControls';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
@@ -1794,8 +1795,10 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Open the Refresh tab to update them.'
         );
+        expect(screen.getByRole('link', { name: 'Refresh tab' })).toHaveAttribute('href', '/refresh');
+        expect(screen.queryByTestId('refresh-dropdown-toggle')).not.toBeInTheDocument();
     });
 
     test('hides the EU KEV banner after a refresh even when no vulnerability is known-exploited', async () => {
@@ -1836,7 +1839,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Open the Refresh tab to update them.'
         );
     });
 
@@ -1847,7 +1850,7 @@ describe('Vulnerability Table', () => {
         const alerts = await screen.findAllByRole('alert');
         expect(alerts).toHaveLength(1);
         expect(alerts[0]).toHaveTextContent(
-            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Open the Refresh tab to update them.'
         );
     });
 
@@ -3112,7 +3115,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows NVD completion banner via phase transition (fast-complete path)', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('nvd', 'running', 5, 10);
             sendRefresh('nvd', 'done', 10, 10);
 
@@ -3131,7 +3134,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows NVD cancelled banner when phase transitions to cancelled', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('nvd', 'running', 3, 10);
             sendRefresh('nvd', 'cancelled', 3, 10);
 
@@ -3150,7 +3153,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS completion banner via phase transition (fast-complete path)', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('epss', 'running', 25, 50);
             sendRefresh('epss', 'done', 50, 50);
 
@@ -3169,7 +3172,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS cancelled banner when phase transitions to cancelled', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('epss', 'running', 5, 20);
             sendRefresh('epss', 'cancelled', 5, 20);
 
@@ -3188,7 +3191,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('does not show EPSS banner on first load when phase is already completed', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('epss', 'done', 50, 50);
 
             await act(async () => { await Promise.resolve(); });
@@ -3202,7 +3205,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('does not show NVD banner on first load when phase is already completed', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('nvd', 'done', 10, 10);
 
             await act(async () => { await Promise.resolve(); });
@@ -3216,7 +3219,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS completion banner when refresh completes between polls (started_at changes)', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('epss', 'running', 25, 50);
             sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
 
@@ -3235,7 +3238,7 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
     test('shows EPSS completion banner for a re-triggered fast refresh (started_at changes)', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('epss', 'running', 10, 50, '2026-06-10T09:00:00Z');
             sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
 
@@ -3378,7 +3381,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
     test('banner can be dismissed via close button', async () => {
         jest.useFakeTimers();
         try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
             sendRefresh('nvd', 'running', 5, 10);
             sendRefresh('nvd', 'done', 10, 10);
 
@@ -3603,13 +3606,29 @@ describe('Status helper, banner close, package filter, modal navigation, first s
     });
 
     test('updates refresh progress through SSE without polling deleted endpoints', async () => {
-        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
         sendRefresh('nvd', 'running', 1, 10);
         sendRefresh('nvd', 'running', 5, 10);
+        expect(screen.getByRole('status')).toHaveTextContent('NVD 5/10');
         sendRefresh('nvd', 'done', 10, 10);
 
         expect(await screen.findByText(/NVD refresh complete/i)).toBeInTheDocument();
         expect(fetchMock.mock.calls.some(([url]) => /\/api\/(nvd|epss|ghsa|euvd)\/progress/.test(String(url)))).toBe(false);
+    });
+
+    test('refresh controls retain provider failures and cancellation outcomes and update loaded data', async () => {
+        const complete = jest.fn();
+        render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} onRefreshComplete={complete} />);
+        sendRefresh('nvd', 'running', 1, 10);
+        sendRefresh('epss', 'running', 2, 10);
+        expect(screen.getByRole('status')).toHaveTextContent('NVD 1/10 · EPSS 2/10');
+        sendRefresh('nvd', 'error', 1, 10);
+        sendRefresh('epss', 'cancelled', 2, 10);
+        expect(await screen.findByText(/NVD refresh failed:/)).toHaveTextContent('EPSS refresh cancelled (2/10 CVEs)');
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
+        sendRefresh('nvd', 'running', 0, 10, '2026-06-10T11:00:00Z');
+        expect(screen.queryByText(/NVD refresh failed:/)).not.toBeInTheDocument();
     });
 
     test('click inside status helper dropdown does not close it (stopPropagation)', async () => {

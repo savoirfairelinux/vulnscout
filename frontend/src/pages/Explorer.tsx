@@ -726,7 +726,6 @@ function Explorer() {
                         compareOperation={currentOperation}
                         variantIds={currentVariantIds}
                         multiOperation={currentMultiOperation}
-                        onRefreshComplete={handleRefreshComplete}
                         missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
                         onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
                         missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
@@ -745,6 +744,9 @@ function Explorer() {
                 } />
                 <Route path={ROUTES.refresh} element={
                     <RefreshOverview key={`${currentProjectId}-${currentVariantId}`} projectId={currentProjectId} variantId={currentVariantId}
+                        vulnerabilities={vulns} onRefreshComplete={handleRefreshComplete}
+                        baseVariantId={currentBaseVariantId} compareOperation={currentOperation}
+                        variantIds={currentVariantIds} multiOperation={currentMultiOperation}
                         comparisonScope={!!currentBaseVariantId || (currentVariantIds?.length ?? 0) > 1} dataRevision={dataRevision} />
                 } />
                 <Route path={ROUTES.review} element={

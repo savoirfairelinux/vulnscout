@@ -1,8 +1,13 @@
 # Refresh Changes
 
 Open **Refresh** in the navigation bar to inspect persisted vulnerability-data
-refresh runs. Start a refresh from **Vulnerabilities → Refresh Vulnerability
-Data**. This view does not run scanners or duplicate the vulnerability's
+refresh runs. Start a refresh here with **Refresh Vulnerability Data**. Choose
+**Complete refresh** for every available provider or **Custom refresh** to choose
+providers, then **Start**. The action uses vulnerabilities in the selected scope,
+not table filters. Progress and per-provider cancellation are available here;
+queued work continues after navigating away. Completed refreshes update the
+loaded data and run results. This view does not run scanners or duplicate the
+vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
 
 ## Scope and Run Selection
@@ -10,19 +15,22 @@ Data**. This view does not run scanners or duplicate the vulnerability's
 The project and variant selector controls visibility. A shared CVE can appear
 in every captured project/variant scope where it is relevant; it is not limited
 to the scope that initiated the refresh. Package links and coverage are scoped
-by the server. The **Initiating scope** identifies where the run was requested,
-which may differ from the scope you are viewing.
+by the server. The selector already identifies the viewing scope, so internal
+project, variant, package and run IDs are not repeated in the page.
 
 Use one project (all its variants) or a single variant. Variant comparisons are
-not refresh scopes; the page asks you to select a project or variant rather than
-silently broadening a comparison to the whole project.
+not result scopes; the page asks you to select a project or variant rather than
+silently broadening the results to the whole project. Refreshing from a
+comparison still targets only its vulnerabilities.
 
-The latest matching run opens by default. Select a recorded run to inspect it,
-or use **Previous runs** and **Next runs**. Selected runs have a shareable
+The latest matching run opens by default. Run cards follow the Scan tab's list
+layout, showing the date, status, providers and change counts. Select a run to
+inspect it, or use **Previous runs** and **Next runs**. Selected runs have a shareable
 `/refresh?run=…` URL. An unavailable or out-of-scope run is explicitly reported;
 the page never silently substitutes another run.
 
-The run ID, sources, start/end timestamps and status are recorded server-side.
+Run identifiers remain in shareable URLs; providers, start/end dates and status
+are displayed without internal IDs.
 **Reload results** retrieves those persisted records, including after a browser
 reload or server restart. It does not refresh provider data, acknowledge changes,
 or clear another user's indicators.

@@ -109,7 +109,7 @@ jest.mock('../../src/components/NavigationBar', () => ({
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
             <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
-            {(['metrics', 'packages', 'vulnerabilities', 'scans', 'review', 'exports', 'ai', 'settings'] as TabKey[]).map(tab => (
+            {(['metrics', 'packages', 'vulnerabilities', 'scans', 'refresh', 'review', 'exports', 'ai', 'settings'] as TabKey[]).map(tab => (
                 <Link key={tab} to={ROUTES[tab]}>{tab}</Link>
             ))}
             <button onClick={onOpenOperationQueue}>progress</button>
@@ -150,11 +150,10 @@ jest.mock('../../src/pages/TableVulnerabilities', () => {
     return {
         __esModule: true,
         mountFilters,
-        default: ({ appendAssessment, appendCVSS, patchVuln, onRefreshComplete, filterLabel, filterValue }: {
+        default: ({ appendAssessment, appendCVSS, patchVuln, filterLabel, filterValue }: {
             appendAssessment: (assessment: { id: string }) => void;
             appendCVSS: (id: string, vector: string) => void;
             patchVuln: (id: string, vulnerability: { id: string }) => void;
-            onRefreshComplete: () => void;
             filterLabel?: string;
             filterValue?: string;
         }) => {
@@ -168,7 +167,6 @@ jest.mock('../../src/pages/TableVulnerabilities', () => {
                 <button onClick={() => appendAssessment({ id: 'assessment-1' })}>append assessment</button>
                 <button onClick={() => appendCVSS('CVE-1', 'CVSS:3.1/test')}>append cvss</button>
                 <button onClick={() => patchVuln('CVE-1', { id: 'CVE-1' })}>patch vulnerability</button>
-                <button onClick={onRefreshComplete}>refresh complete</button>
             </div>;
         },
     };
@@ -488,7 +486,17 @@ describe('Explorer saved-scope validation', () => {
         fireEvent.click(screen.getByRole('button', { name: 'append assessment' }));
         fireEvent.click(screen.getByRole('button', { name: 'append cvss' }));
         fireEvent.click(screen.getByRole('button', { name: 'patch vulnerability' }));
-        fireEvent.click(screen.getByRole('button', { name: 'refresh complete' }));
+        fireEvent.click(screen.getByRole('link', { name: 'refresh' }));
+        expect(screen.getByTestId('refresh-dropdown-toggle')).toBeInTheDocument();
+        const refresh = {
+            op_id: 'refresh:nvd', kind: 'refresh', source: 'nvd', status: 'running',
+            created_at: '2026-10-30T12:00:00Z', started_at: '2026-10-30T12:00:00Z',
+            progress: { current: 1, total: 2, message: 'Refreshing' },
+        };
+        TestEventSource.current.send('operation', refresh);
+        const before = mockVulnerabilitiesList.mock.calls.length;
+        TestEventSource.current.send('operation', { ...refresh, status: 'done', progress: { current: 2, total: 2, message: 'Complete' } });
+        await waitFor(() => expect(mockVulnerabilitiesList.mock.calls.length).toBeGreaterThan(before));
 
         fireEvent.click(screen.getByRole('link', { name: 'packages' }));
         fireEvent.click(screen.getByRole('button', { name: 'show package vulnerabilities' }));
