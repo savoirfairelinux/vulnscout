@@ -657,6 +657,7 @@ describe('AIContext page', () => {
 
         test('uploading references keeps unsaved fields', async () => {
             const backend = mockBackend();
+            const user = userEvent.setup();
             renderPage({ projectId: 'p1' });
             await openVariant1();
             fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Unsaved desc' } });
@@ -672,10 +673,10 @@ describe('AIContext page', () => {
             expect(requestsTo(backend, '/api/variants/v1/context/files', 'POST')).toHaveLength(1);
 
             // Reopening the variant shows the stored reference from the server.
-            fireEvent.click(sidebarItem('Variant 2'));
-            fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
-            await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
-            fireEvent.click(sidebarItem('Variant 1'));
+            await user.click(sidebarItem('Variant 2'));
+            await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+            await screen.findByRole('region', { name: 'Variant 2' });
+            await user.click(sidebarItem('Variant 1'));
             await screen.findByRole('region', { name: 'Variant 1' });
             await waitFor(() => expect(screen.getByLabelText('Variant description')).toHaveValue(''));
             fireEvent.click(screen.getByRole('radio', { name: 'Codebase references' }));
