@@ -24,11 +24,10 @@ function VulnRefreshChanges({ run, vulnId }: Readonly<Props>) {
         <section aria-label="Latest vulnerability refresh" className="space-y-3 rounded-lg bg-gray-800 p-3 text-left text-sm">
             <h4 className="font-semibold text-gray-200">Latest refresh for {vulnId}</h4>
             <dl className="space-y-1">
-                <div><dt className="inline font-semibold">Run: </dt><dd className="inline break-all font-mono">{run.run_id}</dd></div>
                 <div><dt className="inline font-semibold">Started: </dt><dd className="inline"><time dateTime={run.started_at}>{date(run.started_at)}</time></dd></div>
                 <div><dt className="inline font-semibold">Finished: </dt><dd className="inline">{run.finished_at ? <time dateTime={run.finished_at}>{date(run.finished_at)}</time> : 'Not finished'}</dd></div>
                 <div><dt className="inline font-semibold">Sources: </dt><dd className="inline">{run.sources.map(sourceLabel).join(', ')}</dd></div>
-                <div><dt className="inline font-semibold">Requested scope: </dt><dd className="inline break-all">{run.scope.project_id ? `Project ${run.scope.project_id}` : 'All projects'}{run.scope.variant_id ? ` · Variant ${run.scope.variant_id}` : ' · All variants'}</dd></div>
+                <div><dt className="inline font-semibold">Requested scope: </dt><dd className="inline">{run.scope.project_id ? 'Selected project' : 'All projects'}{run.scope.variant_id ? ' · Selected variant' : ' · All variants'}</dd></div>
                 <div><dt className="inline font-semibold">Run status: </dt><dd className="inline">{run.status}</dd></div>
             </dl>
             <p className="text-xs text-gray-400">Changes below are limited to the selected vulnerability and current scope. Provider metadata may be shared across projects; a data change is not an applicability assessment.</p>
