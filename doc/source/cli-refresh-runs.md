@@ -87,7 +87,9 @@ flask --app src.bin.webapp export-refresh-changes --run-id "$run_id" --format js
 flask --app src.bin.webapp prune-refresh-runs
 ```
 
-Schedule `prune-refresh-runs` to physically delete expired rows and snapshots.
+Schedule `prune-refresh-runs` to physically delete expired runs, coverage targets
+and change snapshots in one transaction, including on SQLite without foreign-key
+enforcement.
 Expiry is enforced by read/export endpoints before physical deletion. Live
 vulnerability, package or field-history cleanup does not mutate retained
 refresh artifacts. Reads reconcile unfinished runs whose local owner process
