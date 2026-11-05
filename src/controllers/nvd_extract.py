@@ -10,6 +10,9 @@ the same JSON schema.
 from __future__ import annotations
 
 import datetime
+from typing import cast
+
+from ..helpers.fixs_scrapper import FixsScrapper, NvdCve
 
 
 def extract_affected_cpes(cve: dict) -> list[str]:
@@ -126,6 +129,8 @@ def extract_cve_details(cve: dict) -> dict:
             if val and val not in weaknesses:
                 weaknesses.append(val)
 
+    fixes = FixsScrapper()
+    fixes.search_in_nvd({"cve": cast(NvdCve, cve)})
     return {
         "description": description,
         "status": severity,
@@ -140,6 +145,8 @@ def extract_cve_details(cve: dict) -> dict:
         "weaknesses": weaknesses or None,
         "cpes": extract_affected_cpes(cve),
         "nvd_last_modified": cve.get("lastModified"),
+        "patch_url": api_references_filter_patches(cve.get("references", [])),
+        "versions_data": fixes.list_per_packages(),
     }
 
 

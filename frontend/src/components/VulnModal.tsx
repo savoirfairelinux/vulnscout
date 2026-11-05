@@ -41,6 +41,7 @@ import { assessmentReviewKey, buildAssessmentReviewAction } from "../helpers/aiA
 import VulnHistory from "./VulnHistory";
 import Operations from "../handlers/operations";
 import { waitForQueue } from "../handlers/operationStore";
+import VulnerabilityRefreshRun from "../handlers/vulnerabilityRefreshRun";
 import type { RefreshSource } from "../types/operation";
 
 type Props = {
@@ -652,14 +653,30 @@ type VariantScopedSnapshot = {
                 if (!queued.ok) throw new Error(queued.error);
                 const settled = await waitForQueue(queued.queueId, queued.operations.map(operation => operation.op_id));
                 if (scopeChanged()) return;
-                setRefreshedList(settled.filter(operation => operation.status === 'done').map(operation => operation.source.toUpperCase()));
-                const failed = settled.filter(operation => operation.status !== 'done');
+                const run = await VulnerabilityRefreshRun.exact(queued.queueId, vuln.id, { projectId, variantId });
+                if (scopeChanged()) return;
+                const successful = (source: string) => {
+                    const coverage = run.coverage.filter(entry => entry.source === source && entry.vuln_id === vuln.id);
+                    return run.source_status?.[source] === 'complete' && coverage.length > 0
+                        && coverage.every(entry => entry.status === 'complete');
+                };
+                setRefreshedList(settled.filter(operation => operation.status === 'done' && successful(operation.source)).map(operation => operation.source.toUpperCase()));
+                const failed = settled.filter(operation => operation.status !== 'done' || !successful(operation.source));
                 if (failed.length > 0) {
-                    setRefreshError(`Refresh incomplete: ${failed.map(operation => `${operation.source.toUpperCase()} ${operation.status}${operation.error ? ` — ${operation.error}` : ''}`).join('; ')}.`);
+                    setRefreshError(`Refresh incomplete: ${failed.map(operation => {
+                        const target = run.coverage.find(entry => entry.source === operation.source && entry.vuln_id === vuln.id);
+                        const error = operation.error || target?.error;
+                        return `${operation.source.toUpperCase()} ${operation.status === 'done' ? target?.status || 'incomplete' : operation.status}${error ? ` — ${error}` : ''}`;
+                    }).join('; ')}.`);
                 }
                 if (settled.some(operation => operation.status === 'done')) {
                     const refreshed = await Vulnerabilities.getDetails(vuln.id, variantId, projectId);
-                    if (!scopeChanged() && refreshed) patchVuln(vuln.id, refreshed);
+                    if (!scopeChanged() && refreshed) {
+                        const { assessments: _a, simplified_status: _ss, packages: _p, packages_current: _pc,
+                            packages_current_by_variant: _pcv, variants: _v, found_by: _fb, effort: _e, fix: _f,
+                            ...providerDetails } = refreshed;
+                        patchVuln(vuln.id, { ...vuln, ...providerDetails });
+                    }
                 }
                 return;
             }

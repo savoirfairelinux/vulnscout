@@ -56,6 +56,8 @@ def apply_nvd_update(vuln_record, details: dict, now: datetime.datetime) -> bool
         ("cpes", "cpes"),
         ("publish_date", "publish_date"),
         ("nvd_last_modified", "nvd_last_modified"),
+        ("patch_url", "patch_url"),
+        ("versions_data", "versions_data"),
     ]
     for detail_key, model_attr in fields:
         new_val = details.get(detail_key)
