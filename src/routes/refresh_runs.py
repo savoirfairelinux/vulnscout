@@ -8,10 +8,11 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from flask import Response, abort, current_app, jsonify, request
+from sqlalchemy import JSON, case, column, func
 
 from ..extensions import db
 from ..helpers.datetime_utils import ensure_utc_iso
-from ..models.refresh_run import RefreshChange, RefreshRun
+from ..models.refresh_run import RefreshChange, RefreshRun, RefreshTarget
 
 
 def _visible(packages: list, params: dict) -> list:
@@ -20,7 +21,7 @@ def _visible(packages: list, params: dict) -> list:
     )]
 
 
-def artifact(run: RefreshRun, params: dict, *, paginate: bool = True) -> dict | None:
+def artifact(run: RefreshRun, params: dict, *, paginate: bool = True, summary: dict | None = None) -> dict | None:
     coverage = []
     for entry in run.coverage:
         packages = _visible(entry["packages"], params)
@@ -37,9 +38,9 @@ def artifact(run: RefreshRun, params: dict, *, paginate: bool = True) -> dict | 
         if not scope_matches:
             return None
     changes = []
-    for change in db.session.scalars(
+    for change in ([] if summary is not None else db.session.scalars(
         db.select(RefreshChange).where(RefreshChange.run_id == run.run_id).order_by(RefreshChange.id)
-    ):
+    )):
         row = dict(change.snapshot)
         row["packages"] = _visible(row["packages"], params)
         if (params.get("project_id") or params.get("variant_id")) and not row["packages"]:
@@ -64,13 +65,13 @@ def artifact(run: RefreshRun, params: dict, *, paginate: bool = True) -> dict | 
         "source_status": run.source_status,
         "started_at": ensure_utc_iso(run.started_at), "finished_at": ensure_utc_iso(run.finished_at),
         "status": status, "coverage": coverage,
-        "summary": {
+        "summary": summary if summary is not None else {
             "total_changes": len(changes),
             "changed_vulnerabilities": len({row["vuln_id"] for row in changes}),
             "first_enrichments": sum(row["kind"] == "first_enrichment" for row in changes),
         },
         "changes": changes[offset:offset + limit] if paginate else changes,
-        "total": len(changes), "limit": limit, "offset": offset,
+        "total": summary["total_changes"] if summary is not None else len(changes), "limit": limit, "offset": offset,
     }
 
 
@@ -81,6 +82,61 @@ def retained_runs():
     return db.select(RefreshRun).where(
         RefreshRun.started_at >= datetime.now(timezone.utc) - timedelta(days=days)
     ).order_by(RefreshRun.started_at.desc(), RefreshRun.run_id.desc())
+
+
+def _scope_conditions(value, params):
+    return [value[key].as_string() == params[key] for key in ("project_id", "variant_id") if params.get(key)]
+
+
+def _array_scope_exists(value, params):
+    """Correlate immutable JSON package/scope membership on both supported engines."""
+    expand = func.json_array_elements if db.engine.dialect.name == "postgresql" else func.json_each
+    entries = expand(value).table_valued(column("value", JSON), joins_implicitly=True)
+    return db.select(1).select_from(entries).where(*_scope_conditions(entries.c.value, params)).exists()
+
+
+def _matching_runs(query, params):
+    scoped = bool(params.get("project_id") or params.get("variant_id"))
+    if not scoped and not params.get("vuln_id"):
+        return query
+    targets = db.select(1).where(RefreshTarget.run_id == RefreshRun.run_id)
+    if params.get("vuln_id"):
+        targets = targets.where(RefreshTarget.vuln_id == params["vuln_id"].upper())
+    if scoped:
+        targets = targets.where(_array_scope_exists(RefreshTarget.packages, params))
+    matches = targets.exists()
+    if scoped and not params.get("vuln_id"):
+        matches = db.or_(
+            matches, db.and_(*_scope_conditions(RefreshRun.scope, params)),
+            _array_scope_exists(RefreshRun.scope["variants"], params),
+        )
+    return query.where(matches)
+
+
+def _summaries(run_ids, params):
+    snapshot = RefreshChange.snapshot
+    before_missing = snapshot["before"].as_string().is_(None)
+    after_missing = snapshot["after"].as_string().is_(None)
+    query = db.select(
+        RefreshChange.run_id, func.count(),
+        func.count(func.distinct(snapshot["vuln_id"].as_string())),
+        func.sum(case((snapshot["kind"].as_string() == "first_enrichment", 1), else_=0)),
+    ).where(RefreshChange.run_id.in_(run_ids))
+    for key in ("vuln_id", "source", "field", "kind"):
+        if params.get(key):
+            query = query.where(snapshot[key].as_string() == (
+                params[key].upper() if key == "vuln_id" else params[key]
+            ))
+    if params.get("project_id") or params.get("variant_id"):
+        query = query.where(_array_scope_exists(snapshot["packages"], params))
+    if params.get("change_type"):
+        query = query.where(case(
+            (before_missing, "addition"), (after_missing, "removal"), else_="modification",
+        ) == params["change_type"])
+    return {
+        row[0]: dict(zip(("total_changes", "changed_vulnerabilities", "first_enrichments"), row[1:]))
+        for row in db.session.execute(query.group_by(RefreshChange.run_id))
+    }
 
 
 def export_artifact(data: dict, format_: str) -> str:
@@ -119,11 +175,15 @@ def init_app(app):
             params = request.args.to_dict()
             limit = min(1000, max(1, int(params.get("limit", 100))))
             offset = max(0, int(params.get("offset", 0)))
-            runs = [data for run in db.session.scalars(retained_runs())
-                    if (data := artifact(run, params)) is not None]
+            query = _matching_runs(retained_runs(), params)
+            total = db.session.scalar(db.select(func.count()).select_from(query.order_by(None).subquery()))
+            page = db.session.scalars(query.limit(limit).offset(offset)).all()
+            summaries = _summaries([run.run_id for run in page], params) if page else {}
+            empty = {"total_changes": 0, "changed_vulnerabilities": 0, "first_enrichments": 0}
+            runs = [artifact(run, params, summary=summaries.get(run.run_id, empty)) for run in page]
             for run in runs:
                 run.pop("changes")
-            return jsonify({"runs": runs[offset:offset + limit], "total": len(runs),
+            return jsonify({"runs": runs, "total": total,
                             "limit": limit, "offset": offset})
         except ValueError:
             abort(400, description="Invalid pagination")

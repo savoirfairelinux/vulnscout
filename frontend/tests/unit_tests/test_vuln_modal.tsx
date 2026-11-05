@@ -16,7 +16,7 @@ import AgentChat from '../../src/components/AgentChat';
 import { resetAgentQueue } from '../../src/handlers/agentQueue';
 import AssessmentReviews from "../../src/handlers/assessmentReviews";
 import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
-import Vulnerabilities from "../../src/handlers/vulnerabilities";
+import Vulnerabilities, { asVulnerability } from "../../src/handlers/vulnerabilities";
 import VulnerabilityRefreshRun from "../../src/handlers/vulnerabilityRefreshRun";
 import Operations from "../../src/handlers/operations";
 import * as OperationStore from "../../src/handlers/operationStore";
@@ -3566,6 +3566,17 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({ ok: true, queueId: 'q-scoped', operations });
         const wait = jest.spyOn(OperationStore, 'waitForQueue').mockResolvedValue(operations);
         const details = jest.spyOn(Vulnerabilities, 'getDetails').mockResolvedValue({ ...vulnerability, texts: [{ title: 'description', content: 'Scoped details' }] });
+        const exact = jest.spyOn(VulnerabilityRefreshRun, 'exact').mockResolvedValue({
+            scope: { project_id: 'p-one', variant_id: 'v-one' }, sources: ['nvd', 'epss'],
+            started_at: '2026-01-01', finished_at: '2026-01-01', status: 'incomplete',
+            summary: { total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
+            changes: [], total: 0, limit: 1, offset: 0,
+            run_id: 'q-scoped', source_status: { nvd: 'complete', epss: 'incomplete' },
+            coverage: [
+                { source: 'nvd', vuln_id: vulnerability.id, status: 'complete', error: null },
+                { source: 'epss', vuln_id: vulnerability.id, status: 'failed', error: 'Provider unavailable' },
+            ],
+        });
         const latest = jest.spyOn(VulnerabilityRefreshRun, 'latest').mockResolvedValue(null);
         const subscribe = jest.spyOn(OperationStore, 'subscribe').mockReturnValue(() => {});
         try {
@@ -3580,12 +3591,80 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
                 { kind: 'refresh', source: 'epss', ids: [vulnerability.id], options: { mode: 'api', project_id: 'p-one', variant_id: 'v-one' } },
             ]);
             expect(wait).toHaveBeenCalledWith('q-scoped', ['refresh:nvd', 'refresh:epss']);
+            expect(exact).toHaveBeenCalledWith('q-scoped', vulnerability.id, { projectId: 'p-one', variantId: 'v-one' });
             expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({ texts: [{ title: 'description', content: 'Scoped details' }] }));
             expect(screen.getByText(/Refresh incomplete: EPSS error/)).toBeInTheDocument();
             await waitFor(() => expect(latest).toHaveBeenCalledTimes(2));
             expect(latest).toHaveBeenLastCalledWith(vulnerability.id, { projectId: 'p-one', variantId: 'v-one' }, expect.any(AbortSignal));
         } finally {
-            enqueue.mockRestore(); wait.mockRestore(); details.mockRestore(); latest.mockRestore(); subscribe.mockRestore();
+            enqueue.mockRestore(); wait.mockRestore(); details.mockRestore(); exact.mockRestore(); latest.mockRestore(); subscribe.mockRestore();
+        }
+    });
+
+    test('done operations with skipped and failed coverage never display Updated', async () => {
+        const operations = ['nvd', 'epss'].map(source => ({ op_id: `refresh:${source}`, source, status: 'done' })) as Operation[];
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({ ok: true, queueId: 'q-incomplete', operations });
+        const wait = jest.spyOn(OperationStore, 'waitForQueue').mockResolvedValue(operations);
+        const exact = jest.spyOn(VulnerabilityRefreshRun, 'exact').mockResolvedValue({
+            scope: { project_id: 'p-one', variant_id: null }, sources: ['nvd', 'epss'],
+            started_at: '2026-01-01', finished_at: '2026-01-01', status: 'incomplete',
+            summary: { total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
+            changes: [], total: 0, limit: 1, offset: 0,
+            run_id: 'q-incomplete', source_status: { nvd: 'incomplete', epss: 'incomplete' },
+            coverage: [
+                { source: 'nvd', vuln_id: vulnerability.id, status: 'skipped', error: 'No provider record' },
+                { source: 'epss', vuln_id: vulnerability.id, status: 'failed', error: 'Provider offline' },
+            ],
+        });
+        const details = jest.spyOn(Vulnerabilities, 'getDetails').mockResolvedValue(vulnerability);
+        try {
+            render(<VulnModal vuln={vulnerability} projectId="p-one" onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            await userEvent.click(screen.getByTitle('Refresh from NVD & EPSS'));
+            await screen.findByText(/Refresh incomplete: NVD skipped.*EPSS failed/);
+            expect(screen.queryByText('Updated')).not.toBeInTheDocument();
+        } finally {
+            enqueue.mockRestore(); wait.mockRestore(); exact.mockRestore(); details.mockRestore();
+        }
+    });
+
+    test('scoped refresh merges a parsed details response without losing assessed membership state', async () => {
+        const assessment: Assessment = {
+            id: 'assessment-refresh', vuln_id: vulnerability.id, packages: ['pkg@1.0.0'],
+            status: 'fixed', simplified_status: 'Fixed', justification: '', impact_statement: '',
+            status_notes: '', workaround: '', timestamp: '2026-01-01T00:00:00Z', origin: 'custom', responses: [],
+        };
+        const operations = ['nvd', 'epss'].map(source => ({ op_id: `refresh:${source}`, source, status: 'done' })) as Operation[];
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({ ok: true, queueId: 'q-assessed', operations });
+        const wait = jest.spyOn(OperationStore, 'waitForQueue').mockResolvedValue(operations);
+        const exact = jest.spyOn(VulnerabilityRefreshRun, 'exact').mockResolvedValue({
+            scope: { project_id: 'p-one', variant_id: 'v-one' }, sources: ['nvd', 'epss'],
+            started_at: '2026-01-01', finished_at: '2026-01-01', status: 'complete',
+            summary: { total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
+            changes: [], total: 0, limit: 1, offset: 0,
+            run_id: 'q-assessed', source_status: { nvd: 'complete', epss: 'complete' },
+            coverage: operations.map(operation => ({ source: operation.source, vuln_id: vulnerability.id, status: 'complete', error: null })),
+        });
+        const assessed = {
+            ...vulnerability, simplified_status: 'Fixed', assessments: [assessment],
+            packages_current: ['pkg@1.0.0'], packages_current_by_variant: { 'v-one': ['pkg@1.0.0'] },
+            variants: ['v-one'], found_by: ['sbom'],
+        };
+        // Use the production parser: detail payloads do not carry enriched row state.
+        const parsed = asVulnerability({ id: vulnerability.id, texts: [{ title: 'description', content: 'New provider data' }], epss: { score: 0.9 } });
+        if (Array.isArray(parsed)) throw new Error('Invalid test details');
+        const details = jest.spyOn(Vulnerabilities, 'getDetails').mockResolvedValue(parsed);
+        try {
+            const patchVuln = jest.fn();
+            render(<VulnModal vuln={assessed} projectId="p-one" variantId="v-one" onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+            await userEvent.click(screen.getByTitle('Refresh from NVD & EPSS'));
+            await waitFor(() => expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({
+                simplified_status: 'Fixed', assessments: [assessment], packages: assessed.packages,
+                packages_current: assessed.packages_current, packages_current_by_variant: assessed.packages_current_by_variant,
+                variants: ['v-one'], found_by: ['sbom'], epss: expect.objectContaining({ score: 0.9 }),
+                texts: [{ title: 'description', content: 'New provider data' }],
+            })));
+        } finally {
+            enqueue.mockRestore(); wait.mockRestore(); exact.mockRestore(); details.mockRestore();
         }
     });
 

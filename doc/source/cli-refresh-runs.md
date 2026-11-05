@@ -5,6 +5,9 @@ selected providers, timestamps, coverage and immutable field changes. It prints
 `Refresh run: <id>` before contacting providers. For unattended callers, supply
 your own **new** identity rather than parsing progress output:
 
+IDs are limited to **38 characters** to match field-history operation identities.
+Use letters, digits, dots, underscores or hyphens, starting with a letter or digit.
+
 ```bash
 run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 ./vulnscout refresh -p demo -v x86 --run-id "$run_id"

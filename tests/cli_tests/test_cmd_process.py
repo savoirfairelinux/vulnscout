@@ -108,6 +108,7 @@ class TestCmdProcessCoverage:
             refresh_vulnerability_data=False,
             project_name=None,
             variant_name=None,
+            refresh_run_id=None,
         )
 
     def test_process_command_propagates_refresh_flag(self, app):
@@ -120,6 +121,7 @@ class TestCmdProcessCoverage:
             refresh_vulnerability_data=True,
             project_name=None,
             variant_name=None,
+            refresh_run_id=None,
         )
 
     def test_process_command_propagates_condition_scope(self, app):
@@ -136,6 +138,7 @@ class TestCmdProcessCoverage:
             refresh_vulnerability_data=False,
             project_name="ProcessProject",
             variant_name="ProcessVariant",
+            refresh_run_id=None,
         )
 
     def test_condition_scope_defaults_to_default_variant(self, app):

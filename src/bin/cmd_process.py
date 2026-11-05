@@ -96,6 +96,7 @@ def refresh_vulnerability_sources(
     vulnerability_ids: Iterable[str],
     refresh_sources: Iterable[str] = REFRESH_SOURCES,
     on_source_start: Callable[[str, int, int], None] | None = None,
+    run_id: str | None = None,
 ) -> list[str]:
     """Refresh selected providers for the supplied vulnerabilities."""
     vuln_ctrl = controllers.vulnerabilities
@@ -119,7 +120,7 @@ def refresh_vulnerability_sources(
                  if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")
                  and identifier in all_vulnerabilities]
         for source in applicable_sources
-    }, run_id=current_history_operation()[0])
+    }, run_id=run_id or current_history_operation()[0])
     click.echo(f"Refresh run: {run_id}")
     try:
         for step, source in enumerate(applicable_sources, start=1):
@@ -471,17 +472,20 @@ def create_project_context(
 )
 @click.option("--project", "project_name", default=None, help="Evaluate conditions in this project.")
 @click.option("--variant", "variant_name", default=None, help="Evaluate conditions in this project variant.")
+@click.option("--refresh-run-id", default=None, help="Caller-supplied refresh identity (up to 38 characters).")
 @with_appcontext
 def process_command(
     refresh_vulnerability_data: bool,
     project_name: str | None,
     variant_name: str | None,
+    refresh_run_id: str | None = None,
 ) -> None:
     """Parse all SBOM inputs, persist results to the DB and generate output files."""
     _run_main(
         refresh_vulnerability_data=refresh_vulnerability_data,
         project_name=project_name,
         variant_name=variant_name,
+        refresh_run_id=refresh_run_id,
     )
 
 
@@ -632,6 +636,7 @@ def _run_main(
     refresh_vulnerability_data: bool = False,
     project_name: str | None = None,
     variant_name: str | None = None,
+    refresh_run_id: str | None = None,
 ) -> ControllersCache:
     """Core processing logic (usable both from the CLI command and directly)."""
     controllers = ControllersCache()
@@ -675,6 +680,7 @@ def _run_main(
         failed_sources = refresh_vulnerability_sources(
             controllers,
             vulnCtrl._encountered_this_run,
+            run_id=refresh_run_id,
             on_source_start=lambda label, step, total: echo(
                 f"Refreshing {label} data (step {step} of {total})...", role="info"
             ),

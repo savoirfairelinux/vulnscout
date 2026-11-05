@@ -15,8 +15,8 @@ from pathlib import Path
 from sqlalchemy import event, insert
 from sqlalchemy.orm import Session
 
-from ..extensions import db
-from ..models.refresh_run import RefreshChange, RefreshRun
+from ..extensions import db, write_lock
+from ..models.refresh_run import RefreshChange, RefreshRun, RefreshTarget
 from .history_source import refresh_history
 
 _capture: ContextVar[tuple[str, str] | None] = ContextVar("refresh_run_capture", default=None)
@@ -57,13 +57,9 @@ def reconcile_interrupted_runs() -> None:
             interrupted = now - datetime.fromisoformat(owner["last_seen_at"]) > timedelta(days=1)
         if not interrupted:
             continue
-        run.coverage = [
-            {**entry, "status": "failed", "error": "Refresh owner stopped or its heartbeat expired"}
-            if entry["status"] == "pending" else entry for entry in run.coverage
-        ]
-        run.source_status = {source: "incomplete" if status == "pending" else status
-                             for source, status in run.source_status.items()}
-        run.finished_at = now
+        for source, status in run.source_status.items():
+            if status == "pending":
+                finish_source(run.run_id, source, error="Refresh owner stopped or its heartbeat expired")
         changed = True
     if changed:
         db.session.commit()
@@ -82,16 +78,16 @@ def visibility_for(vuln_ids: list[str]) -> dict[str, list[dict]]:
         package_ids = active_package_ids_for_scans(scans)
         for start in range(0, len(vuln_ids), 500):
             rows = db.session.execute(
-                db.select(Finding.vulnerability_id, Package)
+                db.select(Finding.vulnerability_id, Package.id, Package.name, Package.version, Package.supplier)
                 .select_from(Finding).join(Package).join(Observation).join(Scan)
                 .where(Finding.vulnerability_id.in_(vuln_ids[start:start + 500]), Observation.scan_id.in_(scans))
                 .where(db.or_(Scan.scan_type.is_(None), Scan.scan_type == "sbom", Finding.package_id.in_(package_ids)))
                 .distinct()
             ).all()
-            for vuln_id, package in rows:
+            for vuln_id, package_id, name, version, supplier in rows:
                 result[vuln_id].append({
-                    "package_id": str(package.id), "name": package.name, "version": package.version,
-                    "package": package.string_id,
+                    "package_id": str(package_id), "name": name, "version": version,
+                    "package": f"{name}@{version}" + (f"::{supplier}" if supplier else ""),
                     "variant_id": str(variant.id), "project_id": str(variant.project_id),
                 })
     return result
@@ -101,8 +97,8 @@ def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
                scope: dict | None = None) -> str:
     from ..controllers.operation_registry import new_queue_id
     run_id = run_id or new_queue_id()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
-        raise ValueError("Invalid run ID: use up to 128 letters, digits, dots, underscores or hyphens")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,37}", run_id):
+        raise ValueError("Invalid run ID: use up to 38 letters, digits, dots, underscores or hyphens")
     if db.session.get(RefreshRun, run_id) is not None:
         raise ValueError("Refresh run identity already exists")
     targets = {source: list(dict.fromkeys(ids)) for source, ids in targets.items()}
@@ -116,9 +112,9 @@ def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
         owner={"host": socket.gethostname(), "pid": os.getpid(),
                "process_start": _process_start(os.getpid()),
                "last_seen_at": datetime.now(timezone.utc).isoformat()},
-        coverage=[
-            {"source": source, "vuln_id": identifier, "status": "pending", "error": None,
-             "packages": links[identifier]}
+        targets=[
+            RefreshTarget(source=source, vuln_id=identifier, status="pending", error=None,
+                          packages=links[identifier])
             for source, identifiers in targets.items() for identifier in identifiers
         ],
     )
@@ -128,57 +124,66 @@ def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
 
 
 def add_targets(run_id: str, source: str, ids: list[str]) -> None:
-    run = db.session.get(RefreshRun, run_id)
+    with write_lock():
+        _locked_run(run_id)
+        existing = set(db.session.scalars(db.select(RefreshTarget.vuln_id).where(
+            RefreshTarget.run_id == run_id, RefreshTarget.source == source,
+        )))
+        new_ids = [identifier for identifier in dict.fromkeys(ids) if identifier not in existing]
+        if not new_ids:
+            return
+        links = visibility_for(new_ids) if new_ids else {}
+        db.session.add_all([
+            RefreshTarget(run_id=run_id, source=source, vuln_id=identifier,
+                          status="pending", error=None, packages=links[identifier])
+            for identifier in new_ids
+        ])
+        db.session.commit()
+
+
+def _locked_run(run_id: str) -> RefreshRun:
+    run = db.session.scalar(db.select(RefreshRun).where(RefreshRun.run_id == run_id)
+                            .with_for_update().execution_options(populate_existing=True))
     if run is None:
-        raise ValueError("Refresh run unavailable")
-    existing = {(entry["source"], entry["vuln_id"]) for entry in run.coverage}
-    new_ids = [identifier for identifier in dict.fromkeys(ids) if (source, identifier) not in existing]
-    if not new_ids:
-        return
-    links = visibility_for(new_ids) if new_ids else {}
-    run.coverage = run.coverage + [
-        {"source": source, "vuln_id": identifier, "status": "pending", "error": None,
-         "packages": links[identifier]}
-        for identifier in new_ids
-    ]
-    db.session.commit()
+        raise ValueError("Refresh artifact unavailable")
+    return run
 
 
 def target_result(source: str, vuln_id: str, status: str = "complete", error: str | None = None) -> None:
     capture = _capture.get()
     if capture is None:
         return
-    run = db.session.get(RefreshRun, capture[0])
-    if run is None:
-        raise ValueError("Refresh artifact disappeared during execution")
-    run.coverage = [
-        {**entry, "status": status, "error": error}
-        if entry["source"] == source and entry["vuln_id"] == vuln_id else entry
-        for entry in run.coverage
-    ]
+    run = _locked_run(capture[0])
+    target = db.session.scalar(db.select(RefreshTarget).where(
+        RefreshTarget.run_id == capture[0], RefreshTarget.source == source,
+        RefreshTarget.vuln_id == vuln_id,
+    ))
+    if target is None:
+        raise ValueError("Refresh target disappeared during execution")
+    target.status = status
+    target.error = error
     run.owner = {**run.owner, "last_seen_at": datetime.now(timezone.utc).isoformat()}
 
 
 def finish_source(run_id: str, source: str, status: str = "failed", error: str | None = None) -> None:
-    run = db.session.get(RefreshRun, run_id)
-    if run is None:
-        raise ValueError("Refresh artifact unavailable")
-    run.coverage = [
-        {**entry, "status": status, "error": error or "Target was not checked"}
-        if entry["source"] == source and entry["status"] == "pending" else entry
-        for entry in run.coverage
-    ]
-    source_entries = [entry for entry in run.coverage if entry["source"] == source]
-    run.source_status = {**run.source_status, source: (
-        "complete" if status == "failed" and error is None
-        and all(entry["status"] == "complete" for entry in source_entries)
-        and run.source_status.get(source) != "incomplete"
-        else "incomplete"
-    )}
-    run.owner = {**run.owner, "last_seen_at": datetime.now(timezone.utc).isoformat()}
-    if all(value != "pending" for value in run.source_status.values()):
-        run.finished_at = datetime.now(timezone.utc)
-    db.session.commit()
+    with write_lock():
+        run = _locked_run(run_id)
+        db.session.execute(db.update(RefreshTarget).where(
+            RefreshTarget.run_id == run_id, RefreshTarget.source == source,
+            RefreshTarget.status == "pending",
+        ).values(status=status, error=error or "Target was not checked"))
+        incomplete = db.session.scalar(db.select(RefreshTarget.id).where(
+            RefreshTarget.run_id == run_id, RefreshTarget.source == source,
+            RefreshTarget.status != "complete",
+        ).limit(1)) is not None
+        run.source_status = {**run.source_status, source: (
+            "complete" if status == "failed" and error is None and not incomplete
+            and run.source_status.get(source) != "incomplete" else "incomplete"
+        )}
+        run.owner = {**run.owner, "last_seen_at": datetime.now(timezone.utc).isoformat()}
+        if all(value != "pending" for value in run.source_status.values()):
+            run.finished_at = datetime.now(timezone.utc)
+        db.session.commit()
 
 
 @contextmanager
@@ -265,10 +270,8 @@ def capture_changes(session, rows: list[dict]) -> None:
     from ..models.vulnerability_history import CVSS_FIELD_PREFIX, normalize_value
 
     connection = session.connection()
-    coverage = connection.execute(
-        db.select(RefreshRun.coverage).where(RefreshRun.run_id == capture[0])
-    ).scalar_one()
     snapshots = []
+    packages_by_vuln = {}
     for row in rows:
         field = row["field"]
         if field.startswith(CVSS_FIELD_PREFIX):
@@ -287,8 +290,14 @@ def capture_changes(session, rows: list[dict]) -> None:
             after = normalize_value(connection.execute(
                 db.select(getattr(Vulnerability, field)).where(Vulnerability.id == row["vuln_id"])
             ).scalar_one_or_none())
-        packages: list[dict] = next((entry["packages"] for entry in coverage
-                                    if entry["source"] == capture[1] and entry["vuln_id"] == row["vuln_id"]), [])
+        if row["vuln_id"] not in packages_by_vuln:
+            packages_by_vuln[row["vuln_id"]] = connection.execute(
+                db.select(RefreshTarget.packages).where(
+                    RefreshTarget.run_id == capture[0], RefreshTarget.source == capture[1],
+                    RefreshTarget.vuln_id == row["vuln_id"],
+                )
+            ).scalar_one_or_none() or []
+        packages = packages_by_vuln[row["vuln_id"]]
         before = session.info.get("refresh_before", {}).get((row["vuln_id"], field), row["old_value"])
         if before == after:
             continue
@@ -304,7 +313,7 @@ def capture_changes(session, rows: list[dict]) -> None:
 
 @event.listens_for(Session, "before_flush")
 def _capture_persisted_before(session, _flush_context, _instances):
-    """Read the actual predecessor while holding the existing session write lock.
+    """Read predecessors under transaction-held row locks (SQLite uses its write lock).
 
     An ORM instance may have been loaded before another refresh committed.
     Its attribute history is then insufficient evidence of the value replaced.
@@ -317,18 +326,26 @@ def _capture_persisted_before(session, _flush_context, _instances):
     from ..models.vulnerability_history import TRACKED_FIELDS, cvss_field, cvss_value, normalize_value
     before = {}
     connection = session.connection()
-    for obj in session.dirty:
+    affected = list(session.dirty) + list(session.deleted) + list(session.new)
+    vuln_ids = sorted({obj.id if isinstance(obj, Vulnerability) else obj.vulnerability_id
+                       for obj in affected if isinstance(obj, (Vulnerability, Metrics))})
+    for identifier in vuln_ids:
+        connection.execute(db.select(Vulnerability.id).where(
+            Vulnerability.id == identifier,
+        ).with_for_update()).first()
+    for obj in sorted(session.dirty, key=lambda obj: str(getattr(obj, "id", ""))):
         if isinstance(obj, Vulnerability):
             columns = [getattr(Vulnerability, field) for field in TRACKED_FIELDS]
-            row = connection.execute(db.select(*columns).where(Vulnerability.id == obj.id)).first()
+            row = connection.execute(db.select(*columns).where(Vulnerability.id == obj.id)
+                                     .with_for_update()).first()
             if row:
                 before.update({(obj.id, field): normalize_value(value) for field, value in zip(TRACKED_FIELDS, row)})
-    for obj in list(session.dirty) + list(session.deleted):
+    for obj in sorted(list(session.dirty) + list(session.deleted), key=lambda obj: str(getattr(obj, "id", ""))):
         if isinstance(obj, Metrics):
             row = connection.execute(db.select(
                 Metrics.vulnerability_id, Metrics.variant_id,
                 Metrics.version, Metrics.author, Metrics.score, Metrics.vector,
-            ).where(Metrics.id == obj.id)).first()
+            ).where(Metrics.id == obj.id).with_for_update()).first()
             if row and row.variant_id is None:
                 before[(row.vulnerability_id, cvss_field(row.version, row.author, obj.id))] = (
                     cvss_value(row.score, row.vector)
