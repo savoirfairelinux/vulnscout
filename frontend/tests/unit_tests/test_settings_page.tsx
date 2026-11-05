@@ -731,6 +731,26 @@ describe("Settings scoped project and variant views", () => {
     expect(await screen.findByText("Upload rejected")).toBeInTheDocument();
   });
 
+  test.each([".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.zst"])(
+    "accepts %s SPDX archives in the file picker",
+    async suffix => {
+      renderSettings(`/settings/projects/${project.id}/${variant.id}`);
+      const user = userEvent.setup();
+      const picker = await screen.findByLabelText("SBOM Files");
+      const file = new File(["archive"], `sbom${suffix}`, { type: "application/octet-stream" });
+
+      expect(picker).toHaveAttribute("accept", expect.stringContaining(suffix));
+      await user.upload(picker, file);
+      expect(screen.getByText(file.name)).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Import" }));
+
+      await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
+        project.id, variant.id, [file], ["nvd", "epss", "ghsa", "euvd"],
+      ));
+      expect(await screen.findByText("Upload rejected")).toBeInTheDocument();
+    },
+  );
+
   test("custom import refresh submits only selected sources", async () => {
     renderSettings();
 

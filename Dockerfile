@@ -38,6 +38,7 @@ RUN apk add --no-cache \
     shadow \
     sudo \
     unzip \
+    xz \
     zstd \
     postgresql-client \
     libpq-dev \
