@@ -11,7 +11,7 @@ from flask.cli import with_appcontext
 from sqlalchemy.engine import CursorResult
 
 from ..extensions import db
-from ..models.refresh_run import RefreshChange, RefreshRun
+from ..models.refresh_run import RefreshChange, RefreshRun, RefreshTarget
 from ..routes.refresh_runs import artifact, export_artifact, retained_runs
 from ._common import resolve_project, resolve_project_variant
 from ._console import Command
@@ -56,6 +56,7 @@ def prune_refresh_runs_command():
     cutoff = datetime.now(timezone.utc) - timedelta(days=current_app.config.get("REFRESH_RUN_RETENTION_DAYS", 90))
     ids = db.select(RefreshRun.run_id).where(RefreshRun.started_at < cutoff)
     db.session.execute(db.delete(RefreshChange).where(RefreshChange.run_id.in_(ids)))
+    db.session.execute(db.delete(RefreshTarget).where(RefreshTarget.run_id.in_(ids)))
     result = cast(CursorResult, db.session.execute(db.delete(RefreshRun).where(RefreshRun.started_at < cutoff)))
     db.session.commit()
     click.echo(f"Removed {result.rowcount} expired refresh runs.")

@@ -20,7 +20,7 @@ from src.extensions import db
 from src.helpers.refresh_runs import capture_source, create_run, finish_source, target_result
 from src.models import Finding, Observation, Project, Scan, Variant, Vulnerability
 from src.models.metrics import Metrics
-from src.models.refresh_run import RefreshRun
+from src.models.refresh_run import RefreshChange, RefreshRun, RefreshTarget
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 from . import setup_demo_db
@@ -210,10 +210,18 @@ def test_cancelled_and_failed_targets_have_explicit_coverage(app, client):
 
 def test_expired_exact_run_never_substitutes_latest_and_can_be_pruned(app, client):
     with app.app_context():
+        if db.engine.dialect.name == "sqlite":
+            assert db.session.execute(db.text("PRAGMA foreign_keys")).scalar() == 0
         expired = create_run({"epss": [CVE]}, run_id="expired")
+        _change(expired, 0.5)
         db.session.get(RefreshRun, expired).started_at = datetime.now(timezone.utc) - timedelta(days=91)
         db.session.commit()
         create_run({"epss": [CVE]}, run_id="newest")
+        _change("newest", 0.6)
+        for model in (RefreshChange, RefreshTarget):
+            assert db.session.scalar(db.select(db.func.count()).select_from(model).where(
+                model.run_id == expired,
+            )) == 1
     assert client.get("/api/refresh-runs/expired").status_code == 404
     assert client.get("/api/refresh-runs/expired/export").status_code == 404
     result = app.test_cli_runner().invoke(args=["export-refresh-changes", "--run-id", expired])
@@ -224,6 +232,13 @@ def test_expired_exact_run_never_substitutes_latest_and_can_be_pruned(app, clien
     with app.app_context():
         assert db.session.get(RefreshRun, expired) is None
         assert db.session.get(RefreshRun, "newest") is not None
+        for model in (RefreshChange, RefreshTarget):
+            assert db.session.scalar(db.select(db.func.count()).select_from(model).where(
+                model.run_id == expired,
+            )) == 0
+            assert db.session.scalar(db.select(db.func.count()).select_from(model).where(
+                model.run_id == "newest",
+            )) == 1
     result = app.test_cli_runner().invoke(args=["prune-refresh-runs"])
     assert result.exit_code == 0
     assert result.output == "Removed 0 expired refresh runs.\n"
