@@ -676,7 +676,7 @@ describe('Packages Table', () => {
         expect(screen.queryByRole('dialog')).toBeNull();
     });
 
-    test('compiler flags are opt-in, remembered, and available without the dependency column', async () => {
+    test('compiler flags are opt-in, remembered, and their whole cell opens the modal without the dependency column', async () => {
         const key = 'vulnscout.tables.packages.compiler-column.visibleColumns';
         const metadata = {
             id: 'build', source_name: 'build.jsonld', format: 'hardcoded', variant_id: 'v1', variant_name: 'demo',
@@ -705,14 +705,34 @@ describe('Packages Table', () => {
             await user.click(screen.getByRole('checkbox', { name: 'Dependency' }));
             await user.click(screen.getByRole('checkbox', { name: 'Compiler Flags' }));
             await user.click(screen.getByText('Columns'));
-            expect(await screen.findByRole('button', { name: 'View compiler flags and defines for aaabbbccc' })).toBeTruthy();
+            const compilerButton = await screen.findByRole('button', { name: 'View compiler flags and defines for aaabbbccc' });
+            expect(compilerButton.getAttribute('type')).toBe('button');
+            for (const className of ['w-full', 'h-full', 'p-4']) {
+                expect(compilerButton.classList.contains(className)).toBe(true);
+            }
+            expect(compilerButton.parentElement?.tagName).toBe('TD');
+            expect(compilerButton.parentElement?.classList.contains('p-0')).toBe(true);
+            expect(compilerButton.parentElement?.classList.contains('p-4')).toBe(false);
             expect(screen.queryByRole('columnheader', { name: 'Dependency' })).toBeNull();
             const missing = screen.getByText(packages[1].name).closest('tr')!;
             expect(within(missing).getByTitle('No compiler flags or defines recorded for the selected scope').textContent).toBe('-');
-            await user.click(screen.getByRole('button', { name: 'View compiler flags and defines for aaabbbccc' }));
+            const detailRequests = () => fetch.mock.calls.filter(([input]) => {
+                const url = new URL(String(input));
+                return url.pathname === '/api/package-compiler-metadata' && url.searchParams.get('summary') !== '1';
+            });
+            await user.click(compilerButton);
             expect(await screen.findByRole('dialog', { name: `Compiler flags and defines: ${packages[0].id}` })).toBeTruthy();
             expect(await screen.findByText('-DDEFINE_ONLY=1')).toBeTruthy();
+            expect(detailRequests()).toHaveLength(1);
             await user.click(screen.getByRole('button', { name: 'Close modal' }));
+            for (const key of ['{Enter}', ' ']) {
+                compilerButton.focus();
+                await user.keyboard(key);
+                expect(await screen.findByText('-DDEFINE_ONLY=1')).toBeTruthy();
+                expect(screen.getAllByRole('dialog')).toHaveLength(1);
+                await user.click(screen.getByRole('button', { name: 'Close modal' }));
+            }
+            expect(detailRequests()).toHaveLength(3);
             expect(JSON.parse(window.localStorage.getItem(key)!)).toContain('Compiler Flags');
             view.unmount();
             render(<TablePackages preferenceScopeKey="compiler-column" variantId="v1" packages={packages} />);
