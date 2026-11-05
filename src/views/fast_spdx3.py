@@ -659,7 +659,7 @@ class FastSPDX3:
                 continue
             for target in targets:
                 if isinstance(target, str):
-                    if relation in {'dependsOn', 'hasPrerequisite'}:
+                    if relation in {'dependsOn', 'hasPrerequisite', 'hasOptionalDependency', 'hasProvidedDependency'}:
                         edges.add((source, target, relation, scope))
                     elif relation == 'dependencyOf':
                         edges.add((target, source, relation, scope))

@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from decimal import Decimal
+import json
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.cvss import CVSS
 from ..models.assessment import Assessment
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
+from ..helpers.export_evidence import export_evidence, EVIDENCE_PROPERTY
+from cyclonedx.model import Property
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.bom_ref import BomRef
 from cyclonedx.model.dependency import Dependency
@@ -486,6 +489,18 @@ class CycloneDx:
         self.sbom.components = []
         self.register_components()
         self.register_dependencies()
+        properties = [
+            prop for prop in self.sbom.metadata.properties if prop.name != EVIDENCE_PROPERTY
+        ]
+        references = {}
+        for sid, ref in self._component_refs.items():
+            assert ref.value is not None
+            references[sid] = ref.value
+        properties.append(Property(
+            name=EVIDENCE_PROPERTY,
+            value=json.dumps(export_evidence(self.packagesCtrl, references, include_files=True), sort_keys=True),
+        ))
+        self.sbom.metadata.properties = properties
         self.sbom.vulnerabilities = []
         self.register_vulnerabilities()
 

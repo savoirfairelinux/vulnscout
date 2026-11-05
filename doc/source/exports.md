@@ -68,3 +68,49 @@ and source-inventory completeness cannot be represented by this export.
 Consequently, a reimport conservatively disables compiled-source CVE refinement
 even when individual files retain compilation evidence. Reimport the original
 companion SBOMs to restore complete build evidence and refinement.
+
+## Compiler metadata and dependency nature
+
+SBOM exports use the selected active source documents, not package-global or
+superseded observations. A project export includes the active documents of all
+its variants; a variant export excludes observations from other variants even
+when the package names and versions match. The original input files need not
+remain on disk.
+
+SPDX 2.3 JSON/XML preserves native dependency relationship types, including
+`BUILD_DEPENDENCY_OF`, `RUNTIME_DEPENDENCY_OF`, development, test, optional, and
+provided dependencies. These inverse relationships point from the dependency
+to its dependent. SPDX 3 emits `LifecycleScopedRelationship` for explicit
+lifecycle scopes and preserves `hasPrerequisite`. Optional/provided
+relationships use `hasOptionalDependency`/`hasProvidedDependency`. Generic
+dependencies remain unscoped; an unqualified dependency is not assumed to be
+a runtime dependency. Imported `dependencyOf` declarations are normalized to
+the standard SPDX 3 `dependsOn` direction.
+
+SPDX 3 also emits labelled compiler-metadata `build_Build` observations, with
+`build_parameter` dictionary entries (`compile:flags:<language>` and
+`compile:defines:<language>`) and associated package outputs. Flags and defines
+remain raw strings: quoting, ordering, repeated entries, empty values, and
+language/target distinctions are preserved. No input edges or intermediate
+build graph are inferred from these observations.
+
+All SBOM formats additionally carry a versioned portable JSON evidence payload:
+
+| Output | Evidence location | Intentional native limitations |
+| --- | --- | --- |
+| SPDX 2.3 JSON/XML | Document `OTHER` annotation starting `VulnScout SBOM evidence v1:` | Compiler targets and declarations without an exact SPDX 2 equivalent use the annotation. |
+| SPDX 3 JSON-LD | `SpdxDocument.comment` starting `VulnScout SBOM evidence v1:` | Original declaration spellings and source-document provenance remain in the comment alongside native relationships/build observations. |
+| CycloneDX 1.4/1.5/1.6 JSON | `metadata.properties`, name `vulnscout:sbom-evidence:v1` | The native dependency graph has no per-edge lifecycle qualifier. Recorded files and their build observations are carried in the property rather than presented as software package components. |
+
+The payload preserves dependency declarations (including original relationship
+type, lifecycle scope, and evidence source), compiler targets with original
+document identity, and remapped package associations. CycloneDX additionally
+stores the same recorded file metadata, hashes, associations, and conservative
+compilation observations described above. VulnScout restores this evidence on
+reimport in either parser mode, including across repeated export/import cycles.
+Original document/build identifiers inside evidence are historical labels, not
+live references in the new SBOM. Other tools may ignore private annotations,
+comments, and properties; cross-format conversion by such tools can lose them.
+No export claims to preserve the complete build graph or source completeness.
+OpenVEX is a vulnerability/assessment format, not a file or build inventory;
+these additions do not change its output.

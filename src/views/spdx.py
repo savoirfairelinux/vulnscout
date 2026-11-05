@@ -7,6 +7,7 @@ from ..controllers import ControllersCache, PackagesController, VulnerabilitiesC
 from .fast_spdx import (SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_dependency_scope,
                         spdx2_provenance_only_sources)
 from ..helpers.export_files import file_metadata, SPDX2_INVENTORY_PREFIX, SPDX2_ASSOCIATION_COMMENT
+from ..helpers.export_evidence import dependency_relationships, export_evidence, EVIDENCE_PREFIX
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
@@ -294,15 +295,15 @@ class SPDX:
     def register_dependencies(self):
         """Copy dependency edges between registered components into SBOM."""
         existing = {
-            (relation.spdx_element_id, relation.related_spdx_element_id)
+            (relation.spdx_element_id, relation.related_spdx_element_id, relation.relationship_type)
             for relation in self.sbom.relationships
-            if relation.relationship_type == RelationshipType.DEPENDS_ON
+            if isinstance(relation.spdx_element_id, str) and isinstance(relation.related_spdx_element_id, str)
         }
-        for source, target in sorted(self.packagesCtrl.dependency_edges()):
-            edge = (self.pkg_to_ref[source], self.pkg_to_ref[target])
+        for source, target, kind, _ in dependency_relationships(self.packagesCtrl, spdx3=False):
+            edge = (self.pkg_to_ref[source], self.pkg_to_ref[target], RelationshipType[kind])
             if edge not in existing:
                 existing.add(edge)
-                self.sbom.relationships.append(Relationship(edge[0], RelationshipType.DEPENDS_ON, edge[1]))
+                self.sbom.relationships.append(Relationship(edge[0], edge[2], edge[1]))
 
     def create_shell_document(self, author=None):
         if "sbom" not in self.__dict__ or not self.sbom:
@@ -340,6 +341,13 @@ class SPDX:
 
         stream = StringIO()
         converter = _SPDXDocumentConverter()
+        evidence_annotation = {
+            "annotationDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "annotationType": "OTHER", "annotator": "Tool: VulnScout",
+            "comment": EVIDENCE_PREFIX + json.dumps(
+                export_evidence(self.packagesCtrl, self.pkg_to_ref), sort_keys=True,
+            ),
+        }
         annotated_files: list[dict] = []
         annotated_relationships: list[dict] = []
         for record in self.packagesCtrl.recorded_files():
@@ -374,6 +382,7 @@ class SPDX:
                     "files": annotated_files, "relationships": annotated_relationships,
                 }, sort_keys=True),
             })
+        converter.recorded_annotations.append(evidence_annotation)
         # CPE validation may fail because the SPDX spec expects special characters in package
         # names to be escaped, but our CPE strings may contain unescaped special characters
         if with_cpe:
