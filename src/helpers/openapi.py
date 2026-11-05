@@ -312,9 +312,10 @@ def _parse_docstring(view_func: Callable[..., Any], method: str) -> tuple[str, s
 
 def _add_request_field(metadata: dict[str, Any], field: Any) -> None:
     media_type, name, schema, required = field
-    if metadata["requestBody"] is None:
-        metadata["requestBody"] = {"required": False, "content": {}}
     body = metadata["requestBody"]
+    if body is None:
+        body = {"required": False, "content": {}}
+        metadata["requestBody"] = body
     media = body["content"].setdefault(
         media_type, {"schema": {"type": "object", "properties": {}}},
     )
