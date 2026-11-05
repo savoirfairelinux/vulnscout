@@ -375,6 +375,13 @@ def test_zero_target_initiating_scope_and_skipped_deferred_source_are_visible(ap
     assert data["run_id"] == run and data["status"] == "incomplete"
     assert data["source_status"] == {"epss": "incomplete"}
     assert data["coverage"] == []
+    for params in ({}, {"project_id": PROJECT}, {"project_id": PROJECT, "variant_id": VARIANT}):
+        response = client.get("/api/refresh-runs", query_string=params)
+        assert response.status_code == 200
+        listing = response.get_json()
+        assert listing["total"] == 1
+        assert [entry["run_id"] for entry in listing["runs"]] == [run]
+        assert "changes" not in listing["runs"][0]
     assert client.get(f"/api/refresh-runs/{run}?project_id={uuid.uuid4()}").status_code == 404
 
 

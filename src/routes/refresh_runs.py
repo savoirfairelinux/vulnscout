@@ -182,6 +182,7 @@ def init_app(app):
             empty = {"total_changes": 0, "changed_vulnerabilities": 0, "first_enrichments": 0}
             runs = [artifact(run, params, summary=summaries.get(run.run_id, empty)) for run in page]
             for run in runs:
+                assert run is not None, "Matched refresh run must be visible in the selected scope"
                 run.pop("changes")
             return jsonify({"runs": runs, "total": total,
                             "limit": limit, "offset": offset})

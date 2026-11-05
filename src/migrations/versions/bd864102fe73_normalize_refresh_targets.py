@@ -36,12 +36,12 @@ def upgrade():
 def downgrade():
     connection = op.get_bind()
     runs = sa.table("refresh_runs", sa.column("run_id", sa.String()), sa.column("coverage", sa.JSON()))
-    targets = sa.table("refresh_targets", *[
-        sa.column(key, type_) for key, type_ in [
-            ("id", sa.Integer()), ("run_id", sa.String()), ("source", sa.String()),
-            ("vuln_id", sa.String()), ("status", sa.String()), ("error", sa.String()), ("packages", sa.JSON()),
-        ]
-    ])
+    targets = sa.table(
+        "refresh_targets",
+        sa.column("id", sa.Integer()), sa.column("run_id", sa.String()), sa.column("source", sa.String()),
+        sa.column("vuln_id", sa.String()), sa.column("status", sa.String()), sa.column("error", sa.String()),
+        sa.column("packages", sa.JSON()),
+    )
     for run_id in connection.execute(sa.select(runs.c.run_id)).scalars():
         coverage = [dict(row._mapping) for row in connection.execute(sa.select(
             targets.c.source, targets.c.vuln_id, targets.c.status, targets.c.error, targets.c.packages,
