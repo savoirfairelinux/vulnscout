@@ -308,7 +308,7 @@ setup_user() {
 }
 
 #######################################
-# Extract a .tar, .tar.gz or .tar.zst file into a given folder
+# Extract a .tar, .tar.gz, .tar.xz or .tar.zst file into a given folder
 #######################################
 extract_tar_file() {
     local file="$1"
@@ -316,6 +316,7 @@ extract_tar_file() {
     case "$file" in
         *.tar)     tar -xf "$file" -C "$folder" ;;
         *.tar.gz)  tar -xzf "$file" -C "$folder" ;;
+        *.tar.xz)  tar -xJf "$file" -C "$folder" ;;
         *.tar.zst)
             unzstd "$file" -o "${file%.zst}" --force
             tar -xf "${file%.zst}" -C "$folder"
@@ -330,8 +331,8 @@ cmd_add_file() {
     local src="$2"
     mkdir -p "$INPUTS_DIR/$type"
 
-    # For SPDX inputs, archives (.tar/.tar.gz/.tar.zst) must be extracted first
-    if [[ "$type" == "spdx" ]] && [[ "$src" == *.tar || "$src" == *.tar.gz || "$src" == *.tar.zst ]]; then
+    # For SPDX inputs, archives (.tar/.tar.gz/.tar.xz/.tar.zst) must be extracted first
+    if [[ "$type" == "spdx" ]] && [[ "$src" == *.tar || "$src" == *.tar.gz || "$src" == *.tar.xz || "$src" == *.tar.zst ]]; then
         local tmp_extract
         tmp_extract=$(mktemp -d)
         console_out info "Extracting SPDX archive: $src"

@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Additive entrypoint flags used by the host wrapper's subcommands."""
 
+import io
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
+import tarfile
 
 import pytest
 
@@ -169,4 +173,91 @@ def test_ai_assess_rejects_an_unsafe_run_id(tmp_path, monkeypatch):
     result, calls = _run(tmp_path, "--ai-assess", "--cve", "CVE-2024-0001")
     assert result.returncode == 2
     assert "Invalid VULNSCOUT_RUN_ID." in result.stderr
+    assert calls == []
+
+
+def _spdx_archive(tmp_path, name, suffix, documents):
+    archive = tmp_path / f"{name}{suffix}"
+    modes = {".tar": "w", ".tar.gz": "w:gz", ".tar.xz": "w:xz", ".tar.zst": "w"}
+    source = archive.with_suffix("") if suffix == ".tar.zst" else archive
+    with tarfile.open(source, modes[suffix]) as bundle:
+        for filename, content in documents.items():
+            member = tarfile.TarInfo(f"nested/{filename}")
+            member.size = len(content)
+            bundle.addfile(member, io.BytesIO(content))
+    if suffix == ".tar.zst":
+        if not shutil.which("zstd") or not shutil.which("unzstd"):
+            pytest.skip("zstd and unzstd are required for SPDX Zstandard archive tests")
+        subprocess.run(["zstd", "-q", str(source), "-o", str(archive)], check=True)
+        source.unlink()
+    return archive
+
+
+@pytest.mark.parametrize("suffix", [".tar", ".tar.gz", ".tar.xz", ".tar.zst"])
+def test_spdx_archives_extract_json_and_jsonld(tmp_path, monkeypatch, suffix):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    documents = {
+        "recipe.spdx.json": b'{"spdxVersion":"SPDX-2.2","relationships":[]}',
+        "image.jsonld": b'{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld"}',
+    }
+    archive = _spdx_archive(tmp_path, "image", suffix, documents)
+
+    result, calls = _run(tmp_path, "--add-spdx", str(archive), "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "Warning:" not in result.stdout + result.stderr
+    assert calls == []
+    inputs = tmp_path / "inputs" / "spdx"
+    assert {path.name: path.read_bytes() for path in inputs.iterdir()} == documents
+    assert archive.exists()
+
+
+def test_spdx_xz_import_after_another_variant(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    # Do not remove staged files belonging to other invocations on the host.
+    rm = fake_bin / "rm"
+    rm.write_text(
+        '#!/bin/bash\n'
+        'if [[ "$*" == "-f /tmp/vulnscout_stage_"* ]]; then exit 0; fi\n'
+        'exec /bin/rm "$@"\n'
+    )
+    rm.chmod(0o755)
+
+    for variant, suffix in [("first", ".tar.zst"), ("second", ".tar.xz")]:
+        archive = _spdx_archive(
+            tmp_path, variant, suffix,
+            {f"{variant}.spdx.json": b'{"spdxVersion":"SPDX-2.2","relationships":[]}'},
+        )
+        cve_check = tmp_path / f"{variant}.scouted.json"
+        cve_check.write_text("{}")
+
+        result, calls = _run(
+            tmp_path, "--project", "scarthgap", "--variant", variant,
+            "--add-spdx", str(archive), "--add-cve-check", str(cve_check),
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "Warning:" not in result.stdout + result.stderr
+        assert calls == [
+            shlex.join([
+                "--app", "src.bin.webapp", "merge", "--project", "scarthgap", "--variant", variant,
+                "--spdx", str(tmp_path / "inputs" / "spdx" / f"{variant}.spdx.json"),
+                "--yocto-cve", str(tmp_path / "inputs" / "yocto_cve_check" / cve_check.name),
+            ]),
+            f"{APP} process",
+        ]
+        assert list((tmp_path / "inputs" / "spdx").iterdir()) == []
+
+
+def test_spdx_xz_extraction_failure_stops_import(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    archive = tmp_path / "invalid.tar.xz"
+    archive.write_bytes(b"not an XZ archive")
+
+    result, calls = _run(tmp_path, "--add-spdx", str(archive))
+
+    assert result.returncode != 0
+    assert result.stderr
     assert calls == []

@@ -121,7 +121,7 @@ SQLite cache.
 
 | Flag | Description |
 |------|-------------|
-| `--add-spdx <path>` | Add SPDX 2/3 JSON (`*.spdx.json`), SPDX 3 JSON-LD (`*.jsonld`), or a `.tar`, `.tar.gz`, `.tar.zst` archive containing those files |
+| `--add-spdx <path>` | Add SPDX 2/3 JSON (`*.spdx.json`), SPDX 3 JSON-LD (`*.jsonld`), or a `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst` archive containing those files |
 | `--add-cve-check <path>` | Add a Yocto CVE check file (`*.json`) |
 | `--add-yocto-vex <path>` | Add a Yocto VEX file from `vex.bbclass` (`*.json`) |
 | `--add-openvex <path>` | Add an OpenVEX file; name must match `*openvex*.json` |
