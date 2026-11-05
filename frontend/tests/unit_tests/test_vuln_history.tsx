@@ -128,23 +128,27 @@ describe("VulnHistory", () => {
         const makeRun = (id: string): RefreshRun => ({
             run_id: id, scope: { project_id: id, variant_id: null }, sources: [],
             started_at: '2026-01-01T00:00:00Z', finished_at: null, status: 'incomplete',
-            coverage: [], changes: [], summary: { total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
-            total: 0, limit: 1000, offset: 0,
+            coverage: [], changes: [{
+                vuln_id: 'CVE-1', source: 'nvd', field: 'description', before: null,
+                after: `Description for ${id}`, kind: 'first_enrichment',
+                changed_at: '2026-01-01T00:00:00Z', packages: [],
+            }], summary: { total_changes: 1, changed_vulnerabilities: 1, first_enrichments: 1 },
+            total: 1, limit: 1000, offset: 0,
         });
         latest.mockResolvedValueOnce(makeRun('first-project'));
         const { rerender } = render(<VulnHistory vulnId="CVE-1" projectId="p1" variantId="v1" />);
         await expand();
-        await screen.findByText('first-project');
+        await screen.findByText('Description for first-project');
         let resolve: (value: RefreshRun) => void = () => {};
         latest.mockReturnValueOnce(new Promise(done => { resolve = done; }));
         rerender(<VulnHistory vulnId="CVE-1" projectId="p2" variantId="v2" />);
-        expect(screen.queryByText('first-project')).not.toBeInTheDocument();
+        expect(screen.queryByText('Description for first-project')).not.toBeInTheDocument();
         await expand();
         expect(screen.getByText('Loading refresh changes…')).toBeInTheDocument();
         expect(latest).toHaveBeenLastCalledWith('CVE-1', { projectId: 'p2', variantId: 'v2' }, expect.any(AbortSignal));
         rerender(<VulnHistory vulnId="CVE-2" projectId="p2" variantId="v2" />);
         await act(async () => resolve(makeRun('stale-project')));
-        expect(screen.queryByText('stale-project')).not.toBeInTheDocument();
+        expect(screen.queryByText('Description for stale-project')).not.toBeInTheDocument();
         await expand();
         await waitFor(() => expect(latest).toHaveBeenLastCalledWith('CVE-2', { projectId: 'p2', variantId: 'v2' }, expect.any(AbortSignal)));
         expect(list).not.toHaveBeenCalled();

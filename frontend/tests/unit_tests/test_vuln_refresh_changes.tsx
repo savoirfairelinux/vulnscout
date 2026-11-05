@@ -22,8 +22,30 @@ test('distinguishes no baseline from an unchanged completed run', () => {
     expect(screen.getByText(/No refresh baseline is available/)).toBeInTheDocument();
     rerender(<VulnRefreshChanges run={run} vulnId="CVE-1" />);
     expect(screen.getByText('No data changed in this refresh.')).toBeInTheDocument();
-    expect(screen.getByText('run-one')).toBeInTheDocument();
-    expect(screen.getByText(/Project project-one · Variant variant-one/)).toBeInTheDocument();
+    expect(screen.getByText('Selected project · Selected variant')).toBeInTheDocument();
+});
+
+test.each([
+    [{ project_id: null, variant_id: null }, 'All projects · All variants'],
+    [{ project_id: '81ccd263-5fa5-4b3c-ab9d-ce5c4fec675d', variant_id: null }, 'Selected project · All variants'],
+    [{ project_id: '81ccd263-5fa5-4b3c-ab9d-ce5c4fec675d', variant_id: '00000000-0000-4000-8000-000000000002' }, 'Selected project · Selected variant'],
+])('shows readable scope without internal identifiers for %s', (scope, label) => {
+    const refreshRun = { ...run, run_id: 'q-6b40a4b2-8a48-4ced-aae8-c8738fef4769', scope };
+    const { container } = render(<VulnRefreshChanges run={refreshRun} vulnId="CVE-1" />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(refreshRun.run_id);
+    if (scope.project_id) expect(container).not.toHaveTextContent(scope.project_id);
+    if (scope.variant_id) expect(container).not.toHaveTextContent(scope.variant_id);
+    expect(screen.queryByText('Run:')).not.toBeInTheDocument();
+    expect(screen.getByText('NVD, EPSS')).toBeInTheDocument();
+    expect(screen.getByText('NVD: complete')).toBeInTheDocument();
+    expect(screen.getByText('EPSS: complete')).toBeInTheDocument();
+    expect(screen.getByText('complete')).toBeInTheDocument();
+    expect(screen.getByText('Latest refresh for CVE-1')).toBeInTheDocument();
+    expect(container.querySelectorAll('time')).toHaveLength(2);
+    expect(container.querySelector(`time[datetime="${run.started_at}"]`)).toHaveTextContent(new Date(run.started_at).toLocaleString());
+    expect(container.querySelector(`time[datetime="${run.finished_at}"]`)).toHaveTextContent(new Date(run.finished_at!).toLocaleString());
 });
 
 test('keeps successful changes visible alongside failed source coverage', () => {
