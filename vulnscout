@@ -67,8 +67,8 @@ _vulnscout_files() {
 }
 _vulnscout_complete() {
     local cur prev word verb="" i k
-    local data_verbs="add scan match-condition assess report export import refresh"
-    local all_verbs="add scan match-condition assess report export import refresh delete list config asset start stop restart update version serve"
+    local data_verbs="add scan match-condition assess review report export import refresh"
+    local all_verbs="add scan match-condition assess review report export import refresh delete list config asset start stop restart update version serve"
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -114,6 +114,8 @@ _vulnscout_complete() {
             words="--spdx --cdx --cve-check --yocto-vex --openvex --grype" ;;
         assess)
             words="--cve --filter --model --timeout --dry-run --json" ;;
+        review)
+            words="--assessment-id --cve --re-review --model --timeout --dry-run --json" ;;
         scan)
             local prefix=""
             if [[ "$cur" == *,* ]]; then
@@ -261,7 +263,7 @@ PROJECT="default"
 PROJECT_SPECIFIED=false
 VARIANT=""
 VARIANT_SPECIFIED=false
-# Every -v given to a command, in order; only 'assess' accepts several (others use the last, VARIANT).
+# Every -v given to a command, in order; only 'assess' and 'review' accept several (others use the last, VARIANT).
 VARIANTS=()
 MATCH_CONDITION=""
 PENDING_ARGS=()
@@ -289,6 +291,7 @@ Data commands (also accept --project and --variant; see '<command> --help'):
     scan                    Run vulnerability scans
     match-condition         Test stored vulnerabilities against a condition
     assess                  Assess vulnerabilities with the embedded AI agent
+    review                  Review custom assessments with the embedded AI agent
     report                  Generate reports
     export                  Export SBOMs, custom data, assessments or context
     import                  Import custom data, assessments or context
@@ -396,6 +399,32 @@ Examples:
     vulnscout assess -p demo -v x86 --cve CVE-2024-3094 --json
     vulnscout assess -p demo -v x86 -v arm64 --filter "new and cvss >= 7" --dry-run
     vulnscout assess -p demo --filter "(id == CVE-2024-3094 or id == CVE-2023-4863) and pending"
+EOF
+            ;;
+        review) cat <<'EOF'
+Usage: vulnscout review -p <project> (--assessment-id <uuid>... | --cve <id>... [-v <variant>]...) [options]
+
+Review custom (user) assessments with the AI provider configured for the web UI Agent.
+Each review is recorded alongside the assessment, one per target; the assessment itself
+is never changed. Assessments from SBOM scans and pending AI suggestions are never reviewed.
+Options:
+    --assessment-id <uuid>  Assessment to review (repeatable); every target in the project; not with --cve
+    --cve <id>              Review the custom assessments of this vulnerability (repeatable); not with --assessment-id
+    -p, --project <name>    Project (required)
+    -v, --variant <name>    Variant (repeatable); only with --cve, default: every variant
+    --re-review             Also review targets whose review is still fresh
+    --model <id>            Model to use instead of AI_MODEL
+    --timeout <seconds>     Limit for each agent turn (default: 600)
+    --dry-run               Show the targets without calling the AI
+    --json                  Print the summary as JSON
+Exit codes: 0 every target reviewed, skipped (fresh) or planned (--dry-run); 1 resolution/usage error or any target
+    changed, no_write, failed, timeout or interrupted
+Ctrl-C stops after cancelling the current agent turn and still prints the summary; press it again to stop now.
+
+Examples:
+    vulnscout review -p demo --assessment-id 3f2b6c1e-0000-4000-8000-000000000001
+    vulnscout review -p demo --cve CVE-2024-3094 --re-review
+    vulnscout review -p demo -v x86 -v arm64 --cve CVE-2024-3094 --dry-run --json
 EOF
             ;;
         report) cat <<'EOF'
@@ -823,7 +852,7 @@ find_legacy_tokens() {
                     skip_value=true ;;
                 --dev|-h|--help|--version)
                     ;;
-                start|stop|restart|update|version|serve|add|scan|match-condition|assess|refresh|asset|report|export|import|delete|list)
+                start|stop|restart|update|version|serve|add|scan|match-condition|assess|review|refresh|asset|report|export|import|delete|list)
                     # A new-grammar verb as first command: the rest are its arguments, never legacy flags.
                     if [ "$seen_command" = false ]; then
                         return 1
@@ -1314,6 +1343,59 @@ verb_assess() {
     run_interruptible "${SCOPE_ARGS[@]}" --ai-assess "${variant_args[@]}" "${args[@]}"
 }
 
+verb_review() {
+    local has_id=false has_cve=false
+    local -a args=()
+    # The implicit "default" project does not count: a review always names its project.
+    if [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'review' requires --project."
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --assessment-id)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$ ]]; then
+                    die "invalid assessment ID '$2'."
+                fi
+                args+=(--assessment-id "$2"); has_id=true; shift 2 ;;
+            --cve)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]; then
+                    die "invalid vulnerability ID '$2'."
+                fi
+                args+=(--cve "$2"); has_cve=true; shift 2 ;;
+            --model)
+                require_value "$1" "$#" "${2:-}"
+                args+=(--model "$2"); shift 2 ;;
+            --timeout)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                    die "--timeout must be a positive number of seconds."
+                fi
+                args+=(--timeout "$2"); shift 2 ;;
+            --re-review|--dry-run|--json)
+                args+=("$1"); shift ;;
+            *)
+                reject_option review "$1" ;;
+        esac
+    done
+    if [ "$has_id" = "$has_cve" ]; then
+        die "'review' needs exactly one of --assessment-id or --cve."
+    fi
+    if [ "$has_id" = true ] && [ "$VARIANT_SPECIFIED" = true ]; then
+        die "'review' --variant cannot be used with --assessment-id, which reviews every target in the project."
+    fi
+    local variant
+    local -a variant_args=()
+    for variant in "${VARIANTS[@]}"; do
+        variant_args+=(--variant "$variant")
+    done
+    # Startup messages go to stderr: stdout carries only the report (--json).
+    ensure_running >&2
+    SCOPE_ARGS=(--project "$PROJECT")
+    run_interruptible "${SCOPE_ARGS[@]}" --ai-review "${variant_args[@]}" "${args[@]}"
+}
+
 verb_refresh() {
     require_no_args refresh "$@"
     if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
@@ -1735,6 +1817,7 @@ parse_new() {
         scan) verb_scan "${rest[@]}" ;;
         match-condition) verb_match_condition "${rest[@]}" ;;
         assess) verb_assess "${rest[@]}" ;;
+        review) verb_review "${rest[@]}" ;;
         refresh) verb_refresh "${rest[@]}" ;;
         asset) verb_asset "${rest[@]}" ;;
         report) verb_report "${rest[@]}" ;;

@@ -422,6 +422,18 @@ class ScopedVulnScoutClient(VulnScoutClient):
         self.write_targets = frozenset(
             (target["vuln_id"], target["variant_id"], target["package"]) for target in scope["write_targets"]
         ) if "write_targets" in scope else None
+        # CLI review turns may only review their listed (assessment, variant, package|finding) targets.
+        self.review_targets = frozenset(
+            self._review_key(t["assessment_id"], t["variant_id"], kind, t.get(kind_field))
+            for t in scope["review_targets"]
+            for kind, kind_field in (("package", "package"), ("finding", "finding_id"))
+            if t.get(kind_field)
+        ) if "review_targets" in scope else None
+
+    @staticmethod
+    def _review_key(assessment_id: str, variant_id: Optional[str], kind: str, value: str) -> tuple:
+        return (str(assessment_id).lower(), str(variant_id).lower(), kind,
+                str(value) if kind == "package" else str(value).lower())
 
     def _project(self, project_id: str) -> None:
         if project_id not in self.project_ids:
@@ -593,5 +605,11 @@ class ScopedVulnScoutClient(VulnScoutClient):
 
     def write_assessment_review(self, assessment_id: str, payload: dict) -> dict:
         self._variant(payload.get("variant_id"))
+        if self.review_targets is not None:
+            variant_id = payload.get("variant_id")
+            keys = [self._review_key(assessment_id, variant_id, kind, payload[field])
+                    for kind, field in (("package", "package"), ("finding", "finding_id")) if payload.get(field)]
+            if not any(key in self.review_targets for key in keys):
+                raise VulnScoutError("Review target is outside the targets of this review run.")
         self.get_assessment(assessment_id)
         return super().write_assessment_review(assessment_id, payload)

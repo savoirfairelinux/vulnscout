@@ -223,6 +223,58 @@ retrying a write.
 - `--json` prints `{"model", "scope", "results": [{"id", "outcome", "targets", "reply", "usage", "error"}]}` on stdout; progress, including container startup, goes to stderr. `scope` is `{"project", "variants"}`, where `variants` is `null` when every variant of the project is selected. Each `targets` entry is `{"variant_id", "variant", "package", "written", "assessment_ids"}`; `assessment_ids` lists the pending AI assessments this run's agent saved for the target; assessments written meanwhile by the web agent or another run are not counted.
 - Ctrl-C, or a CI job cancellation (SIGTERM), stops the run inside the container after cancelling the current agent turn. The summary still lists what was written, and the exit code is 1. Press Ctrl-C a second time to stop immediately without a summary.
 
+### Reviewing custom assessments from the CLI
+
+`./vulnscout review` runs the same embedded agent and `assessment-review` skill as **Review with AI** (see [AI Review of Custom Assessments](#ai-review-of-custom-assessments)), without a browser. It records one AI review per (variant, package) target of each **custom** (user-authored) assessment, and never modifies the assessment itself. Assessments from SBOM scans and pending AI suggestions are never reviewed. It uses the same provider settings as `assess`.
+
+```bash
+./vulnscout review -p demo --assessment-id 3f2b6c1e-0000-4000-8000-000000000001
+./vulnscout review -p demo --cve CVE-2024-3094 --re-review
+./vulnscout review -p demo -v x86 -v arm64 --cve CVE-2024-3094 --dry-run --json
+```
+
+- `-p` is always required, and `-p`/`-v` go after the verb. Select assessments in exactly one of two ways:
+  - `--assessment-id <uuid>` (repeatable) reviews every target of that assessment in the project. Targets in other projects are left out and reported as `excluded_targets`. `-v` is rejected in this mode, and an assessment with no target in the project is an error.
+  - `--cve <id>` (repeatable) reviews the custom assessments of that vulnerability: every target in the project, or only the variants given with `-v` (repeatable). Non-custom assessments of the CVE are ignored and counted in `ignored_non_custom`. A CVE with no custom assessment in scope is an error that says whether it has no assessment at all or only SBOM-scan or pending AI ones.
+- All selection errors are listed together and the command exits 1 before any AI call.
+- A target whose review is **fresh** is skipped (`skipped_fresh`); targets with no review or a **stale** one are always reviewed. `--re-review` also reviews fresh targets. When every target is fresh, no agent is loaded and the command exits 0.
+- Each agent turn covers one variant of one assessment; many packages are split into batches shown as `(batch N of M)`. A turn may only save reviews for its own listed targets, against the assessment content selected at the start of the run: any other write, including changing the assessment, is rejected. After each turn the outcome is read back from the database, not from the agent's reply.
+- `--timeout` limits each agent turn (positive integer, default 600 s). `--model` overrides `AI_MODEL`. `--dry-run` lists the targets without calling the AI. An expired or invalid GitHub Copilot token stops the run before the first review.
+- Target outcomes: `reviewed` (a review for the pinned assessment content was saved), `skipped_fresh`, `planned` (dry run), and the failing ones `changed` (the assessment was edited, retargeted or deleted during the run; run it again), `no_write` (the agent saved no review), `failed`, `timeout`, `interrupted`.
+- Assessment outcomes: `planned`, `skipped` (every target fresh), `reviewed`, `partial` (some targets reviewed) and `failed`.
+- Exit codes: **0** when every selected target is reviewed, already fresh (skipped) or planned (`--dry-run`) and the run was not interrupted; **1** on any resolution or usage error (a missing `--project`, using both or neither of `--assessment-id` and `--cve`, a malformed ID, an invalid or missing option value such as `--timeout 0`, an unknown project or variant; with `--json` these errors go to stderr and stdout stays empty; the `vulnscout` wrapper and the `flask ai-review` command both exit 1 for these), any target with a failing outcome (`changed`, `no_write`, `failed`, `timeout`, `interrupted`), or an interrupted run.
+- `--json` prints the report on stdout; progress, including container startup, goes to stderr. Its shape is:
+
+  ```json
+  {
+    "model": "gpt-5",
+    "scope": {"project": "demo", "variants": ["x86"]},
+    "ignored_non_custom": 0,
+    "interrupted": false,
+    "results": [
+      {
+        "assessment_id": "3f2b6c1e-0000-4000-8000-000000000001",
+        "vuln_id": "CVE-2024-3094",
+        "outcome": "reviewed",
+        "excluded_targets": 0,
+        "targets": [
+          {"variant_id": "...", "variant": "x86", "project_id": "...", "package": "xz@5.6.0",
+           "outcome": "reviewed",
+           "review": {"id": "...", "status": "not_affected", "verdict": "agrees"},
+           "error": null}
+        ],
+        "reply": "...",
+        "usage": {"cost": null, "input_tokens": null, "output_tokens": null}
+      }
+    ],
+    "counts": {"reviewed": 1, "skipped": 0, "failed": 0}
+  }
+  ```
+
+  `scope.variants` is `null` when every variant of the project is selected. `interrupted` is `true` when the run was stopped by Ctrl-C or SIGTERM. `counts` is per target: `failed` counts the failing outcomes above. `review` is `null` unless the target was reviewed; its `status` is the VEX status the agent concluded and `verdict` is `agrees` or `differs` relative to the assessment. `error` is the failure message of a failing target.
+- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run after cancelling the current agent turn: reviews already saved stay `reviewed`, the remaining targets are reported as `interrupted` and the summary is still printed, with `Interrupted.` (`"interrupted": true` in `--json`) and exit code 1. Press Ctrl-C a second time to stop immediately without a summary.
+- The web **Review with AI** button is unchanged; CLI and web reviews of a target replace each other.
+
 ## AI Context page
 
 The **AI Context** page uses a settings-style layout. The sidebar lists

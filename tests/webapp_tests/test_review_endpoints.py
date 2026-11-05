@@ -3294,3 +3294,24 @@ def test_batch_never_fuses_two_vulnerabilities(client, demo_ids):
     assert response.status_code == 200, response.get_json()
     ids = {row["id"] for row in response.get_json()["assessments"]}
     assert len(ids) == 2
+
+
+def test_review_state_missing_fresh_stale(client, app):
+    from src.extensions import db
+    from src.models.assessment import Assessment
+    from src.models.assessment_review import AssessmentReview, fingerprint_assessment, review_state
+
+    resp = _create_handmade_assessment(client)
+    assert resp.status_code == 200, resp.get_json()
+    with app.app_context():
+        assessment = Assessment.get_by_id(resp.get_json()["assessment"]["id"])
+        target = assessment.target_rows[0]
+        assert review_state(None) == "missing"
+        review = AssessmentReview.upsert(
+            assessment_id=assessment.id, variant_id=target.variant_id, finding_id=target.finding_id,
+            reviewed_fingerprint=fingerprint_assessment(assessment),
+            status="not_affected", rationale="agrees")
+        assert review_state(review) == "fresh"
+        assessment.status_notes = (assessment.status_notes or "") + " edited"
+        db.session.commit()
+        assert review_state(review) == "stale"

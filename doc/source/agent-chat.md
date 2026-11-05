@@ -23,7 +23,7 @@ Conversation state is managed in memory; this is not a durable multi-user
 session service.
 
 Free chat exposes only the allowed VulnScout MCP tools. Assess and review actions
-(each in its own conversation) and `./vulnscout assess` additionally load the
+(each in its own conversation), `./vulnscout assess` and `./vulnscout review` additionally load the
 bundled skills from `.github/skills`: `cve-assessment` for assessments,
 `assessment-review` (with `cve-assessment`) for reviews. These sessions may read
 only the skill files and fetch public `http(s)` pages; loopback, private,
@@ -52,6 +52,13 @@ web server. That API accepts only new AI assessments on the current turn's
 targets, and revisions of the AI assessments that turn created while all their
 targets remain the turn's; every other write is rejected. It reads provider
 settings from the same `config.env`.
+
+`flask ai-review` (`./vulnscout review`) does the same for AI reviews of custom
+assessments, with `assessment-review` and write access limited to the review
+targets of the current turn; see
+[Reviewing custom assessments from the CLI](ai-assessments.md#reviewing-custom-assessments-from-the-cli).
+CLI reviews use the same provider and skills as the web agent, but do not
+appear in **Conversations**.
 
 ## Configuration and Credentials
 

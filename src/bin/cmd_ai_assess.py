@@ -5,22 +5,17 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
-import os
 import re
-import signal
-import threading
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
-from pathlib import Path
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Iterator
 from uuid import UUID
 
 import click
-from flask import abort, current_app, make_response, request, request_finished, request_started
+from flask import Response, make_response, request
 from flask.cli import with_appcontext
 
 from ..controllers import ConditionParser, ControllersCache
@@ -31,6 +26,7 @@ from ..helpers.env_vars import get_bool_env
 from ..helpers.export_scope import compute_export_scope
 from ..models.observation import Observation
 from ..models.variant import Variant
+from . import _ai_runner
 from ._common import resolve_project_variant
 from ._console import Command, echo
 from .cmd_process import _condition_scope, condition_data, newest_assessment
@@ -39,10 +35,6 @@ CVE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 MESSAGE_LIMIT = 8000
 PROMPT_BUDGET = MESSAGE_LIMIT - len(" (batch 9999 of 9999)")
 FAILING_OUTCOMES = frozenset({"partial", "no_write", "failed", "timeout", "not_found", "interrupted"})
-# Set by entrypoint.sh (cmd_ai_assess) so the host wrapper can forward Ctrl-C to this process.
-PID_FILE_ENV = "VULNSCOUT_AI_ASSESS_PID_FILE"
-# Set by SIGINT so an interrupt is reported even when cancellation cleanup raises another exception.
-_interrupted = threading.Event()
 
 
 @dataclass(frozen=True)
@@ -54,10 +46,6 @@ class Target:
     finding_id: str
 
 
-def _empty_usage() -> dict[str, Any]:
-    return {"cost": None, "input_tokens": None, "output_tokens": None}
-
-
 @dataclass
 class Result:
     id: str
@@ -66,7 +54,7 @@ class Result:
     written: set[Target] = field(default_factory=set)
     assessment_ids: dict[Target, list[str]] = field(default_factory=dict)
     replies: list[str] = field(default_factory=list)
-    usage: dict[str, Any] = field(default_factory=_empty_usage)
+    usage: dict[str, Any] = field(default_factory=_ai_runner.empty_usage)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -227,47 +215,10 @@ def _report(results: list[Result], model: str | None, project: str | None, varia
 def ai_assess_command(project_name, variant_names, cve_ids, condition, model, timeout, dry_run, as_json):
     """Assess vulnerabilities with the embedded AI agent; results are pending AI assessments."""
     try:
-        with _interrupt_signals():
+        with _ai_runner.interrupt_signals():
             _ai_assess(project_name, variant_names, cve_ids, condition, model, timeout, dry_run, as_json)
     finally:
-        _release_pid_file()
-
-
-def _on_sigint(signum, frame) -> None:
-    _interrupted.set()
-    signal.default_int_handler(signum, frame)
-
-
-@contextmanager
-def _interrupt_signals() -> Iterator[None]:
-    """Replace webapp.py's stop handler (prints and exits 0) for this command.
-
-    The host wrapper forwards the first Ctrl-C as SIGINT (stop and report) and any further one as
-    SIGTERM, which must stop at once.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
-    _interrupted.clear()
-    signal.signal(signal.SIGINT, _on_sigint)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    try:
-        yield
-    finally:
-        for signum, handler in previous.items():
-            if handler is not None:
-                signal.signal(signum, handler)
-
-
-def _release_pid_file() -> None:
-    """Remove the entrypoint's pidfile if it still names this process (it ``exec``s into flask)."""
-    path = os.environ.get(PID_FILE_ENV)
-    if not path:
-        return
-    with contextlib.suppress(OSError):
-        if Path(path).read_text().strip() == str(os.getpid()):
-            Path(path).unlink()
+        _ai_runner.release_pid_file()
 
 
 def _scope(project_name: str | None, variant_names: list[str]):
@@ -318,51 +269,6 @@ def _ai_assess(project_name, variant_names, cve_ids, condition, model, timeout, 
     _report(results, model, project_name, variants, as_json)
     if any(result.outcome in FAILING_OUTCOMES for result in results):
         raise SystemExit(1)
-
-
-NO_AI_CONFIG = ("No AI provider configured. Connect an AI provider in the web UI Agent panel "
-                "or set AI_* with `vulnscout config`.")
-GITHUB_SIGNED_OUT = ("GitHub Copilot rejected the configured token (expired or invalid). Reconnect in the "
-                     "web UI Agent panel or update AI_AUTH_CREDENTIALS with `vulnscout config`.")
-
-
-def _load_agent(model: str | None):
-    """Return (credentials, model, MCP server path) from config.env, or fail like the web Agent would
-    (including missing skills)."""
-    from ..routes import agent, agent_skills
-
-    root = agent.Conversation()
-    error = agent._load_env_credentials(root)
-    if error:
-        raise click.ClickException(f"Invalid AI provider configuration: {error}")
-    if not root.credentials.token and not root.credentials.provider:
-        raise click.ClickException(NO_AI_CONFIG)
-    selected = model or root.model
-    if not selected:
-        raise click.ClickException("No AI model configured. Set AI_MODEL with `vulnscout config` or pass --model.")
-    provider = root.credentials.provider
-    if provider and provider.model and selected != provider.model:
-        # A configured AI_MODEL is the provider's only choice; --model replaces it for this run only.
-        root.credentials.provider = replace(provider, model=selected, models=[{"id": selected, "name": selected}])
-    path = agent._mcp_path()
-    if path is None or not path.is_file():
-        raise click.ClickException(
-            "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override.")
-    if agent_skills.skills_path() is None:
-        raise click.ClickException(agent_skills.SKILLS_MISSING_ERROR)
-    return root.credentials, selected, path
-
-
-def _check_github_sign_in(token: str) -> None:
-    """Fail once up front instead of once per vulnerability when the GitHub token is unusable."""
-    from ..routes import agent
-
-    try:
-        auth = asyncio.run(agent._token_status(token))
-    except Exception as exc:
-        raise click.ClickException(f"Could not check the GitHub Copilot sign-in: {exc}") from exc
-    if not auth["authenticated"]:
-        raise click.ClickException(GITHUB_SIGNED_OUT)
 
 
 OUTSIDE_TURN = ("Write rejected: this assessment run may only write AI assessments for its listed targets "
@@ -457,27 +363,21 @@ def _private_api() -> Iterator[tuple[str, list[str], TurnTargets]]:
     and revising the AI assessments that turn created while all their targets remain the turn's;
     every other write is rejected, whatever the agent asks.
     """
-    from werkzeug.serving import make_server
-
-    app = current_app._get_current_object()  # type: ignore[attr-defined]
-    # This process never runs the boot scan that normally opens the /api gate.
-    setattr(app, "_INT_SCAN_FINISHED", True)
-    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     written: list[str] = []
     turns = TurnTargets()
 
-    def guard_write(sender, **extra) -> None:
+    def guard_write() -> Response | None:
         if request.method in ("GET", "HEAD", "OPTIONS"):
-            return
+            return None
         if request.endpoint == "add_assessment" and _turn_allows(
                 turns.current, (request.view_args or {}).get("vuln_id"), request.get_json(silent=True)):
-            return
+            return None
         if request.endpoint == "update_assessment" and _turn_allows_update(
                 turns, (request.view_args or {}).get("assessment_id")):
-            return
-        abort(make_response({"error": OUTSIDE_TURN}, 403))
+            return None
+        return make_response({"error": OUTSIDE_TURN}, 403)
 
-    def record_write(sender, response, **extra) -> None:
+    def record_write(response: Response) -> None:
         if request.endpoint == "add_assessment" and response.status_code == 200:
             body = response.get_json(silent=True) or {}
             row_ids = [str(row["id"]) for row in body.get("assessments") or [] if row.get("id")]
@@ -485,19 +385,8 @@ def _private_api() -> Iterator[tuple[str, list[str], TurnTargets]]:
             if turns.current is not None:
                 turns.created.update(row_ids)
 
-    request_started.connect(guard_write, app, weak=False)
-    request_finished.connect(record_write, app, weak=False)
-    server = make_server("127.0.0.1", 0, app, threaded=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", written, turns
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        request_finished.disconnect(record_write, app)
-        request_started.disconnect(guard_write, app)
+    with _ai_runner.private_api(guard_write, record_write) as url:
+        yield url, written, turns
 
 
 def _ai_targets(row_ids: list[str]) -> dict[str, set[tuple[str, str]]]:
@@ -556,7 +445,7 @@ def _assess(result: Result, label: str, credentials, model: str, path, api_url: 
         except Exception as exc:
             errors.append(("failed", str(exc) or type(exc).__name__))
         # A cleanup error raised while the turn was being cancelled replaces the KeyboardInterrupt.
-        interrupted = interrupted or _interrupted.is_set()
+        interrupted = interrupted or _ai_runner.interrupted.is_set()
         created = _ai_targets(written[start:])
         for target in batch:
             row_ids = sorted(row_id for row_id, pairs in created.items()
@@ -577,28 +466,18 @@ def _assess(result: Result, label: str, credentials, model: str, path, api_url: 
          err=True)
 
 
-def _configured_model(model: str | None) -> str | None:
-    """--model, else AI_MODEL as configured, without validating the provider."""
-    from ..routes import agent
-
-    try:
-        return model or agent._agent_environment().get("AI_MODEL") or None
-    except (OSError, ValueError):
-        return model
-
-
 def _run(results: list[Result], model: str | None, timeout: int) -> str | None:
     from ..routes import agent
 
     pending = [result for result in results if result.outcome == "pending"]
     if not pending:
-        return _configured_model(model)
-    credentials, selected, path = _load_agent(model)
+        return _ai_runner.configured_model(model)
+    credentials, selected, path = _ai_runner.load_agent(model)
     if not get_bool_env("VERBOSE_MODE"):
         # The SDK logs every failed request with a traceback; the summary already reports the error.
         logging.getLogger("copilot").setLevel(logging.ERROR)
     if credentials.token and not credentials.provider:
-        _check_github_sign_in(credentials.token)
+        _ai_runner.check_github_sign_in(credentials.token)
     with _private_api() as (api_url, written, turns):
         try:
             for number, result in enumerate(pending, 1):
@@ -609,7 +488,7 @@ def _run(results: list[Result], model: str | None, timeout: int) -> str | None:
                     if result.outcome == "pending":
                         result.outcome, result.error = "interrupted", "Interrupted."
                     raise
-                if _interrupted.is_set():
+                if _ai_runner.interrupted.is_set():
                     raise KeyboardInterrupt
         except KeyboardInterrupt:
             echo("Interrupted; reporting completed assessments.", role="warning", err=True)

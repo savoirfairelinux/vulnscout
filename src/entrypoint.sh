@@ -255,6 +255,10 @@ Commands with optional --project and --variant (uses "default" project and varia
                          --project without --variant assesses all project variants
                          No scope assesses the default project/variant
 
+        Review custom assessments with the embedded AI agent (uses the remaining arguments):
+        --project <name> --ai-review --assessment-id <uuid>... | --cve <id>... [--variant <name>]... [--re-review] [--model <id>] [--timeout <seconds>] [--dry-run] [--json]
+                         --project is required; --variant only with --cve
+
 Commands only requiring --project (uses default project if not specified):
 
         Import or export custom VulnScout data for a project:
@@ -277,6 +281,7 @@ Examples:
   /scan/src/entrypoint.sh --project test --match-condition "cvss >= 9.0"
   /scan/src/entrypoint.sh --project test --variant x86 --match-condition "cvss >= 9.0"
   /scan/src/entrypoint.sh --project test --ai-assess --filter "pending and cvss >= 9"
+  /scan/src/entrypoint.sh --project test --ai-review --cve CVE-2024-3094
   /scan/src/entrypoint.sh --serve
   /scan/src/entrypoint.sh --report summary.adoc
   /scan/src/entrypoint.sh --config NVD_API_KEY abc123
@@ -857,7 +862,9 @@ cmd_import_context() {
     setup_user
 }
 
-cmd_ai_assess() {
+cmd_ai_command() {
+    local command="$1"
+    shift
     local -a scope_args=()
     if [[ "$PROJECT_SPECIFIED" == "true" ]]; then scope_args+=(--project "$PROJECT_NAME"); fi
     if [[ "$VARIANT_SPECIFIED" == "true" ]]; then scope_args+=(--variant "$VARIANT_NAME"); fi
@@ -877,7 +884,7 @@ cmd_ai_assess() {
     cd "$BASE_DIR"
     # Keep stdout for the command's own output (--json).
     flask --app src.bin.webapp db upgrade >&2 || return $?
-    exec flask --app src.bin.webapp ai-assess "${scope_args[@]}" "$@"
+    exec flask --app src.bin.webapp "$command" "${scope_args[@]}" "$@"
 }
 
 cmd_config_list() {
@@ -1069,7 +1076,9 @@ while [[ $# -gt 0 ]]; do
             JSON_OUTPUT=true; shift ;;
         --ai-assess)
             # Consumes the remaining arguments, like --serve.
-            shift; ai_assess_exit=0; cmd_ai_assess "$@" || ai_assess_exit=$?; exit "$ai_assess_exit" ;;
+            shift; ai_exit=0; cmd_ai_command ai-assess "$@" || ai_exit=$?; exit "$ai_exit" ;;
+        --ai-review)
+            shift; ai_exit=0; cmd_ai_command ai-review "$@" || ai_exit=$?; exit "$ai_exit" ;;
         --export-vulnerability-history)
             shift
             history_scope=()

@@ -30,7 +30,7 @@ case "$1" in
         log_call "$@"
         if [ -n "${VULNSCOUT_TEST_ASSESS_BLOCK:-}" ]; then
             case " $* " in
-                *" --ai-assess "*)
+                *" --ai-assess "*|*" --ai-review "*)
                     # A running assessment: "started" stands for its PID file (published once the
                     # optional gate opens); it reports and exits 1 after the expected forwarded signals.
                     if [ -n "${VULNSCOUT_TEST_ASSESS_GATE:-}" ]; then
@@ -55,7 +55,7 @@ case "$1" in
             esac
         fi
         case " $* " in
-            *" --ai-assess "*" --json "*) echo '{"results": []}' ;;
+            *" --ai-assess "*" --json "*|*" --ai-review "*" --json "*) echo '{"results": []}' ;;
         esac
         exit "${VULNSCOUT_TEST_EXEC_EXIT:-0}"
         ;;
@@ -475,12 +475,13 @@ expect_fail "'assess' --variant requires --project." assess -v x86 --cve CVE-1
 expect_fail "'assess' does not accept option --force." assess --cve CVE-1 --force
 
 # --- assess: Ctrl-C / CI cancel / hangup reach the command in the container ---
-# start_assess [stderr path]: run 'assess' in its own process group, like a foreground job in a terminal.
+# start_assess [stderr path]: run $START_VERB_ARGS in its own process group, like a foreground job in a terminal.
+START_VERB_ARGS=(assess --cve CVE-2024-3094)
 start_assess() {
     reset_log
     rm -f "$TEST_DIR"/assess-*
     set -m
-    VULNSCOUT_TEST_ASSESS_BLOCK="$TEST_DIR" "$ROOT_DIR/vulnscout" assess --cve CVE-2024-3094 --json \
+    VULNSCOUT_TEST_ASSESS_BLOCK="$TEST_DIR" "$ROOT_DIR/vulnscout" "${START_VERB_ARGS[@]}" --json \
         < /dev/null > "$TEST_DIR/stdout" 2> "${1:-$TEST_DIR/stderr}" &
     wrapper=$!
     set +m
@@ -549,6 +550,42 @@ start_assess /dev/full
 wait_until test -f "$TEST_DIR/assess-started"
 signal_job HUP
 finish_assess "SIGHUP with broken stderr" INT
+
+# 'review' reuses the same PID file and signal forwarding.
+START_VERB_ARGS=(review -p demo --cve CVE-2024-3094)
+start_assess
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job INT
+finish_assess "review Ctrl-C" INT
+assert_log "--ai-review"
+START_VERB_ARGS=(assess --cve CVE-2024-3094)
+
+# --- review ---
+UUID1=3f2b6c1e-0000-4000-8000-000000000001
+UUID2=3f2b6c1e-0000-4000-8000-000000000002
+run_ok review -p demo --assessment-id "$UUID1" --assessment-id "$UUID2"
+assert_log "/scan/src/entrypoint.sh --project demo --ai-review --assessment-id $UUID1 --assessment-id $UUID2"
+
+run_ok review -p demo -v x86 -v arm64 --cve CVE-2024-3094 --re-review --model gpt-5 --timeout 30 --dry-run --json
+assert_log "/scan/src/entrypoint.sh --project demo --ai-review --variant x86 --variant arm64 --cve CVE-2024-3094 --re-review --model gpt-5 --timeout 30 --dry-run --json"
+if [ "$(cat "$TEST_DIR/stdout")" != '{"results": []}' ]; then
+    echo "Expected only the JSON report on stdout:" >&2
+    cat "$TEST_DIR/stdout" >&2
+    exit 1
+fi
+
+expect_fail "'review' requires --project." review --cve CVE-1
+expect_fail "'review' requires --project." review --assessment-id "$UUID1"
+expect_fail "'review' requires --project." review -v x86 --cve CVE-1
+expect_fail "'review' requires --project." review --assessment-id nope
+expect_fail "'review' requires --project." review --cve "bad id"
+expect_fail "'review' needs exactly one of --assessment-id or --cve." review -p demo
+expect_fail "'review' needs exactly one of --assessment-id or --cve." review -p demo --cve CVE-1 --assessment-id "$UUID1"
+expect_fail "'review' --variant cannot be used with --assessment-id, which reviews every target in the project." review -p demo -v x86 --assessment-id "$UUID1"
+expect_fail "invalid assessment ID 'nope'." review -p demo --assessment-id nope
+expect_fail "invalid vulnerability ID 'bad id'." review -p demo --cve "bad id"
+expect_fail "--timeout must be a positive number of seconds." review -p demo --cve CVE-1 --timeout 0
+expect_fail "'review' does not accept option --filter." review -p demo --cve CVE-1 --filter x
 
 # --- refresh ---
 run_ok refresh
