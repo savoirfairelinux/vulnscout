@@ -9,6 +9,7 @@ import uuid
 
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController
 from ..helpers.export_files import file_metadata, INVENTORY_UNKNOWN_COMMENT
+from ..helpers.export_evidence import dependency_relationships, export_evidence, EVIDENCE_PREFIX
 
 
 def generate_spdx_namespace() -> str:
@@ -193,11 +194,28 @@ class SPDX3:
                 if owner in self.pkg_to_ref:
                     relationships_to_add.append(self.generate_relationship(self.pkg_to_ref[owner], [ref], "contains"))
 
-        dependencies: Dict[str, List[str]] = {}
-        for source, target in sorted(self.packagesCtrl.dependency_edges()):
-            dependencies.setdefault(self.pkg_to_ref[source], []).append(self.pkg_to_ref[target])
-        for source_ref, target_refs in dependencies.items():
-            relationships_to_add.append(self.generate_relationship(source_ref, target_refs, "dependsOn"))
+        for source, target, kind, scope in dependency_relationships(self.packagesCtrl, spdx3=True):
+            relationship = self.generate_relationship(self.pkg_to_ref[source], [self.pkg_to_ref[target]], kind)
+            if scope:
+                relationship.update(type="LifecycleScopedRelationship", scope=scope)
+            relationships_to_add.append(relationship)
+
+        evidence = export_evidence(self.packagesCtrl, self.pkg_to_ref)
+        graph[1]["comment"] = EVIDENCE_PREFIX + json.dumps(evidence, sort_keys=True)
+        for build_target in evidence["build_targets"]:
+            build_ref = self._next_spdx_ref()
+            elements_to_add.append({
+                "type": "build_Build", "spdxId": build_ref, "name": build_target["name"],
+                "creationInfo": self._creation_info_ref,
+                "build_buildType": "https://vulnscout.io/build-types/recorded-compiler-metadata",
+                "comment": "Recorded compiler metadata only; not a reconstruction of the full build graph.",
+                "build_parameter": [
+                    {"type": "DictionaryEntry", "key": f"compile:{kind}:{language['language']}", "value": value}
+                    for language in build_target["languages"] for kind in ("flags", "defines")
+                    for value in language[kind]
+                ],
+            })
+            relationships_to_add.append(self.generate_relationship(build_ref, build_target["package_ids"], "hasOutput"))
 
         for vuln_id, vuln in self.vulnerabilitiesCtrl.vulnerabilities.items():
             vuln_element = self.generate_vulnerability_element(vuln_id, vuln)
