@@ -3,13 +3,13 @@
 For current command syntax and project/variant scope, see
 [VulnScout CLI](vulnscout-script.md).
 
-Releases before v0.24 used flags for every action, and one call could chain several of them. The flag syntax still works until **v0.25**. Each legacy flag prints one warning on stderr naming its replacement:
+Releases before v0.24 used flags for every action, and one call could chain several of them. The flag syntax was deprecated in v0.24 and removed in **v0.25**. A call that starts with a removed flag exits with code 1 and names its replacement:
 
 ```
-deprecated: --add-spdx (removed in v0.25); use 'vulnscout add --spdx <path>'
+Error: '--add-spdx' was removed in v0.25; use 'vulnscout add --spdx <path>'. See doc/source/cli-migration.md.
 ```
 
-Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in CI logs. A call uses one syntax or the other: flags and commands cannot be mixed in the same call.
+Use the table below to convert existing scripts.
 
 | Flag syntax | Command |
 |---|---|
@@ -45,7 +45,7 @@ Set `VULNSCOUT_NO_DEPRECATION_WARNING=1` to silence the warnings, for example in
 - **One command per call.** Split a chained call into one call per command, in this order: `add`, `scan`, `refresh`, `import`, `export`, `report`, `match-condition`.
 - **Put `match-condition` last.** A chained legacy call still wrote its reports and exports when the condition matched. With separate calls, a script running with `set -e` stops at the first non-zero exit, so run `match-condition` last or handle its exit code explicitly.
 - **`refresh` uses its own scope.** It refreshes the selected project or variant (every vulnerability without `-p`), not only the vulnerabilities imported by the previous `add`.
-- **Custom OpenVEX without `-v`.** `export custom-openvex` writes every project variant, and `import custom-openvex` targets the project's only variant. The legacy flags still default to the `default` variant.
+- **Custom OpenVEX without `-v`.** `export custom-openvex` writes every project variant, and `import custom-openvex` targets the project's only variant. The legacy flags defaulted to the `default` variant.
 - **Scope is command-specific.** Put `-p` and `-v` after the command. A command that does not use them exits with code 1 instead of ignoring them.
 - **`delete` confirms on a terminal.** Use `--yes` to skip the prompt and `--dry-run` to preview. Non-interactive runs do not prompt.
 - **Removed spellings.** The undocumented `perform-grype-scan`, `perform-nvd-scan`, `perform-osv-scan`, `perform-sbom-cve-check-scan`, `sbom-cve-check-scan` and `--sbom-cve-check-scan` forms now fail as unknown commands. Use `scan <type>`.

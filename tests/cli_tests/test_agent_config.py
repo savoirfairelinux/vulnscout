@@ -49,11 +49,12 @@ def config_environment(tmp_path):
     }
 
 
-@pytest.mark.parametrize("script", [WRAPPER, ENTRYPOINT], ids=["wrapper", "entrypoint"])
-def test_config_list_redacts_agent_credentials(config_environment, script):
+@pytest.mark.parametrize(
+    "command", [[str(WRAPPER), "config", "list"], [str(ENTRYPOINT), "--config-list"]], ids=["wrapper", "entrypoint"])
+def test_config_list_redacts_agent_credentials(config_environment, command):
     config, environment = config_environment
     result = subprocess.run(
-        ["bash", str(script), "--config-list"], env=environment,
+        ["bash", *command], env=environment,
         cwd=ROOT, capture_output=True, text=True, check=True,
     )
     assert "AI_AUTH_CREDENTIALS=****" in result.stdout
@@ -64,7 +65,7 @@ def test_config_list_redacts_agent_credentials(config_environment, script):
 def test_wrapper_uses_mounted_file_instead_of_agent_environment(config_environment):
     config, environment = config_environment
     subprocess.run(
-        ["bash", str(WRAPPER), "--start"], env=environment,
+        ["bash", str(WRAPPER), "start"], env=environment,
         cwd=ROOT, capture_output=True, text=True, check=True,
     )
     arguments = Path(environment["ENGINE_LOG"]).read_text().splitlines()

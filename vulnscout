@@ -265,13 +265,10 @@ VARIANT=""
 VARIANT_SPECIFIED=false
 # Every -v given to a command, in order; only 'assess' and 'review' accept several (others use the last, VARIANT).
 VARIANTS=()
-MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false
 EXEC_ENV=()
 
-VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.25"
-LEGACY_TOKENS=()
 SCOPE_ARGS=()
 
 _show_help() {
@@ -312,7 +309,7 @@ Container commands:
     serve                   Start the web UI on port 7275
 
 The legacy flag syntax (for example --add-spdx, --perform-scans, --report)
-still works until v0.25 and prints a deprecation warning. See doc/source/vulnscout-script.md for the mapping.
+was removed in v0.25. See doc/source/cli-migration.md for the command equivalents.
 EOF
 }
 
@@ -782,8 +779,8 @@ validate_scan_types() {
     done
 }
 
-# Print the new-grammar replacement for a legacy action token; return 1 for other tokens.
-legacy_replacement() {
+# Print the command replacing a flag removed in v0.25; return 1 for other tokens.
+removed_flag_replacement() {
     case "$1" in
         --add-spdx|add-spdx) echo "add --spdx <path>" ;;
         --add-cdx|add-cdx) echo "add --cdx <path>" ;;
@@ -824,83 +821,36 @@ legacy_replacement() {
         --stop) echo "stop" ;;
         --restart) echo "restart" ;;
         --update) echo "update" ;;
-        *) return 1 ;;
-    esac
-}
-
-# Legacy-only modifiers: warned about in legacy calls, but they do not select the legacy grammar.
-legacy_modifier_replacement() {
-    case "$1" in
         --use-original-timestamps) echo "import <kind> <path> --timestamps original" ;;
         --use-current-timestamps) echo "import <kind> <path> --timestamps current" ;;
-        amend) echo "export <kind> --amend" ;;
+        amend|--amend) echo "export <kind> --amend" ;;
         *) return 1 ;;
     esac
 }
 
-# Collect legacy tokens into LEGACY_TOKENS; return 0 when the call uses the legacy grammar.
-# Values of -p/--project/-v/--variant are skipped, so "-p list-scans" is not a legacy token.
-find_legacy_tokens() {
-    local is_legacy=1 skip_value=false seen_command=false
-    LEGACY_TOKENS=()
+# Exit 1 when the command token is a removed flag, naming its replacement. Only the first
+# token after the global options is checked: later tokens are command arguments.
+reject_removed_syntax() {
+    local replacement
     while [ $# -gt 0 ]; do
-        if [ "$skip_value" = true ]; then
-            skip_value=false
-        else
-            case "$1" in
-                -p|--project|-v|--variant)
-                    skip_value=true ;;
-                --dev|-h|--help|--version)
-                    ;;
-                start|stop|restart|update|version|serve|add|scan|match-condition|assess|review|refresh|asset|report|export|import|delete|list)
-                    # A new-grammar verb as first command: the rest are its arguments, never legacy flags.
-                    if [ "$seen_command" = false ]; then
-                        return 1
-                    fi ;;
-                config)
-                    if [ "$seen_command" = false ] && { [ $# -lt 3 ] || case "$2" in -*|get|set|unset|list) true ;; *) false ;; esac; }; then
-                        return 1
-                    fi
-                    seen_command=true
-                    # Legacy "config KEY VALUE" always has a key and a value. "config get|set|unset|list",
-                    # "config --help", "help config" and typos such as "config show" use the new grammar.
-                    if [ $# -ge 3 ]; then
-                        case "$2" in
-                            -*|get|set|unset|list) ;;
-                            *) LEGACY_TOKENS+=("$1"); is_legacy=0 ;;
-                        esac
-                    fi ;;
-                *)
-                    seen_command=true
-                    if legacy_replacement "$1" > /dev/null; then
-                        LEGACY_TOKENS+=("$1"); is_legacy=0
-                    elif legacy_modifier_replacement "$1" > /dev/null; then
-                        LEGACY_TOKENS+=("$1")
-                    fi ;;
-            esac
-        fi
-        shift
-    done
-    return "$is_legacy"
-}
-
-warn_legacy_tokens() {
-    if [ "${VULNSCOUT_NO_DEPRECATION_WARNING:-}" = 1 ]; then
-        return 0
-    fi
-    local token replacement
-    local -A seen=()
-    for token in "${LEGACY_TOKENS[@]}"; do
-        if [ -n "${seen[$token]:-}" ]; then
-            continue
-        fi
-        seen[$token]=1
-        if [ "$token" = config ]; then
-            replacement="config set <key> <value>"
-        elif ! replacement="$(legacy_replacement "$token")"; then
-            replacement="$(legacy_modifier_replacement "$token")"
-        fi
-        console_err warning "deprecated: $token (removed in $VULNSCOUT_LEGACY_REMOVAL_VERSION); use 'vulnscout $replacement'"
+        case "$1" in
+            -p|--project|-v|--variant) shift 2 || return 0 ;;
+            --dev|-h|--help) shift ;;
+            config)
+                # The removed form is "config KEY VALUE"; "config get|set|unset|list" is current.
+                if [ $# -ge 3 ]; then
+                    case "$2" in
+                        -*|get|set|unset|list) ;;
+                        *) die "'config <key> <value>' was removed in v0.25; use 'vulnscout config set <key> <value>'. See doc/source/cli-migration.md." ;;
+                    esac
+                fi
+                return 0 ;;
+            *)
+                if replacement="$(removed_flag_replacement "$1")"; then
+                    die "'$1' was removed in v0.25; use 'vulnscout $replacement'. See doc/source/cli-migration.md."
+                fi
+                return 0 ;;
+        esac
     done
 }
 
@@ -1756,7 +1706,7 @@ verb_config() {
                 reject_option "config list" "$2"
             fi
             if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
-                sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
+                sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET|AI_AUTH_CREDENTIALS)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
             else
                 console_out info "No config file found."
             fi ;;
@@ -1833,208 +1783,13 @@ parse_new() {
     esac
 }
 
-parse_legacy() {
-    # Pre-scan args for --dev so it takes effect regardless of position
-    for _arg in "$@"; do
-        [ "$_arg" = "--dev" ] && DEV_MODE=true
-    done
-    local SERVE_REQUESTED=false
-    local REPORT_ARGS=()
-    local EXPORT_ARGS=()
-    local DATA_REQUESTED=""
-    local DATA_ARGS=()
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --dev)
-                DEV_MODE=true; shift ;;
-            -p|--project)
-                PROJECT="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
-            -v|--variant)
-                VARIANT="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
-            --match-condition)
-                MATCH_CONDITION="$2"; shift 2 ;;
-            add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-yocto-vex|--add-yocto-vex|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
-                ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
-            --refresh-vulnerability-data)
-                ensure_running; REFRESH_VULNERABILITY_DATA=true; shift ;;
-            add-asset|--add-asset)
-                ensure_running; add_input add-asset "$2"; shift 2 ;;
-            --perform-scans)
-                if [[ $# -lt 2 || "$2" == --* ]]; then
-                    console_err error "Error: --perform-scans requires a scan type."; exit 1
-                fi
-                validate_scan_types "$2"
-                ensure_running
-                PENDING_ARGS+=(--perform-scans "$2"); shift 2 ;;
-            --perform-grype-scan)
-                ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
-            --perform-nvd-scan)
-                ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
-            --perform-osv-scan)
-                ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
-            --perform-sbom-cve-check-scan)
-                ensure_running; PENDING_ARGS+=(--perform-sbom-cve-check-scan); shift ;;
-            export-spdx|--export-spdx)
-                ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
-            export-cdx|--export-cdx)
-                ensure_running; EXPORT_ARGS+=(--export-cdx); shift ;;
-            export-openvex|--export-openvex)
-                ensure_running; EXPORT_ARGS+=(--export-openvex); shift ;;
-            export-custom-vulnscout-data|--export-custom-vulnscout-data)
-                ensure_running; EXPORT_ARGS+=(--export-custom-vulnscout-data); shift ;;
-            export-custom-openvex-assessments|--export-custom-openvex-assessments)
-                ensure_running; EXPORT_ARGS+=(--export-custom-openvex-assessments); shift ;;
-            amend|--amend)
-                EXPORT_ARGS+=(--amend); shift ;;
-            import-custom-vulnscout-data|--import-custom-vulnscout-data)
-                ensure_running
-                local import_staged
-                import_staged="$(stage_file "$2")"
-                EXPORT_ARGS+=(--import-custom-vulnscout-data "$import_staged")
-                shift 2 ;;
-            import-custom-openvex-assessments|--import-custom-openvex-assessments)
-                ensure_running
-                local import_staged
-                import_staged="$(stage_file "$2")"
-                EXPORT_ARGS+=(--import-custom-openvex-assessments "$import_staged")
-                shift 2 ;;
-            export-context|--export-context)
-                ensure_running; EXPORT_ARGS+=(--export-context); shift ;;
-            import-context|--import-context)
-                ensure_running
-                local import_staged
-                import_staged="$(stage_file "$2")"
-                EXPORT_ARGS+=(--import-context "$import_staged")
-                shift 2 ;;
-            --use-original-timestamps)
-                EXPORT_ARGS+=(--use-original-timestamps); shift ;;
-            --use-current-timestamps)
-                EXPORT_ARGS+=(--use-current-timestamps); shift ;;
-            delete-scan|--delete-scan)
-                ensure_running
-                exec_container --delete-scan "$2"
-                shift 2 ;;
-            delete-outdated|--delete-outdated)
-                ensure_running
-                exec_container --delete-outdated
-                shift ;;
-            delete-empty-scans|--delete-empty-scans)
-                ensure_running
-                exec_container --delete-empty-scans
-                shift ;;
-            delete-orphaned-vulns|--delete-orphaned-vulns|delete-orphaned-vulnerabilities|--delete-orphaned-vulnerabilities)
-                ensure_running
-                exec_container --delete-orphaned-vulns
-                shift ;;
-            serve|--serve)
-                SERVE_REQUESTED=true; shift ;;
-            report|--report)
-                ensure_running
-                local tpl
-                tpl="$(stage_report_template "$2")"
-                REPORT_ARGS+=(--report "$tpl")
-                shift 2 ;;
-            list-projects|--list-projects|list-scans|--list-scans)
-                ensure_running
-                command="${1#--}"
-                if [[ "$DATA_REQUESTED" != "" ]]; then
-                    # Only 1 data request command is allowed at the same time
-                    console_out error "Cannot use $command and $DATA_REQUESTED together"
-                    exit 1
-                fi
-                DATA_REQUESTED="$command"
-                shift ;;
-            --json)
-                DATA_ARGS+=(--json); shift ;;
-            start|--start)
-                do_start
-                if [ "$DEV_MODE" = true ]; then
-                    start_frontend_dev
-                fi
-                shift ;;
-            stop|--stop)
-                call_container_engine rm -f "$CONTAINER_NAME"; shift ;;
-            restart|--restart)
-                call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
-                do_start
-                if [ "$DEV_MODE" = true ]; then
-                    start_frontend_dev
-                fi
-                shift ;;
-            config|--config)
-                config_set "$2" "$3"; shift 3 ;;
-            config-list|--config-list)
-                sed 's/\(API_KEY\|PASSWORD\|SECRET\|AI_AUTH_CREDENTIALS\)=.*/\1=****/' \
-                    "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || console_out info "No config file found."
-                shift ;;
-            config-clear|--config-clear)
-                config_clear "$2"; shift 2 ;;
-            help|--help|-h)
-                show_help; shift ;;
-            version|--version)
-                do_version; shift ;;
-            update|--update)
-                do_update; shift ;;
-            *)
-                console_err error "Unknown command: $1"
-                console_err info "Run 'vulnscout --help' for usage."
-                exit 1 ;;
-        esac
-    done
-
-    # Auto-trigger scan if inputs were staged: one entrypoint call handles move + scan
-    local _exit=0
-    if [ "$SERVE_REQUESTED" = true ]; then
-        ensure_running
-        # Kill any previous Flask process to free port 7275
-        call_container_engine exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
-        sleep 1
-        if [ "$DEV_MODE" = true ]; then
-            start_frontend_dev
-        fi
-        exec_container --project "$PROJECT" --variant "$VARIANT" ${PENDING_ARGS[@]+"${PENDING_ARGS[@]}"} --serve || _exit=$?
-    elif [ ${#PENDING_ARGS[@]} -gt 0 ]; then
-        local -a scan_args=()
-        [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
-        [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ] && scan_args+=(--refresh-vulnerability-data)
-        local -a scan_scope_args=()
-        [ "$PROJECT_SPECIFIED" = true ] && scan_scope_args+=(--project "$PROJECT")
-        [ "$VARIANT_SPECIFIED" = true ] && scan_scope_args+=(--variant "$VARIANT")
-        exec_container "${scan_scope_args[@]}" "${PENDING_ARGS[@]}" "${scan_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
-    elif [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ]; then
-        local -a refresh_args=(--refresh-vulnerability-data)
-        [ "$PROJECT_SPECIFIED" = true ] && refresh_args=(--project "$PROJECT" "${refresh_args[@]}")
-        [ "$VARIANT_SPECIFIED" = true ] && refresh_args=(--variant "$VARIANT" "${refresh_args[@]}")
-        exec_container "${refresh_args[@]}" || _exit=$?
-    elif [[ "$DATA_REQUESTED" != "" ]]; then
-        exec_container "--$DATA_REQUESTED" "${DATA_ARGS[@]}"
-    elif [ -n "$MATCH_CONDITION" ] || [ ${#REPORT_ARGS[@]} -gt 0 ] || [ ${#EXPORT_ARGS[@]} -gt 0 ]; then
-        # No new inputs but a match-condition, report, or export was given: run against existing DB data
-        ensure_running
-        local -a mc_args=()
-        if [ -n "$MATCH_CONDITION" ]; then
-            [ "$PROJECT_SPECIFIED" = true ] && mc_args+=(--project "$PROJECT")
-        else
-            mc_args+=(--project "$PROJECT")
-        fi
-        [ "$VARIANT_SPECIFIED" = true ] && mc_args+=(--variant "$VARIANT")
-        [ -n "$MATCH_CONDITION" ] && mc_args+=(--match-condition "$MATCH_CONDITION")
-        exec_container "${mc_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
-    fi
-    return $_exit
-}
-
 main() {
     if [ $# -eq 0 ]; then
         show_help
         return 0
     fi
-    if find_legacy_tokens "$@"; then
-        warn_legacy_tokens
-        parse_legacy "$@"
-    else
-        parse_new "$@"
-    fi
+    reject_removed_syntax "$@"
+    parse_new "$@"
 }
 
 main "$@"

@@ -11,9 +11,8 @@ For task-specific instructions, see [VulnScout Workflow](vulnscout-workflow.md).
 ./vulnscout <command> --help
 ```
 
-Releases before v0.24 used flags instead of commands. They still work until
-v0.25 and print a deprecation warning; see
-[Migrating from Legacy CLI Flags](cli-migration.md).
+Releases before v0.24 used flags instead of commands. The flags were removed in
+v0.25; see [Migrating from Legacy CLI Flags](cli-migration.md).
 
 ## Commands
 
