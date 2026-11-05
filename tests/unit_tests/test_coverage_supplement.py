@@ -706,6 +706,7 @@ class TestSpdx3VulnNotInRefContinue:
         ctrl = ControllersCache()
         ctrl.packages = MagicMock()
         ctrl.packages.__iter__ = MagicMock(return_value=iter([]))
+        ctrl.packages._export_document_ids = set()
 
         # Loop 2 (building elements): sees nothing → vuln_to_ref stays empty.
         # Loop 3 (building relationships): sees ghost vuln → hits the ``continue``.
