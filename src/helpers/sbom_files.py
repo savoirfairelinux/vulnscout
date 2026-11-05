@@ -18,6 +18,13 @@ from .export_files import (
 logger = logging.getLogger(__name__)
 
 
+def _element_key(ref: str, document: SBOMDocument, namespaces: dict[str, str]) -> str:
+    if ref.startswith('_:'):
+        return f'{document.id}:{ref}'
+    prefix, separator, suffix = ref.partition(':')
+    return namespaces.get(prefix, prefix + ':') + suffix if separator else f'{document.id}:{ref}'
+
+
 def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, str]) -> tuple[dict, dict[str, str]]:
     """Adapt SPDX 2 containment without treating package provenance as compilation."""
     from ..controllers.packages import _spdx_key
@@ -103,10 +110,10 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     edges: dict[str, set[tuple[str, str]]] = defaultdict(set)
     ambiguous: set[str] = set()
     malformed = False
+    document_namespaces = {document.id: namespaces for document, _, _, namespaces in documents}
     for document, data, references, namespaces in documents:
         def key(ref: str) -> str:
-            prefix, separator, suffix = ref.partition(':')
-            return namespaces.get(prefix, prefix + ':') + suffix if separator else f'{document.id}:{ref}'
+            return _element_key(ref, document, namespaces)
 
         for ref, string_id in references.items():
             package_id = canonical.get(string_id)
@@ -118,7 +125,7 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         for item in data.get('@graph', []):
             if not isinstance(item, dict):
                 continue
-            element_ref = item.get('spdxId')
+            element_ref = item.get('spdxId', item.get('@id'))
             if item.get('type') == 'software_File' and (
                 not isinstance(element_ref, str) or not isinstance(item.get('name'), str) or not item['name']
             ):
@@ -148,8 +155,20 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     for ref, (document, item) in nodes.items():
         if item.get('type') != 'software_File' or not isinstance(item.get('name'), str) or not item['name']:
             continue
+        properties = dict(item.get('_file_properties', item))
+        if isinstance(properties.get('verifiedUsing'), list):
+            integrity = []
+            for verification in properties['verifiedUsing']:
+                if isinstance(verification, str):
+                    target = nodes.get(_element_key(verification, document, document_namespaces[document.id]))
+                    if target and target[1].get('type') == 'Hash':
+                        verification = {
+                            key: value for key, value in target[1].items() if key not in {'spdxId', '@id'}
+                        }
+                integrity.append(verification)
+            properties['verifiedUsing'] = integrity
         file = SBOMFile(sbom_document_id=document.id, spdx_id=ref, path=item['name'],
-                        properties=item.get('_file_properties', item))
+                        properties=properties)
         db.session.add(file)
         files[ref] = file
     contains: dict[str, set[str]] = defaultdict(set)
