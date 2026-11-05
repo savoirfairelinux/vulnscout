@@ -89,7 +89,7 @@ test('dependency details do not expose compiler metadata', () => {
             languages: [{ language: 'C', flags: [`-${name}`], defines: [] }],
         }],
     }));
-    render(<DependencyModalView documents={documents} packageId="mbedtls" onSelectPackage={() => {}} />);
+    render(<DependencyExplorer documents={documents} focusedPackageId="mbedtls" />);
     expect(screen.queryByText('-alpha')).toBeNull();
     expect(screen.queryByText('-beta')).toBeNull();
     expect(screen.queryByText('Compiler flags and defines')).toBeNull();
