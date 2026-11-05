@@ -4,13 +4,12 @@ import type { Assessment } from "../handlers/assessments";
 import Assessments from "../handlers/assessments";
 import type { RefreshProgressView } from "../handlers/operationStore";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import React, { useMemo, useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER, getStatusSortIndex, getTopStatusSummaryLabel, getVulnerabilityStatusSummary } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
-import RefreshVulnerabilityData from "../components/RefreshVulnerabilityData";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
@@ -22,53 +21,10 @@ import { getSnapshot as getOperations, refreshProgressOf, subscribe as subscribe
 import useDismissablePopover from "../hooks/useDismissablePopover";
 import PopoverSurface from "../components/PopoverSurface";
 import type { AgentViewContext } from "../types/agent";
+import { Link } from "react-router-dom";
+import { ROUTES } from "../routes";
 
 type SourceBanner = { message: string; type: 'error' | 'success' } | null;
-
-function useRefreshProgressEffect(
-    progress: { in_progress: boolean; phase?: string; current: number; total: number; started_at?: string } | null,
-    label: string,
-    prevInProgress: React.MutableRefObject<boolean | null>,
-    prevPhase: React.MutableRefObject<string | null>,
-    prevStartedAt: React.MutableRefObject<string | null>,
-    setSourceBanner: (state: SourceBanner) => void,
-    onRefreshComplete?: () => void,
-    noun: string = 'entries',
-) {
-    useEffect(() => {
-        const inProgress = progress?.in_progress ?? false;
-        const phase = progress?.phase;
-        const startedAt = progress?.started_at ?? null;
-        const freshCycle = startedAt !== null && startedAt !== prevStartedAt.current;
-        const justCompleted = prevPhase.current !== null && (
-            prevInProgress.current === true ||
-            (prevPhase.current !== 'completed' &&
-             prevPhase.current !== 'cancelled' &&
-             (phase === 'completed' || phase === 'cancelled')) ||
-            (freshCycle && (phase === 'completed' || phase === 'cancelled')));
-        if (inProgress) {
-            if (progress && progress.total > 0 && progress.current > 0) {
-                setSourceBanner({ message: `${label} ${progress.current}/${progress.total}`, type: 'success' });
-            }
-        } else if (justCompleted) {
-            onRefreshComplete?.();
-            if (phase === 'cancelled') {
-                const current = progress?.current ?? 0;
-                const total = progress?.total ?? 0;
-                setSourceBanner({ message: `${label} refresh cancelled${current > 0 ? ` (${current}/${total} ${noun})` : ''}`, type: 'error' });
-            } else {
-                const total = progress?.total ?? 0;
-                setSourceBanner({ message: `${label} refresh complete${total > 0 ? ` (${total} ${noun})` : ''}`, type: 'success' });
-            }
-        }
-        if (progress !== null) {
-            prevInProgress.current = inProgress;
-            prevPhase.current = phase ?? 'idle';
-            prevStartedAt.current = startedAt;
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [progress, onRefreshComplete]);
-}
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import ExplicitSearchInput from '../components/ExplicitSearchInput';
@@ -94,8 +50,6 @@ type Props = {
     variantIds?: string[];
     /** Multi-variant set operation ('union' | 'intersection' | 'difference') */
     multiOperation?: string;
-    /** Called when an NVD, EPSS, or GHSA bulk refresh completes, so the parent can reload data */
-    onRefreshComplete?: () => void;
     missingEuvdDataBannerDismissed?: boolean;
     onMissingEuvdDataBannerDismissedChange?: (dismissed: boolean) => void;
     missingPublishedDateDataBannerDismissed?: boolean;
@@ -383,7 +337,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
     'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed',
 ];
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange, onAgentContextChange }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange, onAgentContextChange }: Readonly<Props>) {
     const preferenceKey = `vulnscout.tables.vulnerabilities.${encodeURIComponent(preferenceScopeKey)}`;
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
@@ -485,13 +439,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     }, [operations]);
     const nvdProgress = progress.nvd;
     const epssProgress = progress.epss;
-    const ghsaProgress = progress.ghsa;
     const euvdProgress = progress.euvd;
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
-    const [nvdBanner, setNvdBanner] = useState<SourceBanner>(null);
-    const [epssBanner, setEpssBanner] = useState<SourceBanner>(null);
-    const [ghsaBanner, setGhsaBanner] = useState<SourceBanner>(null);
-    const [euvdBanner, setEuvdBanner] = useState<SourceBanner>(null);
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [localMissingEuvdDataBannerDismissed, setLocalMissingEuvdDataBannerDismissed] = useState(false);
     const [localMissingPublishedDateDataBannerDismissed, setLocalMissingPublishedDateDataBannerDismissed] = useState(false);
@@ -520,18 +469,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
     const moreFiltersRef = useRef<HTMLDivElement>(null);
-    const prevNvdInProgress = useRef<boolean | null>(null);
-    const prevNvdPhase = useRef<string | null>(null);
-    const prevNvdStartedAt = useRef<string | null>(null);
-    const prevEpssInProgress = useRef<boolean | null>(null);
-    const prevEpssPhase = useRef<string | null>(null);
-    const prevEpssStartedAt = useRef<string | null>(null);
-    const prevGhsaInProgress = useRef<boolean | null>(null);
-    const prevGhsaPhase = useRef<string | null>(null);
-    const prevGhsaStartedAt = useRef<string | null>(null);
-    const prevEuvdInProgress = useRef<boolean | null>(null);
-    const prevEuvdPhase = useRef<string | null>(null);
-    const prevEuvdStartedAt = useRef<string | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -589,7 +526,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
     const shouldShowMissingDataBanner = shouldShowMissingEuvdDataBanner || shouldShowMissingPublishedDateDataBanner;
 
-    const missingDataBannerMessage = <>Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.</>;
+    const missingDataBannerMessage = <>Vulnerabilities are incomplete and need updating. Open the <Link className="underline" to={ROUTES.refresh}>Refresh tab</Link> to update them.</>;
 
     const dismissMissingDataBanner = () => {
         if (shouldShowMissingEuvdDataBanner) setMissingEuvdDataBannerDismissed(true);
@@ -662,31 +599,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         return () => { cancelled = true; };
     }, [variantId, projectId]);
 
-    // Update per-source banners with live progress; reload data when each refresh completes
-    useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete, 'CVEs');
-    useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete, 'CVEs');
-    useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
-    useRefreshProgressEffect(euvdProgress, 'EUVD', prevEuvdInProgress, prevEuvdPhase, prevEuvdStartedAt, setEuvdBanner, onRefreshComplete, 'CVEs');
-
-    const activeBanners = [nvdBanner, epssBanner, ghsaBanner, euvdBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
+    const activeBanners = [generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
     const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
 
-    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', _refreshActivity?: boolean) => {
-        if (source === 'nvd') setNvdBanner({ message, type });
-        else if (source === 'epss') setEpssBanner({ message, type });
-        else if (source === 'ghsa') setGhsaBanner({ message, type });
-        else if (source === 'euvd') setEuvdBanner({ message, type });
-        else setGeneralBanner({ message, type });
-
+    const triggerBanner = (message: string, type: 'error' | 'success') => {
+        setGeneralBanner({ message, type });
     };
 
     const closeBanner = () => {
-        setNvdBanner(null);
-        setEpssBanner(null);
-        setGhsaBanner(null);
-        setEuvdBanner(null);
         setGeneralBanner(null);
     };
 
@@ -1943,20 +1865,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 >
                     Reset Filters
                 </button>
-                <span className="h-6 border-l border-gray-400" aria-hidden="true" />
-                <RefreshVulnerabilityData
-                    vulnerabilities={vulnerabilities}
-                    projectId={projectId}
-                    variantId={baseVariantId || (variantIds?.length ?? 0) > 1 ? undefined : variantId}
-                    getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
-                    onRefreshComplete={onRefreshComplete}
-                    triggerBanner={triggerBanner}
-                    hideBanner={closeBanner}
-                    nvdProgress={nvdProgress}
-                    epssProgress={epssProgress}
-                    ghsaProgress={ghsaProgress}
-                    euvdProgress={euvdProgress}
-                />
             </div>
         </div>
 

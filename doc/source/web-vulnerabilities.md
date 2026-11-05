@@ -48,9 +48,9 @@ does not justify **Not affected**.
 
 ## Refreshing Vulnerability Data
 
-The vulnerabilities table also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
+Open the **Refresh** tab to use the **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
 
-The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. The selected sources are submitted together to the **Operation queue** and run in NVD, EPSS, GHSA, EUVD order on the server's pipeline lane. A progress banner below the toolbar shows the current source and count; each queued or running refresh can be cancelled individually. Closing the page does not stop the work, and another tab can see its progress in the same queue. See [Operation Queue](web-operation-queue.md) for recovery and cancellation behavior.
+The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. The selected sources are submitted together to the **Operation queue** and run in NVD, EPSS, GHSA, EUVD order on the server's pipeline lane. The Refresh tab shows live provider progress and completion messages; each queued or running refresh can be cancelled individually. Closing the page does not stop the work, and another tab can see its progress in the same queue. See [Operation Queue](web-operation-queue.md) for recovery and cancellation behavior.
 
 The available sources are:
 

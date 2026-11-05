@@ -7,6 +7,13 @@ import { MemoryRouter } from 'react-router-dom';
 import RefreshOverview from '../../src/pages/RefreshOverview';
 import RefreshRuns from '../../src/handlers/refreshRuns';
 import type { RefreshRun } from '../../src/handlers/refreshRuns';
+import Vulnerabilities, { type Vulnerability } from '../../src/handlers/vulnerabilities';
+import Operations from '../../src/handlers/operations';
+
+jest.mock('../../src/handlers/operationStore', () => {
+    const operations: never[] = [];
+    return { subscribe: () => () => {}, getSnapshot: () => operations, waitForQueue: jest.fn(async () => []) };
+});
 
 const run: RefreshRun = {
     run_id: 'persisted-run', scope: { project_id: 'project-a', variant_id: null },
@@ -43,7 +50,19 @@ describe('Refresh overview', () => {
 
     test('shows persisted metadata, distinct counts, scoped coverage and expandable before/after with links', async () => {
         show();
-        await screen.findByText('Run ID');
+        await screen.findByText('Selected refresh');
+        for (const id of ['persisted-run', 'project-a', 'variant-a', 'package-1']) {
+            expect(screen.queryByText(new RegExp(id))).not.toBeInTheDocument();
+        }
+        expect(screen.getByText('Update vulnerability data and review what changed.')).toBeInTheDocument();
+        const entries = screen.getByRole('list', { name: 'Refresh runs' });
+        const entry = within(entries).getByRole('button');
+        expect(entry).toHaveAttribute('aria-pressed', 'true');
+        expect(entry).toHaveTextContent('NVD');
+        expect(entry).toHaveTextContent('EPSS');
+        expect(entry).toHaveTextContent('complete');
+        expect(entry).toHaveTextContent('1 vulnerabilities changed');
+        expect(entry.querySelector('time')).toHaveAttribute('dateTime', run.started_at);
         expect(latest).toHaveBeenCalledWith({ project_id: 'project-a', variant_id: 'variant-a' }, expect.any(AbortSignal));
         expect(list).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'project-a', variant_id: 'variant-a' }), expect.any(AbortSignal));
         const counts = screen.getByLabelText('Distinct vulnerability counts');
@@ -142,6 +161,60 @@ describe('Refresh overview', () => {
         await userEvent.click(await screen.findByRole('button', { name: 'Next runs' }));
         await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 20 }), expect.any(AbortSignal)));
         expect(within(screen.getByLabelText('Distinct vulnerability counts')).getByText('Changed:')).toBeInTheDocument();
+    });
+
+    test('run cards select the exact run without showing its internal ID', async () => {
+        const older = { ...run, run_id: 'older-internal-id', sources: ['euvd'] };
+        list.mockResolvedValue({ runs: [run, older], total: 2, limit: 20, offset: 0 });
+        show();
+        const entries = await screen.findByRole('list', { name: 'Refresh runs' });
+        await userEvent.click(within(entries).getByRole('button', { name: /EUVD/ }));
+        await waitFor(() => expect(detail).toHaveBeenCalledWith('older-internal-id',
+            { project_id: 'project-a', variant_id: 'variant-a' }, expect.any(AbortSignal)));
+        expect(screen.queryByText(/older-internal-id/)).not.toBeInTheDocument();
+    });
+
+    test.each([
+        ['variant', { projectId: 'project-a', variantId: 'variant-a' }, 'variant-a'],
+        ['project', { projectId: 'project-a' }, undefined],
+        ['comparison', { projectId: 'project-a', variantId: 'variant-a', baseVariantId: 'variant-b', compareOperation: 'union', comparisonScope: true }, undefined],
+        ['variant subset', { projectId: 'project-a', variantId: 'variant-a', variantIds: ['variant-a', 'variant-b'], multiOperation: 'intersection', comparisonScope: true }, undefined],
+    ])('starts refresh from the new tab with fresh %s scope data and completion updates', async (_label, scope, refreshVariant) => {
+        const vulnerabilities = [{ id: 'CVE-old' }] as Vulnerability[];
+        const fresh = [{ id: 'CVE-new' }, { id: 'GHSA-new' }] as Vulnerability[];
+        const load = jest.spyOn(Vulnerabilities, 'list').mockResolvedValue(fresh);
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({ ok: true, queueId: 'new-run', operations: [] });
+        const complete = jest.fn();
+        render(<MemoryRouter><RefreshOverview {...scope} vulnerabilities={vulnerabilities} onRefreshComplete={complete} /></MemoryRouter>);
+        await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
+        await userEvent.click(screen.getByRole('button', { name: 'Start' }));
+        await waitFor(() => expect(enqueue).toHaveBeenCalled());
+        expect(load).toHaveBeenCalledWith('variantId' in scope ? scope.variantId : undefined, 'project-a',
+            'baseVariantId' in scope ? scope.baseVariantId : undefined,
+            'compareOperation' in scope ? scope.compareOperation : undefined,
+            'variantIds' in scope ? scope.variantIds : undefined,
+            'multiOperation' in scope ? scope.multiOperation : undefined);
+        expect(enqueue).toHaveBeenCalledWith(['nvd', 'epss', 'euvd'].map(source => ({
+            kind: 'refresh', source, ids: ['CVE-new'],
+            options: { mode: 'local', project_id: 'project-a', ...(refreshVariant ? { variant_id: refreshVariant } : {}) },
+        })));
+        await waitFor(() => expect(complete).toHaveBeenCalled());
+        expect(screen.getByRole('link', { name: 'View refresh changes' })).toHaveAttribute('href', '/refresh?run=new-run');
+    });
+
+    test('has explicit run-list loading, empty and error states', async () => {
+        list.mockImplementation(() => new Promise(() => {}));
+        const view = show();
+        expect(screen.getByText('Loading refresh runs…')).toBeInTheDocument();
+        view.unmount();
+        list.mockResolvedValue({ runs: [], total: 0, limit: 20, offset: 0 });
+        const empty = show();
+        expect(await screen.findByText('No refresh runs in this scope.')).toBeInTheDocument();
+        empty.unmount();
+        list.mockRejectedValue(new Error('Unable to load run list'));
+        show();
+        expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load run list');
+        expect(screen.queryByText('Loading refresh runs…')).not.toBeInTheDocument();
     });
 
     test('never broadens unsupported comparison scopes into project requests', () => {
