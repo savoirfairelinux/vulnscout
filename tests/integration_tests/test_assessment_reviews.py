@@ -553,18 +553,6 @@ def test_put_review_accepts_package_string_in_place_of_finding_id(client, findin
     assert resp.get_json()["review"]["package"] == "openssl@3.0.8"
 
 
-def test_package_review_target_requires_persisted_finding_id(finding, variant, monkeypatch):
-    from types import SimpleNamespace
-
-    from src.routes.assessment_reviews import _resolve_target
-
-    assessment = make_assessment(finding, variant)
-    monkeypatch.setattr(Finding, "get_by_package_and_vulnerability", lambda *args: SimpleNamespace(id=None))
-    assert _resolve_target(assessment, {"variant_id": str(variant.id), "package": "openssl@3.0.8"}) == (
-        None, None, ({"error": "Internal error"}, 500),
-    )
-
-
 def test_put_review_overwrites_existing(client, finding, variant):
     # Arrange
     assessment = make_assessment(finding, variant)

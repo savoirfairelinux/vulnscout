@@ -315,7 +315,6 @@ def _add_request_field(metadata: dict[str, Any], field: Any) -> None:
     if metadata["requestBody"] is None:
         metadata["requestBody"] = {"required": False, "content": {}}
     body = metadata["requestBody"]
-    assert body is not None
     media = body["content"].setdefault(
         media_type, {"schema": {"type": "object", "properties": {}}},
     )
