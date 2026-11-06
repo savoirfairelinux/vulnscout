@@ -32,6 +32,8 @@ type Scan = {
     packages_added: number | null;
     packages_removed: number | null;
     packages_upgraded: number | null;
+    dependencies_added: number | null;
+    dependencies_removed: number | null;
     vulns_added: number | null;
     vulns_removed: number | null;
     vulns_unchanged: number | null;

@@ -196,6 +196,24 @@ describe('ScanHistory selected variant scope', () => {
         jest.restoreAllMocks();
     });
 
+    test.each([
+        [1, 0],
+        [0, 1],
+    ])('keeps relationship-only imports visible with Hide empty scans (%i added, %i removed)', async (added, removed) => {
+        mockList.mockResolvedValue([
+            {...scan('changed', 'v1'), is_first: false, dependencies_added: added, dependencies_removed: removed},
+            {...scan('empty', 'v1'), is_first: false, dependencies_added: 0, dependencies_removed: 0},
+            {...scan('unknown', 'v1'), is_first: false, dependencies_added: null, dependencies_removed: null},
+        ]);
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+        expect(await screen.findByText('changed history')).toBeInTheDocument();
+        expect(screen.getByText('empty history')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: /Hide empty scans/}));
+        expect(screen.getByText('changed history')).toBeInTheDocument();
+        expect(screen.queryByText('empty history')).not.toBeInTheDocument();
+        expect(screen.queryByText('unknown history')).not.toBeInTheDocument();
+    });
+
     test('submits selected scans and deferred refreshes together and waits for the full batch', async () => {
         const configuration = jest.spyOn(Projects, 'scanConfiguration').mockResolvedValue({
             exclude_native: true,

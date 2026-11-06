@@ -39,11 +39,12 @@ from ._scan_queries import (
 # Package-change classification
 # ---------------------------------------------------------------------------
 
-def _dependency_changes(scan: Scan, previous: Optional[Scan]) -> dict:
+def _dependency_changes(scan: Scan, previous: Optional[Scan], *, include_details: bool = True) -> dict:
     """Compare frozen package pairs against the existing history predecessor.
 
     Different document inventories are not comparable. Do not skip an
     unrecorded predecessor to find an older, apparently usable baseline.
+    List responses need only counts, without endpoint lookups or serialisation.
     """
     result: dict = {
         "status": "no_previous_import",
@@ -71,6 +72,9 @@ def _dependency_changes(scan: Scan, previous: Optional[Scan]) -> dict:
     current = {tuple(edge) for d in current_docs for edge in d.dependency_snapshot or []}
     before = {tuple(edge) for d in previous_docs for edge in d.dependency_snapshot or []}
     added, removed = current - before, before - current
+    result.update(status="available", added_count=len(added), removed_count=len(removed))
+    if not include_details:
+        return result
     package_ids = {uuid.UUID(pid) for edge in added | removed for pid in edge}
     packages = _package_rows(package_ids)
 
@@ -802,11 +806,14 @@ _LIST_CACHE: Dict[str, Tuple[frozenset, List[dict]]] = {}
 
 def _scan_list_fingerprint(
     scans: list[Scan], observation_counts: Optional[Dict[uuid.UUID, int]] = None,
+    dependency_counts: Optional[Dict[uuid.UUID, int]] = None,
 ) -> frozenset:
-    """Capture metadata and observations committed by other scan processes."""
+    """Capture metadata, observations and completed dependency snapshots."""
     observation_counts = observation_counts or {}
+    dependency_counts = dependency_counts or {}
     return frozenset(
-        (s.id, s.description, s.timestamp, observation_counts.get(s.id, 0)) for s in scans
+        (s.id, s.description, s.timestamp, observation_counts.get(s.id, 0),
+         dependency_counts.get(s.id, 0)) for s in scans
     )
 
 
@@ -814,15 +821,25 @@ def serialize_list_with_diff_cached(scope_key: str, scans: list[Scan]) -> List[d
     """Return the serialised scan-history list for *scans*, cached per *scope_key*.
 
     The heavy diff computation runs once and its result is reused for later
-    requests until scan metadata or observation counts change, including when
-    a separate CLI process commits results to an already-persisted scan.
+    requests until scan metadata, observation counts or completed dependency
+    snapshot counts change, including when a separate CLI process commits
+    results to an already-persisted scan.
     """
     observation_counts: Dict[uuid.UUID, int] = {scan_id: count for scan_id, count in db.session.execute(
         db.select(Observation.scan_id, db.func.count(Observation.id))
         .where(Observation.scan_id.in_([s.id for s in scans]))
         .group_by(Observation.scan_id)
     ).all()} if scans else {}
-    fingerprint = _scan_list_fingerprint(scans, observation_counts)
+    dependency_counts = dict(db.session.execute(
+        db.select(SBOMDocument.scan_id, db.func.count(SBOMDocument.id))
+        .where(
+            SBOMDocument.scan_id.in_([s.id for s in scans]),
+            SBOMDocument.dependencies_recorded.is_(True),
+            SBOMDocument.dependency_snapshot.is_not(None),
+        )
+        .group_by(SBOMDocument.scan_id)
+    ).all()) if scans else {}
+    fingerprint = _scan_list_fingerprint(scans, observation_counts, dependency_counts)
     with _LIST_CACHE_LOCK:
         entry = _LIST_CACHE.get(scope_key)
         if entry is not None and entry[0] == fingerprint:
@@ -993,6 +1010,9 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         base["finding_count"] = len(curr_f)
         base["package_count"] = len(entry["curr_p"])
         base["vuln_count"] = len(curr_v)
+        dependency_changes = _dependency_changes(scan, prev, include_details=False)
+        base["dependencies_added"] = dependency_changes["added_count"]
+        base["dependencies_removed"] = dependency_changes["removed_count"]
 
         # Assessment counts
         assess_info = assessments_map.get(scan.id, {"total": 0, "added": 0, "unchanged": 0, "removed": 0})

@@ -7,7 +7,7 @@ from importlib import import_module
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 
 from src.bin.cmd_process import read_inputs
 from src.bin.webapp import create_app
@@ -101,6 +101,87 @@ def test_recorded_empty_graph_is_real_removal(app, imports):
     scan, doc = imports()
     assert doc.dependency_snapshot == []
     assert diff(app, scan)['dependency_changes']['removed_count'] == 1
+
+
+def test_import_does_not_load_other_projects_dependency_snapshots(app, imports):
+    _, historical = imports([('app', 'lib')])
+    historical_id = historical.id.hex
+    other_variant = Variant.create('other', Project.create('other-project').id)
+    current, _ = imports([('app', 'util')], owner=other_variant.id)
+    current_id = current.id
+    db.session.expunge_all()
+    snapshot_reads = []
+
+    def capture_snapshot_reads(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith('SELECT') and 'sbom_documents.dependency_snapshot' in statement:
+            snapshot_reads.append((statement, parameters))
+
+    event.listen(db.engine, 'before_cursor_execute', capture_snapshot_reads)
+    try:
+        read_inputs(ControllersCache(), current_id)
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', capture_snapshot_reads)
+    assert snapshot_reads
+    for statement, parameters in snapshot_reads:
+        assert 'WHERE' in statement
+        assert historical_id not in str(parameters)
+
+
+@pytest.mark.parametrize(('before', 'after', 'counts'), [
+    ([], [('app', 'lib')], (1, 0)),
+    ([('app', 'lib')], [], (0, 1)),
+    ([('app', 'lib')], [('app', 'util')], (1, 1)),
+    ([('app', 'lib')], [('app', 'lib')], (0, 0)),
+])
+def test_list_exposes_relationship_only_change_counts(app, imports, before, after, counts):
+    first, _ = imports(before)
+    current, _ = imports(after)
+    response = app.test_client().get(f'/api/variants/{current.variant_id}/scans')
+    assert response.status_code == 200
+    rows = {row['id']: row for row in response.json}
+    row = rows[str(current.id)]
+    assert (row['dependencies_added'], row['dependencies_removed']) == counts
+    assert row['packages_added'] == row['packages_removed'] == row['packages_upgraded'] == 0
+    assert 'dependency_changes' not in row
+    assert rows[str(first.id)]['dependencies_added'] is None
+    assert rows[str(first.id)]['dependencies_removed'] is None
+
+
+@pytest.mark.parametrize('reason', ['unrecorded', 'scope', 'tool'])
+def test_list_does_not_turn_unavailable_relationship_comparisons_into_zero(app, imports, reason):
+    imports([('app', 'lib')])
+    current, document = imports()
+    if reason == 'unrecorded':
+        document.dependency_snapshot = None
+    elif reason == 'scope':
+        document.source_name = 'other.json'
+    else:
+        current.scan_type = 'tool'
+    db.session.commit()
+    response = app.test_client().get(f'/api/variants/{current.variant_id}/scans')
+    assert response.status_code == 200
+    row = next(row for row in response.json if row['id'] == str(current.id))
+    assert row['dependencies_added'] is None
+    assert row['dependencies_removed'] is None
+
+
+def test_list_cache_notices_completed_relationship_only_import(app, imports):
+    imports([('app', 'lib')])
+    current, document = imports([('app', 'util')])
+    snapshot = document.dependency_snapshot
+    document.dependencies_recorded = False
+    document.dependency_snapshot = None
+    db.session.commit()
+    url = f'/api/variants/{current.variant_id}/scans'
+    client = app.test_client()
+    before = next(row for row in client.get(url).json if row['id'] == str(current.id))
+    assert before['dependencies_added'] is None
+    # Model a CLI importer completing its immutable snapshot after the list was cached.
+    document.dependencies_recorded = True
+    document.dependency_snapshot = snapshot
+    db.session.commit()
+    after = next(row for row in client.get(url).json if row['id'] == str(current.id))
+    assert after['dependencies_added'] == after['dependencies_removed'] == 1
 
 
 @pytest.mark.parametrize('side', ['current', 'previous'])

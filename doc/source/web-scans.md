@@ -102,6 +102,9 @@ package names and versions. Counts describe unique directed package pairs across
 the import's documents; duplicate links are counted once. Dependency type and
 scope metadata are not compared. A version upgrade can remove an old-version link
 and add a new-version link, independently of the package upgrade classification.
+Imports with only relationship additions or removals remain visible when
+**Hide empty scans** is enabled. The scan list includes relationship-change
+counts without the endpoint details; unavailable comparisons have null counts.
 
 The baseline is the same immediately preceding SBOM import used by the package
 history, ordered by timestamp and scan ID, in the **same variant**. Tool scans do
