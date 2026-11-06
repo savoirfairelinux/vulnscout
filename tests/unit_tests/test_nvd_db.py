@@ -502,6 +502,36 @@ def test_extract_cve_details_non_english_description_fallback():
     assert result["description"] == "Vulnérabilité critique"
 
 
+@pytest.mark.parametrize("include_nvd_reference", [False, True])
+def test_extract_cve_details_deduplicates_reference_urls(include_nvd_reference):
+    cve_id = "CVE-2024-9999"
+    nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
+    reference = "https://example.org/advisory"
+    distinct_references = [
+        reference,
+        reference + "#patch",
+        reference + "?version=1",
+        reference + "?version=2",
+        "https://example.org/Advisory",
+        "http://example.org/advisory",
+    ]
+    references = [
+        {"url": reference, "source": "cve@mitre.org", "tags": ["Issue Tracking"]},
+        {"url": reference, "source": "nvd@nist.gov", "tags": ["Patch"]},
+        {},
+        {"url": ""},
+        {"url": None},
+        *[{"url": url} for url in distinct_references[1:]],
+    ]
+    if include_nvd_reference:
+        references.extend([{"url": nvd_url}, {"url": nvd_url}])
+
+    details = NVD_DB.extract_cve_details({"id": cve_id, "references": references})
+
+    expected = distinct_references + [nvd_url] if include_nvd_reference else [nvd_url] + distinct_references
+    assert details["links"] == expected
+
+
 def test_extract_cve_details_collects_vulnerable_cpes():
     cve = {
         "id": "CVE-2024-9998",
