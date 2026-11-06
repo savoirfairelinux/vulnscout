@@ -33,13 +33,11 @@ from .scc_engine import get_cve_json, get_engine as _get_scc_engine
 from .vulnerabilities import VulnerabilitiesController
 
 EPSS_BATCH_SIZE = 100
-NVD_COMMIT_EVERY = 50
 # Cap prevents burning NVD API rate-limit quota (6 s/CVE without a key).
 MAX_CVE_IDS = 1000
 CVE_RE = re.compile(r'^CVE-\d{4}-\d{4,}$')
 MAX_GHSA_IDS = 500
 GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
-GHSA_COMMIT_EVERY = 20
 GHSA_SLEEP_INTERVAL = 1.0
 # EUVD annotates from cached ENISA dumps with no per-CVE network call, so it
 # commits in larger batches than the network-bound refreshes.
@@ -224,8 +222,8 @@ def run_nvd_refresh(ctx: JobContext) -> None:
 
         done += 1
         ctx.report(done, total, f"NVD refresh: {done}/{total} ({cve_id})")
-        if done % NVD_COMMIT_EVERY == 0:
-            _safe_commit("bulk NVD refresh")
+        # Publish provider data and coverage together, releasing run locks before network work.
+        _safe_commit("bulk NVD refresh")
         if mode == "api" and done < total:
             time.sleep(sleep_between)
 
@@ -279,6 +277,7 @@ def run_epss_refresh(ctx: JobContext) -> None:
             print(f"[bulk EPSS refresh] batch error: {exc}", flush=True)
             _safe_commit("bulk EPSS refresh failed batch")
             processed += len(chunk)
+            _safe_commit("bulk EPSS refresh failed batch")
             ctx.report(processed, total, f"EPSS refresh: {processed}/{total}")
             continue
 
@@ -365,8 +364,7 @@ def run_ghsa_refresh(ctx: JobContext) -> None:
 
         done += 1
         ctx.report(done, total, f"GHSA refresh: {done}/{total} ({ghsa_id})")
-        if done % GHSA_COMMIT_EVERY == 0:
-            _safe_commit("bulk GHSA refresh")
+        _safe_commit("bulk GHSA refresh")
         if done < total:
             time.sleep(GHSA_SLEEP_INTERVAL)
 

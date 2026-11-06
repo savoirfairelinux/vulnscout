@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -3708,6 +3708,45 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
             expect(screen.queryByText('Updated')).not.toBeInTheDocument();
         } finally {
             enqueue.mockRestore(); wait.mockRestore(); details.mockRestore();
+        }
+    });
+
+    test.each(['queue', 'details'])('unmounting during %s prevents stale refresh work after remount', async (stage) => {
+        const operations = [{ op_id: 'refresh:nvd', source: 'nvd', status: 'done' }] as Operation[];
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({ ok: true, queueId: 'old-scope', operations });
+        let finishQueue: (value: Operation[]) => void = () => {};
+        let finishDetails: (value: Vulnerability) => void = () => {};
+        const wait = jest.spyOn(OperationStore, 'waitForQueue').mockReturnValue(stage === 'queue'
+            ? new Promise(resolve => { finishQueue = resolve; }) : Promise.resolve(operations));
+        const details = jest.spyOn(Vulnerabilities, 'getDetails').mockReturnValue(new Promise(resolve => { finishDetails = resolve; }));
+        const exact = jest.spyOn(VulnerabilityRefreshRun, 'exact').mockResolvedValue({
+            scope: { project_id: 'p-one', variant_id: null }, sources: ['nvd'],
+            started_at: '2026-01-01', finished_at: '2026-01-01', status: 'complete',
+            summary: { total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
+            changes: [], total: 0, limit: 1, offset: 0,
+            run_id: 'old-scope', source_status: { nvd: 'complete' },
+            coverage: [{ source: 'nvd', vuln_id: vulnerability.id, status: 'complete', error: null }],
+        });
+        try {
+            const patchVuln = jest.fn();
+            const props = { vuln: vulnerability, onClose: () => {}, appendAssessment: () => {}, appendCVSS: () => null, patchVuln };
+            const oldModal = render(<VulnModal {...props} projectId="p-one" />);
+            await userEvent.click(screen.getByTitle('Refresh from NVD & EPSS'));
+            await waitFor(() => expect(stage === 'queue' ? wait : details).toHaveBeenCalled());
+            oldModal.unmount();
+            render(<VulnModal {...props} projectId="p-two" />);
+            await act(async () => {
+                if (stage === 'queue') finishQueue(operations);
+                else finishDetails(vulnerability);
+            });
+            if (stage === 'queue') {
+                expect(exact).not.toHaveBeenCalled();
+                expect(details).not.toHaveBeenCalled();
+            }
+            expect(patchVuln).not.toHaveBeenCalled();
+            expect(screen.queryByText('Updated')).not.toBeInTheDocument();
+        } finally {
+            enqueue.mockRestore(); wait.mockRestore(); details.mockRestore(); exact.mockRestore();
         }
     });
 

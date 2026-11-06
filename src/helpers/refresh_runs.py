@@ -309,8 +309,8 @@ def tracked_refresh(source: str):
                 ctx.queue_id = run_id
             elif db.session.get(RefreshRun, run_id) is None:
                 create_run({source: list(ctx.options.get("ids", []))}, run_id=run_id)
-            add_targets(run_id, source, list(ctx.options.get("ids", [])))
             try:
+                add_targets(run_id, source, list(ctx.options.get("ids", [])))
                 with capture_source(run_id, source):
                     result = function(ctx)
                     db.session.commit()

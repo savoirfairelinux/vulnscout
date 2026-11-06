@@ -587,7 +587,8 @@ def test_stale_loaded_instance_records_actual_committed_predecessor(app, client)
     assert (row["before"], row["after"]) == (0.6, 0.7)
 
 
-def test_artifact_rolls_back_with_failed_write_and_records_incomplete(app, client, monkeypatch):
+@pytest.mark.parametrize("failed_commit", [1, 2])
+def test_artifact_rolls_back_with_failed_write_and_records_incomplete(app, client, monkeypatch, failed_commit):
     with app.app_context():
         run = create_run({"epss": [CVE]})
         commit = db.session.commit
@@ -595,7 +596,7 @@ def test_artifact_rolls_back_with_failed_write_and_records_incomplete(app, clien
 
         def fail_once():
             calls.append(1)
-            if len(calls) == 1:
+            if len(calls) == failed_commit:
                 raise RuntimeError("write rejected")
             return commit()
 
@@ -1084,3 +1085,101 @@ def test_processing_refresh_preserves_caller_identity(app):
         ])
         assert result.exit_code == 0, result.output
         assert process.call_args.kwargs["refresh_run_id"] == "process-forwarded"
+
+
+@pytest.mark.parametrize("existing_nvd", [False, True])
+def test_shared_nvd_refresh_preserves_other_authors_cvss(app, existing_nvd):
+    from src.controllers import refresh_jobs as jobs
+    with app.app_context():
+        db.session.query(Metrics).filter_by(vulnerability_id=CVE).delete()
+        vendor = Metrics(vulnerability_id=CVE, version="3.1", author="scanner",
+                         score=4.2, vector="scanner-vector")
+        db.session.add(vendor)
+        if existing_nvd:
+            db.session.add(Metrics(vulnerability_id=CVE, version="3.1", author="nvd",
+                                   score=5.0, vector="old-nvd-vector"))
+        db.session.commit()
+        run = create_run({"nvd": [CVE]})
+        with patch.object(jobs, "get_cve_json", return_value={"id": CVE}), \
+                patch.object(jobs, "_get_scc_engine"), \
+                patch.object(jobs, "extract_cve_details", return_value={
+                    "base_score": 9.8, "cvss_version": "3.1", "cvss_vector": "new-nvd-vector",
+                }):
+            jobs.run_nvd_refresh(JobContext("test:nvd", {"ids": [CVE], "mode": "local"}, run))
+        metrics = db.session.scalars(db.select(Metrics).where(
+            Metrics.vulnerability_id == CVE, Metrics.version == "3.1",
+        )).all()
+        assert {metric.author: (float(metric.score), metric.vector) for metric in metrics} == {
+            "scanner": (4.2, "scanner-vector"), "nvd": (9.8, "new-nvd-vector"),
+        }
+        assert len(metrics) == 2
+
+
+@pytest.mark.parametrize("paused_call", [1, 2])
+def test_queued_cancellation_during_actual_nvd_provider_calls(app, client, paused_call):
+    from src.controllers import refresh_jobs as jobs
+    second = "CVE-2099-1111"
+    with app.app_context():
+        Vulnerability.create_record(id=second)
+        run_id = create_run({"nvd": [CVE, second], "epss": [CVE]})
+    provider_waiting = threading.Event()
+    release_provider = threading.Event()
+    cancelled = threading.Event()
+    errors = []
+    transactions = []
+    calls = []
+
+    def fetch(identifier, **_kwargs):
+        calls.append(identifier)
+        transactions.append(db.session().in_transaction())
+        if len(calls) == paused_call:
+            provider_waiting.set()
+            assert release_provider.wait(10)
+        return 200, {"vulnerabilities": [{"cve": {
+            "id": identifier, "descriptions": [{"lang": "en", "value": "Refreshed by NVD"}],
+        }}]}
+
+    def worker():
+        try:
+            with app.app_context():
+                jobs.run_nvd_refresh(JobContext(
+                    "test:nvd", {"ids": [CVE, second], "mode": "api"}, run_id,
+                ))
+        except BaseException as exc:
+            errors.append(exc)
+
+    def cancel():
+        try:
+            with app.app_context():
+                finish_source(run_id, "epss", "cancelled", "Cancelled while queued")
+            cancelled.set()
+        except BaseException as exc:
+            errors.append(exc)
+
+    with patch.object(jobs, "NVD_DB") as api, patch.object(jobs, "_nvd_sleep_interval", return_value=0):
+        api.return_value.api_get_cve.side_effect = fetch
+        api.extract_cve_details.side_effect = jobs.extract_cve_details
+        thread = threading.Thread(target=worker)
+        canceller = threading.Thread(target=cancel)
+        thread.start()
+        try:
+            assert provider_waiting.wait(5), errors
+            canceller.start()
+            assert cancelled.wait(3), "Queued cancellation blocked behind a provider network call"
+            if paused_call == 2:
+                data = client.get(f"/api/refresh-runs/{run_id}").get_json()
+                assert any(row["field"] == "description" and row["after"] == "Refreshed by NVD"
+                           for row in data["changes"])
+                assert next(row for row in data["coverage"]
+                            if row["source"] == "nvd" and row["vuln_id"] == CVE)["status"] == "complete"
+        finally:
+            release_provider.set()
+            thread.join(15)
+            if canceller.ident is not None:
+                canceller.join(15)
+    assert not thread.is_alive() and not canceller.is_alive()
+    assert not errors
+    assert transactions == [False, False]
+    data = client.get(f"/api/refresh-runs/{run_id}").get_json()
+    assert data["source_status"] == {"nvd": "complete", "epss": "incomplete"}
+    assert next(row for row in data["coverage"] if row["source"] == "epss")["status"] == "cancelled"
