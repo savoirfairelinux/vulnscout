@@ -53,6 +53,49 @@ def existing_cve_id():
 
 class TestSingleCveRefreshEndpoint:
 
+    @pytest.mark.parametrize("mode", ["api", "local"])
+    def test_repeated_refresh_keeps_reference_urls_unique(self, app, client, existing_cve_id, mode):
+        from src.extensions import db
+        from src.models.vulnerability import Vulnerability
+
+        nvd_url = f"https://nvd.nist.gov/vuln/detail/{existing_cve_id}"
+        reference = "https://gitlab.freedesktop.org/cairo/cairo/-/issues/415"
+        distinct_reference = reference + "#note_1"
+        expected_urls = [nvd_url, reference, distinct_reference]
+        cve = {
+            "id": existing_cve_id,
+            "references": [
+                {"url": reference, "source": "cve@mitre.org", "tags": ["Issue Tracking"]},
+                {"url": reference, "source": "nvd@nist.gov", "tags": ["Patch"]},
+                {"url": distinct_reference},
+            ],
+        }
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            # Include a duplicate left by an earlier refresh.
+            rec.links = [nvd_url, reference, reference]
+            db.session.commit()
+
+        with patch("src.routes.vulnerabilities.NVD_DB.api_get_cve",
+                   return_value=(200, {"vulnerabilities": [{"cve": cve}]})), \
+             patch("src.routes.vulnerabilities.get_cve_json", return_value=cve):
+            updated_at = None
+            for _ in range(3):
+                response = client.post(
+                    f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                    json={"mode": mode},
+                )
+                assert response.status_code == 200
+                assert response.get_json()["vulnerabilities"][0]["urls"] == expected_urls
+                with app.app_context():
+                    rec = db.session.get(Vulnerability, existing_cve_id)
+                    assert rec.links == expected_urls
+                    if updated_at is None:
+                        updated_at = rec.nvd_data_updated_at
+                        assert updated_at is not None
+                    else:
+                        assert rec.nvd_data_updated_at == updated_at
+
     def test_single_refresh_returns_200_with_vuln_payload(self, client, existing_cve_id):
         """POST /api/vulnerabilities/<id>/nvd-refresh returns 200 + updated vuln dict."""
         mock_details = {
