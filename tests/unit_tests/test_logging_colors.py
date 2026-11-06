@@ -149,6 +149,44 @@ def test_existing_handlers_are_not_reconfigured(isolated_loggers, name):
         assert not logging.getLogger("werkzeug").handlers
 
 
+@pytest.mark.parametrize("configure_first", [False, True])
+@pytest.mark.parametrize("handler_level", [logging.NOTSET, logging.ERROR])
+def test_descendant_deployment_handler_takes_precedence(
+    isolated_loggers, monkeypatch, configure_first, handler_level,
+):
+    logging.getLogger().handlers = []
+    console = io.StringIO()
+    deployment = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", console)
+    if configure_first:
+        configure_console_logging()
+    logger = logging.getLogger("src.bin.webapp")
+    handler = logging.StreamHandler(deployment)
+    handler.setLevel(handler_level)
+    logger.addHandler(handler)
+    if not configure_first:
+        configure_console_logging()
+
+    app = Flask("src.bin.webapp")
+    app.logger.warning("App warning")
+    app.logger.error("App error")
+    logging.getLogger("src.bin.webapp.child").error("Child error")
+    logging.getLogger("src.controllers.example").error("Controller error")
+
+    assert deployment.getvalue().count("App error") == 1
+    assert "App error" not in console.getvalue()
+    assert deployment.getvalue().count("Child error") == 1
+    assert "Child error" not in console.getvalue()
+    if handler_level == logging.NOTSET:
+        assert deployment.getvalue().count("App warning") == 1
+        assert "App warning" not in console.getvalue()
+    else:
+        assert "App warning" not in deployment.getvalue()
+        assert console.getvalue().count("App warning") == 1
+    assert console.getvalue().count("Controller error") == 1
+    assert logger.handlers == [handler]
+
+
 @pytest.mark.parametrize("hint", ["0", "1"])
 def test_real_werkzeug_server_requests_and_wsgi_errors(hint):
     code = """
