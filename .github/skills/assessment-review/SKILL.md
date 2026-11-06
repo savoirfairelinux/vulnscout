@@ -192,6 +192,27 @@ assessment's stored fields:
   corroborates them
 - **Phase 3.5** — confidence score: HIGH, MEDIUM or LOW
 
+Phase 2 includes **Scoped SBOM, File, Compiler and Dependency Evidence** from
+`cve-assessment`, not just uploaded source inspection. For each exact target
+package/variant, use `vulnscout-list_dependency_documents`,
+`vulnscout-list_dependency_packages`, `vulnscout-get_package_source_files` and
+`vulnscout-get_package_dependencies` in the relevant dependency/required-by
+directions. Consume all pages, preserving file/scan/document provenance and
+`compiled_sources_complete`, occurrence `build_targets` by target/language
+(`flags`/`defines`), and `path_edges` declarations (`relationship_type`,
+`lifecycle_scope`, original source document). Cache only within that variant and
+evidence snapshot; do not reuse another target's compiler options or verdict.
+
+Re-derive vulnerable-file/function inclusion and effective configuration using
+matching source/build evidence. File presence does not prove compilation;
+compiler input is not deployment or runtime reachability. BUILD/RUNTIME and
+inverse required-by declarations are scope hints, not proof; preserve mixed and
+unknown scopes. Missing flags, unrecorded files, incomplete coverage or tool
+errors remain unknown under the existing confidence/strictness gate, never a
+reason by themselves for `not_affected`. Cite decisive evidence and gaps in each
+target review's `rationale` and `suggested_impact_statement`, without changing
+the original assessment or adding reverse dependents as review targets.
+
 **Derive each target's verdict before reading the assessment's stored `status`,
 `justification`, `impact_statement`, and `workaround`.** The value of a review is
 that it is independent. Reading the user's conclusion first turns the exercise

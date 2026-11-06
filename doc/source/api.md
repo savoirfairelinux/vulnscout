@@ -538,6 +538,8 @@ are arrays of the original strings from `compile:flags:<language>` and
 `compile:defines:<language>`, without splitting arguments or removing quotes.
 Repeated parameter entries remain separate and ordered. Targets, source
 documents, and variants are never flattened into package-wide compiler options.
+Declarations of the same build SPDX ID in different companion documents remain
+separate under their declaring documents, including conflicting flags or defines.
 Only targets associated with packages in the selected scope are returned.
 
 ### Package Compiler Metadata

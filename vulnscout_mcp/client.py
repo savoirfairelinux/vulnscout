@@ -128,6 +128,29 @@ class VulnScoutClient:
                 if any(not all(isinstance(edge[key], str) for key in ("package_id", "dependency_id"))
                        for edge in doc["edges"]):
                     raise ValueError
+                targets = doc.get("build_targets", [])
+                if not isinstance(targets, list):
+                    raise ValueError
+                for target in targets:
+                    if (not all(isinstance(target[key], str) for key in ("id", "name"))
+                            or not isinstance(target["package_ids"], list)
+                            or not all(isinstance(value, str) for value in target["package_ids"])
+                            or not isinstance(target["languages"], list)):
+                        raise ValueError
+                    for language in target["languages"]:
+                        if (not isinstance(language["language"], str)
+                                or any(not isinstance(language[key], list)
+                                       or not all(isinstance(value, str) for value in language[key])
+                                       for key in ("flags", "defines"))):
+                            raise ValueError
+                for edge in doc["edges"]:
+                    declarations = edge.get("declarations", [])
+                    if not isinstance(declarations, list) or any(
+                        not all(isinstance(declaration[key], str) for key in (
+                            "relationship_type", "lifecycle_scope", "source_document_id", "source_name",
+                        )) for declaration in declarations
+                    ):
+                        raise ValueError
         except (ValueError, TypeError, KeyError) as exc:
             raise VulnScoutError("Invalid dependency graph response for the requested variant.") from exc
         return graph
@@ -151,6 +174,52 @@ class VulnScoutClient:
                 error_msg = response.text
             raise VulnScoutError(error_msg)
         return response.json()
+
+    def get_package_source_files(self, variant_id: str, package_id: str) -> dict:
+        """Read active, variant-scoped recorded files using the exact public package ID."""
+        if not variant_id or not package_id:
+            raise VulnScoutError("A variant scope and exact package ID are required.")
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.get(f"{self.base_url}/api/packages", params={
+                    "variant_id": variant_id, "package_id": package_id, "include_source_files": "true",
+                })
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if not response.is_success:
+            try:
+                message = response.json().get("error", response.text)
+            except (ValueError, AttributeError):
+                message = response.text
+            raise VulnScoutError(message)
+        try:
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise ValueError
+            if not rows:
+                raise VulnScoutError("Package not found in the selected variant; use its exact package ID.")
+            if len(rows) != 1 or rows[0]["id"] != package_id:
+                raise ValueError
+            package = rows[0]
+            files = package["source_files"]
+            if files is not None and not isinstance(files, list):
+                raise ValueError
+            for file in files or []:
+                if (file["variant_id"] != variant_id
+                        or not all(isinstance(file[key], str) for key in (
+                            "spdx_id", "path", "document_id", "document_name", "scan_id", "variant_name",
+                        ))
+                        or not isinstance(file["properties"], dict) or not isinstance(file["builds"], list)):
+                    raise ValueError
+            count = package["source_file_count"]
+            if (count is not None and (type(count) is not int or count < 0)
+                    or type(package["compiled_source_file_count"]) is not int
+                    or package["compiled_source_file_count"] < 0
+                    or not isinstance(package["compiled_sources_complete"], bool)):
+                raise ValueError
+        except (ValueError, TypeError, KeyError) as exc:
+            raise VulnScoutError("Invalid recorded file evidence response for the requested variant/package.") from exc
+        return package
 
     def get_project_context(self, project_id: str) -> dict:
         """GET /api/projects/<project_id>/context."""
@@ -487,6 +556,10 @@ class ScopedVulnScoutClient(VulnScoutClient):
     def get_dependency_graph(self, variant_id: str) -> dict:
         self._variant(variant_id)
         return super().get_dependency_graph(variant_id)
+
+    def get_package_source_files(self, variant_id: str, package_id: str) -> dict:
+        self._variant(variant_id)
+        return super().get_package_source_files(variant_id, package_id)
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         self._project(project_id)

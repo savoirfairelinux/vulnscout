@@ -85,7 +85,8 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     assert captured["enable_skills"] is False
     assert captured["on_permission_request"].__name__ == "approve_all" and "custom_agents" not in captured
     assert "untrusted evidence" in captured["system_message"]["content"]
-    dependency_tools = {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies"}
+    dependency_tools = {"list_dependency_documents", "list_dependency_packages", "get_package_dependencies",
+                        "get_package_source_files"}
     assert dependency_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
     assert {f"mcp:vulnscout-{name}" for name in dependency_tools} <= set(captured["available_tools"])
     assert dependency_tools <= set(agent.READ_TOOLS)
@@ -94,6 +95,10 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     assert all(term in instructions for term in ("next_offset", "max_depth=0", "runtime usage",
                                                  "backports", "unknown", "no web research", "read-only"))
     assert all(term in instructions for term in ("STRIDE", "T# threats", "corroborates"))
+    assert all(term in instructions for term in (
+        "get_package_source_files", "build_targets", "path_edges", "BUILD/RUNTIME",
+        "File presence does not prove compilation",
+    ))
     assert "get_ai_context_form_guide" in agent.READ_TOOLS
     assert "get_ai_context_form_guide" not in agent.WRITE_TOOLS
     assert "mcp:vulnscout-get_ai_context_form_guide" in captured["available_tools"]
