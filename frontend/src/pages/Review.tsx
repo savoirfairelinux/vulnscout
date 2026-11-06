@@ -1975,6 +1975,8 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             {modalVuln && (
                 <VulnModal
                     vuln={modalVuln}
+                    variantId={variantId}
+                    projectId={projectId ?? allVariants.find(v => v.id === variantId)?.project_id}
                     readOnly={true}
                     appendAssessment={() => {}}
                     appendCVSS={() => null}
