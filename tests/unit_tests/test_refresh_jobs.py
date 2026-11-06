@@ -198,7 +198,7 @@ def test_run_nvd_refresh_api_and_local_setup_failure(monkeypatch):
     jobs.run_nvd_refresh(ctx)
     assert refreshed.call_count == 2
     slept.assert_called_once_with(0.0)
-    assert committed.call_count == 1
+    assert committed.call_count == 3
     assert ctx.report.call_args_list[-1].args[-1] == "NVD refresh complete"
 
     monkeypatch.setattr(jobs, "_get_scc_engine", MagicMock(side_effect=ValueError("missing")))
@@ -206,13 +206,12 @@ def test_run_nvd_refresh_api_and_local_setup_failure(monkeypatch):
         jobs.run_nvd_refresh(job_context(["CVE-2024-1"]))
 
 
-def test_nvd_refresh_handles_item_errors_periodic_commits_and_cancellation(monkeypatch):
+def test_nvd_refresh_handles_item_errors_per_target_commits_and_cancellation(monkeypatch):
     monkeypatch.setattr(jobs, "NVD_DB", lambda **_kwargs: MagicMock())
     monkeypatch.setattr(jobs, "_nvd_sleep_interval", lambda: 0.0)
     monkeypatch.setattr(jobs, "_refresh_nvd_record", MagicMock(side_effect=ValueError("bad record")))
     committed = MagicMock()
     monkeypatch.setattr(jobs, "_safe_commit", committed)
-    monkeypatch.setattr(jobs, "NVD_COMMIT_EVERY", 1)
     jobs.run_nvd_refresh(job_context(["CVE-2024-0001"], mode="api"))
     assert committed.call_count == 2
 
@@ -237,17 +236,26 @@ def test_apply_and_run_epss_refresh(monkeypatch):
     assert "epss_data_updated_at" not in record.update_record.call_args.kwargs
 
     client = MagicMock()
-    client.api_get_epss_batch.side_effect = [{"CVE-2024-1": {"score": "0.5"}}, RuntimeError("offline")]
     monkeypatch.setattr(jobs, "EPSS_DB", lambda: client)
     applied = MagicMock()
     monkeypatch.setattr(jobs, "_apply_epss_score", applied)
     committed = MagicMock()
     monkeypatch.setattr(jobs, "_safe_commit", committed)
+    calls = []
+
+    def fetch(ids):
+        assert committed.call_count == len(calls)
+        calls.append(ids)
+        if len(calls) == 1:
+            raise RuntimeError("offline")
+        return {ids[0]: {"score": "0.5"}}
+
+    client.api_get_epss_batch.side_effect = fetch
     monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 1)
     ctx = job_context(["CVE-2024-1", "CVE-2024-2"])
     jobs.run_epss_refresh(ctx)
     applied.assert_called_once()
-    assert committed.call_count == 1
+    assert committed.call_count == 2
     assert ctx.report.call_args_list[-1].args[-1] == "EPSS refresh complete"
 
 
@@ -303,13 +311,12 @@ def test_ghsa_helper_handles_missing_invalid_and_absent_records(monkeypatch):
     jobs._apply_ghsa_published("GHSA-ABCD-1234-5678", now)
 
 
-def test_ghsa_refresh_handles_http_error_periodic_commit_and_cancellation(monkeypatch):
+def test_ghsa_refresh_handles_http_error_per_target_commit_and_cancellation(monkeypatch):
     error = urllib.error.HTTPError("url", 500, "server error", {}, None)
     monkeypatch.setattr(jobs, "_apply_ghsa_published", MagicMock(side_effect=error))
     committed = MagicMock()
     monkeypatch.setattr(jobs, "_safe_commit", committed)
     monkeypatch.setattr(jobs.time, "sleep", MagicMock())
-    monkeypatch.setattr(jobs, "GHSA_COMMIT_EVERY", 1)
     jobs.run_ghsa_refresh(job_context(["GHSA-ABCD-1234-5678"]))
     assert committed.call_count == 2
 

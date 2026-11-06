@@ -34,6 +34,12 @@ failed targets, skipped work and cancellation produce explicit coverage and an
 `incomplete` artifact; absence from a response is never itself a removal.
 Confirmed field clearing has `change_type: removal`. CVSS fields retain metric
 ID, version and author, and their before/after values include score and vector.
+NVD refresh updates only NVD-authored global CVSS metrics, preserving scores
+from scanners, vendors and custom assessments.
+
+Network-bound providers commit each completed request's data and coverage
+before the next external call, so cancelling a queued provider does not wait
+for an unrelated provider's network request.
 
 The explicit refresh command exits nonzero when any provider is incomplete.
 Its partial artifact remains exportable. Artifact exports exit nonzero on

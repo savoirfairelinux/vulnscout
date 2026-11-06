@@ -131,6 +131,7 @@ def add_targets(run_id: str, source: str, ids: list[str]) -> None:
         )))
         new_ids = [identifier for identifier in dict.fromkeys(ids) if identifier not in existing]
         if not new_ids:
+            db.session.commit()
             return
         links = visibility_for(new_ids) if new_ids else {}
         db.session.add_all([
@@ -208,8 +209,8 @@ def tracked_refresh(source: str):
                 ctx.queue_id = run_id
             elif db.session.get(RefreshRun, run_id) is None:
                 create_run({source: list(ctx.options.get("ids", []))}, run_id=run_id)
-            add_targets(run_id, source, list(ctx.options.get("ids", [])))
             try:
+                add_targets(run_id, source, list(ctx.options.get("ids", [])))
                 with capture_source(run_id, source):
                     result = function(ctx)
                     db.session.commit()

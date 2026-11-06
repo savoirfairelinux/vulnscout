@@ -21,6 +21,7 @@ def apply_cvss_update(rec, details: dict, db) -> None:
             Metrics.vulnerability_id == rec.id,
             Metrics.version == cvss_version,
             Metrics.variant_id.is_(None),
+            Metrics.author == "nvd",
         )
     ).scalars().first()
     if existing is not None:

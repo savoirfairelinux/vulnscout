@@ -553,6 +553,11 @@ type VariantScopedSnapshot = {
     const refreshScopeKey = JSON.stringify([vuln.id, projectId, variantId]);
     const refreshScopeRef = useRef(refreshScopeKey);
     refreshScopeRef.current = refreshScopeKey;
+    const refreshGeneration = useRef(0);
+    useEffect(() => {
+        refreshGeneration.current += 1;
+        return () => { refreshGeneration.current += 1; };
+    }, [refreshScopeKey]);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
 
@@ -638,7 +643,9 @@ type VariantScopedSnapshot = {
 
     const handleRefresh = useCallback(async () => {
         const currentScope = JSON.stringify([vuln.id, projectId, variantId]);
-        const scopeChanged = () => refreshScopeRef.current !== currentScope;
+        const generation = refreshGeneration.current;
+        const scopeChanged = () => refreshScopeRef.current !== currentScope
+            || refreshGeneration.current !== generation;
         setRefreshing(true);
         setRefreshError(null);
         setRefreshedList([]);
