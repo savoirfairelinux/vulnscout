@@ -355,19 +355,17 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         }
     }
 
-    /** Each assessed vulnerability gets its own conversation, like every other AI action in the app. */
-    function assessInOwnConversations(ids: string[]) {
+    function assessInOwnConversation(id: string) {
         if (busy || modelBusy || !ready) return;
         try {
             const prefix = bulkAssessmentKeyPrefix(context);
-            const actions = ids.map(id => ({
+            const action = {
                 id: crypto.randomUUID(), key: `${prefix}${id}`, kind: 'assess' as const, title: id, text: assessPrompt(id),
                 context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [id], selectionCount: 1 } },
-            }));
-            enqueueAgentMessages(actions, context, ids.length > 1 ? 'Displayed vulnerabilities' : `Vulnerability ${ids[0]}`, 'per-action');
+            };
+            enqueueAgentMessages([action], context, `Vulnerability ${id}`, 'per-action');
             setError('');
-            if (ids.length > 1) openAgentChat(undefined, 'conversations');
-            else if (actions[0] && findAgentTask(actions[0].id)) openAgentChat(actions[0].id);
+            if (findAgentTask(action.id)) openAgentChat(action.id);
         } catch (reason) {
             setError(errorMessage(reason));
         }
@@ -611,7 +609,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             {ready && inMain && conversation.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
                 <h3 className="text-lg font-semibold leading-snug">What needs your attention?</h3>
                 <div className="space-y-3">
-                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || (largeVulnerabilityView && index === 0)} onClick={() => index === 0 && context.view?.openVulnerabilityId ? assessInOwnConversations([context.view.openVulnerabilityId]) : void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
+                    {prompts.map((prompt, index) => <button key={prompt.label} type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || (largeVulnerabilityView && index === 0)} onClick={() => index === 0 && context.view?.openVulnerabilityId ? assessInOwnConversation(context.view.openVulnerabilityId) : void send(undefined, prompt.message)} className="group flex w-full items-center justify-between gap-3 rounded border border-neutral-300 px-4 py-3 text-left text-neutral-600 hover:border-cyan-600 hover:text-cyan-700 focus-visible:outline-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-cyan-500 dark:hover:text-cyan-400"><span>{prompt.label}</span><FontAwesomeIcon icon={faArrowRight} className="text-xs text-neutral-400 group-hover:text-cyan-600" /></button>)}
                     {largeVulnerabilityView && <p className="text-xs text-neutral-500 dark:text-neutral-400">Filter to 100 or fewer vulnerabilities to summarize the displayed rows.</p>}
                 </div>
             </div>}
@@ -683,16 +681,9 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 <span className="truncate" title={[pageLabel, scopeLabel].filter(Boolean).join(' / ')}>{pageLabel}{scopeLabel && ` / ${scopeLabel}`}</span>
                 {inMain && context.view?.visibleVulnerabilityIds && <span className="ml-auto shrink-0 tabular-nums">{context.view.visibleVulnerabilityIds.length} displayed</span>}
             </div>
-            {inMain && (formAction || context.view?.openVulnerabilityId || (context.page === 'vulnerabilities' && Boolean(context.view?.visibleVulnerabilityIds?.length))) && <div className="flex flex-wrap gap-3 text-xs">
+            {inMain && (formAction || context.view?.openVulnerabilityId) && <div className="flex flex-wrap gap-3 text-xs">
                 {formAction && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId) || conversation.archived} onClick={() => send(undefined, formAction.message)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />{formAction.label}</button>}
-                {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} onClick={() => assessInOwnConversations([context.view!.openVulnerabilityId!])} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
-                {context.page === 'vulnerabilities' && !!context.view?.visibleVulnerabilityIds?.length && <button type="button" onClick={() => {
-                    if ((context.view?.visibleVulnerabilityIds?.length ?? 0) > 100) {
-                        setError('Narrow the table to 100 vulnerabilities or fewer before assessing every displayed row.');
-                    } else {
-                        assessInOwnConversations(context.view?.visibleVulnerabilityIds ?? []);
-                    }
-                }} disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess displayed</button>}
+                {context.view?.openVulnerabilityId && <button type="button" disabled={busy || modelBusy || !ready || Boolean(failedQueuedId)} onClick={() => assessInOwnConversation(context.view!.openVulnerabilityId!)} className="inline-flex items-center gap-2 rounded border border-neutral-300 px-3 py-2 text-cyan-700 hover:border-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:text-cyan-400 dark:hover:border-cyan-500"><FontAwesomeIcon icon={faArrowRight} />Assess vulnerability</button>}
             </div>}
             <label htmlFor={composerId} className="sr-only">Message the agent</label>
             <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">

@@ -796,7 +796,7 @@ test.each(['provider', 'stream', 'interrupted stream'])('pauses a multi-action q
     expect(sent).toEqual(['Assess CVE-1']);
     expect(screen.getByLabelText('Message the agent')).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Assess displayed' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Assess displayed' })).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(failure === 'interrupted stream' ? 'Response interrupted' : 'Provider unavailable');
     expect(within(screen.getByRole('log', { name: 'Agent conversation' })).getByText('Assess CVE-1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'AI queue (2), paused' })).toBeInTheDocument();
@@ -908,7 +908,20 @@ test('finished conversations can be reopened and deleted from the list', async (
     expect(screen.queryByRole('region', { name: 'Finished' })).not.toBeInTheDocument();
 });
 
-test('Assess displayed and Assess vulnerability queue one conversation per vulnerability', async () => {
+test.each([0, 1, 2, 101])('does not offer Assess displayed for %i visible vulnerabilities', async count => {
+    global.fetch = async input => String(input).endsWith('/models') ? jsonResponse(models) : jsonResponse(signedIn);
+    render(<AgentChat context={{ ...context, view: {
+        visibleVulnerabilityIds: Array.from({ length: count }, (_, index) => `CVE-${index}`),
+        selectedVulnerabilityIds: ['CVE-1', 'CVE-2'],
+    } }} onClose={() => undefined} />);
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled());
+    expect(screen.queryByRole('button', { name: 'Assess displayed' })).not.toBeInTheDocument();
+    expect(screen.getByText(`${count} displayed`)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Prioritize next steps' })).toBeEnabled();
+    expect(getAgentQueue()).toEqual([]);
+});
+
+test.each(['Assess vulnerability', 'Assess this vulnerability'])('%s queues the open vulnerability in its own conversation', async label => {
     let finish: (response: Response) => void = () => {};
     global.fetch = async input => {
         const path = String(input);
@@ -916,29 +929,24 @@ test('Assess displayed and Assess vulnerability queue one conversation per vulne
         if (path.endsWith('/messages')) return new Promise(resolve => { finish = resolve; });
         return jsonResponse(signedIn);
     };
-    const displayed = { ...context, view: { visibleVulnerabilityIds: ['CVE-1', 'CVE-2'] } };
-    const { rerender } = render(<AgentChat context={displayed} onClose={() => undefined} />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Assess displayed' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Assess displayed' }));
-    await waitFor(() => expect(getAgentQueue()).toHaveLength(2));
-    const [first, second] = getAgentQueue();
-    expect([first.text, second.text]).toEqual([
-        'Assess CVE-1 in the current scope. Retrieve its details with VulnScout MCP first.',
-        'Assess CVE-2 in the current scope. Retrieve its details with VulnScout MCP first.',
-    ]);
-    expect(first.context.view?.selectedVulnerabilityIds).toEqual(['CVE-1']);
-    expect(first.conversationId).not.toBe(second.conversationId);
-    expect(first.source).toBe('Displayed vulnerabilities');
-    expect(await screen.findByRole('heading', { name: 'Conversations' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open conversation Assess CVE-1' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open conversation Assess CVE-2' })).toBeInTheDocument();
+    enqueueAgentMessages([
+        { id: 'a', key: 'assess:a', kind: 'assess', text: 'Assess A', title: 'CVE-1' },
+        { id: 'b', key: 'assess:b', kind: 'assess', text: 'Assess B', title: 'CVE-2' },
+    ], context, 'Vulnerability selection', 'per-action');
+    render(<AgentChat context={{ ...context, view: {
+        openVulnerabilityId: 'CVE-3', visibleVulnerabilityIds: ['CVE-1', 'CVE-2', 'CVE-3'],
+    } }} onClose={() => undefined} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: label })).toBeEnabled());
     expect(screen.queryByRole('button', { name: 'Assess displayed' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open main conversation' }));
-
-    rerender(<AgentChat context={{ ...context, view: { openVulnerabilityId: 'CVE-3' } }} onClose={() => undefined} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Assess vulnerability' }));
+    fireEvent.click(screen.getByRole('button', { name: label }));
     expect(getAgentQueue().map(task => task.title)).toEqual(['CVE-1', 'CVE-2', 'CVE-3']);
-    expect(getAgentConversation(getAgentQueue()[2].conversationId).title).toBe('Assess CVE-3');
+    const task = getAgentQueue()[2];
+    expect(task.text).toBe('Assess CVE-3 in the current scope. Retrieve its details with VulnScout MCP first.');
+    expect(task.context.view?.selectedVulnerabilityIds).toEqual(['CVE-3']);
+    expect(task.context.view?.selectionCount).toBe(1);
+    expect(task.source).toBe('Vulnerability CVE-3');
+    expect(task.conversationId).not.toBe(getAgentQueue()[0].conversationId);
+    expect(getAgentConversation(task.conversationId).title).toBe('Assess CVE-3');
     // A waiting request opens its own conversation, showing the pending request and its place in line.
     expect(screen.getByRole('heading', { name: 'Assess CVE-3' })).toBeInTheDocument();
     expect(within(screen.getByRole('log', { name: 'Agent conversation' })).getByRole('status')).toHaveTextContent('Waiting in the AI queue · #2');
