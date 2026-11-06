@@ -1111,6 +1111,47 @@ def test_project_export_keeps_compiler_targets_separate_across_variants(app, tmp
     }
 
 
+@pytest.mark.parametrize("format_name", ["spdx2", "xml", "spdx3", "cdx6"])
+@pytest.mark.parametrize("fast", [False, True])
+def test_exports_keep_conflicting_companion_compiler_observations(app, tmp_path, monkeypatch, format_name, fast):
+    from src.helpers.export_evidence import read_evidence
+
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _documents()
+    documents["release.jsonld"] = json.loads(json.dumps(documents["a-build.jsonld"]))
+    build = next(node for node in documents["release.jsonld"]["@graph"] if node.get("type") == "build_Build")
+    build["build_parameter"] = [
+        {"key": "compile:flags:C", "value": "-O3"},
+        {"key": "compile:defines:C", "value": "-DNDEBUG"},
+    ]
+    variant, scan = _import(tmp_path, documents)
+    for document in SBOMDocument.get_by_scan(scan.id):
+        Path(document.path).unlink()
+    output = _export_sbom_evidence(variant, format_name, tmp_path)
+    targets = read_evidence(output)["build_targets"]
+    expected = {
+        "a-build.jsonld": [{"language": "C", "flags": ["-DCONFIG_FEATURE=1"], "defines": []}],
+        "release.jsonld": [{"language": "C", "flags": ["-O3"], "defines": ["-DNDEBUG"]}],
+    }
+    assert len(targets) == 2
+    assert len({target["id"] for target in targets}) == 1
+    assert {target["source_document"]["source_name"]: target["languages"] for target in targets} == expected
+    if format_name == "spdx3":
+        builds = [node for node in output["@graph"] if node.get("type") == "build_Build"]
+        assert len(builds) == 2
+        assert len({node["spdxId"] for node in builds}) == 2
+    restored = Variant.create("restored", variant.project_id)
+    restored_scan = Scan.create("roundtrip", restored.id, scan_type="sbom")
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(output))
+    SBOMDocument.create(str(path), path.name, restored_scan.id,
+                        format="cdx" if format_name.startswith("cdx") else "spdx")
+    read_inputs(ControllersCache(), restored_scan.id)
+    repeated = read_evidence(_export_sbom_evidence(restored, format_name, tmp_path))["build_targets"]
+    assert len(repeated) == 2
+    assert {target["source_document"]["source_name"]: target["languages"] for target in repeated} == expected
+
+
 def _exported_file_records(output, version):
     from src.helpers.export_files import spdx2_annotation_inventory
 
@@ -1483,3 +1524,97 @@ def test_unresolved_hash_references_are_not_emitted_as_native_integrity(app, tmp
     assert "checksums" not in exported
     evidence = json.loads(exported["comment"][len(EVIDENCE_PREFIX):])
     assert evidence["properties"]["verifiedUsing"] == ["_:missing"]
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("identifier", ["spdxId", "@id"])
+@pytest.mark.parametrize("as_list", [False, True])
+def test_graph_content_identifiers_roundtrip_without_original_documents(app, tmp_path, version, identifier, as_list):
+    documents = _documents()
+    source = documents["z-source.jsonld"]["@graph"]
+    file = next(node for node in source if node.get("type") == "software_File")
+    file["software_contentIdentifier"] = ["_:cid"] if as_list else "_:cid"
+    content_identifier = {
+        "type": "software_ContentIdentifier",
+        "software_contentIdentifierType": "gitoid",
+        "software_contentIdentifierValue": "gitoid:blob:sha1:" + "c" * 40,
+    }
+    source.append({identifier: "_:cid", **content_identifier})
+    documents["a-build.jsonld"]["@graph"].append({
+        identifier: "_:cid", **content_identifier,
+        "software_contentIdentifierValue": "gitoid:blob:sha1:" + "d" * 40,
+    })
+    variant, scan = _import(tmp_path, documents)
+    properties = _package(app, variant)["source_files"][0]["properties"]
+    assert properties["software_contentIdentifier"] == [content_identifier]
+    for document in SBOMDocument.get_by_scan(scan.id):
+        Path(document.path).unlink()
+    output = _export_sbom_evidence(variant, "spdx3", tmp_path) if version == 3 else _export_files(variant, version)
+    exported = next(file for file in _exported_file_records(output, version)
+                    if file.get("fileName", file.get("name")) == "src/enabled.c")
+    if version == 3:
+        assert exported["software_contentIdentifier"] == [content_identifier]
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _import(tmp_path, {name: output}, restored)
+    again = _export_files(restored, 3)
+    exported = next(file for file in _exported_file_records(again, 3) if file.get("name") == "src/enabled.c")
+    assert exported["software_contentIdentifier"] == [content_identifier]
+
+
+@pytest.mark.parametrize("reference", ["_:missing", "https://example.org/missing", {"@id": "_:missing"}, ["_:missing"]])
+def test_unresolved_content_identifiers_remain_only_in_evidence(reference):
+    from src.helpers.export_files import EVIDENCE_PREFIX, file_metadata
+
+    exported = file_metadata({"properties": {"software_contentIdentifier": reference}, "builds": []}, spdx3=True)
+    assert "software_contentIdentifier" not in exported
+    evidence = json.loads(exported["comment"][len(EVIDENCE_PREFIX):])
+    assert evidence["properties"]["software_contentIdentifier"] == reference
+
+
+def test_inline_content_identifiers_are_exported_without_local_identity():
+    from src.helpers.export_files import EVIDENCE_PREFIX, file_metadata
+
+    identifier = {
+        "type": "software_ContentIdentifier", "@id": "_:cid", "spdxId": "_:cid",
+        "software_contentIdentifierType": "swhid",
+        "software_contentIdentifierValue": "swh:1:cnt:" + "c" * 40,
+    }
+    exported = file_metadata({"properties": {"software_contentIdentifier": identifier}, "builds": []}, spdx3=True)
+    assert exported["software_contentIdentifier"] == [{
+        key: value for key, value in identifier.items() if key not in {"@id", "spdxId"}
+    }]
+    evidence = json.loads(exported["comment"][len(EVIDENCE_PREFIX):])
+    assert evidence["properties"]["software_contentIdentifier"] == identifier
+
+
+@pytest.mark.parametrize("target_size", [0, 1, 10000])
+def test_restore_evidence_queries_only_used_packages_in_large_inventory(app, target_size):
+    from sqlalchemy import event
+    from src.helpers.export_evidence import restore_evidence
+
+    project = Project.create("evidence-query-count")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("large inventory", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("unused.json", "unused.json", scan.id, format="spdx")
+    db.session.add_all(Package(name=f"package-{index}", version="1") for index in range(10000))
+    db.session.commit()
+    db.session.refresh(document)
+    references = {f"SPDXRef-{index}": f"package-{index}@1" for index in range(10000)}
+    target = {"id": "target", "name": "target", "package_ids": list(references)[:target_size], "languages": []}
+    evidence = {"dependencies": [], "build_targets": [target] if target_size else []}
+    selects = []
+
+    def track_selects(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(db.engine, "before_cursor_execute", track_selects)
+    try:
+        restore_evidence(document, evidence, references)
+    finally:
+        event.remove(db.engine, "before_cursor_execute", track_selects)
+    assert len(selects) == (target_size + 499) // 500
+    if target_size:
+        assert len(document.build_targets[0]["package_ids"]) == target_size
+        assert document.build_targets[0]["package_ids"][0] == str(Package.get_by_string_id("package-0@1").id)

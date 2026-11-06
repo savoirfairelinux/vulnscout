@@ -47,11 +47,11 @@ SPDX 2 uses labelled `OTHER` relationships rather than asserting package
 file analysis (`filesAnalyzed` remains false); associations to annotation-only
 records stay inside that annotation. Recorded SPDX 2
 checksums and SPDX 3 hashes are translated when their algorithms are supported.
-SPDX 3 Hash references are resolved during import within the scan (blank-node
-identifiers remain document-local) and persisted as self-contained integrity
-metadata, so export does not depend on the original graph. Unresolved references
-from older imports are retained only in the evidence comment, not emitted as
-dangling native integrity references.
+SPDX 3 Hash and software content-identifier references are resolved during import
+within the scan (blank-node identifiers remain document-local) and persisted as
+self-contained integrity metadata, so export does not depend on the original
+graph. Unresolved references from older imports are retained only in the evidence
+comment, not emitted as dangling native integrity references.
 Native file types, licenses, and other supported properties are retained in the
 matching format; properties without a native equivalent are retained in the
 labelled comment metadata.
@@ -96,6 +96,8 @@ SPDX 3 also emits labelled compiler-metadata `build_Build` observations, with
 remain raw strings: quoting, ordering, repeated entries, empty values, and
 language/target distinctions are preserved. No input edges or intermediate
 build graph are inferred from these observations.
+Companion documents declaring the same build SPDX ID retain separate compiler
+observations and source-document identities, even when their flags conflict.
 
 All SBOM formats additionally carry a versioned portable JSON evidence payload:
 
