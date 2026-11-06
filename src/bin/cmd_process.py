@@ -20,7 +20,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.env_vars import get_bool_env
-from ..helpers.history_source import current_history_operation, history_source, refresh_history
+from ..helpers.history_source import current_history_operation, history_source
 from ..extensions import batch_session, db as _db
 import click
 from ._console import Command, echo, print_message, verbose, warn
@@ -96,6 +96,7 @@ def refresh_vulnerability_sources(
     vulnerability_ids: Iterable[str],
     refresh_sources: Iterable[str] = REFRESH_SOURCES,
     on_source_start: Callable[[str, int, int], None] | None = None,
+    run_id: str | None = None,
 ) -> list[str]:
     """Refresh selected providers for the supplied vulnerabilities."""
     vuln_ctrl = controllers.vulnerabilities
@@ -113,7 +114,14 @@ def refresh_vulnerability_sources(
         )
     ]
     failed_sources: list[str] = []
-    run_id = current_history_operation()[0] or new_queue_id()
+    from ..helpers.refresh_runs import capture_source, create_run, finish_source
+    run_id = create_run({
+        source: [identifier for identifier in selected_vulnerability_ids
+                 if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")
+                 and identifier in all_vulnerabilities]
+        for source in applicable_sources
+    }, run_id=run_id or current_history_operation()[0])
+    click.echo(f"Refresh run: {run_id}")
     try:
         for step, source in enumerate(applicable_sources, start=1):
             prefix = "GHSA-" if source == "ghsa" else "CVE-"
@@ -126,11 +134,14 @@ def refresh_vulnerability_sources(
             if on_source_start is not None:
                 on_source_start(label, step, len(applicable_sources))
             try:
-                with refresh_history(source, run_id):
-                    succeeded = _refresh_source(controllers, source)
-                if not succeeded:
+                with capture_source(run_id, source):
+                    completed = _refresh_source(controllers, source)
+                if not completed:
                     failed_sources.append(label)
+                finish_source(run_id, source, error=None if completed else "Source refresh failed")
             except Exception as exc:
+                _db.session.rollback()
+                finish_source(run_id, source, error="Source refresh failed")
                 failed_sources.append(label)
                 verbose(f"{label} enrichment failed: {exc}")
     finally:
@@ -462,27 +473,34 @@ def create_project_context(
 )
 @click.option("--project", "project_name", default=None, help="Evaluate conditions in this project.")
 @click.option("--variant", "variant_name", default=None, help="Evaluate conditions in this project variant.")
+@click.option("--refresh-run-id", default=None, help="Caller-supplied refresh identity (up to 38 characters).")
 @with_appcontext
 def process_command(
     refresh_vulnerability_data: bool,
     project_name: str | None,
     variant_name: str | None,
+    refresh_run_id: str | None = None,
 ) -> None:
     """Parse all SBOM inputs, persist results to the DB and generate output files."""
     _run_main(
         refresh_vulnerability_data=refresh_vulnerability_data,
         project_name=project_name,
         variant_name=variant_name,
+        refresh_run_id=refresh_run_id,
     )
 
 
 @click.command("refresh-vulnerability-data", cls=Command)
 @click.option("--project", "project_name", default=None, help="Refresh vulnerabilities in this project only.")
 @click.option("--variant", "variant_name", default=None, help="Refresh vulnerabilities in this project variant only.")
+@click.option("--run-id", default=None, help="Unique caller-supplied identity for this refresh (never reused).")
 @with_appcontext
-def refresh_vulnerability_data_command(project_name: str | None, variant_name: str | None) -> None:
+def refresh_vulnerability_data_command(project_name: str | None, variant_name: str | None,
+                                       run_id: str | None = None) -> None:
     """Refresh vulnerability data already stored in the database."""
     scope = None
+    project = None
+    variant = None
     if variant_name and not project_name:
         raise click.UsageError("--variant requires --project.")
     if project_name:
@@ -496,17 +514,33 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
             scope = compute_export_scope(project_id=project.id)
 
     controllers = ControllersCache(scope=scope)
-    failed_sources = refresh_vulnerability_sources(
-        controllers,
-        controllers.vulnerabilities.vulnerabilities,
-        on_source_start=lambda label, step, total: echo(
-            f"Refreshing {label} data (step {step} of {total})...", role="info"
-        ),
-    )
-    if failed_sources:
-        unique_failed = list(dict.fromkeys(failed_sources))
+    from ..controllers.refresh_jobs import REFRESH_JOBS
+    from ..controllers.job_context import JobContext
+    from ..helpers.refresh_runs import create_run
+    from ..models.refresh_run import RefreshRun
+    identifiers = list(controllers.vulnerabilities.vulnerabilities)
+    targets = {source: [identifier for identifier in identifiers
+                        if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")]
+               for source in ("nvd", "epss", "ghsa", "euvd")}
+    try:
+        run_id = create_run(targets, run_id=run_id, scope={
+            "project_id": str(project.id) if project is not None else None,
+            "variant_id": str(variant.id) if variant is not None else None,
+        })
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Refresh run: {run_id}")
+    errors = []
+    for source, ids in targets.items():
+        echo(f"Refreshing {source.upper()} data...", role="info")
+        try:
+            REFRESH_JOBS[source](JobContext(f"cli-refresh:{source}", {"ids": ids, "mode": "local"}, run_id))
+        except Exception as exc:
+            errors.append(f"{source}: {exc}")
+    run = _db.session.get(RefreshRun, run_id)
+    if errors or run is None or any(value != "complete" for value in run.source_status.values()):
         raise click.ClickException(
-            f"{', '.join(unique_failed)} vulnerability-data refresh failed."
+            f"Refresh run {run_id} is incomplete. " + "; ".join(errors)
         )
     echo("Vulnerability data refresh complete.", role="success")
 
@@ -603,6 +637,7 @@ def _run_main(
     refresh_vulnerability_data: bool = False,
     project_name: str | None = None,
     variant_name: str | None = None,
+    refresh_run_id: str | None = None,
 ) -> ControllersCache:
     """Core processing logic (usable both from the CLI command and directly)."""
     controllers = ControllersCache()
@@ -646,6 +681,7 @@ def _run_main(
         failed_sources = refresh_vulnerability_sources(
             controllers,
             vulnCtrl._encountered_this_run,
+            run_id=refresh_run_id,
             on_source_start=lambda label, step, total: echo(
                 f"Refreshing {label} data (step {step} of {total})...", role="info"
             ),

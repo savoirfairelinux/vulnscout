@@ -39,6 +39,10 @@ import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../
 import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
 import { assessmentReviewKey, buildAssessmentReviewAction } from "../helpers/aiAssessmentReview";
 import VulnHistory from "./VulnHistory";
+import Operations from "../handlers/operations";
+import { waitForQueue } from "../handlers/operationStore";
+import VulnerabilityRefreshRun from "../handlers/vulnerabilityRefreshRun";
+import type { RefreshSource } from "../types/operation";
 
 type Props = {
     vuln: Vulnerability;
@@ -546,6 +550,14 @@ type VariantScopedSnapshot = {
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
     const [historyVersion, setHistoryVersion] = useState(0);
+    const refreshScopeKey = JSON.stringify([vuln.id, projectId, variantId]);
+    const refreshScopeRef = useRef(refreshScopeKey);
+    refreshScopeRef.current = refreshScopeKey;
+    const refreshGeneration = useRef(0);
+    useEffect(() => {
+        refreshGeneration.current += 1;
+        return () => { refreshGeneration.current += 1; };
+    }, [refreshScopeKey]);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
 
@@ -564,13 +576,13 @@ type VariantScopedSnapshot = {
         if (modalRef.current) {
             modalRef.current.scrollTop = 0;
         }
-    }, [vuln.id]);
+    }, [vuln.id, projectId, variantId]);
 
     useEffect(() => {
         setRefreshing(false);
         setRefreshError(null);
         setRefreshedList([]);
-    }, [vuln.id]);
+    }, [vuln.id, projectId, variantId]);
 
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -630,12 +642,54 @@ type VariantScopedSnapshot = {
     const isGhsaVuln = vuln.id.toUpperCase().startsWith('GHSA-');
 
     const handleRefresh = useCallback(async () => {
+        const currentScope = JSON.stringify([vuln.id, projectId, variantId]);
+        const generation = refreshGeneration.current;
+        const scopeChanged = () => refreshScopeRef.current !== currentScope
+            || refreshGeneration.current !== generation;
         setRefreshing(true);
         setRefreshError(null);
         setRefreshedList([]);
         try {
+            if (projectId || variantId) {
+                const sources: RefreshSource[] = isGhsaVuln ? ['ghsa'] : ['nvd', 'epss'];
+                const jobs = sources.map(source => ({
+                    ...Operations.refreshJob(source, [vuln.id], { mode: 'api' }),
+                    options: { mode: 'api' as const, ...(projectId ? { project_id: projectId } : {}), ...(variantId ? { variant_id: variantId } : {}) },
+                }));
+                const queued = await Operations.enqueue(jobs);
+                if (!queued.ok) throw new Error(queued.error);
+                const settled = await waitForQueue(queued.queueId, queued.operations.map(operation => operation.op_id));
+                if (scopeChanged()) return;
+                const run = await VulnerabilityRefreshRun.exact(queued.queueId, vuln.id, { projectId, variantId });
+                if (scopeChanged()) return;
+                const successful = (source: string) => {
+                    const coverage = run.coverage.filter(entry => entry.source === source && entry.vuln_id === vuln.id);
+                    return run.source_status?.[source] === 'complete' && coverage.length > 0
+                        && coverage.every(entry => entry.status === 'complete');
+                };
+                setRefreshedList(settled.filter(operation => operation.status === 'done' && successful(operation.source)).map(operation => operation.source.toUpperCase()));
+                const failed = settled.filter(operation => operation.status !== 'done' || !successful(operation.source));
+                if (failed.length > 0) {
+                    setRefreshError(`Refresh incomplete: ${failed.map(operation => {
+                        const target = run.coverage.find(entry => entry.source === operation.source && entry.vuln_id === vuln.id);
+                        const error = operation.error || target?.error;
+                        return `${operation.source.toUpperCase()} ${operation.status === 'done' ? target?.status || 'incomplete' : operation.status}${error ? ` — ${error}` : ''}`;
+                    }).join('; ')}.`);
+                }
+                if (settled.some(operation => operation.status === 'done')) {
+                    const refreshed = await Vulnerabilities.getDetails(vuln.id, variantId, projectId);
+                    if (!scopeChanged() && refreshed) {
+                        const { assessments: _a, simplified_status: _ss, packages: _p, packages_current: _pc,
+                            packages_current_by_variant: _pcv, variants: _v, found_by: _fb, effort: _e, fix: _f,
+                            ...providerDetails } = refreshed;
+                        patchVuln(vuln.id, { ...vuln, ...providerDetails });
+                    }
+                }
+                return;
+            }
             if (vuln.id.toUpperCase().startsWith('GHSA-')) {
                 const result = await GhsaRefreshHandler.triggerSingleRefresh(vuln.id);
+                if (scopeChanged()) return;
                 if (result) {
                     const { simplified_status: _ss, assessments: _a, packages_current: _pc, variants: _v, found_by: _fb, ...ghsaUpdates } = result;
                     patchVuln(vuln.id, { ...vuln, ...ghsaUpdates });
@@ -648,6 +702,7 @@ type VariantScopedSnapshot = {
                     NvdRefreshHandler.triggerSingleRefresh(vuln.id, "api"),
                     EpssRefreshHandler.triggerSingleRefresh(vuln.id),
                 ]);
+                if (scopeChanged()) return;
 
                 const errors: string[] = [];
                 const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
@@ -699,12 +754,14 @@ type VariantScopedSnapshot = {
                 }
             }
         } catch (error) {
-            setRefreshError(String(error) + " Please try again later.");
+            if (!scopeChanged()) setRefreshError(String(error) + " Please try again later.");
         } finally {
-            setRefreshing(false);
-            setHistoryVersion(version => version + 1);
+            if (!scopeChanged()) {
+                setRefreshing(false);
+                setHistoryVersion(version => version + 1);
+            }
         }
-    }, [vuln, patchVuln]);
+    }, [vuln, patchVuln, variantId, projectId, isGhsaVuln]);
 
     const copyRowId = async (row: Assessment) => {
         try {
@@ -1939,7 +1996,7 @@ type VariantScopedSnapshot = {
                             </div>
                         )}
 
-                        <VulnHistory vulnId={vuln.id} reloadKey={historyVersion} />
+                        <VulnHistory vulnId={vuln.id} projectId={projectId} variantId={variantId} reloadKey={historyVersion} />
 
                         <div className="mb-6 mt-6" tabIndex={isEditing ? undefined : -1}>
                             <TimeEstimateEditor
