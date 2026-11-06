@@ -194,10 +194,10 @@ refute_stdout "Examples:"
 assert_stdout "was removed in v0.25"
 
 run_ok
-assert_stdout "Usage: vulnscout [global options] <command>"
+assert_stdout "Usage: vulnscout <command> [arguments] [options] [global options]"
 
 run_ok scan --help
-assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [scanner options] [types|all]"
+assert_stdout "Usage: vulnscout scan [-p <project>] [-v <variant>] [scanner options] [types|all]"
 assert_stdout "vulnscout scan --grype --osv --sbom-cve-check"
 assert_stdout "Examples:"
 if [ -s "$VULNSCOUT_TEST_LOG" ]; then
