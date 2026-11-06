@@ -9,7 +9,7 @@ import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import React from 'react';
 
-import type { Vulnerability } from "../../src/handlers/vulnerabilities";
+import Vulnerabilities, { type Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
@@ -3309,6 +3309,27 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         fetchMock.resetMocks();
     });
 
+    test.each(['Exploitable', 'Fixed', 'Pending Assessment'])(
+        'displays all current package statuses and matches the %s filter', async status => {
+            const packages = ['curl@8.5.0', 'libcurl@8.5.0', 'curl-static@8.5.0'];
+            const assessments = ['Exploitable', 'Fixed', 'Pending Assessment'].map((simplified_status, index) => ({
+                id: `assessment-${index}`, vuln_id: vulnerabilities[0].id,
+                packages: [packages[index]], variant_id: 'board', origin: 'custom',
+                status: simplified_status, simplified_status,
+                timestamp: `2026-11-0${index + 1}T12:00:00Z`, responses: [],
+            }));
+            const enriched = Vulnerabilities.enrich_with_assessments([{
+                ...vulnerabilities[0], packages, packages_current: packages,
+                packages_current_by_variant: { board: packages },
+            }], assessments);
+            render(<TableVulnerabilities vulnerabilities={enriched}
+                filterLabel="Status" filterValue={status} preferenceScopeKey={`package-status-${status}`}
+                appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            expect(await screen.findByRole('cell', { name: 'Exploitable, Pending Assessment, Fixed' }))
+                .toBeInTheDocument();
+        }
+    );
+
     test('status summary helper button opens and closes dropdown', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
@@ -3322,7 +3343,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
 
         const helpTitle = await screen.findByText('Status Summary');
         expect(helpTitle).toBeInTheDocument();
-        expect(screen.getByText(/Status aggregates all assessment outcomes/i)).toBeInTheDocument();
+        expect(screen.getByText(/Status aggregates the newest assessment for each package and variant/i)).toBeInTheDocument();
 
         // Close via click outside — the dropdown closes via a mousedown listener
         fireEvent.mouseDown(document.body);

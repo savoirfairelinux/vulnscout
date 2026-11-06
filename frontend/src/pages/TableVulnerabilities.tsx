@@ -954,7 +954,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             HintText: <>
                 <h3 className="font-bold text-white mb-2">Status Summary</h3>
                 <div className="space-y-1 text-gray-100">
-                    <p>Status aggregates all assessment outcomes for the vulnerability in the current scope.</p>
+                    <p>Status aggregates the newest assessment for each package and variant in the current scope.</p>
                     <p>Scope follows your active project, variant, and compare selection.</p>
                     <p>Display lists every distinct outcome, for example: Exploitable, Pending Assessment.</p>
                     <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>

@@ -24,6 +24,12 @@ VulnScout provides several filter categories, each accessible from a dedicated d
 - **Source**: restrict the table to vulnerabilities found by a specific scanner or import source (Yocto, Grype, CycloneDX, SPDX3, OpenVEX, or Local User Data).
 - **Severity**: select one or more severity levels (Critical, High, Medium, Low, None). You can also switch to a continuous **score-based** filter using a range slider, which filters by the underlying CVSS max score rather than the categorical label.
 - **Status**: filter by triage status: Pending Assessment, Exploitable, Not affected, or Fixed.
+  The column lists all distinct current package statuses, comma-separated, using
+  the newest assessment for each package/variant target in the selected scope.
+  Historical assessments superseded for the same target do not contribute;
+  updating one package does not hide another package's status. Status filters
+  match any listed status, and a vulnerability remains active while any current
+  target is active.
 - **Published Date**: filter vulnerabilities by their NVD publication date. The dropdown supports exact-date matching, before/after comparisons, date ranges, and a "within the last N days" shorthand. This filter becomes active once the NVD sync has completed.
 - **More Filters**: groups less common filters together:
   - **EPSS Range**: a percentage-based range slider that narrows the list to vulnerabilities whose Exploit Prediction Scoring System score falls within the specified band.
