@@ -19,6 +19,7 @@ import TableVulnerabilities from "./TableVulnerabilities";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
+import RefreshOverview from "./RefreshOverview";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
@@ -41,6 +42,7 @@ const tabLabels: Record<string, string> = {
         packages: 'SBOM',
         vulnerabilities: 'Vulnerabilities',
         scans: 'Scans',
+        refresh: 'Refresh',
         review: 'Review',
         exports: 'Export',
         settings: 'Settings',
@@ -55,7 +57,7 @@ const tabLabels: Record<string, string> = {
  */
 type ExplorerNavState = {
     vulnFilter?: {
-        label: "Source" | "Severity" | "Status" | "Package";
+        label: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
         value: string;
         vulnerabilityIds?: string[];
     };
@@ -293,8 +295,9 @@ function Explorer() {
     const applyScope = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
-        // A new scope invalidates any filter the previous page navigated with.
-        navigate(location.pathname, { replace: true, state: null });
+        // A new scope invalidates any filter the previous page navigated with,
+        // but not the URL query (e.g. the exact run identity of /refresh?run=…).
+        navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
         setScopeRevision(revision => revision + 1);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
@@ -325,7 +328,7 @@ function Explorer() {
             multiActive ? variantIds : undefined,
             multiActive ? (multiOperation || undefined) : undefined,
         );
-    }, [loadData, navigate, location.pathname]);
+    }, [loadData, navigate, location.pathname, location.search]);
 
     // Changing the scope leaves the open AI context item, so unsaved edits are
     // confirmed first; false tells the selector to keep its previous scope.
@@ -723,7 +726,6 @@ function Explorer() {
                         compareOperation={currentOperation}
                         variantIds={currentVariantIds}
                         multiOperation={currentMultiOperation}
-                        onRefreshComplete={handleRefreshComplete}
                         missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
                         onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
                         missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
@@ -739,6 +741,13 @@ function Explorer() {
                         variantIds={currentVariantIds}
                         onScanComplete={handleScanComplete}
                     />
+                } />
+                <Route path={ROUTES.refresh} element={
+                    <RefreshOverview key={`${currentProjectId}-${currentVariantId}`} projectId={currentProjectId} variantId={currentVariantId}
+                        vulnerabilities={vulns} onRefreshComplete={handleRefreshComplete}
+                        baseVariantId={currentBaseVariantId} compareOperation={currentOperation}
+                        variantIds={currentVariantIds} multiOperation={currentMultiOperation}
+                        comparisonScope={!!currentBaseVariantId || (currentVariantIds?.length ?? 0) > 1} dataRevision={dataRevision} />
                 } />
                 <Route path={ROUTES.review} element={
                     <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} />

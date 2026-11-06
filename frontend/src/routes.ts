@@ -12,6 +12,7 @@ export const ROUTES = {
     packages: '/sbom',
     vulnerabilities: '/vulnerabilities',
     scans: '/scans',
+    refresh: '/refresh',
     review: '/review',
     ai: '/ai-context',
     exports: '/export',

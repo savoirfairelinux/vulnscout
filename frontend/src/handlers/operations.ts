@@ -59,9 +59,13 @@ class Operations {
     static refreshJob(
         source: RefreshSource,
         ids: string[],
-        options: { mode?: "local" | "api" } = {},
+        options: { mode?: "local" | "api"; project_id?: string; variant_id?: string } = {},
     ): OperationJob {
-        return { kind: "refresh", source, ids, options: { mode: options.mode ?? "local" } };
+        return { kind: "refresh", source, ids, options: {
+            mode: options.mode ?? "local",
+            ...(options.project_id ? { project_id: options.project_id } : {}),
+            ...(options.variant_id ? { variant_id: options.variant_id } : {}),
+        } };
     }
 
     static deferredRefreshJob(

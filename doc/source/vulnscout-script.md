@@ -21,6 +21,7 @@ v0.25; see [Migrating from Legacy CLI Flags](cli-migration.md).
 | `add --spdx\|--cdx\|--cve-check\|--yocto-vex\|--openvex\|--grype <path>` | Import input files. Options repeat and mix; one call is processed as one import. | default `default` | default `default` |
 | `scan [--grype] [--nvd] [--osv] [--sbom-cve-check] [--all]` | Run the selected scanners together on the current data. Positional types (`scan nvd,osv`) also work; no selection means `all`. | default `default` | default `default` |
 | `refresh` | Refresh EPSS, NVD, ENISA EUVD and GitHub Advisory data. | optional; all data when omitted | optional; needs `-p` |
+| `export refresh-changes --run-id <id> [--format json\|csv]` | Export one exact persisted refresh artifact to stdout. | optional visibility filter | optional; needs `-p` |
 | `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional; needs `-p` |
 | `assess --cve <id>...\|--filter <expr> [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Create pending AI assessments with the configured AI provider. Use `--cve` or `--filter`, not both; see [Assess from the CLI or CI](ai-assessments.md#assess-from-the-cli-or-ci). | optional; all variants of the project | optional, repeatable; needs `-p` |
 | `review --assessment-id <uuid>...\|--cve <id>... [--re-review] [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Record AI reviews of custom assessments with the configured AI provider, one per target; the assessments are never changed. Use `--assessment-id` or `--cve`, not both; see [Reviewing custom assessments from the CLI](ai-assessments.md#reviewing-custom-assessments-from-the-cli). | required | optional, repeatable; `--cve` only, needs `-p` |
@@ -162,4 +163,5 @@ It is registered for `vulnscout` (on `PATH`) and `./vulnscout`. For any other in
 :maxdepth: 1
 
 cli-migration
+cli-refresh-runs
 ```

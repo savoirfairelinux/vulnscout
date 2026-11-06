@@ -115,6 +115,15 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
         </NavLink>
       </li>
 
+      <li>
+        <NavLink to={ROUTES.refresh} onClick={guardedClick(ROUTES.refresh)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>
+          <span className="flex items-center h-full px-4 py-2">
+            <FontAwesomeIcon icon={faArrowsRotate} className="mr-1" />
+            Refresh
+          </span>
+        </NavLink>
+      </li>
+
       {/* === Review === */}
       <li>
         <NavLink to={ROUTES.review} onClick={guardedClick(ROUTES.review)} className={navLiClass} style={{ display: 'flex', height: '100%' }}>

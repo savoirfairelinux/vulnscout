@@ -19,6 +19,7 @@ import uuid
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..extensions import db
+from ..helpers.refresh_runs import add_targets, target_result, tracked_refresh
 from ..helpers.active_scans import active_package_ids_for_scans, active_scan_ids_for_variant
 from ..models import Finding, Observation, Scan, Vulnerability
 from .epss_db import EPSS_DB
@@ -125,6 +126,10 @@ def run_deferred_refresh(ctx: JobContext) -> None:
             and candidate.get("position", 0) < operation.get("position", 0)
         ]
         if any(scan.get("status") in {STATUS_ERROR, STATUS_CANCELLED} for scan in preceding_scans):
+            from ..helpers.refresh_runs import finish_source
+            if ctx.queue_id:
+                finish_source(ctx.queue_id, str(ctx.options["source"]), "skipped",
+                              "Earlier scan failed or was cancelled")
             ctx.report(0, 0, "Skipped because an earlier scan did not complete")
             return
 
@@ -147,6 +152,8 @@ def run_deferred_refresh(ctx: JobContext) -> None:
         return
 
     ctx.options["ids"] = ids
+    if ctx.queue_id:
+        add_targets(ctx.queue_id, source, ids)
     REFRESH_JOBS[source](ctx)
 
 
@@ -154,13 +161,13 @@ def run_deferred_refresh(ctx: JobContext) -> None:
 # NVD
 # ---------------------------------------------------------------------------
 
-def _refresh_nvd_record(cve_id: str, mode: str, nvd: Optional[NVD_DB]) -> None:
+def _refresh_nvd_record(cve_id: str, mode: str, nvd: Optional[NVD_DB]) -> bool:
     now = datetime.datetime.now(datetime.timezone.utc)
     if mode == "api" and nvd is not None:
         status_code, payload = nvd.api_get_cve(cve_id, max_retries=2)
         if status_code != 200 or not payload.get("vulnerabilities"):
             print(f"[bulk NVD refresh] {cve_id}: status={status_code}, skipping", flush=True)
-            return
+            return False
         details = NVD_DB.extract_cve_details(payload["vulnerabilities"][0]["cve"])
     else:
         cve_obj = get_cve_json(cve_id)
@@ -169,21 +176,26 @@ def _refresh_nvd_record(cve_id: str, mode: str, nvd: Optional[NVD_DB]) -> None:
                 f"[bulk NVD refresh] {cve_id}: not found in local NVD database, skipping",
                 flush=True,
             )
-            return
+            return False
         details = extract_cve_details(cve_obj)
 
     record = db.session.get(Vulnerability, cve_id)
     if record is not None:
         apply_nvd_update(record, details, now)
         apply_cvss_update(record, details, db)
+        return True
+    return False
 
 
+@tracked_refresh("nvd")
 def run_nvd_refresh(ctx: JobContext) -> None:
     """Refresh NVD/CVSS metadata from the local FKIE database or the REST API."""
     cve_ids: List[str] = list(ctx.options["ids"])
     mode = ctx.options.get("mode", "local")
     total = len(cve_ids)
     ctx.report(0, total, f"Starting bulk NVD refresh: 0/{total}")
+    if not total:
+        return
 
     nvd: Optional[NVD_DB] = None
     sleep_between = 0.0
@@ -203,8 +215,11 @@ def run_nvd_refresh(ctx: JobContext) -> None:
             _safe_commit("bulk NVD refresh cancel")
             ctx.check_cancelled()
         try:
-            _refresh_nvd_record(cve_id, mode, nvd)
+            checked = _refresh_nvd_record(cve_id, mode, nvd)
+            target_result("nvd", cve_id, "complete" if checked else "skipped",
+                          None if checked else "Provider record unavailable")
         except Exception as exc:
+            target_result("nvd", cve_id, "failed", str(exc)[:500])
             print(f"[bulk NVD refresh] error for {cve_id}: {exc}", flush=True)
 
         done += 1
@@ -237,11 +252,14 @@ def _apply_epss_score(cve_id: str, score: object, now: datetime.datetime) -> Non
     record.update_record(**updates)
 
 
+@tracked_refresh("epss")
 def run_epss_refresh(ctx: JobContext) -> None:
     """Refresh EPSS scores in batches of :data:`EPSS_BATCH_SIZE`."""
     cve_ids: List[str] = list(ctx.options["ids"])
     total = len(cve_ids)
     ctx.report(0, total, f"Starting bulk EPSS refresh: 0/{total}")
+    if not total:
+        return
 
     epss = EPSS_DB()
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -256,6 +274,8 @@ def run_epss_refresh(ctx: JobContext) -> None:
         try:
             results = epss.api_get_epss_batch(chunk)
         except Exception as exc:
+            for cve_id in chunk:
+                target_result("epss", cve_id, "failed", str(exc)[:500])
             print(f"[bulk EPSS refresh] batch error: {exc}", flush=True)
             processed += len(chunk)
             ctx.report(processed, total, f"EPSS refresh: {processed}/{total}")
@@ -266,8 +286,12 @@ def run_epss_refresh(ctx: JobContext) -> None:
             if result:
                 try:
                     _apply_epss_score(cve_id, result["score"], now)
+                    target_result("epss", cve_id)
                 except Exception as exc:
+                    target_result("epss", cve_id, "failed", str(exc)[:500])
                     print(f"[bulk EPSS refresh] error updating {cve_id}: {exc}", flush=True)
+            else:
+                target_result("epss", cve_id, "skipped", "Provider record unavailable")
             processed += 1
 
         _safe_commit("bulk EPSS refresh")
@@ -280,13 +304,13 @@ def run_epss_refresh(ctx: JobContext) -> None:
 # GHSA
 # ---------------------------------------------------------------------------
 
-def _apply_ghsa_published(ghsa_id: str, now: datetime.datetime) -> None:
+def _apply_ghsa_published(ghsa_id: str, now: datetime.datetime) -> bool:
     published_at = VulnerabilitiesController._fetch_ghsa_published(ghsa_id)
     if not published_at:
-        return
+        return False
     record = db.session.get(Vulnerability, ghsa_id)
     if record is None:
-        return
+        return False
     try:
         publish_date = datetime.date.fromisoformat(str(published_at)[:10])
     except ValueError:
@@ -298,13 +322,17 @@ def _apply_ghsa_published(ghsa_id: str, now: datetime.datetime) -> None:
         if record.publish_date != publish_date:
             updates["ghsa_data_updated_at"] = now
     record.update_record(**updates)
+    return publish_date is not None
 
 
+@tracked_refresh("ghsa")
 def run_ghsa_refresh(ctx: JobContext) -> None:
     """Fetch GHSA publication dates, honouring GitHub's rate limit."""
     ghsa_ids: List[str] = list(ctx.options["ids"])
     total = len(ghsa_ids)
     ctx.report(0, total, f"Starting bulk GHSA refresh: 0/{total}")
+    if not total:
+        return
 
     now = datetime.datetime.now(datetime.timezone.utc)
     done = 0
@@ -316,8 +344,11 @@ def run_ghsa_refresh(ctx: JobContext) -> None:
             ctx.check_cancelled()
 
         try:
-            _apply_ghsa_published(ghsa_id, now)
+            checked = _apply_ghsa_published(ghsa_id, now)
+            target_result("ghsa", ghsa_id, "complete" if checked else "skipped",
+                          None if checked else "Provider record unavailable")
         except urllib.error.HTTPError as exc:
+            target_result("ghsa", ghsa_id, "failed", str(exc)[:500])
             if exc.code in (403, 429):
                 _safe_commit("bulk GHSA refresh rate-limited")
                 raise OperationError(
@@ -327,6 +358,7 @@ def run_ghsa_refresh(ctx: JobContext) -> None:
             print(f"[bulk GHSA refresh] error for {ghsa_id}: {exc}", flush=True)
             failed += 1
         except Exception as exc:
+            target_result("ghsa", ghsa_id, "failed", str(exc)[:500])
             print(f"[bulk GHSA refresh] error for {ghsa_id}: {exc}", flush=True)
             failed += 1
 
@@ -393,11 +425,14 @@ def _apply_euvd(
     return False, False
 
 
+@tracked_refresh("euvd")
 def run_euvd_refresh(ctx: JobContext) -> None:
     """Annotate CVEs from the cached ENISA EUVD mapping and EU KEV dump."""
     cve_ids: List[str] = list(ctx.options["ids"])
     total = len(cve_ids)
     ctx.report(0, total, "Loading ENISA EUVD CVE mapping…")
+    if not total:
+        return
 
     euvd = EUVD_DB()
     full_map = euvd.get_full_mapping()
@@ -416,6 +451,7 @@ def run_euvd_refresh(ctx: JobContext) -> None:
             ctx.check_cancelled()
 
         matched_euvd, known_exploited = _apply_euvd(cve_id, full_map, kev_map, now)
+        target_result("euvd", cve_id)
         if matched_euvd:
             matched += 1
         if known_exploited:
