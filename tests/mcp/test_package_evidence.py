@@ -143,13 +143,43 @@ def test_compiler_metadata_stays_with_owning_document_target_and_language():
             return_value=httpx.Response(200, json={"documents": [first, second]}),
         )
         result = invoke(server.tools, "list_dependency_packages", query="lib")
-        assert [row["build_targets"] for row in result["items"][0]["occurrences"]] == [
-            first["build_targets"][:2], second["build_targets"],
+        expected = [
+            {**target, "document_id": doc["id"], "source_name": doc["source_name"]}
+            for doc in (first, second) for target in doc["build_targets"] if "lib@1" in target["package_ids"]
         ]
+        assert [row["build_targets"] for row in result["items"][0]["occurrences"]] == [expected, expected]
         scoped = invoke(server.tools, "list_dependency_packages", query="lib", document_id="d2")
         assert len(scoped["items"][0]["occurrences"]) == 1
         isolated = invoke(server.tools, "list_dependency_packages", query="isolated")
-        assert isolated["items"][0]["occurrences"][0]["build_targets"] == first["build_targets"][2:]
+        assert scoped["items"][0]["occurrences"][0]["build_targets"] == expected
+        assert isolated["items"][0]["occurrences"][0]["build_targets"] == [
+            {**first["build_targets"][2], "document_id": "d1", "source_name": "d1.spdx"},
+        ]
+
+
+def test_build_only_companion_document_reaches_inventory_and_traversal():
+    target = {"id": "compiler", "name": "compiler", "package_ids": ["lib@1"],
+              "languages": [{"language": "C", "flags": ["-O2"], "defines": []}]}
+    build = document("build", [], [])
+    build["build_targets"] = [target]
+    packages = document("packages", [package("app"), package("lib")], [edge("app", "lib")])
+    other = document("other", [package("unrelated")], [])
+    server = Server()
+    client = VulnScoutClient(BASE_URL)
+    register_tools(server, client)
+    with patch.object(client, "get_dependency_graph", return_value={"documents": [build, packages, other]}):
+        inventory = invoke(server.tools, "list_dependency_packages", query="lib")
+        scoped = invoke(server.tools, "list_dependency_packages", query="lib", document_id="packages")
+        traversal = invoke(server.tools, "get_package_dependencies", package_id="app@1")
+        root = invoke(server.tools, "get_package_dependencies", package_id="lib@1", direction="dependents")
+        for row in (inventory["items"][0], scoped["items"][0], traversal["items"][0], root["root"]):
+            occurrence = row["occurrences"][0]
+            assert occurrence["document_id"] == "packages"
+            assert occurrence["build_targets"] == [
+                {**target, "document_id": "build", "source_name": "build.spdx"},
+            ]
+        unrelated = invoke(server.tools, "list_dependency_packages", query="unrelated")
+        assert unrelated["items"][0]["occurrences"][0]["build_targets"] == []
 
 
 def test_typed_edges_preserve_conflicts_provenance_and_reverse_orientation():

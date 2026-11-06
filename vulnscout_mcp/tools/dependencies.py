@@ -20,11 +20,13 @@ def _graph(client: VulnScoutClient, variant_id: str, document_id: str | None) ->
     if document_id is not None and not selected:
         raise ValueError("No active SBOM document found with that ID in this variant.")
     packages: dict[str, dict] = {}
+    targets_by_package: dict[str, list[dict]] = {}
     for doc in documents:
-        targets_by_package: dict[str, list[dict]] = {}
         for target in doc.get("build_targets", []):
+            observation = {**target, "document_id": doc["id"], "source_name": doc["source_name"]}
             for package_id in target["package_ids"]:
-                targets_by_package.setdefault(package_id, []).append(target)
+                targets_by_package.setdefault(package_id, []).append(observation)
+    for doc in documents:
         for package in doc["packages"]:
             entry = packages.setdefault(package["id"], {"id": package["id"], "occurrences": []})
             entry["occurrences"].append({
@@ -205,8 +207,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         query is a case-insensitive substring of name, version or opaque package ID.
         Returns paginated unique IDs with per-document occurrences retaining original
         version, release_version, source_revision, version_evidence and conflict flags.
-        Each occurrence's build_targets retains only targets owning that package in
-        that document, with separate language/flags/defines; never flatten across targets.
+        Each occurrence's build_targets retains targets owning that package across the
+        variant's documents, with declaring document_id/source_name and separate
+        language/flags/defines; never flatten conflicting declarations or targets.
         Use exact returned IDs for traversal; names alone can match several releases.
         document_id optionally restricts discovery to one active source.
         Follow next_offset until null (limit 1..500); pages are not snapshot-isolated.

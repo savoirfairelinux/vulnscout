@@ -188,6 +188,11 @@ through HTTP, without snapshot isolation. Errors are `Error: ...`, not absence.
 each occurrence: document, target ID/name/package IDs and separate language
 `flags`/`defines`, without parsing or flattening raw strings. Targets come from
 the dependency graph, even for isolated packages with no dependency edges.
+Ownership is resolved across the active variant's companion documents, including
+build-only documents. Each target carries its declaring `document_id` and
+`source_name`, independently of the package occurrence's document. All matching
+observations remain visible, including conflicting declarations of one build ID;
+an optional package-document filter does not discard companion compiler evidence.
 
 `get_package_dependencies` retains `path_edges` aligned to each hop of `path`.
 Each hop is a list of edge records with graph document/source, normalized

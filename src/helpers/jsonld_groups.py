@@ -23,7 +23,7 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
                          packages: "PackagesController") -> None:
     """Resolve companion-document groups within one ingestion scan, never by suffix alone."""
     nodes: dict[str, dict] = {}
-    build_documents: dict[str, SBOMDocument] = {}
+    build_observations: list[tuple[SBOMDocument, str, dict]] = []
     references: dict[str, str] = {}
     edges: dict[str, set[tuple[str, str]]] = defaultdict(set)
     eligible = []
@@ -51,7 +51,7 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
             if isinstance(ref, str):
                 nodes[key(ref)] = item
                 if item.get('type') == 'build_Build':
-                    build_documents[key(ref)] = document
+                    build_observations.append((document, key(ref), item))
             source, targets = item.get('from'), item.get('to', [])
             if isinstance(targets, str):
                 targets = [targets]
@@ -71,8 +71,7 @@ def record_jsonld_groups(documents: list[tuple[SBOMDocument, dict, dict[str, str
         outputs[build].update(owners.get(target, ()))
         if target in references:
             outputs[build].add(target)
-    for build, document in build_documents.items():
-        node = nodes[build]
+    for document, build, node in build_observations:
         languages: dict[str, dict] = {}
         parameters = node.get('build_parameter', [])
         if not isinstance(parameters, list):

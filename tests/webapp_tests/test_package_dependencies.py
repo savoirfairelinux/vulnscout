@@ -204,6 +204,81 @@ def test_real_zephyr_compiler_metadata_survives_ingestion_and_api(app, tmp_path)
     assert next(item for item in stored if item['id'] == target['id'])['languages'] == target['languages']
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+def test_companion_build_declarations_preserve_conflicting_compiler_observations(
+        app, tmp_path, monkeypatch, reverse):
+    import httpx
+
+    from vulnscout_mcp.client import VulnScoutClient
+    from vulnscout_mcp.tools.dependencies import _packages_impl, _traverse_impl
+
+    configurations = {
+        'debug.jsonld': ('-O0', '-DDEBUG'),
+        'release.jsonld': ('-O3', '-DNDEBUG'),
+    }
+    documents = {
+        name.removesuffix('.jsonld'): _zephyr_spdx3([
+            {'type': 'build_Build', 'spdxId': 'zephyr:compiler', 'name': 'compiler',
+             'build_parameter': [
+                 {'key': 'compile:flags:C', 'value': flags},
+                 {'key': 'compile:defines:C', 'value': defines},
+             ]},
+            {'type': 'Relationship', 'relationshipType': 'hasOutput',
+             'from': 'zephyr:compiler', 'to': ['zephyr:lib']},
+        ])
+        for name, (flags, defines) in configurations.items()
+    }
+    if reverse:
+        documents = dict(reversed(documents.items()))
+    documents['packages'] = _zephyr_spdx3([
+        {'type': 'software_Package', 'spdxId': f'zephyr:{name}', 'name': name,
+         'software_packageVersion': '1'} for name in ('app', 'lib')
+    ] + [
+        {'type': 'Relationship', 'relationshipType': 'dependsOn',
+         'from': 'zephyr:app', 'to': ['zephyr:lib']},
+    ])
+    project = Project.create('conflicting-compilers')
+    variant = Variant.create('board', project.id)
+    scan = _import_grouping_documents(tmp_path, variant, documents)
+    variant_id = str(variant.id)
+    http = app.test_client()
+    graph = http.get(f'/api/package-dependencies?variant_id={variant_id}').json
+    compiler = http.get(f'/api/package-compiler-metadata?variant_id={variant_id}').json
+    for response in (graph, compiler):
+        targets = {doc['source_name']: doc['build_targets'][0] for doc in response['documents']
+                   if doc['build_targets']}
+        assert targets.keys() == configurations.keys()
+        for name, (flags, defines) in configurations.items():
+            assert targets[name]['id'] == 'https://example.org/zephyr/compiler'
+            assert targets[name]['package_ids'] == ['lib@1']
+            assert targets[name]['languages'] == [
+                {'language': 'C', 'flags': [flags], 'defines': [defines]},
+            ]
+    db.session.expire_all()
+    assert {doc.source_name for doc in SBOMDocument.get_by_scan(scan.id) if doc.build_targets} == set(configurations)
+
+    def get(client, url, *, params):
+        response = http.get(url.removeprefix('http://vulnscout.test'), query_string=params)
+        return httpx.Response(response.status_code, json=response.json)
+
+    monkeypatch.setattr(httpx.Client, 'get', get)
+    client = VulnScoutClient('http://vulnscout.test')
+    packages = json.loads(_packages_impl(client, variant_id, 'lib@1', None, 0, 100))
+    traversal = json.loads(_traverse_impl(client, variant_id, 'app@1', 'dependencies', 0, None, 0, 100))
+    root = json.loads(_traverse_impl(client, variant_id, 'lib@1', 'dependents', 0, None, 0, 100))
+    for package in (packages['items'][0], traversal['items'][0], root['root']):
+        occurrence = package['occurrences'][0]
+        assert occurrence['source_name'] == 'packages.jsonld'
+        targets = {target['source_name']: target for target in occurrence['build_targets']}
+        assert targets.keys() == configurations.keys()
+        for name, (flags, defines) in configurations.items():
+            assert targets[name]['languages'] == [
+                {'language': 'C', 'flags': [flags], 'defines': [defines]},
+            ]
+            assert targets[name]['document_id'] == next(
+                doc['id'] for doc in graph['documents'] if doc['source_name'] == name)
+
+
 def test_real_zephyr_evidence_reaches_mcp_without_flattening_targets(app, tmp_path, monkeypatch):
     import httpx
 
