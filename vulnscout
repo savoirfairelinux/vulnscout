@@ -274,7 +274,7 @@ SCOPE_ARGS=()
 _show_help() {
     cat <<'EOF'
 VulnScout - Vulnerability Scanner
-Usage: vulnscout [global options] <command> [arguments] [options]
+Usage: vulnscout <command> [arguments] [options] [global options]
        vulnscout <command> --help
 
 Global options (before or after the command):
@@ -316,7 +316,7 @@ EOF
 _show_verb_help() {
     case "$1" in
         add) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] add <input options>
+Usage: vulnscout add [-p <project>] [-v <variant>] <input options>
 
 Add SBOMs and scan results to a variant, then process them.
 Input options (repeatable and combinable; all files form one scan):
@@ -336,7 +336,7 @@ Examples:
 EOF
             ;;
         scan) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] scan [scanner options] [types|all]
+Usage: vulnscout scan [-p <project>] [-v <variant>] [scanner options] [types|all]
 
 Run vulnerability scans. All selected scanners run together as one scan run,
 in the order grype, nvd, osv, sbom-cve-check. Without a selection, all run.
@@ -359,7 +359,7 @@ Examples:
 EOF
             ;;
         match-condition) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] match-condition <expr>
+Usage: vulnscout match-condition [-p <project>] [-v <variant>] <expr>
 
 Test stored vulnerabilities against a condition. Exits 2 if any vulnerability matches.
 Options:
@@ -425,7 +425,7 @@ Examples:
 EOF
             ;;
         report) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] report <template|path>... [options]
+Usage: vulnscout report [-p <project>] [-v <variant>] <template|path>... [options]
 
 Generate reports from built-in templates or local files.
 Options:
@@ -460,7 +460,7 @@ Examples:
 EOF
             ;;
         import) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] import <kind> <path> [options]
+Usage: vulnscout import [-p <project>] [-v <variant>] <kind> <path> [options]
 
 Kinds: custom-data, custom-openvex, context
 Options:
@@ -477,7 +477,7 @@ Examples:
 EOF
             ;;
         refresh) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] refresh
+Usage: vulnscout refresh [-p <project>] [-v <variant>]
 
 Refresh stored vulnerability data, including EPSS.
 Options:

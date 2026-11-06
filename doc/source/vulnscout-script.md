@@ -7,7 +7,7 @@ This page introduces command syntax, options, and project/variant selection.
 For task-specific instructions, see [VulnScout Workflow](vulnscout-workflow.md).
 
 ```
-./vulnscout [global options] <command> [arguments] [options]
+./vulnscout <command> [arguments] [options] [global options]
 ./vulnscout <command> --help
 ```
 
