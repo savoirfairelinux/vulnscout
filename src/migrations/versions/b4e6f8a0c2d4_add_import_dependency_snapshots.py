@@ -1,14 +1,14 @@
 """Preserve per-import package-pair dependency snapshots.
 
 Revision ID: b4e6f8a0c2d4
-Revises: a3d5e7f9b1c2
+Revises: e91a47b28c60
 """
 from alembic import op
 import sqlalchemy as sa
 
 
 revision = 'b4e6f8a0c2d4'
-down_revision = 'a3d5e7f9b1c2'
+down_revision = 'e91a47b28c60'
 branch_labels = None
 depends_on = None
 
