@@ -9,6 +9,13 @@ import Packages, { type Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
 import Vulnerabilities from '../../src/handlers/vulnerabilities';
 
+beforeAll(() => {
+    global.ResizeObserver = class implements ResizeObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+    };
+});
 
 const getDOMRect = (width: number, height: number) => ({
     width,
@@ -654,26 +661,95 @@ describe('Packages Table', () => {
         expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
     })
 
-    test('dependency column follows version metadata and its whole cell opens a package modal', async () => {
-        render(<TablePackages preferenceScopeKey="dependency-default" packages={packages} />);
-        const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
-        expect(headers.slice(0, 6)).toEqual([
-            'Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities',
-        ]);
+    test('dependency actions are discoverable and open the correct scoped package by mouse or keyboard', async () => {
+        const fetch = jest.spyOn(global, 'fetch').mockImplementation(async input => {
+            const url = new URL(String(input));
+            return {
+                ok: true, json: async () => url.searchParams.has('counts')
+                    ? { counts: { [packages[0].id]: { in: 1, out: 0 }, [packages[1].id]: { in: 0, out: 1 } }, unrecorded: [] }
+                    : { documents: [{
+                        id: 'dependency-fixture', source_name: 'fixture.spdx', variant_id: 'dependency-v1', variant_name: 'default',
+                        dependencies_recorded: true, packages,
+                        edges: [{ package_id: packages[0].id, dependency_id: packages[1].id }],
+                    }] },
+            } as Response;
+        });
+        try {
+            render(<TablePackages preferenceScopeKey="dependency-default" packages={packages}
+                variantId="dependency-v1" compareVariantId="dependency-v2" operation="intersection" />);
+            const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
+            expect(headers.slice(0, 6)).toEqual([
+                'Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities',
+            ]);
 
-        await waitFor(() => expect(screen.getAllByText('Deps: 0 / Req by: 0')).toHaveLength(packages.length));
-        const dependencyButton = screen.getByRole('button', { name: 'Explore dependencies for aaabbbccc' });
-        expect(dependencyButton.getAttribute('title')).toBe(
-            'Deps: direct dependencies of this package. Req by: packages that directly depend on this package.');
-        expect(dependencyButton.className).toContain('w-full h-full p-4');
-        expect(dependencyButton.parentElement?.tagName).toBe('TD');
-        expect(dependencyButton.parentElement?.className).not.toContain('p-4');
+            const dependencyButton = await screen.findByRole('button', { name: 'Explore dependencies for aaabbbccc' });
+            expect(dependencyButton.getAttribute('type')).toBe('button');
+            expect(dependencyButton.textContent).toContain('Explore');
+            expect(dependencyButton.textContent).toContain('Deps: 1 / Req by: 0');
+            expect(dependencyButton.getAttribute('title')).toBe(
+                'Deps: direct dependencies of this package. Req by: packages that directly depend on this package.');
+            for (const className of ['w-full', 'h-full', 'p-4', 'text-cyan-300',
+                'hover:underline', 'focus-visible:outline-2', 'focus-visible:outline-cyan-300']) {
+                expect(dependencyButton.classList.contains(className)).toBe(true);
+            }
+            expect(dependencyButton.parentElement?.tagName).toBe('TD');
+            expect(dependencyButton.parentElement?.className).not.toContain('p-4');
+            expect(screen.queryByRole('button', { name: 'Explore dependencies for dddeeefff' })).toBeNull();
+            expect(screen.getByText('Deps: 0 / Req by: 0').closest('button')).toBeNull();
 
-        const user = userEvent.setup();
-        await user.click(dependencyButton);
-        expect(await screen.findByRole('dialog', { name: 'Package dependencies' })).toBeTruthy();
-        await user.click(screen.getByRole('button', { name: 'Close modal' }));
-        expect(screen.queryByRole('dialog')).toBeNull();
+            const user = userEvent.setup();
+            dependencyButton.focus();
+            await new Promise(resolve => setTimeout(resolve, 75));
+            expect(document.activeElement).toBe(dependencyButton);
+            await user.click(dependencyButton);
+            expect(await screen.findByRole('dialog', { name: 'Package dependencies' })).toBeTruthy();
+            expect(await within(await screen.findByRole('complementary', { name: 'Package inspector' }))
+                .findByRole('heading', { name: packages[0].id })).toBeTruthy();
+            await user.click(screen.getByRole('button', { name: 'Close modal' }));
+            expect(screen.queryByRole('dialog')).toBeNull();
+
+            const reverseButton = screen.getByRole('button', { name: 'Explore dependencies for xxxyyyzzz' });
+            expect(reverseButton.textContent).toContain('Deps: 0 / Req by: 1');
+            for (const key of ['{Enter}', ' ']) {
+                reverseButton.focus();
+                await new Promise(resolve => setTimeout(resolve, 75));
+                expect(document.activeElement).toBe(reverseButton);
+                await user.keyboard(key);
+                expect(await screen.findByRole('dialog', { name: 'Package dependencies' })).toBeTruthy();
+                expect(await within(await screen.findByRole('complementary', { name: 'Package inspector' }))
+                    .findByRole('heading', { name: packages[1].id })).toBeTruthy();
+                expect(screen.getAllByRole('dialog')).toHaveLength(1);
+                await user.click(screen.getByRole('button', { name: 'Close modal' }));
+            }
+            const requests = fetch.mock.calls.map(([input]) => new URL(String(input)));
+            expect(requests.some(url => url.searchParams.has('counts'))).toBe(true);
+            expect(requests.some(url => !url.searchParams.has('counts'))).toBe(true);
+            for (const url of requests) {
+                expect(url.pathname).toBe('/api/package-dependencies');
+                expect(url.searchParams.get('variant_id')).toBe('dependency-v1');
+                expect(url.searchParams.get('compare_variant_id')).toBe('dependency-v2');
+                expect(url.searchParams.get('operation')).toBe('intersection');
+            }
+        } finally {
+            fetch.mockRestore();
+        }
+    });
+
+    test('dependency loading and unavailable states are not actions or zero counts', async () => {
+        let fail!: (reason: Error) => void;
+        const fetch = jest.spyOn(global, 'fetch').mockImplementation(() =>
+            new Promise<Response>((_resolve, reject) => { fail = reject; }));
+        try {
+            render(<TablePackages variantId="dependency-error" packages={packages} />);
+            expect(screen.getAllByText('Loading…')).toHaveLength(packages.length);
+            expect(screen.queryByRole('button', { name: /Explore dependencies for/ })).toBeNull();
+            fail(new Error('Offline'));
+            await waitFor(() => expect(screen.getAllByText('Unavailable')).toHaveLength(packages.length));
+            expect(screen.queryByRole('button', { name: /Explore dependencies for/ })).toBeNull();
+            expect(screen.queryByText('Deps: 0 / Req by: 0')).toBeNull();
+        } finally {
+            fetch.mockRestore();
+        }
     });
 
     test('compiler flags are opt-in, remembered, and their whole cell opens the modal without the dependency column', async () => {

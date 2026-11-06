@@ -64,6 +64,18 @@ The interactive mode is where you investigate each CVE and record your triage de
 2. Open [Vulnerability Details](web-vulnerability-details.md), read the advisory, inspect the affected packages, and check the build and deployment evidence.
 3. Record a supported status, justification, impact, and notes; optionally document a workaround or estimate remediation effort. See [AI Assessments](ai-assessments.md) for assisted analysis and human approval.
 
+### Package dependencies
+
+The SBOM table's **Dependency** column shows **Deps** (direct dependencies) and
+**Req by** (packages that directly depend on this package). When either count is
+nonzero, select the cyan **Explore** button, or focus it and press Enter or Space,
+to open the dependency explorer for that package in the selected scope.
+Zero counts are informational, not buttons. **Loading…**, **Unavailable**,
+**Not recorded**, and **Not in active scan** are also noninteractive states;
+unavailable or unrecorded evidence must not be interpreted as zero dependencies.
+Reimport older SBOMs to populate relationships marked **Not recorded**.
+Recorded relationships do not prove runtime use.
+
 (source-files)=
 ### Recorded files
 

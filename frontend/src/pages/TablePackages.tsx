@@ -415,13 +415,21 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         title="Dependencies are only available for packages of active scans">Not in active scan</div>;
                     if (info.row.original.dependenciesUnrecorded) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
                         title="Its SBOM was imported before dependency support; import it again to record relationships">Not recorded</div>;
+                    const countText = counts ? `Deps: ${counts.in} / Req by: ${counts.out}` : 'Loading…';
+                    const countTitle = "Deps: direct dependencies of this package. Req by: packages that directly depend on this package.";
+                    if (dependencyError || !counts || (counts.in === 0 && counts.out === 0)) {
+                        return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
+                            title={countTitle}>{dependencyError ? 'Unavailable' : countText}</div>;
+                    }
                     return <button type="button"
-                        className="flex items-center justify-center gap-2 w-full h-full p-4 text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        className="flex flex-col items-center justify-center gap-1 w-full h-full p-4 text-center text-cyan-300 hover:bg-slate-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 focus-visible:-outline-offset-2"
+                        // Keep virtualized row focus management from taking focus off this action.
+                        onFocus={event => event.stopPropagation()}
                         onClick={() => setSelectedDependencyPackage(info.row.original.id)}
-                        title="Deps: direct dependencies of this package. Req by: packages that directly depend on this package."
+                        title={countTitle}
                         aria-label={`Explore dependencies for ${info.row.original.name}`}>
-                        <FontAwesomeIcon icon={faDiagramProject} />
-                        {dependencyError ? 'Unavailable' : counts ? `Deps: ${counts.in} / Req by: ${counts.out}` : 'Loading…'}
+                        <span className="flex items-center gap-2"><FontAwesomeIcon icon={faDiagramProject} />Explore</span>
+                        <span className="text-xs">{countText}</span>
                     </button>;
                 },
                 sortDescFirst: true,
