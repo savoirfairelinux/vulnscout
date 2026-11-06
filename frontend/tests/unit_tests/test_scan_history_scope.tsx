@@ -133,6 +133,11 @@ const richDiff: ScanDiff = {
         old_package_id: 'old', new_package_id: 'new', package_supplier: pkg.package_supplier,
     }],
     packages_unchanged: [{...pkg, package_id: 'package-3'}],
+    dependency_changes: {
+        status: 'available', added_count: 1, removed_count: 0,
+        added: [{ dependent: pkg, dependency: {...pkg, package_id: 'linked', package_name: 'lib'} }],
+        removed: [],
+    },
     vulns_added: ['CVE-2026-0001'], vulns_removed: ['CVE-2026-0002'],
     vulns_unchanged: ['CVE-2026-0003'], assessment_count: 3,
     assessments_added: [assessment], assessments_removed: [{...assessment, vulnerability_id: 'CVE-2026-0002'}],
@@ -189,6 +194,24 @@ describe('ScanHistory selected variant scope', () => {
         __reset();
         restoreStream();
         jest.restoreAllMocks();
+    });
+
+    test.each([
+        [1, 0],
+        [0, 1],
+    ])('keeps relationship-only imports visible with Hide empty scans (%i added, %i removed)', async (added, removed) => {
+        mockList.mockResolvedValue([
+            {...scan('changed', 'v1'), is_first: false, dependencies_added: added, dependencies_removed: removed},
+            {...scan('empty', 'v1'), is_first: false, dependencies_added: 0, dependencies_removed: 0},
+            {...scan('unknown', 'v1'), is_first: false, dependencies_added: null, dependencies_removed: null},
+        ]);
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+        expect(await screen.findByText('changed history')).toBeInTheDocument();
+        expect(screen.getByText('empty history')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: /Hide empty scans/}));
+        expect(screen.getByText('changed history')).toBeInTheDocument();
+        expect(screen.queryByText('empty history')).not.toBeInTheDocument();
+        expect(screen.queryByText('unknown history')).not.toBeInTheDocument();
     });
 
     test('submits selected scans and deferred refreshes together and waits for the full batch', async () => {
@@ -540,6 +563,9 @@ describe('ScanHistory selected variant scope', () => {
         fireEvent.click(await screen.findByRole('button', {name: 'View Scan Diff'}));
         expect(await screen.findByTestId('scan-diff-modal-backdrop')).toBeInTheDocument();
         expect(screen.getByText('Added packages (1)')).toBeInTheDocument();
+        expect(screen.getByRole('region', {name: 'Dependency relationships'})).toBeInTheDocument();
+        expect(screen.getByText('Added relationships (1)')).toBeInTheDocument();
+        expect(screen.getByText('Removed relationships (0)')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', {name: /Findings/}));
         expect(screen.getByText('Findings on upgraded packages (1)')).toBeInTheDocument();
         const diffModal = screen.getByTestId('scan-diff-modal-backdrop');
