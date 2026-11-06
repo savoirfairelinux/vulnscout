@@ -171,9 +171,27 @@ def _valid_target(target) -> bool:
 
 def restore_evidence(document: SBOMDocument, evidence: dict, references: dict[str, str]) -> None:
     """Restore portable evidence only for package references resolved by this document."""
+    required = {
+        ref for target in evidence["build_targets"] if _valid_target(target)
+        for ref in target["package_ids"] if isinstance(ref, str)
+    }
+    for record in evidence["dependencies"]:
+        if isinstance(record, dict):
+            required.update(ref for ref in (record.get("source"), record.get("target")) if isinstance(ref, str))
+    string_ids = {references[ref] for ref in required if ref in references}
+    if not string_ids:
+        return
+    names = sorted({sid.split("@", 1)[0] for sid in string_ids if "@" in sid})
+    package_ids = {}
+    for start in range(0, len(names), 500):
+        package_ids.update({
+            package.string_id: package.id for package in db.session.scalars(
+                db.select(Package).where(Package.name.in_(names[start:start + 500]))
+            ) if package.string_id in string_ids
+        })
     members = {
-        ref: package.id for ref, sid in references.items()
-        if (package := Package.get_by_string_id(sid)) is not None
+        ref: package_ids[references[ref]] for ref in required
+        if ref in references and references[ref] in package_ids
     }
     targets = []
     for target in evidence["build_targets"]:

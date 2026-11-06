@@ -188,6 +188,20 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
                         }
                 integrity.append(verification)
             properties['verifiedUsing'] = integrity
+        content_identifiers = properties.get('software_contentIdentifier')
+        if isinstance(content_identifiers, (str, dict)):
+            content_identifiers = [content_identifiers]
+        if isinstance(content_identifiers, list):
+            identifiers = []
+            for content_identifier in content_identifiers:
+                if isinstance(content_identifier, str):
+                    target = nodes.get(_element_key(content_identifier, document, document_namespaces[document.id]))
+                    if target and target[1].get('type') == 'software_ContentIdentifier':
+                        content_identifier = {
+                            key: value for key, value in target[1].items() if key not in {'spdxId', '@id'}
+                        }
+                identifiers.append(content_identifier)
+            properties['software_contentIdentifier'] = identifiers
         file = SBOMFile(sbom_document_id=document.id, spdx_id=ref, path=item['name'],
                         properties=properties)
         db.session.add(file)
