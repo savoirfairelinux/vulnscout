@@ -40,6 +40,9 @@ errors are red, and critical messages are bold red. Werkzeug's existing
 HTTP-status highlighting is retained in terminals and stripped from plain
 output. Log levels, message text, and tracebacks are unchanged. Explicit logging
 handlers configured by a deployment take precedence over these defaults.
+The default console handler skips records covered at their level by a handler
+on a descendant logger, such as `src.bin.webapp`, including handlers added after
+console logging is initialized. Other application loggers retain console output.
 
 ## Container Lifecycle
 
