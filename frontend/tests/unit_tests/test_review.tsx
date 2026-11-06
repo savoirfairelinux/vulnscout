@@ -113,8 +113,8 @@ jest.mock('../../src/components/TableGeneric', () => {
 // VulnModal's own navigation UI (covered in test_vuln_modal.tsx).
 jest.mock('../../src/components/VulnModal', () => ({
     __esModule: true,
-    default: ({ vuln, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate }: any) => (
-        <div data-testid="vuln-modal">
+    default: ({ vuln, projectId, variantId, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate }: any) => (
+        <div data-testid="vuln-modal" data-project-id={projectId} data-variant-id={variantId}>
             <div data-testid="vuln-modal-vuln-id">{vuln?.id}</div>
             <button onClick={() => { appendAssessment(); appendCVSS(); patchVuln(); }}>
                 invoke-vuln-modal-callbacks
@@ -313,6 +313,7 @@ type NetworkOpts = {
     packagesByVariant?: Record<string, unknown[]>;
     packagesGate?: Promise<void>;
     variantsGate?: Promise<void>;
+    allVariantsGate?: Promise<void>;
     variantsOk?: boolean;
     mutationOk?: boolean;
     exportOk?: boolean;
@@ -336,7 +337,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         // Every variant ships the shared package by default so the editor's
         // package/variant compatibility gate does not disable the checkboxes.
         packages = [{ name: 'pkgA', version: '1.0.0' }], packagesByVariant, packagesGate,
-        variantsGate, variantsOk = true,
+        variantsGate, allVariantsGate, variantsOk = true,
         mutationOk = true, exportOk = true,
         importResult = {
             status: 'success', assessments_imported: 2, assessments_skipped: 1,
@@ -398,7 +399,10 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
                     ? JSON.stringify(vulnDetail)
                     : { status: 500, body: JSON.stringify({}) };
             }
-            if (url.includes('/api/variants')) return JSON.stringify(variants);
+            if (url.includes('/api/variants')) {
+                if (allVariantsGate) await allVariantsGate;
+                return JSON.stringify(variants);
+            }
             if (url.includes('/api/projects')) return JSON.stringify(projects);
             if (url.includes('/api/version')) return JSON.stringify({ version: 'unknown' });
             return JSON.stringify([]);
@@ -1410,6 +1414,60 @@ const openAssessmentsModal = async (
     await user.click(idCell);
     await screen.findByTestId('vuln-modal');
 };
+
+describe('Review — modal scope', () => {
+    const variants = [
+        ...VARIANTS,
+        { id: 'v3', name: 'Variant Gamma', project_id: 'proj2' },
+        { id: 'v4', name: 'Variant Delta', project_id: 'proj2' },
+    ];
+    const projects = [...PROJECTS, { id: 'proj2', name: 'Project Two' }];
+
+    test.each([false, true])('preserves project/all-variants scope (delayed variants: %s)', async delayed => {
+        let releaseVariants!: () => void;
+        const allVariantsGate = new Promise<void>(resolve => { releaseVariants = resolve; });
+        mockNetwork([makeAssessment('a1', 'v3')], {
+            variants, projects, allVariantsGate: delayed ? allVariantsGate : undefined,
+        });
+        render(<Review projectId="proj2" />);
+        const user = userEvent.setup();
+
+        if (!delayed) await screen.findByText('Variant Gamma');
+        await openAssessmentsModal(user, 0);
+        expect(screen.getByTestId('vuln-modal')).toHaveAttribute('data-project-id', 'proj2');
+        expect(screen.getByTestId('vuln-modal')).not.toHaveAttribute('data-variant-id');
+
+        if (delayed) {
+            expect(screen.queryByText('Variant Gamma')).not.toBeInTheDocument();
+            await act(async () => { releaseVariants(); });
+            await screen.findByText('Variant Gamma');
+            expect(screen.getByTestId('vuln-modal')).toHaveAttribute('data-project-id', 'proj2');
+            expect(screen.getByTestId('vuln-modal')).not.toHaveAttribute('data-variant-id');
+        }
+    });
+
+    test.each([false, true])('derives project scope from only the selected variant (delayed variants: %s)', async delayed => {
+        let releaseVariants!: () => void;
+        const allVariantsGate = new Promise<void>(resolve => { releaseVariants = resolve; });
+        mockNetwork([makeAssessment('a1', 'v3')], {
+            variants, projects, allVariantsGate: delayed ? allVariantsGate : undefined,
+        });
+        render(<Review variantId="v3" />);
+        const user = userEvent.setup();
+
+        if (!delayed) await screen.findByText('Variant Gamma');
+        await openAssessmentsModal(user, 0);
+        expect(screen.getByTestId('vuln-modal')).toHaveAttribute('data-variant-id', 'v3');
+        if (delayed) {
+            expect(screen.queryByText('Variant Gamma')).not.toBeInTheDocument();
+            expect(screen.getByTestId('vuln-modal')).not.toHaveAttribute('data-project-id');
+            await act(async () => { releaseVariants(); });
+            await screen.findByText('Variant Gamma');
+        }
+        expect(screen.getByTestId('vuln-modal')).toHaveAttribute('data-project-id', 'proj2');
+        expect(screen.getByTestId('vuln-modal')).toHaveAttribute('data-variant-id', 'v3');
+    });
+});
 
 /**
  * Like mockNetworkWithVulnById, but the single-vulnerability GET for any id in
