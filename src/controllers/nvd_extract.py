@@ -97,12 +97,12 @@ def extract_cve_details(cve: dict) -> dict:
             cvss_impact = primary.get("impactScore")
             break
 
-    # References / links
-    links = [
+    # NVD can repeat a URL under different sources or tags.
+    links = list(dict.fromkeys(
         ref.get("url")
         for ref in cve.get("references", [])
         if ref.get("url")
-    ]
+    ))
     # Always include the NVD detail page
     cve_id = cve.get("id", "")
     nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
