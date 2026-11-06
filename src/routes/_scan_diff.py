@@ -830,7 +830,7 @@ def serialize_list_with_diff_cached(scope_key: str, scans: list[Scan]) -> List[d
         .where(Observation.scan_id.in_([s.id for s in scans]))
         .group_by(Observation.scan_id)
     ).all()} if scans else {}
-    dependency_counts = dict(db.session.execute(
+    dependency_counts: Dict[uuid.UUID, int] = {scan_id: count for scan_id, count in db.session.execute(
         db.select(SBOMDocument.scan_id, db.func.count(SBOMDocument.id))
         .where(
             SBOMDocument.scan_id.in_([s.id for s in scans]),
@@ -838,7 +838,7 @@ def serialize_list_with_diff_cached(scope_key: str, scans: list[Scan]) -> List[d
             SBOMDocument.dependency_snapshot.is_not(None),
         )
         .group_by(SBOMDocument.scan_id)
-    ).all()) if scans else {}
+    ).all()} if scans else {}
     fingerprint = _scan_list_fingerprint(scans, observation_counts, dependency_counts)
     with _LIST_CACHE_LOCK:
         entry = _LIST_CACHE.get(scope_key)
